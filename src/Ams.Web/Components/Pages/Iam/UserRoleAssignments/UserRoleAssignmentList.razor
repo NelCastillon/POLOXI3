@@ -1,0 +1,537 @@
+@page "/iam/user-role-assignments"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>User Role Assignments — IAM</PageTitle>
+
+<AppPageHeader Title="User Role Assignments"
+               Subtitle="View and manage role assignments for all users across the platform"
+               Icon="bi-person-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAssign">
+            <i class="bi bi-person-plus" aria-hidden="true"></i> Assign Role
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="ura-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0" aria-label="Filter: Total Assignments">
+        <span class="ura-kpi-icon ura-kpi-icon--total"><i class="bi bi-person-check-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="ura-kpi-value">@_totalCount</div>
+            <div class="ura-kpi-label">Total Assignments</div>
+        </div>
+        @if (_kpiActive == 1) { <span class="ura-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0" aria-label="Filter: Active">
+        <span class="ura-kpi-icon ura-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="ura-kpi-value">@_activeCount</div>
+            <div class="ura-kpi-label">Active</div>
+        </div>
+        @if (_kpiActive == 2) { <span class="ura-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0" aria-label="Filter: Expiring Soon">
+        <span class="ura-kpi-icon ura-kpi-icon--expiring"><i class="bi bi-clock-history" aria-hidden="true"></i></span>
+        <div>
+            <div class="ura-kpi-value">@_expiringCount</div>
+            <div class="ura-kpi-label">Expiring Soon</div>
+        </div>
+        @if (_kpiActive == 3) { <span class="ura-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass4" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0" aria-label="Filter: Inactive">
+        <span class="ura-kpi-icon ura-kpi-icon--inactive"><i class="bi bi-slash-circle" aria-hidden="true"></i></span>
+        <div>
+            <div class="ura-kpi-value">@_inactiveCount</div>
+            <div class="ura-kpi-label">Inactive</div>
+        </div>
+        @if (_kpiActive == 4) { <span class="ura-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search user or role…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_statusOptions"
+                        Placeholder="All Statuses"
+                        ShowClearButton="true"
+                        Width="150px"
+                        Value="_filterStatus"
+                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </Filters>
+    <Actions>
+        @if (_selected.Count > 0)
+        {
+            <span class="rbl-sel-count">
+                <i class="bi bi-check2-square" aria-hidden="true"></i> @_selected.Count selected
+            </span>
+            <button class="um-btn um-btn-sm um-btn-warning"
+                    @onclick="() => OpenRevoke(_selected[0])"
+                    disabled="@(_selected.Count != 1)"
+                    title="Revoke assignment">
+                <i class="bi bi-x-circle" aria-hidden="true"></i> Revoke
+            </button>
+        }
+    </Actions>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading assignments…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading assignments…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="UserRoleDto"
+            DataSource="@_assignments"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row"
+                               Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
+        <GridEvents TValue="UserRoleDto"
+                    RowSelected="OnRowSelected"
+                    RowDeselected="OnRowDeselected" />
+        <GridColumns>
+
+            <GridColumn Type="ColumnType.CheckBox" Width="48" />
+
+            <GridColumn Field="@nameof(UserRoleDto.UserFullName)"
+                        HeaderText="User"
+                        Width="220">
+                <Template>
+                    @{ var r = (UserRoleDto)context; }
+                    <div class="ura-user-cell">
+                        <span class="ura-user-avatar" aria-hidden="true">
+                            <i class="bi bi-person-fill"></i>
+                        </span>
+                        <div class="ura-user-info">
+                            <div class="ura-user-name">@r.UserFullName</div>
+                            @if (!string.IsNullOrEmpty(r.UserName))
+                            {
+                                <div class="ura-user-sub">@@@r.UserName</div>
+                            }
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserRoleDto.RoleName)"
+                        HeaderText="Role"
+                        Width="200">
+                <Template>
+                    @{ var r = (UserRoleDto)context; }
+                    <div class="ura-role-cell">
+                        <span class="ura-role-badge" aria-hidden="true">
+                            <i class="bi bi-shield-fill"></i>
+                        </span>
+                        <div class="ura-role-info">
+                            <div class="ura-role-name">@r.RoleName</div>
+                            @if (!string.IsNullOrEmpty(r.RoleCode))
+                            {
+                                <div class="ura-role-code">@r.RoleCode</div>
+                            }
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserRoleDto.IsActive)"
+                        HeaderText="Status"
+                        Width="110">
+                <Template>
+                    @{ var r = (UserRoleDto)context; }
+                    <AppStatusBadge Status="@(r.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserRoleDto.AssignedDateUtc)"
+                        HeaderText="Assigned"
+                        Width="130">
+                <Template>
+                    @{ var r = (UserRoleDto)context; }
+                    <span title="@r.AssignedDateUtc.ToString("g")">@FormatRelative(r.AssignedDateUtc)</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserRoleDto.EffectiveEndDateUtc)"
+                        HeaderText="Expires"
+                        Width="130">
+                <Template>
+                    @{ var r = (UserRoleDto)context; }
+                    @if (r.EffectiveEndDateUtc.HasValue)
+                    {
+                        var isExpiring = r.EffectiveEndDateUtc.Value < DateTime.UtcNow.AddDays(30);
+                        <span class="@(isExpiring ? "ura-expiring-soon" : "")"
+                              title="@r.EffectiveEndDateUtc.Value.ToString("d")">
+                            @r.EffectiveEndDateUtc.Value.ToString("MMM d, yyyy")
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="ura-no-expiry">Permanent</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserRoleDto.AssignedByFullName)"
+                        HeaderText="Assigned By"
+                        Width="160">
+                <Template>
+                    @{ var r = (UserRoleDto)context; }
+                    <span>@(string.IsNullOrEmpty(r.AssignedByFullName) ? "—" : r.AssignedByFullName)</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText=""
+                        Width="80"
+                        AllowSorting="false"
+                        AllowFiltering="false">
+                <Template>
+                    @{ var r = (UserRoleDto)context; }
+                    <div class="um-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenRevoke(r)"
+                                title="Revoke assignment"
+                                disabled="@(!r.IsActive)">
+                            <i class="bi bi-x-circle" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Assign Role dialog -->
+<SfDialog @bind-Visible="_showAssign"
+          Width="500px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogTemplates>
+        <Header><i class="bi bi-person-plus" aria-hidden="true"></i> Assign Role to User</Header>
+        <Content>
+            <div class="ura-assign-form">
+                <div class="form-group">
+                    <label>User <span class="req" aria-hidden="true">*</span></label>
+                    <SfDropDownList TItem="UserDto" TValue="Guid"
+                                    DataSource="@_availableUsers"
+                                    @bind-Value="_assignUserId"
+                                    Placeholder="Select a user…"
+                                    AllowFiltering="true">
+                        <DropDownListFieldSettings Text="FullName" Value="UserId" />
+                    </SfDropDownList>
+                </div>
+                <div class="form-group">
+                    <label>Role <span class="req" aria-hidden="true">*</span></label>
+                    <SfDropDownList TItem="RoleDto" TValue="Guid"
+                                    DataSource="@_availableRoles"
+                                    @bind-Value="_assignRoleId"
+                                    Placeholder="Select a role…"
+                                    AllowFiltering="true">
+                        <DropDownListFieldSettings Text="RoleName" Value="RoleId" />
+                    </SfDropDownList>
+                </div>
+                @if (!string.IsNullOrEmpty(_assignError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_assignError
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showAssign = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ExecuteAssignAsync" disabled="@_saving">
+                    @if (_saving) { <span class="um-spinner-xs" aria-hidden="true"></span> }
+                    Assign Role
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- Revoke confirmation -->
+<AppConfirmActionDialog @bind-Visible="_showRevoke"
+                        Title="Revoke Role Assignment"
+                        Message="@($"Revoke '{_revokeTarget?.RoleName}' from {_revokeTarget?.UserFullName}?")"
+                        Detail="The user will immediately lose access granted by this role. This action can be undone by re-assigning the role."
+                        Variant="warning"
+                        ConfirmText="Revoke"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteRevokeAsync" />
+
+<!-- Toast -->
+<SfToast @ref="_toast"
+         ShowCloseButton="true"
+         Timeout="4000"
+         NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ─────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ──────────────────────────────────────────────────────────────────
+    private SfGrid<UserRoleDto>? _grid;
+    private SfToast?             _toast;
+
+    // ── Data ──────────────────────────────────────────────────────────────────
+    private List<UserRoleDto> _allAssignments = [];
+    private List<UserRoleDto> _assignments    = [];
+    private List<UserRoleDto> _selected       = [];
+    private List<UserDto>     _availableUsers = [];
+    private List<RoleDto>     _availableRoles = [];
+
+    // ── Loading / action flags ────────────────────────────────────────────────
+    private bool _loading    = false;
+    private bool _saving     = false;
+    private bool _confirming = false;
+
+    // ── Dialog visibility ─────────────────────────────────────────────────────
+    private bool _showAssign = false;
+    private bool _showRevoke = false;
+
+    // ── Active targets ────────────────────────────────────────────────────────
+    private UserRoleDto? _revokeTarget;
+    private Guid         _assignUserId;
+    private Guid         _assignRoleId;
+    private string       _assignError = string.Empty;
+
+    // ── Filters ───────────────────────────────────────────────────────────────
+    private string _search       = string.Empty;
+    private string _filterStatus = string.Empty;
+
+    // ── KPI state ─────────────────────────────────────────────────────────────
+    private int _kpiActive = 0; // 0=none 1=total 2=active 3=expiring 4=inactive
+
+    private string KpiClass1 => "ura-kpi-card ura-kpi-card--total"    + (_kpiActive == 1 ? " ura-kpi-card--sel" : "");
+    private string KpiClass2 => "ura-kpi-card ura-kpi-card--active"   + (_kpiActive == 2 ? " ura-kpi-card--sel" : "");
+    private string KpiClass3 => "ura-kpi-card ura-kpi-card--expiring" + (_kpiActive == 3 ? " ura-kpi-card--sel" : "");
+    private string KpiClass4 => "ura-kpi-card ura-kpi-card--inactive" + (_kpiActive == 4 ? " ura-kpi-card--sel" : "");
+
+    // ── KPI counters ──────────────────────────────────────────────────────────
+    private int _totalCount;
+    private int _activeCount;
+    private int _expiringCount;
+    private int _inactiveCount;
+
+    // ── Static options ────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Active",   "Active"),
+        new("Inactive", "Inactive"),
+    ];
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",                   "/"),
+            new("IAM",                    "/iam"),
+            new("User Role Assignments",  "/iam/user-role-assignments"));
+
+        await LoadAsync();
+    }
+
+    // ── Data loading ──────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchUserRolesAsync(_tenantId);
+            _allAssignments = result?.Items.ToList() ?? [];
+            _selected.Clear();
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        var term = _search.Trim();
+        _assignments = _allAssignments.Where(r =>
+            (string.IsNullOrEmpty(_filterStatus) ||
+                (r.IsActive ? "Active" : "Inactive") == _filterStatus) &&
+            (string.IsNullOrEmpty(term) ||
+                (r.UserFullName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (r.UserName?.Contains(term, StringComparison.OrdinalIgnoreCase)     ?? false) ||
+                (r.RoleName?.Contains(term, StringComparison.OrdinalIgnoreCase)     ?? false) ||
+                (r.RoleCode?.Contains(term, StringComparison.OrdinalIgnoreCase)     ?? false))
+        ).ToList();
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive    = _kpiActive == n ? 0 : n;
+        _filterStatus = string.Empty;
+        switch (_kpiActive)
+        {
+            case 2: _filterStatus = "Active";   break;
+            case 4: _filterStatus = "Inactive"; break;
+        }
+        if (_kpiActive == 3)
+        {
+            var cutoff = DateTime.UtcNow.AddDays(30);
+            _assignments = _allAssignments
+                .Where(r => r.IsActive && r.EffectiveEndDateUtc.HasValue && r.EffectiveEndDateUtc.Value <= cutoff)
+                .ToList();
+            StateHasChanged();
+        }
+        else
+        {
+            ApplyFilters();
+        }
+    }
+
+    private void ComputeKpi()
+    {
+        var cutoff     = DateTime.UtcNow.AddDays(30);
+        _totalCount    = _allAssignments.Count;
+        _activeCount   = _allAssignments.Count(r => r.IsActive);
+        _expiringCount = _allAssignments.Count(r => r.IsActive && r.EffectiveEndDateUtc.HasValue && r.EffectiveEndDateUtc.Value <= cutoff);
+        _inactiveCount = _allAssignments.Count(r => !r.IsActive);
+    }
+
+    // ── Row selection ─────────────────────────────────────────────────────────
+    private void OnRowSelected(RowSelectEventArgs<UserRoleDto> args)
+    {
+        if (!_selected.Contains(args.Data))
+            _selected.Add(args.Data);
+    }
+
+    private void OnRowDeselected(RowDeselectEventArgs<UserRoleDto> args)
+    {
+        _selected.Remove(args.Data);
+    }
+
+    // ── Assign ────────────────────────────────────────────────────────────────
+    private async Task OpenAssign()
+    {
+        _assignUserId = Guid.Empty;
+        _assignRoleId = Guid.Empty;
+        _assignError  = string.Empty;
+
+        if (_availableUsers.Count == 0)
+        {
+            var users = await Api.SearchUsersAsync(_tenantId);
+            _availableUsers = users?.Items.ToList() ?? [];
+        }
+        if (_availableRoles.Count == 0)
+        {
+            var roles = await Api.SearchRolesAsync(_tenantId);
+            _availableRoles = roles?.Items.ToList() ?? [];
+        }
+        _showAssign = true;
+    }
+
+    private async Task ExecuteAssignAsync()
+    {
+        if (_assignUserId == Guid.Empty) { _assignError = "Please select a user.";  return; }
+        if (_assignRoleId == Guid.Empty) { _assignError = "Please select a role.";  return; }
+
+        _saving = true;
+        try
+        {
+            await Api.AssignUserRoleAsync(new AssignUserRoleRequest
+            {
+                TenantId = _tenantId,
+                UserId   = _assignUserId,
+                RoleId   = _assignRoleId,
+            });
+            _showAssign = false;
+            await ShowToastAsync("Role assigned successfully.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _assignError = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // ── Revoke ────────────────────────────────────────────────────────────────
+    private void OpenRevoke(UserRoleDto r) { _revokeTarget = r; _showRevoke = true; }
+
+    private async Task ExecuteRevokeAsync()
+    {
+        if (_revokeTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.RevokeUserRoleAsync(new RevokeUserRoleRequest { UserRoleId = _revokeTarget.UserRoleId });
+            await ShowToastAsync($"Role '{_revokeTarget.RoleName}' revoked from {_revokeTarget.UserFullName}.", "e-toast-warning");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _confirming  = false;
+            _revokeTarget = null;
+        }
+    }
+
+    // ── Stub actions ──────────────────────────────────────────────────────────
+    private Task ExportAsync() => ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+
+    // ── Toast helper ──────────────────────────────────────────────────────────
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    private static string FormatRelative(DateTime dt)
+    {
+        var diff = DateTime.UtcNow - dt;
+        return diff.TotalDays switch
+        {
+            < 1   => diff.TotalHours < 1 ? "Just now" : $"{(int)diff.TotalHours}h ago",
+            < 7   => $"{(int)diff.TotalDays}d ago",
+            < 30  => $"{(int)(diff.TotalDays / 7)}w ago",
+            < 365 => $"{(int)(diff.TotalDays / 30)}mo ago",
+            _     => dt.ToString("d"),
+        };
+    }
+
+    // ── Inner models ──────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Value, string Label);
+}

@@ -1,0 +1,281 @@
+@inject ApiClient Api
+
+<div class="tab-section">
+    <div class="ts-header">
+        <h3 class="ts-title">Permissions</h3>
+        <div class="ts-header-right">
+            <div class="ts-toggle-group" role="tablist" aria-label="Permission view">
+                <button role="tab"
+                        class="ts-toggle @(_view == "direct" ? "active" : "")"
+                        aria-selected="@(_view == "direct")"
+                        @onclick='() => _view = "direct"'>
+                    Direct
+                </button>
+                <button role="tab"
+                        class="ts-toggle @(_view == "effective" ? "active" : "")"
+                        aria-selected="@(_view == "effective")"
+                        @onclick='() => SwitchToEffective()'>
+                    Effective
+                </button>
+            </div>
+            @if (_view == "direct")
+            {
+                <button class="ts-btn-primary" @onclick="OpenGrant">
+                    <i class="bi bi-plus-lg" aria-hidden="true"></i> Grant Permission
+                </button>
+            }
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="ts-loading" aria-live="polite">
+            <div class="ts-spinner" aria-hidden="true"></div> Loading permissions…
+        </div>
+    }
+    else if (_view == "direct")
+    {
+        @if (_direct.Count == 0)
+        {
+            <div class="ts-empty">
+                <i class="bi bi-key" aria-hidden="true"></i>
+                <span>No direct permissions granted.</span>
+            </div>
+        }
+        else
+        {
+            <SfGrid TValue="UserPermissionDto" DataSource="@_direct" AllowPaging="true"
+                    AllowSorting="true" EnableHover="true" RowHeight="48">
+                <GridPageSettings PageSize="15" />
+                <GridColumns>
+                    <GridColumn Field="PermissionName" HeaderText="Permission" Width="200" />
+                    <GridColumn Field="ResourceCode" HeaderText="Resource" Width="140" />
+                    <GridColumn Field="ActionCode" HeaderText="Action" Width="100" />
+                    <GridColumn Field="IsGranted" HeaderText="Grant" Width="90">
+                        <Template Context="p">
+                            @{ var perm = (UserPermissionDto)p; }
+                            <span class="badge @(perm.IsGranted ? "badge-green" : "badge-red")">
+                                @(perm.IsGranted ? "Allow" : "Deny")
+                            </span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="GrantedDateUtc" HeaderText="Granted" Width="140">
+                        <Template Context="p">
+                            @{ var perm = (UserPermissionDto)p; }
+                            <span>@perm.GrantedDateUtc.ToString("MMM d, yyyy")</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="ExpiresDateUtc" HeaderText="Expires" Width="130">
+                        <Template Context="p">
+                            @{ var perm = (UserPermissionDto)p; }
+                            <span>@(perm.ExpiresDateUtc?.ToString("MMM d, yyyy") ?? "Never")</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right" AllowSorting="false">
+                        <Template Context="p">
+                            @{ var perm = (UserPermissionDto)p; }
+                            <button class="ra-btn ra-btn-danger" title="Revoke permission"
+                                    @onclick="() => RevokeAsync(perm)">
+                                <i class="bi bi-x-lg" aria-hidden="true"></i>
+                            </button>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        }
+    }
+    else
+    {
+        @if (_effective.Count == 0)
+        {
+            <div class="ts-empty">
+                <i class="bi bi-key" aria-hidden="true"></i>
+                <span>No effective permissions found.</span>
+            </div>
+        }
+        else
+        {
+            <SfGrid TValue="EffectivePermissionDto" DataSource="@_effective" AllowPaging="true"
+                    AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="48">
+                <GridPageSettings PageSize="20" />
+                <GridFilterSettings Type="@(Syncfusion.Blazor.Grids.FilterType.Menu)" />
+                <GridColumns>
+                    <GridColumn Field="PermissionName" HeaderText="Permission" Width="220" />
+                    <GridColumn Field="ResourceCode" HeaderText="Resource" Width="150" />
+                    <GridColumn Field="ActionCode" HeaderText="Action" Width="110" />
+                    <GridColumn Field="GrantSource" HeaderText="Source" Width="100">
+                        <Template Context="e">
+                            @{ var ep = (EffectivePermissionDto)e; }
+                            <span class="badge @(ep.GrantSource == "Direct" ? "badge-blue" : "badge-neutral")">
+                                @ep.GrantSource
+                            </span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="RoleName" HeaderText="Via Role" Width="160" />
+                    <GridColumn Field="ExpiresDateUtc" HeaderText="Expires" Width="130">
+                        <Template Context="e">
+                            @{ var ep = (EffectivePermissionDto)e; }
+                            <span>@(ep.ExpiresDateUtc?.ToString("MMM d, yyyy") ?? "Never")</span>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        }
+    }
+
+    @if (!string.IsNullOrEmpty(_msg))
+    {
+        <div class="ts-feedback @(_isError ? "ts-feedback-err" : "ts-feedback-ok")" role="alert">
+            <i class="bi @(_isError ? "bi-x-circle" : "bi-check-circle")" aria-hidden="true"></i>
+            @_msg
+        </div>
+    }
+</div>
+
+<!-- ── Grant Permission Dialog ─────────────────────── -->
+<SfDialog @bind-Visible="_showGrant" Width="500px" IsModal="true"
+          ShowCloseIcon="true" CloseOnEscape="true">
+    <DialogTemplates>
+        <Header><i class="bi bi-key-fill" aria-hidden="true"></i> Grant Permission</Header>
+        <Content>
+            <div class="ts-assign-form">
+                <div class="form-group">
+                    <label>Permission <span class="req" aria-hidden="true">*</span></label>
+                    <SfDropDownList TItem="PermissionDto" TValue="Guid"
+                                    DataSource="@_availablePerms"
+                                    @bind-Value="_selectedPermId"
+                                    Placeholder="Select a permission…">
+                        <DropDownListFieldSettings Text="PermissionName" Value="PermissionId" />
+                    </SfDropDownList>
+                </div>
+                <div class="form-group">
+                    <label>Grant Type</label>
+                    <SfDropDownList TItem="string" TValue="string"
+                                    DataSource="@(new[]{"Allow","Deny"})"
+                                    @bind-Value="_grantType"
+                                    Placeholder="Allow" />
+                </div>
+                <div class="form-group">
+                    <label>Expires (optional)</label>
+                    <SfDatePicker TValue="DateTime?" @bind-Value="_permExpiry"
+                                  Min="DateTime.UtcNow"
+                                  Placeholder="No expiry" />
+                </div>
+                @if (!string.IsNullOrEmpty(_grantError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_grantError
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="ts-btn-ghost" @onclick="() => _showGrant = false">Cancel</button>
+                <button class="ts-btn-primary" @onclick="GrantAsync" disabled="@_saving">
+                    @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                    Grant
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid UserId   { get; set; }
+    [Parameter] public Guid TenantId { get; set; }
+
+    private bool   _loading = true;
+    private bool   _saving;
+    private string _view    = "direct";
+
+    private List<UserPermissionDto>    _direct    = [];
+    private List<EffectivePermissionDto> _effective = [];
+    private List<PermissionDto>        _availablePerms = [];
+
+    private bool      _showGrant;
+    private Guid      _selectedPermId;
+    private string    _grantType   = "Allow";
+    private DateTime? _permExpiry;
+    private string    _grantError  = string.Empty;
+    private string    _msg         = string.Empty;
+    private bool      _isError;
+
+    protected override async Task OnInitializedAsync() => await LoadDirectAsync();
+
+    private async Task LoadDirectAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.GetUserDirectPermissionsAsync(UserId);
+            _direct = result?.ToList() ?? [];
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+        finally { _loading = false; }
+    }
+
+    private async Task SwitchToEffective()
+    {
+        _view = "effective";
+        if (_effective.Count > 0) return;
+        _loading = true;
+        try
+        {
+            var result = await Api.GetEffectivePermissionsAsync(UserId);
+            _effective = result?.ToList() ?? [];
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+        finally { _loading = false; }
+    }
+
+    private async Task OpenGrant()
+    {
+        _selectedPermId = Guid.Empty;
+        _grantType      = "Allow";
+        _permExpiry     = null;
+        _grantError     = string.Empty;
+        if (_availablePerms.Count == 0)
+        {
+            var result = await Api.SearchPermissionsAsync(TenantId);
+            _availablePerms = result?.Items.ToList() ?? [];
+        }
+        _showGrant = true;
+    }
+
+    private async Task GrantAsync()
+    {
+        if (_selectedPermId == Guid.Empty) { _grantError = "Select a permission."; return; }
+        _saving = true;
+        try
+        {
+            var req = new GrantUserPermissionRequest
+            {
+                TenantId      = TenantId,
+                UserId        = UserId,
+                PermissionId  = _selectedPermId,
+                IsGranted     = _grantType != "Deny",
+                ExpiresDateUtc = _permExpiry,
+            };
+            await Api.GrantUserPermissionAsync(UserId, req);
+            _showGrant = false;
+            ShowMsg("Permission granted.", false);
+            await LoadDirectAsync();
+        }
+        catch (Exception ex) { _grantError = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    private async Task RevokeAsync(UserPermissionDto perm)
+    {
+        try
+        {
+            await Api.RevokeUserPermissionAsync(UserId, perm.UserPermissionId);
+            ShowMsg($"Permission '{perm.PermissionName}' revoked.", false);
+            await LoadDirectAsync();
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+    }
+
+    private void ShowMsg(string msg, bool isError) { _msg = msg; _isError = isError; }
+}

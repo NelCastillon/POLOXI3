@@ -1,0 +1,735 @@
+@page "/iam/role-permission-matrix"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>Role-Permission Matrix – AMS Enterprise</PageTitle>
+
+<div class="rpm-page">
+
+    <!-- ── Page Header ─────────────────────────────────── -->
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">
+                <i class="bi bi-grid-3x3-gap-fill" aria-hidden="true"></i> Role-Permission Matrix
+            </h1>
+            <p class="page-subtitle">Edit role permissions inline — click any cell to grant or revoke</p>
+        </div>
+        <div class="page-actions">
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" aria-label="Refresh">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+            </button>
+            <button class="um-btn @(_compareMode ? "um-btn-primary" : "um-btn-ghost")" @onclick="ToggleCompareMode" title="@(_compareMode ? "Exit compare mode" : "Compare roles side-by-side")">
+                <i class="bi bi-columns-gap" aria-hidden="true"></i> Compare
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenClone">
+                <i class="bi bi-copy" aria-hidden="true"></i> Clone Role
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenBulk">
+                <i class="bi bi-toggles" aria-hidden="true"></i> Bulk Edit
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="ExportCsvAsync">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
+        </div>
+    </div>
+
+    <!-- ── KPI Strip ────────────────────────────────────── -->
+    <div class="rpm-kpi-strip">
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-blue"><i class="bi bi-key-fill"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Permissions</div>
+                <div class="kpi-value">@_allPermissions.Count</div>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-purple"><i class="bi bi-shield-lock"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Roles</div>
+                <div class="kpi-value">@_allRoles.Count</div>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-green"><i class="bi bi-check2-all"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Total Grants</div>
+                <div class="kpi-value">@_grants.Count</div>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-amber"><i class="bi bi-percent"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Coverage</div>
+                <div class="kpi-value">@CoveragePct%</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Toolbar ───────────────────────────────────────── -->
+    <div class="rpm-toolbar">
+        <div class="rpm-toolbar-left">
+            <div class="um-search-box">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input class="um-search-input"
+                       type="search"
+                       placeholder="Filter permissions…"
+                       aria-label="Filter permissions"
+                       value="@_permSearch"
+                       @oninput="e => _permSearch = e.Value?.ToString() ?? string.Empty" />
+            </div>
+            <select class="rpm-select" aria-label="Filter by module" value="@_moduleFilter" @onchange="e => _moduleFilter = e.Value?.ToString() ?? string.Empty">
+                <option value="">All Modules</option>
+                @foreach (var m in Modules)
+                {
+                    <option value="@m">@m</option>
+                }
+            </select>
+            <div class="um-search-box">
+                <i class="bi bi-shield" aria-hidden="true"></i>
+                <input class="um-search-input"
+                       type="search"
+                       placeholder="Filter roles…"
+                       aria-label="Filter roles"
+                       value="@_roleSearch"
+                       @oninput="e => _roleSearch = e.Value?.ToString() ?? string.Empty" />
+            </div>
+        </div>
+        @if (_compareMode)
+        {
+            <div class="rpm-compare-hint">
+                <i class="bi bi-info-circle" aria-hidden="true"></i>
+                Click role headers to select columns for comparison.
+                @if (_compareRoles.Count > 0)
+                {
+                    <button class="rpm-compare-clear" @onclick="() => _compareRoles.Clear()">Clear</button>
+                }
+            </div>
+        }
+    </div>
+
+    <!-- ── Matrix ────────────────────────────────────────── -->
+    @if (_loading)
+    {
+        <div class="rpm-loading" aria-live="polite">
+            <div class="rpm-spinner" aria-hidden="true"></div>
+            <span>Loading matrix…</span>
+        </div>
+    }
+    else if (_allRoles.Count == 0 || _allPermissions.Count == 0)
+    {
+        <div class="rpm-empty">
+            <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i>
+            <p>No roles or permissions found for this tenant.</p>
+        </div>
+    }
+    else
+    {
+        <div class="rpm-matrix-card">
+            <div class="rpm-matrix-wrapper">
+                <table class="rpm-matrix" role="grid" aria-label="Role-Permission matrix">
+                    <thead>
+                        <tr>
+                            <th class="rpm-th rpm-th-perm rpm-corner" scope="col">Permission</th>
+                            <th class="rpm-th rpm-th-res" scope="col">Resource</th>
+                            <th class="rpm-th rpm-th-act" scope="col">Action</th>
+                            @foreach (var role in VisibleRoles)
+                            {
+                                var isCompared = _compareRoles.Contains(role.RoleId);
+                                <th class="rpm-th rpm-th-role @(isCompared ? "rpm-th-role-cmp" : "") @(role.IsSystemRole ? "rpm-th-role-sys" : "")"
+                                    scope="col"
+                                    @onclick="() => OnRoleHeaderClick(role)"
+                                    title="@role.RoleName — @role.RoleTypeCode">
+                                    <div class="rpm-role-hdr">
+                                        @if (_compareMode)
+                                        {
+                                            <span class="rpm-cmp-check @(isCompared ? "rpm-cmp-on" : "")" aria-hidden="true">
+                                                <i class="bi @(isCompared ? "bi-check-square-fill" : "bi-square")"></i>
+                                            </span>
+                                        }
+                                        <div class="rpm-role-hdr-name">@role.RoleName</div>
+                                        <div class="rpm-role-hdr-sub">
+                                            <span class="rpm-role-type-dot rpm-dot-@role.RoleTypeCode.ToLowerInvariant()" aria-hidden="true"></span>
+                                            @role.RoleCode
+                                        </div>
+                                    </div>
+                                </th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var group in GroupedPermissions)
+                        {
+                            <tr class="rpm-group-row" role="row">
+                                <td class="rpm-group-td" colspan="@(3 + VisibleRoles.Count)" scope="row">
+                                    <i class="bi bi-folder2-open" aria-hidden="true"></i>
+                                    @group.Key
+                                    <span class="rpm-group-count">@group.Items.Count</span>
+                                </td>
+                            </tr>
+                            @foreach (var perm in group.Items)
+                            {
+                                <tr class="rpm-perm-row" role="row">
+                                    <td class="rpm-td-perm">
+                                        <div class="rpm-perm-name">@perm.PermissionName</div>
+                                        <code class="rpm-perm-code">@perm.PermissionCode</code>
+                                    </td>
+                                    <td class="rpm-td-meta">@perm.ResourceCode</td>
+                                    <td class="rpm-td-meta">
+                                        <span class="rpm-action-badge rpm-action-@perm.ActionCode.ToLowerInvariant()">@perm.ActionCode</span>
+                                    </td>
+                                    @foreach (var role in VisibleRoles)
+                                    {
+                                        <td class="@CellClass(role.RoleId, perm.PermissionId, role.IsSystemRole)"
+                                            role="gridcell"
+                                            tabindex="0"
+                                            aria-checked="@_grants.Contains((role.RoleId, perm.PermissionId))"
+                                            title="@CellTitle(role.RoleId, perm.PermissionId, role.IsSystemRole, perm.PermissionCode, role.RoleName)"
+                                            @onclick="() => ToggleCellAsync(role, perm)"
+                                            @onkeydown="e => OnCellKeyDown(e, role, perm)">
+                                            @if (_busy.Contains((role.RoleId, perm.PermissionId)))
+                                            {
+                                                <span class="rpm-cell-spin" aria-hidden="true"></span>
+                                            }
+                                            else if (_grants.Contains((role.RoleId, perm.PermissionId)))
+                                            {
+                                                <i class="bi bi-check-lg" aria-hidden="true"></i>
+                                            }
+                                            else if (role.IsSystemRole)
+                                            {
+                                                <i class="bi bi-lock-fill rpm-cell-lock-icon" aria-hidden="true"></i>
+                                            }
+                                        </td>
+                                    }
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="rpm-matrix-footer">
+                <span>@FilteredPermissions.Count permission@(FilteredPermissions.Count == 1 ? "" : "s")</span>
+                <span>·</span>
+                <span>@VisibleRoles.Count role@(VisibleRoles.Count == 1 ? "" : "s") shown</span>
+            </div>
+        </div>
+    }
+
+</div>
+
+<!-- ── Clone Role Dialog ────────────────────────────── -->
+<SfDialog @bind-Visible="_showClone"
+          Width="480px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogTemplates>
+        <Header>
+            <span class="dlg-hd-icon"><i class="bi bi-copy" aria-hidden="true"></i></span>
+            Clone Permissions from Role
+        </Header>
+        <Content>
+            <div class="dlg-form">
+                <div class="form-row">
+                    <div class="form-group form-group-full">
+                        <label>Source Role <span class="req" aria-hidden="true">*</span></label>
+                        <SfDropDownList TItem="RoleDto" TValue="Guid?"
+                                        DataSource="@_allRoles"
+                                        @bind-Value="_cloneSourceId"
+                                        Placeholder="Copy permissions from…">
+                            <DropDownListFieldSettings Text="RoleName" Value="RoleId" />
+                        </SfDropDownList>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group form-group-full">
+                        <label>Target Role <span class="req" aria-hidden="true">*</span></label>
+                        <SfDropDownList TItem="RoleDto" TValue="Guid?"
+                                        DataSource="@_allRoles"
+                                        @bind-Value="_cloneTargetId"
+                                        Placeholder="Grant permissions to…">
+                            <DropDownListFieldSettings Text="RoleName" Value="RoleId" />
+                        </SfDropDownList>
+                    </div>
+                </div>
+                @if (_cloneSourceId.HasValue && _cloneTargetId.HasValue && _cloneSourceId != _cloneTargetId)
+                {
+                    <div class="rpm-clone-preview">
+                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                        <strong>@CloneCount</strong> permission@(CloneCount == 1 ? "" : "s") will be added to
+                        <strong>@(_allRoles.FirstOrDefault(r => r.RoleId == _cloneTargetId)?.RoleName)</strong>
+                        that it does not already have.
+                    </div>
+                }
+                @if (_cloneSourceId.HasValue && _cloneTargetId.HasValue && _cloneSourceId == _cloneTargetId)
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> Source and target roles must be different.
+                    </div>
+                }
+                @if (!string.IsNullOrEmpty(_dlgError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_dlgError
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseClone">Cancel</button>
+                <button class="um-btn um-btn-primary"
+                        @onclick="ExecuteCloneAsync"
+                        disabled="@(!CanClone || _saving)">
+                    @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
+                    Clone @(CloneCount > 0 ? CloneCount + " " : "")Permission@(CloneCount == 1 ? "" : "s")
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Bulk Grant / Revoke Dialog ────────────────────── -->
+<SfDialog @bind-Visible="_showBulk"
+          Width="560px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogTemplates>
+        <Header>
+            <span class="dlg-hd-icon"><i class="bi bi-toggles" aria-hidden="true"></i></span>
+            Bulk Grant / Revoke
+        </Header>
+        <Content>
+            <div class="dlg-form">
+                <div class="form-row">
+                    <div class="form-group form-group-full">
+                        <label>Role <span class="req" aria-hidden="true">*</span></label>
+                        <SfDropDownList TItem="RoleDto" TValue="Guid?"
+                                        DataSource="@_allRoles"
+                                        @bind-Value="_bulkRoleId"
+                                        Placeholder="Select role…">
+                            <DropDownListFieldSettings Text="RoleName" Value="RoleId" />
+                        </SfDropDownList>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group form-group-full">
+                        <label>Action</label>
+                        <div class="rpm-bulk-action-toggle">
+                            <button class="rpm-bulk-action-btn @(_bulkGrant ? "active" : "")" @onclick="() => _bulkGrant = true">
+                                <i class="bi bi-check-circle-fill" aria-hidden="true"></i> Grant
+                            </button>
+                            <button class="rpm-bulk-action-btn @(!_bulkGrant ? "active" : "")" @onclick="() => _bulkGrant = false">
+                                <i class="bi bi-slash-circle" aria-hidden="true"></i> Revoke
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group form-group-full">
+                        <label>Permissions</label>
+                        <div class="um-search-box" style="margin-bottom:8px">
+                            <i class="bi bi-search" aria-hidden="true"></i>
+                            <input class="um-search-input" type="search" placeholder="Filter…"
+                                   value="@_bulkSearch"
+                                   @oninput="e => _bulkSearch = e.Value?.ToString() ?? string.Empty" />
+                        </div>
+                        <div class="rpm-bulk-perm-list">
+                                    <label class="rpm-bulk-perm-item rpm-bulk-select-all">
+                                        <input type="checkbox"
+                                               checked="@(BulkVisiblePermissions.Count > 0 && BulkVisiblePermissions.All(p => _bulkPermissions.Contains(p.PermissionId)))"
+                                               @onchange="e => ToggleBulkAll(BulkVisiblePermissions, (bool)(e.Value ?? false))" />
+                                        <span>Select all (@BulkVisiblePermissions.Count)</span>
+                                    </label>
+                                    @foreach (var perm in BulkVisiblePermissions)
+                                    {
+                                <label class="rpm-bulk-perm-item">
+                                    <input type="checkbox"
+                                           checked="@_bulkPermissions.Contains(perm.PermissionId)"
+                                           @onchange="e => ToggleBulkPerm(perm.PermissionId, (bool)(e.Value ?? false))" />
+                                    <span class="rpm-bulk-perm-name">@perm.PermissionName</span>
+                                    <code class="rpm-bulk-perm-code">@perm.PermissionCode</code>
+                                </label>
+                            }
+                        </div>
+                    </div>
+                </div>
+                @if (!string.IsNullOrEmpty(_dlgError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_dlgError
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseBulk">Cancel</button>
+                <button class="um-btn @(_bulkGrant ? "um-btn-primary" : "um-btn-warning")"
+                        @onclick="ExecuteBulkAsync"
+                        disabled="@(!_bulkRoleId.HasValue || _bulkPermissions.Count == 0 || _saving)">
+                    @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
+                    @(_bulkGrant ? "Grant" : "Revoke") @(_bulkPermissions.Count > 0 ? _bulkPermissions.Count + " " : "")Selected
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Toast ─────────────────────────────────────────── -->
+<SfToast @ref="_toast" ID="rpm-toast" ShowCloseButton="true" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private static readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Data ──────────────────────────────────────────────────
+    private List<RoleDto>       _allRoles       = [];
+    private List<PermissionDto> _allPermissions = [];
+    private HashSet<(Guid RoleId, Guid PermissionId)> _grants  = [];
+    private Dictionary<(Guid RoleId, Guid PermissionId), Guid> _grantIds = [];
+    private HashSet<(Guid RoleId, Guid PermissionId)> _busy    = [];
+    private bool _loading = true;
+
+    // ── Filters ───────────────────────────────────────────────
+    private string _moduleFilter = string.Empty;
+    private string _permSearch   = string.Empty;
+    private string _roleSearch   = string.Empty;
+
+    // ── Compare mode ──────────────────────────────────────────
+    private bool         _compareMode  = false;
+    private HashSet<Guid> _compareRoles = [];
+
+    // ── Dialogs ───────────────────────────────────────────────
+    private bool   _showClone;
+    private Guid?  _cloneSourceId;
+    private Guid?  _cloneTargetId;
+
+    private bool   _showBulk;
+    private Guid?  _bulkRoleId;
+    private bool   _bulkGrant     = true;
+    private string _bulkSearch    = string.Empty;
+    private HashSet<Guid> _bulkPermissions = [];
+
+    private bool   _saving;
+    private string _dlgError = string.Empty;
+
+    // ── Toast ─────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Computed ──────────────────────────────────────────────
+    private IReadOnlyList<RoleDto> VisibleRoles
+    {
+        get
+        {
+            var bySearch = string.IsNullOrEmpty(_roleSearch)
+                ? _allRoles
+                : _allRoles.Where(r => r.RoleName.Contains(_roleSearch, StringComparison.OrdinalIgnoreCase)
+                                    || r.RoleCode.Contains(_roleSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+            return _compareMode && _compareRoles.Count > 0
+                ? bySearch.Where(r => _compareRoles.Contains(r.RoleId)).ToList()
+                : bySearch;
+        }
+    }
+
+    private IReadOnlyList<PermissionDto> FilteredPermissions =>
+        _allPermissions.Where(p =>
+            (string.IsNullOrEmpty(_moduleFilter) || p.ResourceCode == _moduleFilter) &&
+            (string.IsNullOrEmpty(_permSearch)   ||
+             p.PermissionName.Contains(_permSearch, StringComparison.OrdinalIgnoreCase) ||
+             p.PermissionCode.Contains(_permSearch, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+    private IReadOnlyList<PermGroup> GroupedPermissions =>
+        FilteredPermissions
+            .GroupBy(p => p.ResourceCode)
+            .OrderBy(g => g.Key)
+            .Select(g => new PermGroup(g.Key, g.ToList()))
+            .ToList();
+
+    private IReadOnlyList<string> Modules =>
+        _allPermissions.Select(p => p.ResourceCode).Distinct().OrderBy(x => x).ToList();
+
+    private double CoveragePct => (_allRoles.Count * _allPermissions.Count) == 0 ? 0
+        : Math.Round(100.0 * _grants.Count / (_allRoles.Count * _allPermissions.Count), 1);
+
+    // ── Clone computed ────────────────────────────────────────
+    private int CloneCount
+    {
+        get
+        {
+            if (!_cloneSourceId.HasValue || !_cloneTargetId.HasValue || _cloneSourceId == _cloneTargetId)
+                return 0;
+            return _allPermissions.Count(p =>
+                _grants.Contains((_cloneSourceId.Value, p.PermissionId)) &&
+                !_grants.Contains((_cloneTargetId.Value, p.PermissionId)));
+        }
+    }
+    private bool CanClone => _cloneSourceId.HasValue && _cloneTargetId.HasValue && _cloneSourceId != _cloneTargetId && CloneCount > 0;
+
+    // ── Bulk computed ─────────────────────────────────────────
+    private IReadOnlyList<PermissionDto> BulkVisiblePermissions =>
+        string.IsNullOrEmpty(_bulkSearch)
+            ? _allPermissions
+            : _allPermissions.Where(p =>
+                p.PermissionName.Contains(_bulkSearch, StringComparison.OrdinalIgnoreCase) ||
+                p.PermissionCode.Contains(_bulkSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+
+    // ── Lifecycle ─────────────────────────────────────────────
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var matrix = await Api.GetRolePermissionMatrixAsync(_tenantId);
+            if (matrix is not null)
+            {
+                _allRoles       = matrix.Roles.ToList();
+                _allPermissions = matrix.Permissions.ToList();
+                _grants  = matrix.Grants.Select(g => (g.RoleId, g.PermissionId)).ToHashSet();
+                _grantIds = matrix.Grants.ToDictionary(g => (g.RoleId, g.PermissionId), g => g.RolePermissionId);
+            }
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    // ── Cell toggle ───────────────────────────────────────────
+    private async Task ToggleCellAsync(RoleDto role, PermissionDto perm)
+    {
+        if (role.IsSystemRole) return;
+        var key = (role.RoleId, perm.PermissionId);
+        if (_busy.Contains(key)) return;
+
+        _busy.Add(key);
+        StateHasChanged();
+        try
+        {
+            if (_grants.Contains(key))
+            {
+                await Api.RevokePermissionFromRoleAsync(new RevokeRolePermissionRequest
+                {
+                    RolePermissionId = _grantIds[key],
+                });
+                _grants.Remove(key);
+                _grantIds.Remove(key);
+            }
+            else
+            {
+                var rpId = await Api.AssignPermissionToRoleAsync(new AssignRolePermissionRequest
+                {
+                    TenantId     = _tenantId,
+                    RoleId       = role.RoleId,
+                    PermissionId = perm.PermissionId,
+                });
+                _grants.Add(key);
+                _grantIds[key] = rpId;
+            }
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally
+        {
+            _busy.Remove(key);
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnCellKeyDown(KeyboardEventArgs e, RoleDto role, PermissionDto perm)
+    {
+        if (e.Key == "Enter" || e.Key == " ")
+            await ToggleCellAsync(role, perm);
+    }
+
+    // ── Compare mode ──────────────────────────────────────────
+    private void ToggleCompareMode()
+    {
+        _compareMode = !_compareMode;
+        if (!_compareMode) _compareRoles.Clear();
+    }
+
+    private void OnRoleHeaderClick(RoleDto role)
+    {
+        if (!_compareMode) return;
+        if (!_compareRoles.Add(role.RoleId)) _compareRoles.Remove(role.RoleId);
+    }
+
+    // ── Clone dialog ──────────────────────────────────────────
+    private void OpenClone()
+    {
+        _cloneSourceId = null;
+        _cloneTargetId = null;
+        _dlgError      = string.Empty;
+        _showClone     = true;
+    }
+    private void CloseClone() { _showClone = false; _dlgError = string.Empty; }
+
+    private async Task ExecuteCloneAsync()
+    {
+        if (!CanClone || _saving) return;
+        _dlgError = string.Empty;
+        _saving   = true;
+        try
+        {
+            var toGrant = _allPermissions
+                .Where(p => _grants.Contains((_cloneSourceId!.Value, p.PermissionId)) &&
+                            !_grants.Contains((_cloneTargetId!.Value, p.PermissionId)))
+                .ToList();
+
+            foreach (var perm in toGrant)
+            {
+                var rpId = await Api.AssignPermissionToRoleAsync(new AssignRolePermissionRequest
+                {
+                    TenantId     = _tenantId,
+                    RoleId       = _cloneTargetId!.Value,
+                    PermissionId = perm.PermissionId,
+                });
+                var key = (_cloneTargetId.Value, perm.PermissionId);
+                _grants.Add(key);
+                _grantIds[key] = rpId;
+            }
+            var targetName = _allRoles.FirstOrDefault(r => r.RoleId == _cloneTargetId)?.RoleName ?? "target";
+            CloseClone();
+            await ShowToastAsync($"Cloned {toGrant.Count} permission(s) to '{targetName}'.");
+        }
+        catch (Exception ex) { _dlgError = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    // ── Bulk dialog ───────────────────────────────────────────
+    private void OpenBulk()
+    {
+        _bulkRoleId     = null;
+        _bulkGrant      = true;
+        _bulkSearch     = string.Empty;
+        _bulkPermissions.Clear();
+        _dlgError       = string.Empty;
+        _showBulk       = true;
+    }
+    private void CloseBulk() { _showBulk = false; _dlgError = string.Empty; }
+
+    private void ToggleBulkPerm(Guid permId, bool add)
+    {
+        if (add) _bulkPermissions.Add(permId);
+        else _bulkPermissions.Remove(permId);
+    }
+
+    private void ToggleBulkAll(IReadOnlyList<PermissionDto> visible, bool add)
+    {
+        foreach (var p in visible)
+        {
+            if (add) _bulkPermissions.Add(p.PermissionId);
+            else _bulkPermissions.Remove(p.PermissionId);
+        }
+    }
+
+    private async Task ExecuteBulkAsync()
+    {
+        if (!_bulkRoleId.HasValue || _bulkPermissions.Count == 0 || _saving) return;
+        _dlgError = string.Empty;
+        _saving   = true;
+        int count = 0;
+        try
+        {
+            foreach (var permId in _bulkPermissions.ToList())
+            {
+                var key = (_bulkRoleId.Value, permId);
+                if (_bulkGrant && !_grants.Contains(key))
+                {
+                    var rpId = await Api.AssignPermissionToRoleAsync(new AssignRolePermissionRequest
+                    {
+                        TenantId     = _tenantId,
+                        RoleId       = _bulkRoleId.Value,
+                        PermissionId = permId,
+                    });
+                    _grants.Add(key);
+                    _grantIds[key] = rpId;
+                    count++;
+                }
+                else if (!_bulkGrant && _grants.Contains(key))
+                {
+                    await Api.RevokePermissionFromRoleAsync(new RevokeRolePermissionRequest
+                    {
+                        RolePermissionId = _grantIds[key],
+                    });
+                    _grants.Remove(key);
+                    _grantIds.Remove(key);
+                    count++;
+                }
+            }
+            var roleName = _allRoles.FirstOrDefault(r => r.RoleId == _bulkRoleId)?.RoleName ?? "role";
+            CloseBulk();
+            await ShowToastAsync($"{(_bulkGrant ? "Granted" : "Revoked")} {count} permission(s) on '{roleName}'.");
+        }
+        catch (Exception ex) { _dlgError = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    // ── Export ────────────────────────────────────────────────
+    private async Task ExportCsvAsync()
+    {
+        var roles = VisibleRoles;
+        var perms = FilteredPermissions;
+        var sb    = new System.Text.StringBuilder();
+
+        sb.Append("Permission,Code,Resource,Action");
+        foreach (var r in roles) sb.Append($",{CsvEsc(r.RoleName)}");
+        sb.AppendLine();
+
+        foreach (var perm in perms)
+        {
+            sb.Append($"{CsvEsc(perm.PermissionName)},{CsvEsc(perm.PermissionCode)},{CsvEsc(perm.ResourceCode)},{CsvEsc(perm.ActionCode)}");
+            foreach (var r in roles)
+                sb.Append(_grants.Contains((r.RoleId, perm.PermissionId)) ? ",1" : ",0");
+            sb.AppendLine();
+        }
+
+        var bytes  = System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+        var base64 = Convert.ToBase64String(bytes);
+        await JS.InvokeVoidAsync("amsShell.downloadBase64",
+            $"role-permission-matrix-{DateTime.UtcNow:yyyyMMdd}.csv", "text/csv;charset=utf-8", base64);
+    }
+
+    private static string CsvEsc(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return string.Empty;
+        const string dq = "\"";
+        return s.Contains(',') || s.Contains('"') || s.Contains('\n')
+            ? dq + s.Replace(dq, dq + dq) + dq
+            : s;
+    }
+
+    // ── Helpers ───────────────────────────────────────────────
+    private string CellClass(Guid roleId, Guid permId, bool locked)
+    {
+        if (locked)                              return "rpm-cell rpm-cell-off rpm-cell-locked";
+        if (_busy.Contains((roleId, permId)))    return "rpm-cell rpm-cell-busy";
+        return _grants.Contains((roleId, permId)) ? "rpm-cell rpm-cell-on" : "rpm-cell rpm-cell-off";
+    }
+
+    private string CellTitle(Guid roleId, Guid permId, bool locked, string permCode, string roleName)
+    {
+        if (locked) return $"{permCode} — system role (read-only)";
+        return _grants.Contains((roleId, permId))
+            ? $"Revoke {permCode} from {roleName}"
+            : $"Grant {permCode} to {roleName}";
+    }
+
+    private sealed record PermGroup(string Key, IReadOnlyList<PermissionDto> Items);
+
+    private async Task ShowToastAsync(string message, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content  = message,
+            CssClass = isError ? "e-toast-danger" : "e-toast-success",
+            Timeout  = 4000,
+        });
+    }
+}

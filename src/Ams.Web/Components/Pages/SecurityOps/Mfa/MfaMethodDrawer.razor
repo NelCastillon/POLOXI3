@@ -1,0 +1,227 @@
+@*
+    MfaMethodDrawer — right-side drawer for registering a new MFA method for a user.
+    Usage: <MfaMethodDrawer @bind-Visible="_show" TenantId="_tenantId" UserId="_userId" OnSaved="ReloadAsync" />
+*@
+@using Ams.Application.Features.Security
+@inject ApiClient Api
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppCrudDrawer @bind-Visible="_open"
+               Title="Add MFA Method"
+               Icon="bi-shield-plus"
+               Width="480px"
+               IsBusy="_busy"
+               OnClose="HandleCloseAsync">
+    <Footer>
+        <button class="um-btn um-btn-ghost" @onclick="HandleCloseAsync" disabled="@_busy">Cancel</button>
+        <button class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_busy">
+            @if (_busy) { <span class="um-spin" aria-hidden="true"></span> }
+            Add Method
+        </button>
+    </Footer>
+    <Content>
+        @if (!string.IsNullOrEmpty(_errorMsg))
+        {
+            <div class="mfad-error">
+                <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                @_errorMsg
+            </div>
+        }
+
+        <!-- Method type -->
+        <div class="mfad-section">
+            <h4 class="mfad-section-title">Method Type</h4>
+            <div class="mfad-grid">
+                <div class="mfad-field mfad-field--full">
+                    <label class="mfad-label">Device Type <span class="req">*</span></label>
+                    <SfDropDownList TValue="string" TItem="LabelValue"
+                                   DataSource="_typeOptions"
+                                   @bind-Value="_form.DeviceTypeCode"
+                                   Placeholder="Select MFA type">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                </div>
+                <div class="mfad-field mfad-field--full">
+                    <label class="mfad-label">Device Name <span class="req">*</span></label>
+                    <SfTextBox @bind-Value="_form.DeviceName"
+                               Placeholder="@DeviceNamePlaceholder" />
+                    <span class="mfad-hint">A friendly label to identify this method.</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Conditional contact fields -->
+        @if (_form.DeviceTypeCode == "SMS")
+        {
+            <div class="mfad-section">
+                <h4 class="mfad-section-title">SMS Details</h4>
+                <div class="mfad-grid">
+                    <div class="mfad-field mfad-field--full">
+                        <label class="mfad-label">Phone Number <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.PhoneNumber"
+                                   Placeholder="+1 555 000 0000" />
+                    </div>
+                </div>
+            </div>
+        }
+
+        @if (_form.DeviceTypeCode == "Email")
+        {
+            <div class="mfad-section">
+                <h4 class="mfad-section-title">Email Details</h4>
+                <div class="mfad-grid">
+                    <div class="mfad-field mfad-field--full">
+                        <label class="mfad-label">Email Address <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.EmailAddress"
+                                   Placeholder="user@example.com" />
+                    </div>
+                </div>
+            </div>
+        }
+
+        <!-- Info panel for TOTP / HardwareToken / BackupCode -->
+        @if (_form.DeviceTypeCode is "TOTP" or "HardwareToken" or "BackupCode")
+        {
+            <div class="mfad-info-panel">
+                <i class="bi bi-info-circle-fill" aria-hidden="true"></i>
+                <span>@DeviceTypeInfoText</span>
+            </div>
+        }
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    // ── Parameters ─────────────────────────────────────────────────────────────
+    [Parameter] public bool     Visible   { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public Guid     TenantId  { get; set; }
+    [Parameter] public Guid     UserId    { get; set; }
+    [Parameter] public EventCallback OnSaved { get; set; }
+
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── State ──────────────────────────────────────────────────────────────────
+    private bool   _open  = false;
+    private bool   _busy  = false;
+    private string _errorMsg = string.Empty;
+    private FormModel _form = new();
+
+    // ── Options ────────────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _typeOptions =
+    [
+        new("TOTP",          "Authenticator App (TOTP)"),
+        new("SMS",           "SMS"),
+        new("Email",         "Email OTP"),
+        new("HardwareToken", "Hardware Token"),
+        new("BackupCode",    "Backup Code"),
+    ];
+
+    // ── Computed helpers ───────────────────────────────────────────────────────
+    private string DeviceNamePlaceholder => _form.DeviceTypeCode switch
+    {
+        "TOTP"          => "e.g. Google Authenticator",
+        "SMS"           => "e.g. Personal Phone",
+        "Email"         => "e.g. Work Email",
+        "HardwareToken" => "e.g. YubiKey 5",
+        "BackupCode"    => "e.g. Recovery Codes",
+        _               => "Friendly name for this method",
+    };
+
+    private string DeviceTypeInfoText => _form.DeviceTypeCode switch
+    {
+        "TOTP"          => "The user will need to scan a QR code with their authenticator app to complete setup.",
+        "HardwareToken" => "The user will need to register their hardware token via the user portal.",
+        "BackupCode"    => "Backup codes will be generated and shown to the user once.",
+        _               => string.Empty,
+    };
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override void OnParametersSet()
+    {
+        if (Visible && !_open)
+        {
+            _form     = new();
+            _errorMsg = string.Empty;
+            _open     = true;
+        }
+        else if (!Visible && _open)
+        {
+            _open = false;
+        }
+    }
+
+    // ── Save ───────────────────────────────────────────────────────────────────
+    private async Task SaveAsync()
+    {
+        _errorMsg = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(_form.DeviceTypeCode))
+        { _errorMsg = "Device type is required."; return; }
+
+        if (string.IsNullOrWhiteSpace(_form.DeviceName))
+        { _errorMsg = "Device name is required."; return; }
+
+        if (_form.DeviceTypeCode == "SMS" && string.IsNullOrWhiteSpace(_form.PhoneNumber))
+        { _errorMsg = "Phone number is required for SMS."; return; }
+
+        if (_form.DeviceTypeCode == "Email" && string.IsNullOrWhiteSpace(_form.EmailAddress))
+        { _errorMsg = "Email address is required for Email OTP."; return; }
+
+        _busy = true;
+        try
+        {
+            var request = new AddMfaMethodRequest
+            {
+                TenantId       = TenantId,
+                UserId         = UserId,
+                DeviceTypeCode = _form.DeviceTypeCode,
+                DeviceName     = _form.DeviceName.Trim(),
+                PhoneNumber    = string.IsNullOrWhiteSpace(_form.PhoneNumber)    ? null : _form.PhoneNumber.Trim(),
+                EmailAddress   = string.IsNullOrWhiteSpace(_form.EmailAddress)   ? null : _form.EmailAddress.Trim(),
+            };
+            await Api.AddMfaMethodAsync(request);
+            await ShowToastAsync($"\"{_form.DeviceName}\" added successfully.", "e-toast-success");
+            await CloseAsync();
+            await OnSaved.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _errorMsg = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // ── Close ──────────────────────────────────────────────────────────────────
+    private async Task HandleCloseAsync() => await CloseAsync();
+
+    private async Task CloseAsync()
+    {
+        _open = false;
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    // ── Toast helper ───────────────────────────────────────────────────────────
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    // ── FormModel ──────────────────────────────────────────────────────────────
+    private sealed class FormModel
+    {
+        public string DeviceTypeCode { get; set; } = string.Empty;
+        public string DeviceName     { get; set; } = string.Empty;
+        public string PhoneNumber    { get; set; } = string.Empty;
+        public string EmailAddress   { get; set; } = string.Empty;
+    }
+
+    private sealed record LabelValue(string Value, string Label);
+}

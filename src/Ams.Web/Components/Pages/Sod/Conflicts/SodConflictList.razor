@@ -1,0 +1,680 @@
+@page "/sod/conflicts"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Sod
+@inject ApiClient Api
+
+<PageTitle>SoD Conflict Dashboard</PageTitle>
+
+<div class="scd-shell">
+
+    <!-- ── Header ──────────────────────────────────────────────────────────── -->
+    <div class="scd-header">
+        <div class="scd-header-left">
+            <nav class="scd-breadcrumb" aria-label="breadcrumb">
+                <a href="/" class="scd-bc-link">Home</a>
+                <span class="scd-bc-sep" aria-hidden="true">›</span>
+                <a href="/sod/rules" class="scd-bc-link">SoD Rules</a>
+                <span class="scd-bc-sep" aria-hidden="true">›</span>
+                <span class="scd-bc-current">Conflict Dashboard</span>
+            </nav>
+            <h1 class="scd-title">
+                <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                SoD Conflict Dashboard
+            </h1>
+        </div>
+        <div class="scd-header-right">
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- ── KPI strip ───────────────────────────────────────────────────────── -->
+    <div class="scd-kpi-strip">
+        <div class="scd-kpi">
+            <span class="scd-kpi-value">@_all.Count</span>
+            <span class="scd-kpi-label">Total</span>
+        </div>
+        <div class="scd-kpi scd-kpi--open">
+            <span class="scd-kpi-value">@_all.Count(c => c.StatusCode == "Open")</span>
+            <span class="scd-kpi-label">Open</span>
+        </div>
+        <div class="scd-kpi scd-kpi--review">
+            <span class="scd-kpi-value">@_all.Count(c => c.StatusCode == "InReview")</span>
+            <span class="scd-kpi-label">In Review</span>
+        </div>
+        <div class="scd-kpi scd-kpi--remediated">
+            <span class="scd-kpi-value">@_all.Count(c => c.StatusCode == "Remediated")</span>
+            <span class="scd-kpi-label">Remediated</span>
+        </div>
+        <div class="scd-kpi scd-kpi--critical">
+            <span class="scd-kpi-value">@_all.Count(c => c.SeverityCode is "High" or "Critical")</span>
+            <span class="scd-kpi-label">High / Critical</span>
+        </div>
+    </div>
+
+    <!-- ── Filter row ──────────────────────────────────────────────────────── -->
+    <div class="scd-filter-row">
+        <div class="scd-search-wrap">
+            <i class="bi bi-search scd-search-icon" aria-hidden="true"></i>
+            <input class="scd-search-input"
+                   type="text"
+                   placeholder="Search user, rule…"
+                   value="@_searchTerm"
+                   @oninput="OnSearchInput" />
+        </div>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_statusOptions"
+                        Placeholder="All Statuses"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterStatus"
+                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilter(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_severityOptions"
+                        Placeholder="All Severities"
+                        ShowClearButton="true"
+                        Width="155px"
+                        Value="_filterSeverity"
+                        ValueChanged="@((string v) => { _filterSeverity = v; ApplyFilter(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </div>
+
+    <!-- ── Table ───────────────────────────────────────────────────────────── -->
+    @if (_loading)
+    {
+        <div class="scd-loading">
+            <span class="um-spin" aria-hidden="true"></span>
+            Loading conflicts…
+        </div>
+    }
+    else if (_filtered.Count == 0)
+    {
+        <div class="scd-empty">
+            <i class="bi bi-shield-check scd-empty-icon" aria-hidden="true"></i>
+            <p>@(_all.Count == 0 ? "No SoD conflicts detected." : "No conflicts match the current filters.")</p>
+        </div>
+    }
+    else
+    {
+        <div class="scd-table-wrap">
+            <table class="scd-table">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Conflict Rule</th>
+                        <th>Severity</th>
+                        <th>Detected</th>
+                        <th>Status</th>
+                        <th>Resolved By</th>
+                        <th class="scd-th-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var c in _filtered)
+                    {
+                        <tr class="@(c.IsResolved ? "scd-row--resolved" : "")">
+                            <td>
+                                <div class="scd-user-name">@c.UserFullName</div>
+                                <div class="scd-user-email">@c.UserEmail</div>
+                            </td>
+                            <td>
+                                <div class="scd-rule-code">@c.RuleCode</div>
+                                <div class="scd-rule-name">@c.RuleName</div>
+                            </td>
+                            <td>
+                                <span class="scd-severity-badge scd-severity-badge--@c.SeverityCode.ToLower()">
+                                    @c.SeverityCode
+                                </span>
+                            </td>
+                            <td class="scd-td-date">@c.DetectedDateUtc.ToString("dd MMM yyyy")</td>
+                            <td>
+                                <span class="scd-status-badge scd-status-badge--@c.StatusCode.ToLower()">
+                                    @StatusLabel(c.StatusCode)
+                                </span>
+                            </td>
+                            <td>
+                                @if (c.ResolvedByFullName is not null)
+                                {
+                                    <div class="scd-resolved-by">@c.ResolvedByFullName</div>
+                                    @if (c.ResolvedDateUtc.HasValue)
+                                    {
+                                        <div class="scd-resolved-date">@c.ResolvedDateUtc.Value.ToString("dd MMM yyyy")</div>
+                                    }
+                                }
+                                else if (c.ReviewerFullName is not null)
+                                {
+                                    <div class="scd-reviewer">
+                                        <i class="bi bi-person-check" aria-hidden="true"></i>
+                                        @c.ReviewerFullName
+                                    </div>
+                                }
+                                else
+                                {
+                                    <span class="scd-unassigned">—</span>
+                                }
+                            </td>
+                            <td class="scd-td-actions">
+                                <button class="scd-action-btn scd-action-btn--detail"
+                                        title="View Detail"
+                                        @onclick="() => OpenDetail(c)">
+                                    <i class="bi bi-eye" aria-hidden="true"></i>
+                                </button>
+                                @if (!c.IsResolved)
+                                {
+                                    <button class="scd-action-btn scd-action-btn--assign"
+                                            title="Assign Reviewer"
+                                            @onclick="() => OpenAssign(c)">
+                                        <i class="bi bi-person-plus" aria-hidden="true"></i>
+                                    </button>
+                                    <button class="scd-action-btn scd-action-btn--remediate"
+                                            title="Remediate"
+                                            @onclick='() => OpenAction(c, "Remediate")'>
+                                        <i class="bi bi-tools" aria-hidden="true"></i>
+                                    </button>
+                                    <button class="scd-action-btn scd-action-btn--resolve"
+                                            title="Resolve"
+                                            @onclick='() => OpenAction(c, "Resolve")'>
+                                        <i class="bi bi-check-circle" aria-hidden="true"></i>
+                                    </button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="scd-results-footer">
+            Showing <strong>@_filtered.Count</strong> of <strong>@_all.Count</strong> conflicts
+        </div>
+    }
+
+</div>
+
+<!-- ── Detail dialog ─────────────────────────────────────────────────────── -->
+<SfDialog Width="560px"
+          Visible="_detailVisible"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogEvents Closed="OnDetailClosed" />
+    <DialogTemplates>
+        <Header>
+            <span class="scd-dlg-icon scd-dlg-icon--detail" aria-hidden="true">
+                <i class="bi bi-info-circle"></i>
+            </span>
+            Conflict Detail
+        </Header>
+        <Content>
+            @if (_selectedConflict is not null)
+            {
+                <div class="scd-dlg-body scd-detail-body">
+                    <div class="scd-detail-section">
+                        <div class="scd-detail-label">User</div>
+                        <div class="scd-detail-value">@_selectedConflict.UserFullName</div>
+                        <div class="scd-detail-sub">@_selectedConflict.UserEmail</div>
+                    </div>
+                    <div class="scd-detail-section">
+                        <div class="scd-detail-label">Conflict Rule</div>
+                        <div class="scd-detail-value">@_selectedConflict.RuleName</div>
+                        <div class="scd-detail-sub">@_selectedConflict.RuleCode</div>
+                    </div>
+                    <div class="scd-detail-row">
+                        <div class="scd-detail-section">
+                            <div class="scd-detail-label">Severity</div>
+                            <span class="scd-severity-badge scd-severity-badge--@_selectedConflict.SeverityCode.ToLower()">
+                                @_selectedConflict.SeverityCode
+                            </span>
+                        </div>
+                        <div class="scd-detail-section">
+                            <div class="scd-detail-label">Status</div>
+                            <span class="scd-status-badge scd-status-badge--@_selectedConflict.StatusCode.ToLower()">
+                                @StatusLabel(_selectedConflict.StatusCode)
+                            </span>
+                        </div>
+                        <div class="scd-detail-section">
+                            <div class="scd-detail-label">Detected</div>
+                            <div class="scd-detail-value">@_selectedConflict.DetectedDateUtc.ToString("dd MMM yyyy")</div>
+                        </div>
+                    </div>
+                    @if (_selectedConflict.ReviewerFullName is not null)
+                    {
+                        <div class="scd-detail-section">
+                            <div class="scd-detail-label">Assigned Reviewer</div>
+                            <div class="scd-detail-value">@_selectedConflict.ReviewerFullName</div>
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(_selectedConflict.RemediationNote))
+                    {
+                        <div class="scd-detail-section">
+                            <div class="scd-detail-label">Remediation Note</div>
+                            <div class="scd-detail-note">@_selectedConflict.RemediationNote</div>
+                        </div>
+                    }
+                    @if (_selectedConflict.ResolvedByFullName is not null)
+                    {
+                        <div class="scd-detail-section">
+                            <div class="scd-detail-label">Resolved By</div>
+                            <div class="scd-detail-value">@_selectedConflict.ResolvedByFullName</div>
+                            @if (_selectedConflict.ResolvedDateUtc.HasValue)
+                            {
+                                <div class="scd-detail-sub">@_selectedConflict.ResolvedDateUtc.Value.ToString("dd MMM yyyy HH:mm")</div>
+                            }
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(_selectedConflict.ResolutionNote))
+                    {
+                        <div class="scd-detail-section">
+                            <div class="scd-detail-label">Resolution Note</div>
+                            <div class="scd-detail-note">@_selectedConflict.ResolutionNote</div>
+                        </div>
+                    }
+                </div>
+            }
+        </Content>
+        <FooterTemplate>
+            <div class="scd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _detailVisible = false">Close</button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Assign Reviewer dialog ────────────────────────────────────────────── -->
+<SfDialog Width="440px"
+          Visible="_assignVisible"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogEvents Closed="OnAssignClosed" />
+    <DialogTemplates>
+        <Header>
+            <span class="scd-dlg-icon scd-dlg-icon--assign" aria-hidden="true">
+                <i class="bi bi-person-plus"></i>
+            </span>
+            Assign Reviewer
+        </Header>
+        <Content>
+            <div class="scd-dlg-body">
+                @if (!string.IsNullOrEmpty(_actionError))
+                {
+                    <div class="scd-dlg-error">
+                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                        @_actionError
+                    </div>
+                }
+                @if (_selectedConflict is not null)
+                {
+                    <p class="scd-dlg-ctx">
+                        Conflict: <strong>@_selectedConflict.RuleName</strong>
+                        for <strong>@_selectedConflict.UserFullName</strong>
+                    </p>
+                }
+                <div class="scd-field">
+                    <label class="scd-label">Reviewer <span class="scd-req">*</span></label>
+                    <SfDropDownList TValue="Guid" TItem="UserDto"
+                                    DataSource="@_users"
+                                    @bind-Value="_assignReviewerId"
+                                    AllowFiltering="true"
+                                    Placeholder="Select a reviewer…">
+                        <DropDownListFieldSettings Value="UserId" Text="FullName" />
+                    </SfDropDownList>
+                    @if (_validateAction && _assignReviewerId == Guid.Empty)
+                    {
+                        <span class="scd-validation">Please select a reviewer.</span>
+                    }
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="scd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseAssignDialog" disabled="@_processing">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ExecuteAssignAsync" disabled="@_processing">
+                    @if (_processing) { <span class="um-spin" aria-hidden="true"></span> <span>Saving…</span> }
+                    else { <i class="bi bi-person-check" aria-hidden="true"></i> <span>Assign</span> }
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Remediate / Resolve dialog ────────────────────────────────────────── -->
+<SfDialog Width="480px"
+          Visible="_actionVisible"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogEvents Closed="OnActionClosed" />
+    <DialogTemplates>
+        <Header>
+            <span class="scd-dlg-icon @ActionIconClass" aria-hidden="true">
+                <i class="bi @ActionIcon"></i>
+            </span>
+            @ActionTitle
+        </Header>
+        <Content>
+            <div class="scd-dlg-body">
+                @if (!string.IsNullOrEmpty(_actionError))
+                {
+                    <div class="scd-dlg-error">
+                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                        @_actionError
+                    </div>
+                }
+                @if (_selectedConflict is not null)
+                {
+                    <p class="scd-dlg-ctx">
+                        Conflict: <strong>@_selectedConflict.RuleName</strong>
+                        for <strong>@_selectedConflict.UserFullName</strong>
+                    </p>
+                }
+                <div class="scd-field">
+                    <label class="scd-label">
+                        @NoteLabel
+                        <span class="scd-optional">(optional)</span>
+                    </label>
+                    <SfTextBox @bind-Value="_actionNote"
+                               Multiline="true"
+                               Placeholder="@NotePlaceholder" />
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="scd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseActionDialog" disabled="@_processing">Cancel</button>
+                <button class="@ActionButtonClass" @onclick="ExecuteActionAsync" disabled="@_processing">
+                    @if (_processing) { <span class="um-spin" aria-hidden="true"></span> <span>Processing…</span> }
+                    else { <i class="bi @ActionIcon" aria-hidden="true"></i> <span>@ActionTitle</span> }
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Toast ─────────────────────────────────────────────────────────────── -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId      = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private readonly Guid _currentUserId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    private SfToast? _toast;
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private List<SodConflictDto> _all      = [];
+    private List<SodConflictDto> _filtered = [];
+    private List<UserDto>        _users    = [];
+
+    // ── Filter state ───────────────────────────────────────────────────────────
+    private bool   _loading        = true;
+    private string _searchTerm     = string.Empty;
+    private string _filterStatus   = string.Empty;
+    private string _filterSeverity = string.Empty;
+
+    // ── Shared dialog state ────────────────────────────────────────────────────
+    private bool             _processing        = false;
+    private string           _actionError       = string.Empty;
+    private bool             _validateAction    = false;
+    private SodConflictDto?  _selectedConflict  = null;
+
+    // ── Detail dialog ──────────────────────────────────────────────────────────
+    private bool _detailVisible = false;
+
+    // ── Assign reviewer dialog ─────────────────────────────────────────────────
+    private bool _assignVisible    = false;
+    private Guid _assignReviewerId = Guid.Empty;
+
+    // ── Remediate / Resolve dialog ─────────────────────────────────────────────
+    private bool   _actionVisible = false;
+    private string _actionMode    = string.Empty;
+    private string _actionNote    = string.Empty;
+
+    // ── Computed properties ────────────────────────────────────────────────────
+    private string ActionTitle => _actionMode == "Remediate" ? "Remediate Conflict" : "Resolve Conflict";
+
+    private string ActionIcon => _actionMode == "Remediate" ? "bi-tools" : "bi-check-circle";
+
+    private string ActionIconClass => _actionMode == "Remediate"
+        ? "scd-dlg-icon--remediate"
+        : "scd-dlg-icon--resolve";
+
+    private string ActionButtonClass => _actionMode == "Remediate"
+        ? "um-btn scd-btn-remediate"
+        : "um-btn scd-btn-resolve";
+
+    private string NoteLabel => _actionMode == "Remediate" ? "Remediation Note" : "Resolution Note";
+
+    private string NotePlaceholder => _actionMode == "Remediate"
+        ? "Describe the remediation steps taken…"
+        : "Describe how the conflict was resolved…";
+
+    // ── Static options ─────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Open",       "Open"),
+        new("InReview",   "In Review"),
+        new("Remediated", "Remediated"),
+        new("Resolved",   "Resolved"),
+    ];
+
+    private static readonly List<LabelValue> _severityOptions =
+    [
+        new("Low",      "Low"),
+        new("Medium",   "Medium"),
+        new("High",     "High"),
+        new("Critical", "Critical"),
+    ];
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadReferenceDataAsync();
+        await LoadAsync();
+    }
+
+    // ── Data loading ───────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchSodConflictsAsync(_tenantId, pageSize: 500);
+            _all = result?.Items?.ToList() ?? [];
+            ApplyFilter();
+        }
+        catch
+        {
+            _all = [];
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = "Failed to load SoD conflicts.",
+                CssClass = "e-toast-danger",
+                Icon     = "bi bi-exclamation-triangle",
+            });
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadReferenceDataAsync()
+    {
+        try
+        {
+            var result = await Api.SearchUsersAsync(_tenantId);
+            _users = result?.Items?.ToList() ?? [];
+        }
+        catch { /* non-fatal */ }
+    }
+
+    // ── Filtering ──────────────────────────────────────────────────────────────
+    private void OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _searchTerm = e.Value?.ToString() ?? string.Empty;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        var q = _searchTerm.Trim().ToLowerInvariant();
+        _filtered = _all.Where(c =>
+            (string.IsNullOrEmpty(q) ||
+             c.UserFullName.ToLowerInvariant().Contains(q) ||
+             c.UserEmail.ToLowerInvariant().Contains(q) ||
+             c.RuleCode.ToLowerInvariant().Contains(q) ||
+             c.RuleName.ToLowerInvariant().Contains(q)) &&
+            (string.IsNullOrEmpty(_filterStatus)   || c.StatusCode   == _filterStatus) &&
+            (string.IsNullOrEmpty(_filterSeverity) || c.SeverityCode == _filterSeverity))
+            .ToList();
+    }
+
+    // ── Detail dialog ──────────────────────────────────────────────────────────
+    private void OpenDetail(SodConflictDto c)
+    {
+        _selectedConflict = c;
+        _detailVisible    = true;
+    }
+
+    private void OnDetailClosed() => _detailVisible = false;
+
+    // ── Assign reviewer dialog ─────────────────────────────────────────────────
+    private void OpenAssign(SodConflictDto c)
+    {
+        _selectedConflict  = c;
+        _assignReviewerId  = c.ReviewerUserId ?? Guid.Empty;
+        _actionError       = string.Empty;
+        _validateAction    = false;
+        _assignVisible     = true;
+    }
+
+    private void CloseAssignDialog() => _assignVisible = false;
+
+    private void OnAssignClosed()
+    {
+        _assignVisible  = false;
+        _validateAction = false;
+        _actionError    = string.Empty;
+    }
+
+    private async Task ExecuteAssignAsync()
+    {
+        _validateAction = true;
+        if (_assignReviewerId == Guid.Empty) return;
+
+        _processing  = true;
+        _actionError = string.Empty;
+        try
+        {
+            await Api.AssignSodConflictReviewerAsync(_selectedConflict!.SodConflictId, new AssignSodConflictReviewerRequest
+            {
+                ReviewerUserId   = _assignReviewerId,
+                AssignedByUserId = _currentUserId,
+            });
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = "Reviewer assigned successfully.",
+                CssClass = "e-toast-success",
+                Icon     = "bi bi-check-circle",
+            });
+            _assignVisible = false;
+            await LoadAsync();
+        }
+        catch
+        {
+            _actionError = "Failed to assign reviewer. Please try again.";
+        }
+        finally
+        {
+            _processing = false;
+        }
+    }
+
+    // ── Remediate / Resolve dialog ─────────────────────────────────────────────
+    private void OpenAction(SodConflictDto c, string mode)
+    {
+        _selectedConflict = c;
+        _actionMode       = mode;
+        _actionNote       = string.Empty;
+        _actionError      = string.Empty;
+        _validateAction   = false;
+        _actionVisible    = true;
+    }
+
+    private void CloseActionDialog() => _actionVisible = false;
+
+    private void OnActionClosed()
+    {
+        _actionVisible  = false;
+        _validateAction = false;
+        _actionError    = string.Empty;
+        _actionNote     = string.Empty;
+    }
+
+    private async Task ExecuteActionAsync()
+    {
+        _processing  = true;
+        _actionError = string.Empty;
+        try
+        {
+            if (_actionMode == "Remediate")
+            {
+                await Api.RemediateSodConflictAsync(_selectedConflict!.SodConflictId, new RemediateSodConflictRequest
+                {
+                    RemediatedByUserId = _currentUserId,
+                    RemediationNote    = _actionNote,
+                });
+                await _toast!.ShowAsync(new ToastModel
+                {
+                    Content  = "Conflict marked as remediated.",
+                    CssClass = "e-toast-success",
+                    Icon     = "bi bi-check-circle",
+                });
+            }
+            else
+            {
+                await Api.ResolveSodConflictAsync(_selectedConflict!.SodConflictId, new ResolveSodConflictRequest
+                {
+                    ResolvedByUserId = _currentUserId,
+                    ResolutionNote   = _actionNote,
+                });
+                await _toast!.ShowAsync(new ToastModel
+                {
+                    Content  = "Conflict resolved successfully.",
+                    CssClass = "e-toast-success",
+                    Icon     = "bi bi-check-circle",
+                });
+            }
+            _actionVisible = false;
+            await LoadAsync();
+        }
+        catch
+        {
+            _actionError = "An error occurred. Please try again.";
+        }
+        finally
+        {
+            _processing = false;
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    private static string StatusLabel(string code) => code switch
+    {
+        "Open"       => "Open",
+        "InReview"   => "In Review",
+        "Remediated" => "Remediated",
+        "Resolved"   => "Resolved",
+        _            => code,
+    };
+
+    // ── Inner types ────────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Value, string Label);
+}

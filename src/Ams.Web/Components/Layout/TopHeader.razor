@@ -1,0 +1,286 @@
+@using Microsoft.AspNetCore.Hosting
+@inject ShellStateService Shell
+@inject NotificationService Notifs
+@inject IWebHostEnvironment HostEnv
+@implements IDisposable
+
+<header class="ams-header" role="banner">
+
+    @* ── Sidebar toggle (desktop) ─────────────────────── *@
+    <button class="hdr-toggle"
+            @onclick="Shell.ToggleNav"
+            aria-label="@(Shell.NavCollapsed ? "Expand sidebar" : "Collapse sidebar")"
+            title="@(Shell.NavCollapsed ? "Expand sidebar" : "Collapse sidebar")">
+        <i class="bi @(Shell.NavCollapsed ? "bi-layout-sidebar" : "bi-layout-sidebar-inset")"
+           aria-hidden="true"></i>
+    </button>
+
+    @* ── Hamburger (mobile) ───────────────────────────── *@
+    <button class="hdr-hamburger"
+            @onclick="Shell.OpenMobileNav"
+            aria-label="Open navigation"
+            aria-expanded="@Shell.MobileNavOpen.ToString().ToLower()">
+        <i class="bi bi-list" aria-hidden="true"></i>
+    </button>
+
+    @* ── Global search (opens command palette) ────────── *@
+    <div class="hdr-search" role="search">
+        <button class="hdr-search-box"
+                type="button"
+                @onclick="Shell.OpenQuickSearch"
+                aria-label="Open global search (Ctrl+K)">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <span class="hdr-search-placeholder">Search across all modules…</span>
+            <kbd class="hdr-kbd" aria-label="Shortcut: Control K">⌃ K</kbd>
+        </button>
+    </div>
+
+    @* ── Right-side action cluster ────────────────────── *@
+    <div class="hdr-right" role="toolbar" aria-label="Header actions">
+
+        @* Environment indicator *@
+        <span class="env-pill env-@_envKey"
+              role="status"
+              aria-label="Environment: @_envLabel">
+            @_envLabel
+        </span>
+
+        @* Tenant switcher *@
+        <button class="hdr-tenant-btn"
+                title="Switch tenant"
+                aria-label="Tenant: Contoso Corp — click to switch">
+            <i class="bi bi-building" aria-hidden="true"></i>
+            <span class="hdr-tenant-name">Contoso Corp</span>
+            <i class="bi bi-chevron-down" aria-hidden="true"></i>
+        </button>
+
+        @* ── Quick actions ──────────────────────────────── *@
+        <div class="hdr-drop-host @(_quickOpen ? "is-open" : "")">
+            <button class="hdr-create-btn"
+                    @onclick="ToggleQuick"
+                    aria-haspopup="menu"
+                    aria-expanded="@_quickOpen.ToString().ToLower()"
+                    aria-label="Quick create actions">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i>
+                <span>Create</span>
+            </button>
+            <ul class="hdr-drop" role="menu" aria-label="Quick create">
+                @foreach (var qa in QuickActions)
+                {
+                    <li role="none">
+                        <a class="hdr-drop-item" href="@qa.Url" role="menuitem" @onclick="CloseAll">
+                            <i class="@qa.Icon" aria-hidden="true"></i>
+                            <span>@qa.Label</span>
+                        </a>
+                    </li>
+                }
+            </ul>
+        </div>
+
+        @* ── Notifications ──────────────────────────────── *@
+        <div class="hdr-drop-host @(_notifOpen ? "is-open" : "")">
+            <button class="hdr-icon-btn"
+                    @onclick="ToggleNotif"
+                    aria-haspopup="dialog"
+                    aria-expanded="@_notifOpen.ToString().ToLower()"
+                    aria-label="Notifications, @Notifs.UnreadCount unread">
+                <i class="bi bi-bell" aria-hidden="true"></i>
+                @if (Notifs.UnreadCount > 0)
+                {
+                    <span class="hdr-badge" aria-hidden="true">
+                        @(Notifs.UnreadCount > 99 ? "99+" : Notifs.UnreadCount)
+                    </span>
+                }
+            </button>
+            <div class="hdr-drop hdr-drop-notif" role="dialog" aria-label="Notifications panel">
+                <div class="hdr-drop-hd">
+                    <span>Notifications</span>
+                    @if (Notifs.UnreadCount > 0)
+                    {
+                        <button class="hdr-link-btn" @onclick="() => Notifs.MarkAllRead()">
+                            Mark all read
+                        </button>
+                    }
+                </div>
+                @if (Notifs.Items.Count == 0)
+                {
+                    <div class="hdr-notif-empty">
+                        <i class="bi bi-bell-slash" aria-hidden="true"></i>
+                        <span>All caught up</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="hdr-notif-list">
+                        @foreach (var n in Notifs.Items.Take(10))
+                        {
+                            <a class="hdr-notif-item @(n.IsRead ? "" : "is-unread")"
+                               href="@(n.ActionUrl ?? "#")">
+                                <div class="hdr-notif-icon hdr-notif--@n.TypeKey">
+                                    <i class="bi @n.Icon" aria-hidden="true"></i>
+                                </div>
+                                <div class="hdr-notif-body">
+                                    <div class="hdr-notif-title">@n.Title</div>
+                                    @if (!string.IsNullOrEmpty(n.Body))
+                                    {
+                                        <div class="hdr-notif-text">@n.Body</div>
+                                    }
+                                    @if (n.DateUtc.HasValue)
+                                    {
+                                        <div class="hdr-notif-date">
+                                            @n.DateUtc.Value.ToLocalTime().ToString("MMM d, h:mm tt")
+                                        </div>
+                                    }
+                                </div>
+                            </a>
+                        }
+                    </div>
+                    @if (Notifs.Items.Count > 10)
+                    {
+                        <div class="hdr-notif-footer">
+                            <a class="hdr-link-btn" href="/notifications">
+                                View all @Notifs.Items.Count notifications
+                            </a>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+
+        @* ── Theme toggle ────────────────────────────────── *@
+        <button class="hdr-icon-btn"
+                @onclick="Shell.ToggleTheme"
+                aria-label="@(Shell.ThemeDark ? "Switch to light mode" : "Switch to dark mode")"
+                title="@(Shell.ThemeDark ? "Light mode" : "Dark mode")">
+            <i class="bi @(Shell.ThemeDark ? "bi-sun" : "bi-moon")" aria-hidden="true"></i>
+        </button>
+
+        @* ── Help ────────────────────────────────────────── *@
+        <a class="hdr-icon-btn" href="/help" title="Help & Documentation" aria-label="Help">
+            <i class="bi bi-question-circle" aria-hidden="true"></i>
+        </a>
+
+        @* ── User profile ───────────────────────────────── *@
+        <div class="hdr-drop-host @(_profileOpen ? "is-open" : "")">
+            <button class="hdr-profile-btn"
+                    @onclick="ToggleProfile"
+                    aria-haspopup="menu"
+                    aria-expanded="@_profileOpen.ToString().ToLower()"
+                    aria-label="User menu">
+                <div class="hdr-avatar" aria-hidden="true">AU</div>
+                <div class="hdr-user-meta">
+                    <span class="hdr-user-name">Admin User</span>
+                    <span class="hdr-user-role">System Admin</span>
+                </div>
+                <i class="bi bi-chevron-down hdr-caret" aria-hidden="true"></i>
+            </button>
+            <ul class="hdr-drop hdr-drop-profile" role="menu" aria-label="User menu">
+                <li class="hdr-profile-hd">
+                    <div class="hdr-avatar hdr-avatar-lg" aria-hidden="true">AU</div>
+                    <div>
+                        <div class="hdr-user-name">Admin User</div>
+                        <div class="hdr-user-email">admin@enterprise.com</div>
+                    </div>
+                </li>
+                <li class="hdr-divider" role="separator"></li>
+                @foreach (var item in ProfileMenu)
+                {
+                    <li role="none">
+                        <a class="hdr-drop-item @(item.Danger ? "is-danger" : "")"
+                           href="@item.Url"
+                           role="menuitem"
+                           @onclick="CloseAll">
+                            <i class="@item.Icon" aria-hidden="true"></i>
+                            <span>@item.Label</span>
+                        </a>
+                    </li>
+                }
+            </ul>
+        </div>
+
+    </div>
+
+    @* ── Click-away overlay (closes all dropdowns) ─────── *@
+    @if (_quickOpen || _notifOpen || _profileOpen)
+    {
+        <div class="hdr-overlay" @onclick="CloseAll" aria-hidden="true"></div>
+    }
+
+</header>
+
+@code {
+    // ── Static menu data ──────────────────────────────────────
+    private sealed record QuickActionItem(string Label, string Icon, string Url);
+    private sealed record ProfileItem(string Label, string Icon, string Url, bool Danger = false);
+
+    private static readonly QuickActionItem[] QuickActions =
+    [
+        new("New Lead",       "bi bi-funnel",      "/leads/new"),
+        new("New Invoice",    "bi bi-receipt",     "/invoices/new"),
+        new("New Account",    "bi bi-people",      "/accounts/new"),
+        new("New Contact",    "bi bi-person-plus", "/contacts/new"),
+        new("New Time Entry", "bi bi-clock",       "/timeentries/new"),
+        new("New Expense",    "bi bi-wallet2",     "/expenses/new"),
+    ];
+
+    private static readonly ProfileItem[] ProfileMenu =
+    [
+        new("My Profile",   "bi bi-person",          "/profile"),
+        new("Preferences",  "bi bi-sliders",         "/preferences"),
+        new("Help & Docs",  "bi bi-question-circle", "/help"),
+        new("Sign Out",     "bi bi-box-arrow-right", "/logout", Danger: true),
+    ];
+
+    // ── State ─────────────────────────────────────────────────
+    private bool   _quickOpen;
+    private bool   _notifOpen;
+    private bool   _profileOpen;
+    private string _envKey   = "dev";
+    private string _envLabel = "DEV";
+
+    // ── Lifecycle ─────────────────────────────────────────────
+    protected override void OnInitialized()
+    {
+        Shell.OnChange  += OnShellChange;
+        Notifs.OnChange += OnShellChange;
+        (_envKey, _envLabel) = HostEnv.EnvironmentName.ToUpperInvariant() switch
+        {
+            "DEVELOPMENT" => ("dev",  "DEV"),
+            "STAGING"     => ("uat",  "UAT"),
+            "PRODUCTION"  => ("prod", "PROD"),
+            var e         => (e.ToLower(), e),
+        };
+    }
+
+    private void OnShellChange() => InvokeAsync(StateHasChanged);
+
+    // ── Dropdown toggles ──────────────────────────────────────
+    private void ToggleQuick()
+    {
+        _quickOpen   = !_quickOpen;
+        _notifOpen   = false;
+        _profileOpen = false;
+    }
+
+    private void ToggleNotif()
+    {
+        _notifOpen   = !_notifOpen;
+        _quickOpen   = false;
+        _profileOpen = false;
+    }
+
+    private void ToggleProfile()
+    {
+        _profileOpen = !_profileOpen;
+        _quickOpen   = false;
+        _notifOpen   = false;
+    }
+
+    private void CloseAll() { _quickOpen = _notifOpen = _profileOpen = false; }
+
+    public void Dispose()
+    {
+        Shell.OnChange  -= OnShellChange;
+        Notifs.OnChange -= OnShellChange;
+    }
+}

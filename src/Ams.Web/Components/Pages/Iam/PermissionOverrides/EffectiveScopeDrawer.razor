@@ -1,0 +1,194 @@
+@*
+    EffectiveScopeDrawer — previews the computed effective permission set for a user.
+    Combines role-based grants and direct overrides (with any scope restrictions).
+    Usage: <EffectiveScopeDrawer @bind-Visible="_show" UserId="_userId" UserFullName="_userName" />
+*@
+@inject ApiClient Api
+
+<AppCrudDrawer @bind-Visible="_open"
+               Title="Effective Scope Preview"
+               Icon="bi-eye"
+               Width="780px"
+               IsBusy="_loading"
+               OnClose="HandleCloseAsync">
+    <Footer>
+        <button class="um-btn um-btn-ghost" @onclick="HandleCloseAsync">Close</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Footer>
+    <Content>
+        @if (_loading)
+        {
+            <div class="esd-loading">
+                <span class="um-spin" aria-hidden="true"></span>
+                <span>Computing effective scope…</span>
+            </div>
+        }
+        else
+        {
+            <div class="esd-user-banner">
+                <span class="esd-avatar" aria-hidden="true">@UserInitials(UserFullName)</span>
+                <div>
+                    <div class="esd-user-name">@(UserFullName ?? "Unknown user")</div>
+                    <div class="esd-user-sub">@_permissions.Count permission@(_permissions.Count == 1 ? "" : "s") in effective scope</div>
+                </div>
+                <div class="esd-kpi-strip">
+                    <div class="esd-kpi esd-kpi--role">
+                        <div class="esd-kpi-value">@_roleCount</div>
+                        <div class="esd-kpi-label">From Roles</div>
+                    </div>
+                    <div class="esd-kpi esd-kpi--override">
+                        <div class="esd-kpi-value">@_overrideCount</div>
+                        <div class="esd-kpi-label">Overrides</div>
+                    </div>
+                    <div class="esd-kpi esd-kpi--scoped">
+                        <div class="esd-kpi-value">@_scopedCount</div>
+                        <div class="esd-kpi-label">Scoped</div>
+                    </div>
+                </div>
+            </div>
+
+            @if (_permissions.Count == 0)
+            {
+                <div class="esd-empty">
+                    <i class="bi bi-shield-slash" aria-hidden="true"></i>
+                    <span>No effective permissions found for this user.</span>
+                </div>
+            }
+            else
+            {
+                @if (_rolePermissions.Count > 0)
+                {
+                    <div class="esd-group">
+                        <div class="esd-group-header">
+                            <i class="bi bi-person-badge" aria-hidden="true"></i>
+                            Role-Based Permissions
+                            <span class="esd-group-count">@_rolePermissions.Count</span>
+                        </div>
+                        <div class="esd-table-header">
+                            <span>Permission</span>
+                            <span>Resource</span>
+                            <span>Action</span>
+                            <span>Via Role</span>
+                        </div>
+                        @foreach (var p in _rolePermissions)
+                        {
+                            <div class="esd-table-row">
+                                <div class="esd-perm">
+                                    <div class="esd-perm-name">@(p.PermissionName ?? "—")</div>
+                                    <div class="esd-perm-code">@p.PermissionCode</div>
+                                </div>
+                                <span class="esd-cell">@(p.ResourceCode ?? "—")</span>
+                                <span class="esd-cell">@(p.ActionCode ?? "—")</span>
+                                <span class="esd-role-pill">@(p.RoleName ?? "—")</span>
+                            </div>
+                        }
+                    </div>
+                }
+
+                @if (_overridePermissions.Count > 0)
+                {
+                    <div class="esd-group">
+                        <div class="esd-group-header">
+                            <i class="bi bi-shield-lock" aria-hidden="true"></i>
+                            Direct Overrides
+                            <span class="esd-group-count">@_overridePermissions.Count</span>
+                        </div>
+                        <div class="esd-table-header esd-table-header--override">
+                            <span>Permission</span>
+                            <span>Allow / Deny</span>
+                            <span>Resource</span>
+                            <span>Scope Type</span>
+                            <span>Scope Value</span>
+                        </div>
+                        @foreach (var p in _overridePermissions)
+                        {
+                            <div class="esd-table-row esd-table-row--override">
+                                <div class="esd-perm">
+                                    <div class="esd-perm-name">@(p.PermissionName ?? "—")</div>
+                                    <div class="esd-perm-code">@p.PermissionCode</div>
+                                </div>
+                                @if (p.IsGranted)
+                                {
+                                    <span class="esd-badge esd-badge--allow">
+                                        <i class="bi bi-check-circle-fill" aria-hidden="true"></i> Allow
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span class="esd-badge esd-badge--deny">
+                                        <i class="bi bi-slash-circle-fill" aria-hidden="true"></i> Deny
+                                    </span>
+                                }
+                                <span class="esd-cell">@(p.ResourceCode ?? "—")</span>
+                                <span class="esd-scope-type">@(p.ScopeTypeCode ?? "—")</span>
+                                <span class="esd-scope-value">@(p.ScopeValue ?? "—")</span>
+                            </div>
+                        }
+                    </div>
+                }
+            }
+        }
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    [Parameter] public bool                Visible        { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public Guid                UserId         { get; set; }
+    [Parameter] public string?             UserFullName   { get; set; }
+
+    private bool                             _open                = false;
+    private bool                             _loading             = false;
+    private bool                             _prevVisible         = false;
+    private List<PermissionScopePreviewDto>  _permissions         = [];
+    private List<PermissionScopePreviewDto>  _rolePermissions     = [];
+    private List<PermissionScopePreviewDto>  _overridePermissions = [];
+    private int _roleCount;
+    private int _overrideCount;
+    private int _scopedCount;
+
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    protected override void OnParametersSet() => _open = Visible;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var justOpened = Visible && !_prevVisible;
+        _prevVisible   = Visible;
+        if (justOpened) await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (UserId == Guid.Empty) return;
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _permissions         = await Api.PreviewEffectiveScopeAsync(_tenantId, UserId) ?? [];
+            _rolePermissions     = _permissions.Where(p => p.Source == "Role").ToList();
+            _overridePermissions = _permissions.Where(p => p.Source == "Override").ToList();
+            _roleCount     = _rolePermissions.Count;
+            _overrideCount = _overridePermissions.Count;
+            _scopedCount   = _overridePermissions.Count(p => !string.IsNullOrEmpty(p.ScopeTypeCode));
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task HandleCloseAsync()
+    {
+        _open = false;
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    private static string UserInitials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "?";
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant()
+            : name[..Math.Min(2, name.Length)].ToUpperInvariant();
+    }
+}

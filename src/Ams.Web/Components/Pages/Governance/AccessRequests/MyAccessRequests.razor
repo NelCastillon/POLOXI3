@@ -1,0 +1,296 @@
+@page "/governance/access-requests/my"
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>My Access Requests — Governance</PageTitle>
+
+<AppPageHeader Title="My Access Requests"
+               Subtitle="Track and review all access requests you have submitted"
+               Icon="bi-inbox">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/governance/access-requests/new")'>
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> New Request
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── Status tab strip ──────────────────────────────────────────────────── -->
+<div class="mar-view-tabs">
+    @foreach (var tab in _tabs)
+    {
+        <button class="@TabClass(tab.StatusCode)" @onclick="() => SwitchTab(tab.StatusCode)">
+            <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+            <span class="mar-tab-count">@CountForStatus(tab.StatusCode)</span>
+        </button>
+    }
+</div>
+
+<!-- ── Filter row ────────────────────────────────────────────────────────── -->
+<div class="mar-filter-row">
+    <div class="mar-search-box">
+        <i class="bi bi-search mar-search-icon" aria-hidden="true"></i>
+        <input class="mar-search-input"
+               type="text"
+               placeholder="Search by type, target, role, ticket…"
+               value="@_searchTerm"
+               @oninput="OnSearchInput" />
+    </div>
+    <select class="mar-type-select" @bind="_filterType" @bind:after="ApplyFilter">
+        <option value="">All Types</option>
+        @foreach (var t in _requestTypes)
+        {
+            <option value="@t.Code">@t.Label</option>
+        }
+    </select>
+</div>
+
+<!-- ── Content ───────────────────────────────────────────────────────────── -->
+@if (_loading)
+{
+    <div class="mar-loading">
+        <span class="um-spin" aria-hidden="true"></span>
+        <span>Loading requests…</span>
+    </div>
+}
+else if (_filtered.Count == 0)
+{
+    <div class="mar-empty">
+        <i class="bi bi-inbox mar-empty-icon" aria-hidden="true"></i>
+        <p class="mar-empty-msg">No @ActiveTabLabel.ToLower() requests found.</p>
+        @if (_activeTab == "Pending" && string.IsNullOrEmpty(_searchTerm) && string.IsNullOrEmpty(_filterType))
+        {
+            <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/governance/access-requests/new")'>
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> Submit New Request
+            </button>
+        }
+    </div>
+}
+else
+{
+    <div class="mar-card-list">
+        @foreach (var item in _filtered)
+        {
+            <div class="mar-card">
+                <div class="mar-card-type">
+                    <span class="mar-type-badge mar-type-badge--@item.RequestTypeCode.ToLower()">
+                        <i class="bi @TypeIcon(item.RequestTypeCode)" aria-hidden="true"></i>
+                    </span>
+                    <div>
+                        <div class="mar-card-type-label">@TypeLabel(item.RequestTypeCode)</div>
+                        <div class="mar-card-date">@item.CreatedDateUtc.ToString("dd MMM yyyy")</div>
+                    </div>
+                </div>
+
+                <div class="mar-card-for">
+                    <div class="mar-card-name">@item.RequestedForFullName</div>
+                    <div class="mar-card-email">@item.RequestedForEmail</div>
+                </div>
+
+                <div class="mar-card-target">
+                    @if (!string.IsNullOrEmpty(item.RoleName))
+                    {
+                        <span class="mar-target-pill mar-target-pill--role">
+                            <i class="bi bi-person-badge" aria-hidden="true"></i> @item.RoleName
+                        </span>
+                    }
+                    else if (!string.IsNullOrEmpty(item.PermissionName))
+                    {
+                        <span class="mar-target-pill mar-target-pill--perm">
+                            <i class="bi bi-key" aria-hidden="true"></i> @item.PermissionName
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="mar-target-none">—</span>
+                    }
+                </div>
+
+                <div class="mar-card-meta">
+                    <span class="mar-urgency-badge mar-urgency-badge--@item.UrgencyCode.ToLower()">@item.UrgencyCode</span>
+                    @if (!string.IsNullOrEmpty(item.TicketReference))
+                    {
+                        <span class="mar-ticket">
+                            <i class="bi bi-hash" aria-hidden="true"></i>@item.TicketReference
+                        </span>
+                    }
+                </div>
+
+                <div class="mar-card-status">
+                    <AppStatusBadge StatusCode="@item.StatusCode" />
+                </div>
+
+                <div class="mar-card-actions">
+                    <button class="um-btn um-btn-ghost um-btn-sm"
+                            title="View Details"
+                            @onclick="() => ViewDetails(item.AccessRequestId)">
+                        <i class="bi bi-eye" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="mar-results-footer">
+        Showing <strong>@_filtered.Count</strong> of <strong>@_allForTab.Count</strong> @ActiveTabLabel.ToLower() requests
+    </div>
+}
+
+<!-- Toast -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ──────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId      = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private readonly Guid _currentUserId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private List<AccessRequestDto> _all       = [];
+    private List<AccessRequestDto> _allForTab = [];
+    private List<AccessRequestDto> _filtered  = [];
+
+    // ── State ──────────────────────────────────────────────────────────────────
+    private bool   _loading     = true;
+    private string _activeTab   = "Pending";
+    private string _searchTerm  = string.Empty;
+    private string _filterType  = string.Empty;
+
+    // ── Tab definitions ────────────────────────────────────────────────────────
+    private record TabInfo(string StatusCode, string Label, string Icon);
+
+    private static readonly List<TabInfo> _tabs =
+    [
+        new("Pending",   "Submitted",  "bi-send"),
+        new("InReview",  "In Review",  "bi-hourglass-split"),
+        new("Returned",  "Returned",   "bi-arrow-return-left"),
+        new("Approved",  "Approved",   "bi-check-circle"),
+        new("Rejected",  "Rejected",   "bi-x-circle"),
+        new("Cancelled", "Cancelled",  "bi-slash-circle"),
+    ];
+
+    // ── Request type definitions ───────────────────────────────────────────────
+    private record TypeInfo(string Code, string Label);
+
+    private static readonly List<TypeInfo> _requestTypes =
+    [
+        new("RoleAccess",         "Role Access"),
+        new("PermissionOverride", "Permission Override"),
+        new("PrivilegedAccess",   "Privileged Access"),
+        new("TemporaryAccess",    "Temporary Access"),
+        new("MfaReset",           "MFA Reset"),
+        new("ExportAccess",       "Export Access"),
+    ];
+
+    // ── Computed ───────────────────────────────────────────────────────────────
+    private string ActiveTabLabel => _tabs.FirstOrDefault(t => t.StatusCode == _activeTab)?.Label ?? _activeTab;
+    private string TabClass(string s) => s == _activeTab ? "mar-view-tab mar-view-tab--active" : "mar-view-tab";
+    private int    CountForStatus(string s) => _all.Count(r => r.StatusCode == s);
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+        [
+            new("Home", "/"),
+            new("Governance", "/governance"),
+            new("My Requests", "/governance/access-requests/my"),
+        ]);
+        await LoadAsync();
+    }
+
+    // ── Data loading ───────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchAccessRequestsAsync(
+                _tenantId,
+                requestedByUserId: _currentUserId,
+                pageSize: 500);
+            _all = result?.Items?.ToList() ?? [];
+        }
+        catch
+        {
+            _all = [];
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = "Failed to load your requests.",
+                CssClass = "e-toast-danger",
+                Icon     = "bi bi-exclamation-triangle",
+            });
+        }
+        finally
+        {
+            _loading = false;
+            ApplyFilter();
+        }
+    }
+
+    // ── Filtering ──────────────────────────────────────────────────────────────
+    private void SwitchTab(string statusCode)
+    {
+        _activeTab  = statusCode;
+        _searchTerm = string.Empty;
+        _filterType = string.Empty;
+        ApplyFilter();
+    }
+
+    private void OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _searchTerm = e.Value?.ToString() ?? string.Empty;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        _allForTab = _all.Where(r => r.StatusCode == _activeTab).ToList();
+        var q = _searchTerm.Trim().ToLower();
+        _filtered = _allForTab
+            .Where(r =>
+                (string.IsNullOrEmpty(q) ||
+                 (r.RequestTypeCode?.ToLower().Contains(q) == true) ||
+                 (r.RequestedForFullName?.ToLower().Contains(q) == true) ||
+                 (r.TicketReference?.ToLower().Contains(q) == true) ||
+                 (r.RoleName?.ToLower().Contains(q) == true) ||
+                 (r.PermissionName?.ToLower().Contains(q) == true))
+                && (string.IsNullOrEmpty(_filterType) || r.RequestTypeCode == _filterType))
+            .ToList();
+        StateHasChanged();
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    private static string TypeIcon(string code) => code switch
+    {
+        "RoleAccess"         => "bi-person-badge",
+        "PermissionOverride" => "bi-key",
+        "PrivilegedAccess"   => "bi-shield-lock",
+        "TemporaryAccess"    => "bi-clock-history",
+        "MfaReset"           => "bi-phone-flip",
+        "ExportAccess"       => "bi-download",
+        _                    => "bi-circle",
+    };
+
+    private static string TypeLabel(string code) => code switch
+    {
+        "RoleAccess"         => "Role Access",
+        "PermissionOverride" => "Permission Override",
+        "PrivilegedAccess"   => "Privileged Access",
+        "TemporaryAccess"    => "Temporary Access",
+        "MfaReset"           => "MFA Reset",
+        "ExportAccess"       => "Export Access",
+        _                    => code,
+    };
+
+    private void ViewDetails(Guid id) => Nav.NavigateTo($"/governance/access-requests/{id}");
+}

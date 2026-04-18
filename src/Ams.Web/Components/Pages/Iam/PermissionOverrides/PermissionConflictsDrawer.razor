@@ -1,0 +1,126 @@
+@*
+    PermissionConflictsDrawer — surfaces Allow/Deny conflicts for a user's permission overrides.
+    Usage: <PermissionConflictsDrawer @bind-Visible="_show" UserId="_userId" UserFullName="_userName" />
+*@
+@inject ApiClient Api
+
+<AppCrudDrawer @bind-Visible="_open"
+               Title="Validate Conflicts"
+               Icon="bi-exclamation-diamond"
+               Width="700px"
+               IsBusy="_loading"
+               OnClose="HandleCloseAsync">
+    <Footer>
+        <button class="um-btn um-btn-ghost" @onclick="HandleCloseAsync">Close</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadConflictsAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Footer>
+    <Content>
+        @if (_loading)
+        {
+            <div class="pcd-loading">
+                <span class="um-spin" aria-hidden="true"></span>
+                <span>Analysing conflicts…</span>
+            </div>
+        }
+        else
+        {
+            @if (UserId != Guid.Empty && !string.IsNullOrEmpty(UserFullName))
+            {
+                <div class="pcd-context">
+                    <i class="bi bi-person-circle" aria-hidden="true"></i>
+                    Showing conflicts for <strong>@UserFullName</strong>
+                </div>
+            }
+
+            @if (_conflicts.Count == 0)
+            {
+                <div class="pcd-ok">
+                    <i class="bi bi-shield-check" aria-hidden="true"></i>
+                    <div>
+                        <div class="pcd-ok-title">No Conflicts Found</div>
+                        <div class="pcd-ok-sub">All permission overrides are consistent for this user.</div>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="pcd-summary">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    <span>
+                        @_conflicts.Count conflict@(_conflicts.Count == 1 ? "" : "s") detected —
+                        the same permission has both an Allow and a Deny override.
+                    </span>
+                </div>
+
+                <div class="pcd-grid">
+                    <div class="pcd-grid-header">
+                        <span>User</span>
+                        <span>Permission</span>
+                        <span>Type</span>
+                        <span>Allow ID</span>
+                        <span>Deny ID</span>
+                    </div>
+                    @foreach (var c in _conflicts)
+                    {
+                        <div class="pcd-grid-row">
+                            <span class="pcd-user">@(c.UserFullName ?? "—")</span>
+                            <div class="pcd-perm">
+                                <div class="pcd-perm-name">@(c.PermissionName ?? "—")</div>
+                                <div class="pcd-perm-code">@c.PermissionCode</div>
+                            </div>
+                            <span class="pcd-conflict-badge">@c.ConflictType</span>
+                            <span class="pcd-id" title="@c.AllowOverrideId">@ShortId(c.AllowOverrideId)</span>
+                            <span class="pcd-id" title="@c.DenyOverrideId">@ShortId(c.DenyOverrideId)</span>
+                        </div>
+                    }
+                </div>
+            }
+        }
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    [Parameter] public bool                Visible        { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public Guid                UserId         { get; set; }
+    [Parameter] public string?             UserFullName   { get; set; }
+
+    private bool                        _open        = false;
+    private bool                        _loading     = false;
+    private bool                        _prevVisible = false;
+    private List<PermissionConflictDto> _conflicts   = [];
+
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    protected override void OnParametersSet() => _open = Visible;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var justOpened = Visible && !_prevVisible;
+        _prevVisible   = Visible;
+        if (justOpened) await LoadConflictsAsync();
+    }
+
+    private async Task LoadConflictsAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _conflicts = await Api.ValidatePermissionConflictsAsync(
+                _tenantId,
+                UserId == Guid.Empty ? null : UserId) ?? [];
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task HandleCloseAsync()
+    {
+        _open = false;
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    private static string ShortId(Guid id) => id.ToString("N")[..8].ToUpperInvariant();
+}

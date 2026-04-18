@@ -1,0 +1,1184 @@
+@page "/iam/users/{UserId:guid}"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>@PageTitle — IAM</PageTitle>
+
+<!-- Toast must be outside all conditional blocks -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@if (_loading)
+{
+    <div class="ud-loading">
+        <span class="um-spin ud-loading-spin" aria-hidden="true"></span>
+        <span>Loading user…</span>
+    </div>
+}
+else if (_user is null)
+{
+    <div class="ud-not-found">
+        <i class="bi bi-person-x ud-not-found-icon" aria-hidden="true"></i>
+        <h2>User not found</h2>
+        <p>The requested user could not be loaded.</p>
+        <button class="um-btn um-btn-ghost" @onclick="NavigateToList">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Users
+        </button>
+    </div>
+}
+else
+{
+    <!-- Page header -->
+    <AppPageHeader Title="@PageTitle"
+                   Subtitle="@PageSubtitle"
+                   Icon="bi-person-badge">
+        <Actions>
+            <button class="um-btn um-btn-ghost" @onclick="OpenEdit">
+                <i class="bi bi-pencil" aria-hidden="true"></i> Edit User
+            </button>
+            @if (_user.StatusCode == "Active")
+            {
+                <button class="um-btn um-btn-warning" @onclick="OpenDisable">
+                    <i class="bi bi-person-dash" aria-hidden="true"></i> Disable
+                </button>
+            }
+            else
+            {
+                <button class="um-btn um-btn-primary" @onclick="OpenEnable">
+                    <i class="bi bi-person-check" aria-hidden="true"></i> Enable
+                </button>
+            }
+            @if (_user.IsLockedOut)
+            {
+                <button class="um-btn um-btn-ghost" @onclick="OpenUnlock">
+                    <i class="bi bi-unlock" aria-hidden="true"></i> Unlock
+                </button>
+            }
+            <button class="um-btn um-btn-ghost" @onclick="ResetMfaAsync">
+                <i class="bi bi-shield-x" aria-hidden="true"></i> Reset MFA
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="RevokeSessionsAsync">
+                <i class="bi bi-box-arrow-right" aria-hidden="true"></i> Revoke Sessions
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenAddRole">
+                <i class="bi bi-person-plus" aria-hidden="true"></i> Add Role
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenAddPermission">
+                <i class="bi bi-key" aria-hidden="true"></i> Add Permission
+            </button>
+        </Actions>
+    </AppPageHeader>
+
+    <!-- Identity / stats bar -->
+    <div class="ud-stats-bar">
+        <div class="ud-avatar-wrap">
+            <span class="ud-avatar" style="@AvatarStyle()" aria-hidden="true">@Initials()</span>
+        </div>
+        <div class="ud-stats">
+            <AppStatusBadge Status="@_user.StatusCode" />
+            @if (_user.IsLockedOut)
+            {
+                <span class="badge badge-amber">
+                    <i class="bi bi-lock-fill" aria-hidden="true"></i> Locked
+                </span>
+            }
+            @if (_user.MfaEnabled)
+            {
+                <span class="badge badge-green">
+                    <i class="bi bi-shield-check-fill" aria-hidden="true"></i> MFA On
+                </span>
+            }
+            else
+            {
+                <span class="badge badge-neutral">
+                    <i class="bi bi-shield" aria-hidden="true"></i> MFA Off
+                </span>
+            }
+            @if (!string.IsNullOrEmpty(_user.UserTypeCode))
+            {
+                <span class="badge badge-blue">@_user.UserTypeCode</span>
+            }
+            @if (!string.IsNullOrEmpty(_user.Department))
+            {
+                <span class="ud-stat-chip">
+                    <i class="bi bi-building" aria-hidden="true"></i> @_user.Department
+                </span>
+            }
+            @if (!string.IsNullOrEmpty(_user.JobTitle))
+            {
+                <span class="ud-stat-chip">
+                    <i class="bi bi-briefcase" aria-hidden="true"></i> @_user.JobTitle
+                </span>
+            }
+            <span class="ud-stat-chip">
+                <i class="bi bi-clock" aria-hidden="true"></i> Last login: @FormatRelative(_user.LastLoginDateUtc)
+            </span>
+        </div>
+    </div>
+
+    <!-- Detail tabs -->
+    <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="OnTabChangedAsync">
+        <Tabs>
+
+            <!-- 0: Profile -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Profile" IconCss="bi bi-person" /></ChildContent>
+                <ContentTemplate>
+                    <div class="ud-tab-body">
+                        <div class="ud-info-card">
+                        <h3 class="ud-section-title">Identity</h3>
+                        <div class="ud-profile-grid">
+                            <div class="ud-field-group">
+                                <span class="ts-label">Username</span>
+                                <span class="ts-value">@_user.UserName</span>
+                            </div>
+                            <div class="ud-field-group">
+                                <span class="ts-label">Full Name</span>
+                                <span class="ts-value">@_user.FullName</span>
+                            </div>
+                            <div class="ud-field-group">
+                                <span class="ts-label">Display Name</span>
+                                <span class="ts-value">@(_user.DisplayName ?? "—")</span>
+                            </div>
+                            <div class="ud-field-group">
+                                <span class="ts-label">Email</span>
+                                <span class="ts-value">@_user.Email</span>
+                            </div>
+                            <div class="ud-field-group">
+                                <span class="ts-label">Phone</span>
+                                <span class="ts-value">@(_user.PhoneNumber ?? "—")</span>
+                            </div>
+                            <div class="ud-field-group">
+                                <span class="ts-label">User Type</span>
+                                <span class="ts-value">@(_user.UserTypeCode ?? "—")</span>
+                            </div>
+                            <div class="ud-field-group">
+                                <span class="ts-label">Department</span>
+                                <span class="ts-value">@(_user.Department ?? "—")</span>
+                            </div>
+                            <div class="ud-field-group">
+                                <span class="ts-label">Job Title</span>
+                                <span class="ts-value">@(_user.JobTitle ?? "—")</span>
+                            </div>
+                            <div class="ud-field-group">
+                                <span class="ts-label">Time Zone</span>
+                                <span class="ts-value">@(_user.TimeZoneCode ?? "—")</span>
+                            </div>
+                            <div class="ud-field-group">
+                                <span class="ts-label">Locale</span>
+                                <span class="ts-value">@(_user.LocaleCode ?? "—")</span>
+                            </div>
+                            <div class="ud-field-group">
+                                <span class="ts-label">Created</span>
+                                <span class="ts-value">@(_user.CreatedDateUtc.ToString("d"))</span>
+                            </div>
+                            <div class="ud-field-group">
+                                <span class="ts-label">Last Modified</span>
+                                <span class="ts-value">@(_user.ModifiedDateUtc?.ToString("d") ?? "—")</span>
+                            </div>
+                        </div>
+                        </div>
+
+                        @if (_profile is not null)
+                        {
+                            <div class="ud-info-card">
+                            <h3 class="ud-section-title">Contact &amp; Address</h3>
+                            <div class="ud-profile-grid">
+                                <div class="ud-field-group">
+                                    <span class="ts-label">Mobile</span>
+                                    <span class="ts-value">@(_profile.MobileNumber ?? "—")</span>
+                                </div>
+                                <div class="ud-field-group">
+                                    <span class="ts-label">Country</span>
+                                    <span class="ts-value">@(_profile.CountryCode ?? "—")</span>
+                                </div>
+                                <div class="ud-field-group ud-field-group--wide">
+                                    <span class="ts-label">Address</span>
+                                    <span class="ts-value">@CityState()</span>
+                                </div>
+                                <div class="ud-field-group">
+                                    <span class="ts-label">Emergency Contact</span>
+                                    <span class="ts-value">@(_profile.EmergencyContactName ?? "—")</span>
+                                </div>
+                                <div class="ud-field-group">
+                                    <span class="ts-label">Emergency Phone</span>
+                                    <span class="ts-value">@(_profile.EmergencyContactPhone ?? "—")</span>
+                                </div>
+                            </div>
+                            </div>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 1: Security -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Security" IconCss="bi bi-shield-lock" /></ChildContent>
+                <ContentTemplate>
+                    <div class="ud-tab-body">
+                        <div class="ud-security-grid">
+
+                            <div class="@MfaCardClass">
+                                <span class="@MfaIconClass" aria-hidden="true">
+                                    <i class="bi bi-shield-check-fill"></i>
+                                </span>
+                                <div>
+                                    <div class="ud-sec-label">MFA Status</div>
+                                    <div class="ud-sec-value">@MfaValueText</div>
+                                    @if (_user.MfaEnabled)
+                                    {
+                                        <div class="ud-sec-detail">MFA enrolled</div>
+                                    }
+                                </div>
+                            </div>
+
+                            <div class="@LockCardClass">
+                                <span class="@LockIconClass" aria-hidden="true">
+                                    <i class="bi bi-lock-fill"></i>
+                                </span>
+                                <div>
+                                    <div class="ud-sec-label">Account Lock</div>
+                                    <div class="ud-sec-value">@LockValueText</div>
+                                    @if (_user.LockoutEndDateUtc.HasValue)
+                                    {
+                                        <div class="ud-sec-detail">Expires: @FormatRelative(_user.LockoutEndDateUtc)</div>
+                                    }
+                                </div>
+                            </div>
+
+                            <div class="ud-sec-card">
+                                <span class="ud-sec-icon ud-sec-icon--neutral" aria-hidden="true">
+                                    <i class="bi bi-exclamation-triangle-fill"></i>
+                                </span>
+                                <div>
+                                    <div class="ud-sec-label">Failed Attempts</div>
+                                    <div class="ud-sec-value">@_user.FailedLoginAttempts</div>
+                                    <div class="ud-sec-detail">Since last success</div>
+                                </div>
+                            </div>
+
+                            <div class="ud-sec-card">
+                                <span class="ud-sec-icon ud-sec-icon--neutral" aria-hidden="true">
+                                    <i class="bi bi-key-fill"></i>
+                                </span>
+                                <div>
+                                    <div class="ud-sec-label">Password Changed</div>
+                                    <div class="ud-sec-value">@FormatRelative(_user.PasswordChangedDateUtc)</div>
+                                    @if (_user.PasswordChangedDateUtc.HasValue)
+                                    {
+                                        <div class="ud-sec-detail">@(_user.PasswordChangedDateUtc.Value.ToString("d"))</div>
+                                    }
+                                </div>
+                            </div>
+
+                            <div class="ud-sec-card">
+                                <span class="ud-sec-icon ud-sec-icon--neutral" aria-hidden="true">
+                                    <i class="bi bi-clock-history"></i>
+                                </span>
+                                <div>
+                                    <div class="ud-sec-label">Last Login</div>
+                                    <div class="ud-sec-value">@FormatRelative(_user.LastLoginDateUtc)</div>
+                                    @if (_user.LastLoginDateUtc.HasValue)
+                                    {
+                                        <div class="ud-sec-detail">@(_user.LastLoginDateUtc.Value.ToString("g"))</div>
+                                    }
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 2: Roles -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Roles" IconCss="bi bi-people" /></ChildContent>
+                <ContentTemplate>
+                    <div class="ud-tab-body">
+                        <div class="ud-tab-toolbar">
+                            <span class="ud-tab-count">@_userRoles.Count role(s)</span>
+                            <button class="um-btn um-btn-ghost" @onclick="OpenAddRole">
+                                <i class="bi bi-person-plus" aria-hidden="true"></i> Add Role
+                            </button>
+                        </div>
+                        @if (_rolesLoading)
+                        {
+                            <div class="ud-tab-loading"><span class="um-spin" aria-hidden="true"></span></div>
+                        }
+                        else
+                        {
+                            <SfGrid DataSource="_userRoles"
+                                    AllowPaging="true"
+                                    AllowSorting="true"
+                                    CssClass="e-grid--compact">
+                                <GridPageSettings PageSize="15" />
+                                <GridColumns>
+                                    <GridColumn Field="@nameof(UserRoleDto.RoleName)"   HeaderText="Role"        Width="180" />
+                                    <GridColumn Field="@nameof(UserRoleDto.RoleCode)"   HeaderText="Code"        Width="140" />
+                                    <GridColumn Field="@nameof(UserRoleDto.AssignedByFullName)" HeaderText="Assigned By" Width="160" />
+                                    <GridColumn Field="@nameof(UserRoleDto.AssignedDateUtc)"    HeaderText="Assigned"    Width="130">
+                                        <Template>
+                                            @{ var r = (UserRoleDto)context; }
+                                            <span>@r.AssignedDateUtc.ToString("d")</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(UserRoleDto.EffectiveStartDateUtc)" HeaderText="Effective From" Width="130">
+                                        <Template>
+                                            @{ var r = (UserRoleDto)context; }
+                                            <span>@(r.EffectiveStartDateUtc?.ToString("d") ?? "—")</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(UserRoleDto.EffectiveEndDateUtc)" HeaderText="Expires" Width="120">
+                                        <Template>
+                                            @{ var r = (UserRoleDto)context; }
+                                            <span>@(r.EffectiveEndDateUtc?.ToString("d") ?? "—")</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(UserRoleDto.IsActive)" HeaderText="Active" Width="90" TextAlign="TextAlign.Center">
+                                        <Template>
+                                            @{ var r = (UserRoleDto)context; }
+                                            <AppStatusBadge Status="@(r.IsActive ? "Active" : "Inactive")" />
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn HeaderText="" Width="90" TextAlign="TextAlign.Center">
+                                        <Template>
+                                            @{ var r = (UserRoleDto)context; }
+                                            <button class="um-btn um-btn-ghost um-btn--xs" @onclick="() => RevokeRoleAsync(r)">
+                                                <i class="bi bi-x-circle" aria-hidden="true"></i> Revoke
+                                            </button>
+                                        </Template>
+                                    </GridColumn>
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 3: Permissions -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Permissions" IconCss="bi bi-key" /></ChildContent>
+                <ContentTemplate>
+                    <div class="ud-tab-body">
+                        <div class="ud-tab-toolbar">
+                            <span class="ud-tab-count">@_permissions.Count permission override(s)</span>
+                            <button class="um-btn um-btn-ghost" @onclick="OpenAddPermission">
+                                <i class="bi bi-key-fill" aria-hidden="true"></i> Add Permission
+                            </button>
+                        </div>
+                        @if (_permsLoading)
+                        {
+                            <div class="ud-tab-loading"><span class="um-spin" aria-hidden="true"></span></div>
+                        }
+                        else
+                        {
+                            <SfGrid DataSource="_permissions"
+                                    AllowPaging="true"
+                                    AllowSorting="true"
+                                    CssClass="e-grid--compact">
+                                <GridPageSettings PageSize="15" />
+                                <GridColumns>
+                                    <GridColumn Field="@nameof(UserPermissionDto.PermissionName)"  HeaderText="Permission"  Width="180" />
+                                    <GridColumn Field="@nameof(UserPermissionDto.PermissionCode)"  HeaderText="Code"        Width="150" />
+                                    <GridColumn Field="@nameof(UserPermissionDto.ResourceCode)"    HeaderText="Resource"    Width="130" />
+                                    <GridColumn Field="@nameof(UserPermissionDto.ActionCode)"      HeaderText="Action"      Width="110" />
+                                    <GridColumn Field="@nameof(UserPermissionDto.IsGranted)"       HeaderText="Grant"       Width="90" TextAlign="TextAlign.Center">
+                                        <Template>
+                                            @{ var p = (UserPermissionDto)context; }
+                                            <AppStatusBadge Status="@(p.IsGranted ? "Active" : "Inactive")"
+                                                            Label="@(p.IsGranted ? "Granted" : "Denied")" />
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(UserPermissionDto.GrantedByFullName)" HeaderText="Granted By" Width="150" />
+                                    <GridColumn Field="@nameof(UserPermissionDto.GrantedDateUtc)"    HeaderText="Granted"    Width="120">
+                                        <Template>
+                                            @{ var p = (UserPermissionDto)context; }
+                                            <span>@p.GrantedDateUtc.ToString("d")</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(UserPermissionDto.ExpiresDateUtc)" HeaderText="Expires" Width="110">
+                                        <Template>
+                                            @{ var p = (UserPermissionDto)context; }
+                                            <span>@(p.ExpiresDateUtc?.ToString("d") ?? "—")</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn HeaderText="" Width="90" TextAlign="TextAlign.Center">
+                                        <Template>
+                                            @{ var p = (UserPermissionDto)context; }
+                                            <button class="um-btn um-btn-ghost um-btn--xs" @onclick="() => RevokePermissionAsync(p)">
+                                                <i class="bi bi-x-circle" aria-hidden="true"></i> Revoke
+                                            </button>
+                                        </Template>
+                                    </GridColumn>
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 4: Scope -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Scope" IconCss="bi bi-diagram-3" /></ChildContent>
+                <ContentTemplate>
+                    <div class="ud-tab-body">
+                        <div class="ud-tab-toolbar">
+                            <span class="ud-tab-count">@_scopes.Count scope(s)</span>
+                            <button class="um-btn um-btn-ghost" @onclick="OpenAddScope">
+                                <i class="bi bi-plus-circle" aria-hidden="true"></i> Add Scope
+                            </button>
+                        </div>
+                        @if (_scopesLoading)
+                        {
+                            <div class="ud-tab-loading"><span class="um-spin" aria-hidden="true"></span></div>
+                        }
+                        else
+                        {
+                            <SfGrid DataSource="_scopes"
+                                    AllowPaging="true"
+                                    AllowSorting="true"
+                                    CssClass="e-grid--compact">
+                                <GridPageSettings PageSize="15" />
+                                <GridColumns>
+                                    <GridColumn Field="@nameof(UserScopeDto.ScopeTypeCode)" HeaderText="Scope Type"  Width="150" />
+                                    <GridColumn Field="@nameof(UserScopeDto.ScopeValue)"    HeaderText="Value"       Width="180" />
+                                    <GridColumn Field="@nameof(UserScopeDto.IsActive)"      HeaderText="Active"      Width="90" TextAlign="TextAlign.Center">
+                                        <Template>
+                                            @{ var s = (UserScopeDto)context; }
+                                            <AppStatusBadge Status="@(s.IsActive ? "Active" : "Inactive")" />
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(UserScopeDto.GrantedByFullName)" HeaderText="Granted By"  Width="160" />
+                                    <GridColumn Field="@nameof(UserScopeDto.GrantedDateUtc)"    HeaderText="Granted"     Width="120">
+                                        <Template>
+                                            @{ var s = (UserScopeDto)context; }
+                                            <span>@s.GrantedDateUtc.ToString("d")</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(UserScopeDto.ExpiresDateUtc)" HeaderText="Expires" Width="110">
+                                        <Template>
+                                            @{ var s = (UserScopeDto)context; }
+                                            <span>@(s.ExpiresDateUtc?.ToString("d") ?? "—")</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn HeaderText="" Width="90" TextAlign="TextAlign.Center">
+                                        <Template>
+                                            @{ var s = (UserScopeDto)context; }
+                                            <button class="um-btn um-btn-ghost um-btn--xs" @onclick="() => RevokeScopeAsync(s)">
+                                                <i class="bi bi-x-circle" aria-hidden="true"></i> Revoke
+                                            </button>
+                                        </Template>
+                                    </GridColumn>
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 5: Sessions (stub) -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Sessions" IconCss="bi bi-display" /></ChildContent>
+                <ContentTemplate>
+                    <div class="ud-tab-body">
+                        <div class="ud-tab-toolbar">
+                            <button class="um-btn um-btn-ghost" @onclick="RevokeSessionsAsync">
+                                <i class="bi bi-box-arrow-right" aria-hidden="true"></i> Revoke All Sessions
+                            </button>
+                        </div>
+                        <div class="ts-empty">
+                            <i class="bi bi-display ts-empty-icon" aria-hidden="true"></i>
+                            <div class="ts-empty-title">No active sessions</div>
+                            <div class="ts-empty-sub">Session management is not yet available in this release.</div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 6: MFA (stub) -->
+            <TabItem>
+                <ChildContent><TabHeader Text="MFA" IconCss="bi bi-shield-lock" /></ChildContent>
+                <ContentTemplate>
+                    <div class="ud-tab-body">
+                        <div class="ud-security-grid">
+                            <div class="@MfaCardClass ud-sec-card--wide">
+                                <span class="@MfaIconClass" aria-hidden="true">
+                                    <i class="bi bi-shield-check-fill"></i>
+                                </span>
+                                <div>
+                                    <div class="ud-sec-label">Multi-Factor Authentication</div>
+                                    <div class="ud-sec-value">@MfaValueText</div>
+                                    @if (_user.MfaEnabled)
+                                    {
+                                        <div class="ud-sec-detail">MFA enrolled</div>
+                                    }
+                                    <button class="um-btn um-btn-ghost ud-sec-action" @onclick="ResetMfaAsync">
+                                        <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset MFA Device
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="ts-empty ud-mfa-stub">
+                            <div class="ts-empty-sub">Detailed MFA device management coming in a future release.</div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 7: Login History (stub) -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Login History" IconCss="bi bi-clock-history" /></ChildContent>
+                <ContentTemplate>
+                    <div class="ud-tab-body">
+                        <div class="ts-empty">
+                            <i class="bi bi-clock-history ts-empty-icon" aria-hidden="true"></i>
+                            <div class="ts-empty-title">Login history unavailable</div>
+                            <div class="ts-empty-sub">Login event history will be available in a future release.</div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 8: Audit -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Audit" IconCss="bi bi-journal-text" /></ChildContent>
+                <ContentTemplate>
+                    <div class="ud-tab-body">
+                        <AppAuditPanel Entries="_auditEntries"
+                                       Loading="_auditLoading"
+                                       Title="User Audit Trail" />
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 9: Access Requests (stub) -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Access Requests" IconCss="bi bi-hand-index" /></ChildContent>
+                <ContentTemplate>
+                    <div class="ud-tab-body">
+                        <div class="ts-empty">
+                            <i class="bi bi-hand-index ts-empty-icon" aria-hidden="true"></i>
+                            <div class="ts-empty-title">No access requests</div>
+                            <div class="ts-empty-sub">Access request workflows are not yet available in this release.</div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 10: Policy Acknowledgements (stub) -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Policy Acknowledgements" IconCss="bi bi-file-check" /></ChildContent>
+                <ContentTemplate>
+                    <div class="ud-tab-body">
+                        <div class="ts-empty">
+                            <i class="bi bi-file-check ts-empty-icon" aria-hidden="true"></i>
+                            <div class="ts-empty-title">No acknowledgements</div>
+                            <div class="ts-empty-sub">Policy acknowledgement tracking is not yet available in this release.</div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+        </Tabs>
+    </AppDetailTabs>
+}
+
+<!-- ═══════════════════════════════════════════════════════════════════════════════
+     Edit User drawer
+═══════════════════════════════════════════════════════════════════════════════ -->
+<UserEditDrawer @bind-Visible="_showEdit"
+                UserId="_editUserId"
+                OnSaved="HandleEditSavedAsync" />
+
+<!-- Add Scope drawer -->
+<AppCrudDrawer @bind-Visible="_showAddScope"
+               Title="Add Scope"
+               Icon="bi-diagram-3"
+               Width="480px"
+               IsBusy="_saving"
+               ConfirmText="Add Scope"
+               OnConfirm="SaveScopeAsync"
+               OnClose="CloseAddScope">
+    <Content>
+        <div class="form-row">
+            <label class="form-label">Scope Type <span class="req">*</span></label>
+            <SfTextBox @bind-Value="_scopeForm.ScopeTypeCode" Placeholder="e.g. Branch, Region" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Scope Value <span class="req">*</span></label>
+            <SfTextBox @bind-Value="_scopeForm.ScopeValue" Placeholder="e.g. BRANCH-001" />
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════════
+     Confirm dialogs
+═══════════════════════════════════════════════════════════════════════════════ -->
+<AppConfirmActionDialog @bind-Visible="_showDisable"
+                        Title="Disable User"
+                        Message="@DisableMessage"
+                        Detail="The user will no longer be able to sign in. You can re-enable them at any time."
+                        Variant="warning"
+                        ConfirmText="Disable"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteDisableAsync" />
+
+<AppConfirmActionDialog @bind-Visible="_showEnable"
+                        Title="Enable User"
+                        Message="@EnableMessage"
+                        Detail="The user will regain sign-in access immediately."
+                        Variant="primary"
+                        ConfirmText="Enable"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteEnableAsync" />
+
+<AppConfirmActionDialog @bind-Visible="_showUnlock"
+                        Title="Unlock Account"
+                        Message="@UnlockMessage"
+                        Detail="The lockout will be removed and the user can sign in again."
+                        Variant="warning"
+                        ConfirmText="Unlock"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteUnlockAsync" />
+
+<!-- ═══════════════════════════════════════════════════════════════════════════════
+     Lookup dialogs
+═══════════════════════════════════════════════════════════════════════════════ -->
+<AppLookupDialog @bind-Visible="_showAddRole"
+                 Title="Add Role"
+                 @bind-SearchValue="_rolePickSearch"
+                 OnSearch="SearchRolesForPickerAsync"
+                 SearchPlaceholder="Search roles…"
+                 Width="560px">
+    <Content>
+        @if (_pickRoles.Count == 0)
+        {
+            <div class="ald-empty">No roles found.</div>
+        }
+        else
+        {
+            @foreach (var role in _pickRoles)
+            {
+                <div class="ald-row" @onclick="() => AssignRoleAsync(role)">
+                    <div class="ald-row-title">@role.RoleName</div>
+                    <div class="ald-row-sub">@role.RoleCode</div>
+                </div>
+            }
+        }
+    </Content>
+</AppLookupDialog>
+
+<AppLookupDialog @bind-Visible="_showAddPerm"
+                 Title="Add Permission Override"
+                 @bind-SearchValue="_permPickSearch"
+                 OnSearch="SearchPermsForPickerAsync"
+                 SearchPlaceholder="Search permissions…"
+                 Width="600px">
+    <Content>
+        @if (_pickPerms.Count == 0)
+        {
+            <div class="ald-empty">No permissions found.</div>
+        }
+        else
+        {
+            @foreach (var perm in _pickPerms)
+            {
+                <div class="ald-row" @onclick="() => GrantPermissionAsync(perm)">
+                    <div class="ald-row-title">@perm.PermissionName</div>
+                    <div class="ald-row-sub">@perm.ResourceCode — @perm.ActionCode</div>
+                </div>
+            }
+        }
+    </Content>
+</AppLookupDialog>
+
+@code {
+    // ── Constants ─────────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Route parameter ───────────────────────────────────────────────────────────
+    [Parameter] public Guid UserId { get; set; }
+
+    // ── Refs ──────────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Page state ────────────────────────────────────────────────────────────────
+    private UserDto?        _user    = null;
+    private UserProfileDto? _profile = null;
+    private int             _tab     = 0;
+
+    // ── Tab data ──────────────────────────────────────────────────────────────────
+    private List<UserRoleDto>       _userRoles   = [];
+    private List<UserPermissionDto> _permissions = [];
+    private List<UserScopeDto>      _scopes      = [];
+    private IEnumerable<AppAuditPanel.AuditEntryVm> _auditEntries = [];
+
+    // ── Loading flags ─────────────────────────────────────────────────────────────
+    private bool _loading       = true;
+    private bool _saving        = false;
+    private bool _confirming    = false;
+    private bool _rolesLoading  = false;
+    private bool _permsLoading  = false;
+    private bool _scopesLoading = false;
+    private bool _auditLoading  = false;
+
+    // ── Dialog visibility ─────────────────────────────────────────────────────────
+    private bool  _showEdit     = false;
+    private Guid? _editUserId;
+    private bool  _showDisable  = false;
+    private bool  _showEnable   = false;
+    private bool  _showUnlock   = false;
+    private bool  _showAddRole  = false;
+    private bool  _showAddPerm  = false;
+    private bool  _showAddScope = false;
+
+    // ── Picker state ──────────────────────────────────────────────────────────────
+    private List<RoleDto>       _pickRoles = [];
+    private List<PermissionDto> _pickPerms = [];
+    private string _rolePickSearch = string.Empty;
+    private string _permPickSearch = string.Empty;
+
+    // ── Form models ───────────────────────────────────────────────────────────────
+    private ScopeFormModel _scopeForm = new();
+
+    // ── Computed string properties (HTML-attribute safe) ──────────────────────────
+    private string PageTitle    => _user?.FullName ?? "User Detail";
+    private string PageSubtitle => _user?.Email    ?? string.Empty;
+    private string DisableMessage => "Disable " + (_user?.FullName ?? "this user") + "?";
+    private string EnableMessage  => "Enable "  + (_user?.FullName ?? "this user") + "?";
+    private string UnlockMessage  => "Unlock account for " + (_user?.FullName ?? "this user") + "?";
+
+    private string MfaValueText  => _user is null ? "—" : (_user.MfaEnabled  ? "Enabled"   : "Disabled");
+    private string LockValueText => _user is null ? "—" : (_user.IsLockedOut ? "Locked Out" : "Unlocked");
+
+    private string MfaIconClass => _user?.MfaEnabled == true
+        ? "ud-sec-icon ud-sec-icon--on"
+        : "ud-sec-icon ud-sec-icon--off";
+
+    private string MfaCardClass => _user?.MfaEnabled == true
+        ? "ud-sec-card ud-sec-card--on"
+        : "ud-sec-card ud-sec-card--off";
+
+    private string LockIconClass => _user?.IsLockedOut == true
+        ? "ud-sec-icon ud-sec-icon--danger"
+        : "ud-sec-icon ud-sec-icon--neutral";
+
+    private string LockCardClass => _user?.IsLockedOut == true
+        ? "ud-sec-card ud-sec-card--danger"
+        : "ud-sec-card";
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────────
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_user?.UserId == UserId) return;
+        await LoadUserAsync();
+    }
+
+    private async Task LoadUserAsync()
+    {
+        _loading = true;
+        _user    = null;
+        _profile = null;
+        _userRoles.Clear();
+        _permissions.Clear();
+        _scopes.Clear();
+        StateHasChanged();
+
+        try
+        {
+            _user    = await Api.GetUserByIdAsync(UserId);
+            _profile = await Api.GetUserProfileAsync(UserId);
+            SetCrumbs();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void SetCrumbs()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",  "/"),
+            new("IAM",   "/iam"),
+            new("Users", "/iam/users"),
+            new(_user?.FullName ?? "User", null));
+    }
+
+    // ── Tab handling ──────────────────────────────────────────────────────────────
+    private async Task OnTabChangedAsync(int tab)
+    {
+        _tab = tab;
+        await LoadTabDataAsync(tab);
+    }
+
+    private async Task LoadTabDataAsync(int tab)
+    {
+        switch (tab)
+        {
+            case 2 when !_userRoles.Any():
+                await LoadRolesTabAsync();
+                break;
+            case 3 when !_permissions.Any():
+                await LoadPermissionsTabAsync();
+                break;
+            case 4 when !_scopes.Any():
+                await LoadScopesTabAsync();
+                break;
+            case 8 when !_auditEntries.Any():
+                await LoadAuditTabAsync();
+                break;
+        }
+    }
+
+    private async Task LoadRolesTabAsync()
+    {
+        _rolesLoading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchUserRolesAsync(_tenantId, UserId, null, null);
+            _userRoles = result?.Items.ToList() ?? [];
+        }
+        finally
+        {
+            _rolesLoading = false;
+        }
+    }
+
+    private async Task LoadPermissionsTabAsync()
+    {
+        _permsLoading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.GetUserDirectPermissionsAsync(UserId);
+            _permissions = result?.ToList() ?? [];
+        }
+        finally
+        {
+            _permsLoading = false;
+        }
+    }
+
+    private async Task LoadScopesTabAsync()
+    {
+        _scopesLoading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.GetUserScopesAsync(UserId);
+            _scopes = result?.ToList() ?? [];
+        }
+        finally
+        {
+            _scopesLoading = false;
+        }
+    }
+
+    private async Task LoadAuditTabAsync()
+    {
+        _auditLoading = true;
+        StateHasChanged();
+        try
+        {
+            _auditEntries = [];
+        }
+        finally
+        {
+            _auditLoading = false;
+        }
+    }
+
+    // ── Dialog openers / closers ──────────────────────────────────────────────────
+    private void OpenEdit()
+    {
+        if (_user is null) return;
+        _editUserId = _user.UserId;
+        _showEdit   = true;
+    }
+
+    private async Task HandleEditSavedAsync() => await LoadUserAsync();
+    private void OpenDisable()       => _showDisable  = true;
+    private void OpenEnable()        => _showEnable   = true;
+    private void OpenUnlock()        => _showUnlock   = true;
+    private void OpenAddRole()       => _showAddRole  = true;
+    private void OpenAddPermission() => _showAddPerm  = true;
+    private void OpenAddScope()      => _showAddScope = true;
+    private void CloseAddScope()     => _showAddScope = false;
+
+    // ── Disable / Enable / Unlock
+    private async Task ExecuteDisableAsync()
+    {
+        if (_user is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.SetUserActiveAsync(_user.UserId, false, null);
+            _showDisable = false;
+            await Toast("User disabled.");
+            await LoadUserAsync();
+        }
+        catch
+        {
+            await Toast("Failed to disable user.", isError: true);
+        }
+        finally
+        {
+            _confirming = false;
+        }
+    }
+
+    private async Task ExecuteEnableAsync()
+    {
+        if (_user is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.SetUserActiveAsync(_user.UserId, true, null);
+            _showEnable = false;
+            await Toast("User enabled.");
+            await LoadUserAsync();
+        }
+        catch
+        {
+            await Toast("Failed to enable user.", isError: true);
+        }
+        finally
+        {
+            _confirming = false;
+        }
+    }
+
+    private async Task ExecuteUnlockAsync()
+    {
+        if (_user is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.UnlockUserAsync(_user.UserId, null);
+            _showUnlock = false;
+            await Toast("Account unlocked.");
+            await LoadUserAsync();
+        }
+        catch
+        {
+            await Toast("Failed to unlock account.", isError: true);
+        }
+        finally
+        {
+            _confirming = false;
+        }
+    }
+
+    // ── Reset MFA / Revoke Sessions ───────────────────────────────────────────────
+    private async Task ResetMfaAsync()
+    {
+        await Toast("MFA reset is not yet implemented.");
+    }
+
+    private async Task RevokeSessionsAsync()
+    {
+        await Toast("Session revocation is not yet implemented.");
+    }
+
+    // ── Roles ─────────────────────────────────────────────────────────────────────
+    private async Task SearchRolesForPickerAsync(string term)
+    {
+        var result = await Api.SearchRolesAsync(_tenantId, term);
+        _pickRoles = result?.Items.ToList() ?? [];
+    }
+
+    private async Task AssignRoleAsync(RoleDto role)
+    {
+        if (_user is null) return;
+        _showAddRole = false;
+        try
+        {
+            var req = new AssignUserRoleRequest
+            {
+                TenantId = _tenantId,
+                UserId   = _user.UserId,
+                RoleId   = role.RoleId,
+            };
+            await Api.AssignUserRoleAsync(req);
+            await Toast("Role assigned.");
+            _userRoles.Clear();
+            await LoadRolesTabAsync();
+        }
+        catch
+        {
+            await Toast("Failed to assign role.", isError: true);
+        }
+    }
+
+    private async Task RevokeRoleAsync(UserRoleDto userRole)
+    {
+        try
+        {
+            await Api.RevokeUserRoleAsync(new RevokeUserRoleRequest { UserRoleId = userRole.UserRoleId });
+            _userRoles.Remove(userRole);
+            await Toast("Role revoked.");
+        }
+        catch
+        {
+            await Toast("Failed to revoke role.", isError: true);
+        }
+    }
+
+    // ── Permissions ───────────────────────────────────────────────────────────────
+    private async Task SearchPermsForPickerAsync(string term)
+    {
+        var result = await Api.SearchPermissionsAsync(_tenantId, term);
+        _pickPerms = result?.Items.ToList() ?? [];
+    }
+
+    private async Task GrantPermissionAsync(PermissionDto perm)
+    {
+        if (_user is null) return;
+        _showAddPerm = false;
+        try
+        {
+            var req = new GrantUserPermissionRequest
+            {
+                TenantId     = _tenantId,
+                UserId       = _user.UserId,
+                PermissionId = perm.PermissionId,
+                IsGranted    = true,
+            };
+            await Api.GrantUserPermissionAsync(_user.UserId, req);
+            await Toast("Permission granted.");
+            _permissions.Clear();
+            await LoadPermissionsTabAsync();
+        }
+        catch
+        {
+            await Toast("Failed to grant permission.", isError: true);
+        }
+    }
+
+    private async Task RevokePermissionAsync(UserPermissionDto perm)
+    {
+        try
+        {
+            await Api.RevokeUserPermissionAsync(UserId, perm.PermissionId, null);
+            _permissions.Remove(perm);
+            await Toast("Permission revoked.");
+        }
+        catch
+        {
+            await Toast("Failed to revoke permission.", isError: true);
+        }
+    }
+
+    // ── Scopes ────────────────────────────────────────────────────────────────────
+    private async Task SaveScopeAsync()
+    {
+        if (_user is null) return;
+        _saving = true;
+        try
+        {
+            var req = new AssignUserScopeRequest
+            {
+                TenantId      = _tenantId,
+                UserId        = _user.UserId,
+                ScopeTypeCode = _scopeForm.ScopeTypeCode,
+                ScopeValue    = _scopeForm.ScopeValue,
+            };
+            await Api.AssignUserScopeAsync(req);
+            _showAddScope = false;
+            _scopeForm    = new();
+            await Toast("Scope assigned.");
+            _scopes.Clear();
+            await LoadScopesTabAsync();
+        }
+        catch
+        {
+            await Toast("Failed to assign scope.", isError: true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task RevokeScopeAsync(UserScopeDto scope)
+    {
+        try
+        {
+            await Api.RevokeUserScopeAsync(scope.UserScopeId, null);
+            _scopes.Remove(scope);
+            await Toast("Scope revoked.");
+        }
+        catch
+        {
+            await Toast("Failed to revoke scope.", isError: true);
+        }
+    }
+
+    // ── Navigation ────────────────────────────────────────────────────────────────
+    private void NavigateToList() => Nav.NavigateTo("/iam/users");
+
+    // ── Helpers ───────────────────────────────────────────────────────────────────
+    private string Initials()
+    {
+        if (_user is null) return "?";
+        var parts = _user.FullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? (parts[0][0].ToString() + parts[^1][0].ToString()).ToUpperInvariant()
+            : _user.FullName.Length > 0 ? _user.FullName[0].ToString().ToUpperInvariant() : "?";
+    }
+
+    private string AvatarStyle()
+    {
+        if (_user is null) return string.Empty;
+        var hash  = Math.Abs(_user.UserId.GetHashCode());
+        var hue   = hash % 360;
+        var sat   = 45 + (hash % 25);
+        var light = 38 + (hash % 18);
+        return "background:hsl(" + hue + "," + sat + "%," + light + "%);color:#fff;";
+    }
+
+    private string FormatRelative(DateTime? dt)
+    {
+        if (dt is null) return "Never";
+        var diff = DateTime.UtcNow - dt.Value;
+        if (diff.TotalMinutes < 1)   return "Just now";
+        if (diff.TotalHours   < 1)   return (int)diff.TotalMinutes + "m ago";
+        if (diff.TotalDays    < 1)   return (int)diff.TotalHours   + "h ago";
+        if (diff.TotalDays    < 30)  return (int)diff.TotalDays    + "d ago";
+        if (diff.TotalDays    < 365) return (int)(diff.TotalDays / 30)  + "mo ago";
+        return (int)(diff.TotalDays / 365) + "y ago";
+    }
+
+    private string CityState()
+    {
+        if (_profile is null) return "—";
+        var parts = new[] { _profile.AddressLine1, _profile.AddressLine2, _profile.City, _profile.StateProvince, _profile.PostalCode }
+            .Where(p => !string.IsNullOrWhiteSpace(p));
+        var result = string.Join(", ", parts);
+        return string.IsNullOrEmpty(result) ? "—" : result;
+    }
+
+    private async Task Toast(string message, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content         = message,
+            CssClass        = isError ? "e-toast-danger" : "e-toast-success",
+            Icon            = isError ? "e-error toast-icons" : "e-success toast-icons",
+            ShowCloseButton = true,
+            Timeout         = 4000,
+        });
+    }
+
+    // ── Form models ───────────────────────────────────────────────────────────────
+    private sealed class ScopeFormModel
+    {
+        public string ScopeTypeCode { get; set; } = string.Empty;
+        public string ScopeValue    { get; set; } = string.Empty;
+    }
+}

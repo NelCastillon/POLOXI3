@@ -1,0 +1,213 @@
+@inject ApiClient Api
+
+<div class="tab-section">
+    <div class="ts-header">
+        <h3 class="ts-title">Security &amp; Account Status</h3>
+    </div>
+
+    @if (User is null)
+    {
+        <div class="ts-empty"><i class="bi bi-shield-x"></i> No security data.</div>
+    }
+    else
+    {
+        <!-- ── Account status ────────────────────────── -->
+        <div class="ts-security-grid">
+            <div class="ts-sec-card @(User.IsLockedOut ? "sec-card-warn" : "sec-card-ok")">
+                <div class="ts-sec-icon">
+                    <i class="bi @(User.IsLockedOut ? "bi-lock-fill" : "bi-unlock-fill")"
+                       aria-hidden="true"></i>
+                </div>
+                <div class="ts-sec-body">
+                    <div class="ts-sec-label">Account Lock Status</div>
+                    <div class="ts-sec-value">@(User.IsLockedOut ? "Locked Out" : "Not Locked")</div>
+                    @if (User.LockoutEndDateUtc.HasValue)
+                    {
+                        <div class="ts-sec-meta">
+                            Until @User.LockoutEndDateUtc.Value.ToString("f")
+                        </div>
+                    }
+                </div>
+                <div class="ts-sec-action">
+                    @if (User.IsLockedOut)
+                    {
+                        <button class="ts-btn-success ts-sec-btn" @onclick="UnlockAsync" disabled="@_saving">
+                            <i class="bi bi-unlock" aria-hidden="true"></i> Unlock
+                        </button>
+                    }
+                    else
+                    {
+                        <button class="ts-btn-warning ts-sec-btn" @onclick="OpenLockDialog">
+                            <i class="bi bi-lock" aria-hidden="true"></i> Lock Account
+                        </button>
+                    }
+                </div>
+            </div>
+
+            <div class="ts-sec-card @(User.FailedLoginAttempts > 3 ? "sec-card-warn" : "sec-card-neutral")">
+                <div class="ts-sec-icon">
+                    <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+                </div>
+                <div class="ts-sec-body">
+                    <div class="ts-sec-label">Failed Login Attempts</div>
+                    <div class="ts-sec-value">@User.FailedLoginAttempts</div>
+                    <div class="ts-sec-meta">Resets on successful login</div>
+                </div>
+            </div>
+
+            <div class="ts-sec-card @(User.MfaEnabled ? "sec-card-ok" : "sec-card-warn")">
+                <div class="ts-sec-icon">
+                    <i class="bi @(User.MfaEnabled ? "bi-shield-fill-check" : "bi-shield-x")"
+                       aria-hidden="true"></i>
+                </div>
+                <div class="ts-sec-body">
+                    <div class="ts-sec-label">Multi-Factor Authentication</div>
+                    <div class="ts-sec-value">@(User.MfaEnabled ? "Enabled" : "Disabled")</div>
+                    <div class="ts-sec-meta">Manage in the MFA tab</div>
+                </div>
+            </div>
+
+            <div class="ts-sec-card sec-card-neutral">
+                <div class="ts-sec-icon">
+                    <i class="bi bi-key" aria-hidden="true"></i>
+                </div>
+                <div class="ts-sec-body">
+                    <div class="ts-sec-label">Password Last Changed</div>
+                    <div class="ts-sec-value">
+                        @(User.PasswordChangedDateUtc.HasValue
+                            ? User.PasswordChangedDateUtc.Value.ToString("MMM d, yyyy")
+                            : "Never")
+                    </div>
+                    @if (User.PasswordChangedDateUtc.HasValue)
+                    {
+                        var age = (int)(DateTime.UtcNow - User.PasswordChangedDateUtc.Value).TotalDays;
+                        <div class="ts-sec-meta">@age day(s) ago</div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Status & quick actions ────────────────── -->
+        <div class="ts-sec-actions-row">
+            <div class="ts-sec-section-label">Account Actions</div>
+            <div class="ts-sec-action-btns">
+                <button class="ts-btn-primary" @onclick="ToggleActiveAsync" disabled="@_saving">
+                    <i class="bi @(IsActive() ? "bi-slash-circle" : "bi-check-circle")"
+                       aria-hidden="true"></i>
+                    @(IsActive() ? "Deactivate Account" : "Activate Account")
+                </button>
+                <button class="ts-btn-ghost" @onclick="OpenLockDialog" disabled="@User.IsLockedOut">
+                    <i class="bi bi-clock" aria-hidden="true"></i> Temporary Lock
+                </button>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_msg))
+        {
+            <div class="ts-feedback @(_isError ? "ts-feedback-err" : "ts-feedback-ok")"
+                 role="alert">
+                <i class="bi @(_isError ? "bi-x-circle" : "bi-check-circle")"
+                   aria-hidden="true"></i> @_msg
+            </div>
+        }
+    }
+</div>
+
+<!-- ── Lock dialog ───────────────────────────────────── -->
+<SfDialog @bind-Visible="_showLockDialog" Width="400px" IsModal="true"
+          ShowCloseIcon="true" CloseOnEscape="true">
+    <DialogTemplates>
+        <Header><i class="bi bi-lock" aria-hidden="true"></i> Lock Account</Header>
+        <Content>
+            <div class="ts-lock-form">
+                <p class="ts-lock-info">
+                    Lock out <strong>@User?.FullName</strong> until the specified date.
+                    Leave blank to lock indefinitely.
+                </p>
+                <div class="form-group">
+                    <label>Lockout Until (optional)</label>
+                    <SfDatePicker TValue="DateTime?"
+                                  @bind-Value="_lockoutEnd"
+                                  Min="DateTime.UtcNow"
+                                  Placeholder="Select date…" />
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="ts-btn-ghost" @onclick="() => _showLockDialog = false">Cancel</button>
+                <button class="ts-btn-warning" @onclick="LockAsync" disabled="@_saving">
+                    @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                    Lock Account
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    [Parameter] public UserDto?      User          { get; set; }
+    [Parameter] public Guid          TenantId      { get; set; }
+    [Parameter] public EventCallback OnUserUpdated { get; set; }
+
+    private bool      _saving;
+    private bool      _showLockDialog;
+    private DateTime? _lockoutEnd;
+    private string    _msg     = string.Empty;
+    private bool      _isError;
+
+    private bool IsActive() =>
+        User?.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase) ?? false;
+
+    private void OpenLockDialog() { _lockoutEnd = null; _showLockDialog = true; }
+
+    private async Task LockAsync()
+    {
+        if (User is null) return;
+        _saving = true;
+        try
+        {
+            await Api.LockUserAsync(User.UserId, _lockoutEnd);
+            _showLockDialog = false;
+            ShowMsg("Account locked.", false);
+            await OnUserUpdated.InvokeAsync();
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+        finally { _saving = false; }
+    }
+
+    private async Task UnlockAsync()
+    {
+        if (User is null) return;
+        _saving = true;
+        try
+        {
+            await Api.UnlockUserAsync(User.UserId);
+            ShowMsg("Account unlocked.", false);
+            await OnUserUpdated.InvokeAsync();
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+        finally { _saving = false; }
+    }
+
+    private async Task ToggleActiveAsync()
+    {
+        if (User is null) return;
+        _saving = true;
+        try
+        {
+            var activate = !IsActive();
+            await Api.SetUserActiveAsync(User.UserId, activate);
+            ShowMsg($"Account {(activate ? "activated" : "deactivated")}.", false);
+            await OnUserUpdated.InvokeAsync();
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+        finally { _saving = false; }
+    }
+
+    private void ShowMsg(string msg, bool isError)
+    {
+        _msg     = msg;
+        _isError = isError;
+    }
+}

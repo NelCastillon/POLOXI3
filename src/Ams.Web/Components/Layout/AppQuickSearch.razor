@@ -1,0 +1,233 @@
+@*
+    AppQuickSearch — global command-palette / quick-search overlay.
+    Activated by Ctrl+K (or ⌘K on Mac) via the keyboard listener in shell.js,
+    or programmatically via Shell.OpenQuickSearch() (e.g. clicking the search box in TopHeader).
+
+    Place once inside MainLayout.razor.  The component self-registers its JS keyboard shortcut
+    on first render using a DotNetObjectReference.
+*@
+
+@inject ShellStateService Shell
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IDisposable
+
+@if (Shell.QuickSearchOpen)
+{
+    <div class="aqs-overlay" @onclick="Close" aria-hidden="true"></div>
+
+    <div class="aqs-modal" role="dialog" aria-label="Quick search" aria-modal="true">
+
+        @* ── Search input ────────────────────────────────── *@
+        <div class="aqs-search-row">
+            <i class="bi bi-search aqs-icon" aria-hidden="true"></i>
+            <input id="aqs-input"
+                   type="search"
+                   class="aqs-input"
+                   placeholder="Search pages, actions, records…"
+                   autocomplete="off"
+                   @bind="_query"
+                   @bind:event="oninput"
+                   @onkeydown="OnKeyDown" />
+            <kbd class="aqs-esc-hint" aria-label="Press Escape to close">Esc</kbd>
+        </div>
+
+        @{
+            var results = GetResults();
+        }
+
+        @* ── Results ─────────────────────────────────────── *@
+        @if (results.Count > 0)
+        {
+            <ul class="aqs-results" role="listbox" aria-label="Search results">
+                @for (var i = 0; i < results.Count; i++)
+                {
+                    var r   = results[i];
+                    var idx = i;
+                    <li role="none">
+                        <a class="aqs-result-item @(_selectedIdx == idx ? "is-active" : "")"
+                           href="@r.Url"
+                           role="option"
+                           aria-selected="@(_selectedIdx == idx ? "true" : "false")"
+                           @onclick="Close">
+                            <div class="aqs-result-icon">
+                                <i class="bi @r.Icon" aria-hidden="true"></i>
+                            </div>
+                            <div class="aqs-result-body">
+                                <span class="aqs-result-label">@r.Label</span>
+                                @if (!string.IsNullOrEmpty(r.Category))
+                                {
+                                    <span class="aqs-result-cat">@r.Category</span>
+                                }
+                            </div>
+                            <i class="bi bi-arrow-return-left aqs-result-enter" aria-hidden="true"></i>
+                        </a>
+                    </li>
+                }
+            </ul>
+        }
+        else if (!string.IsNullOrWhiteSpace(_query))
+        {
+            <div class="aqs-empty">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <span>No results for "<strong>@_query</strong>"</span>
+            </div>
+        }
+        else
+        {
+            @* ── Hint groups shown when no query is typed ── *@
+            <div class="aqs-hints">
+                @foreach (var grp in _hintGroups)
+                {
+                    <div class="aqs-hint-group">
+                        <div class="aqs-hint-label">@grp.Label</div>
+                        @foreach (var item in grp.Items)
+                        {
+                            <a class="aqs-hint-item" href="@item.Url" @onclick="Close">
+                                <i class="bi @item.Icon" aria-hidden="true"></i>
+                                <span>@item.Label</span>
+                            </a>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        @* ── Keyboard shortcut legend ─────────────────────── *@
+        <div class="aqs-footer" aria-hidden="true">
+            <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+            <span><kbd>↵</kbd> open</span>
+            <span><kbd>Esc</kbd> close</span>
+        </div>
+
+    </div>
+}
+
+@code {
+    private sealed record SearchItem(string Label, string Url, string Icon, string? Category = null);
+    private sealed record HintGroup(string Label, SearchItem[] Items);
+
+    private string _query       = string.Empty;
+    private int    _selectedIdx = 0;
+    private bool   _prevOpen;
+
+    private DotNetObjectReference<AppQuickSearch>? _dotnetRef;
+
+    // ── Hint groups (shown when query is empty) ───────────────
+    private static readonly HintGroup[] _hintGroups =
+    [
+        new("Navigation",
+        [
+            new("Dashboard",    "/",            "bi-speedometer2"),
+            new("Leads",        "/leads",       "bi-person-plus"),
+            new("Accounts",     "/accounts",    "bi-building"),
+            new("Invoices",     "/invoices",    "bi-receipt"),
+            new("Time Entries", "/timeentries", "bi-clock"),
+        ]),
+        new("Admin",
+        [
+            new("Users",       "/users",       "bi-people"),
+            new("Roles",       "/roles",       "bi-shield-check"),
+            new("Preferences", "/preferences", "bi-sliders"),
+        ]),
+    ];
+
+    // ── Full searchable catalogue ─────────────────────────────
+    private static readonly SearchItem[] _catalogue =
+    [
+        new("Dashboard",          "/",                           "bi-speedometer2",       "Navigation"),
+        new("Leads",              "/leads",                      "bi-person-plus",         "CRM"),
+        new("Opportunities",      "/opportunities",              "bi-trophy",              "CRM"),
+        new("Quotes",             "/crm/quotes",                 "bi-file-text",           "CRM"),
+        new("Lead Activities",    "/crm/lead-activities",        "bi-lightning",           "CRM"),
+        new("Accounts",           "/accounts",                   "bi-building",            "Accounts"),
+        new("Contacts",           "/contacts",                   "bi-person-badge",        "Accounts"),
+        new("Agreements",         "/agreements",                 "bi-file-earmark-check",  "Operations"),
+        new("Engagements",        "/engagements",                "bi-briefcase",           "Operations"),
+        new("Milestones",         "/ops/milestones",             "bi-flag",                "Operations"),
+        new("Invoices",           "/invoices",                   "bi-receipt",             "Billing"),
+        new("Time Entries",       "/timeentries",                "bi-clock",               "Billing"),
+        new("Expenses",           "/expenses",                   "bi-credit-card",         "Billing"),
+        new("Payments",           "/payments",                   "bi-cash-coin",           "Billing"),
+        new("GL Accounts",        "/finance/glaccounts",         "bi-journals",            "Finance"),
+        new("Journal Entries",    "/finance/journalentries",     "bi-journal-text",        "Finance"),
+        new("Vendors",            "/finance/vendors",            "bi-truck",               "Finance"),
+        new("Users",              "/users",                      "bi-people",              "Admin"),
+        new("Roles",              "/roles",                      "bi-shield-check",        "Admin"),
+        new("Preferences",        "/preferences",                "bi-sliders",             "Admin"),
+    ];
+
+    private List<SearchItem> GetResults()
+    {
+        if (string.IsNullOrWhiteSpace(_query)) return [];
+        var q = _query.Trim();
+        return _catalogue
+            .Where(i =>
+                i.Label.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                (i.Category?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
+            .Take(8)
+            .ToList();
+    }
+
+    // ── Keyboard navigation ───────────────────────────────────
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        var results = GetResults();
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                _selectedIdx = Math.Min(_selectedIdx + 1, results.Count - 1);
+                break;
+            case "ArrowUp":
+                _selectedIdx = Math.Max(_selectedIdx - 1, 0);
+                break;
+            case "Enter" when _selectedIdx >= 0 && _selectedIdx < results.Count:
+                Nav.NavigateTo(results[_selectedIdx].Url);
+                Close();
+                break;
+            case "Escape":
+                Close();
+                break;
+        }
+    }
+
+    private void Close()
+    {
+        Shell.CloseQuickSearch();
+        _query       = string.Empty;
+        _selectedIdx = 0;
+    }
+
+    // ── Called from shell.js via DotNetObjectReference ────────
+    [JSInvokable]
+    public void OpenFromJs()
+    {
+        Shell.OpenQuickSearch();
+        InvokeAsync(StateHasChanged);
+    }
+
+    // ── Lifecycle ─────────────────────────────────────────────
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _dotnetRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("amsShell.init", _dotnetRef);
+        }
+
+        if (Shell.QuickSearchOpen && !_prevOpen)
+            await JS.InvokeVoidAsync("amsShell.focus", "aqs-input");
+
+        _prevOpen = Shell.QuickSearchOpen;
+    }
+
+    protected override void OnInitialized() => Shell.OnChange += OnShellChange;
+    private void OnShellChange()            => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Shell.OnChange -= OnShellChange;
+        _dotnetRef?.Dispose();
+        _ = JS.InvokeVoidAsync("amsShell.dispose");
+    }
+}

@@ -1,0 +1,638 @@
+@page "/compliance/acknowledgements"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Policy Acknowledgements — Compliance</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Policy Acknowledgements"
+               Subtitle="Track pending, overdue and completed policy acknowledgements"
+               Icon="bi-check2-all">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="RefreshAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <a href="/compliance/policies" class="um-btn um-btn-ghost">
+            <i class="bi bi-file-earmark-text" aria-hidden="true"></i> Policies
+        </a>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
+<div class="pa-kpi-strip">
+    <div class="@KpiClass(1)" @onclick="() => SetView(1)" role="button" tabindex="0"
+         aria-label="View: Pending">
+        <span class="pa-kpi-icon pa-kpi-icon--pending">
+            <i class="bi bi-hourglass-split" aria-hidden="true"></i>
+        </span>
+        <div>
+            <div class="pa-kpi-value">@(_summary?.TotalPending ?? 0)</div>
+            <div class="pa-kpi-label">Pending</div>
+        </div>
+        @if (_view == 1) { <span class="pa-kpi-dot" aria-hidden="true"></span> }
+    </div>
+
+    <div class="@KpiClass(2)" @onclick="() => SetView(2)" role="button" tabindex="0"
+         aria-label="View: Overdue">
+        <span class="pa-kpi-icon pa-kpi-icon--overdue">
+            <i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i>
+        </span>
+        <div>
+            <div class="pa-kpi-value">@(_summary?.TotalOverdue ?? 0)</div>
+            <div class="pa-kpi-label">Overdue</div>
+        </div>
+        @if (_view == 2) { <span class="pa-kpi-dot" aria-hidden="true"></span> }
+    </div>
+
+    <div class="@KpiClass(3)" @onclick="() => SetView(3)" role="button" tabindex="0"
+         aria-label="View: Acknowledged">
+        <span class="pa-kpi-icon pa-kpi-icon--acked">
+            <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+        </span>
+        <div>
+            <div class="pa-kpi-value">@(_summary?.TotalAcknowledged ?? 0)</div>
+            <div class="pa-kpi-label">Acknowledged</div>
+        </div>
+        @if (_view == 3) { <span class="pa-kpi-dot" aria-hidden="true"></span> }
+    </div>
+
+    <div class="@KpiClass(0)" @onclick="() => SetView(0)" role="button" tabindex="0"
+         aria-label="View: Policies with audience">
+        <span class="pa-kpi-icon pa-kpi-icon--total">
+            <i class="bi bi-file-earmark-check-fill" aria-hidden="true"></i>
+        </span>
+        <div>
+            <div class="pa-kpi-value">@(_summary?.TotalPoliciesWithAudience ?? 0)</div>
+            <div class="pa-kpi-label">Active Policies</div>
+        </div>
+        @if (_view == 0) { <span class="pa-kpi-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- ── Filter toolbar ────────────────────────────────────────────────────── -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="@SearchPlaceholder">
+    <Filters>
+        @if (_view is 1 or 2)
+        {
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_typeOptions"
+                            Placeholder="All Types"
+                            ShowClearButton="true"
+                            Width="170px"
+                            Value="_filterType"
+                            ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        }
+        @if (_view == 3)
+        {
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_typeOptions"
+                            Placeholder="All Types"
+                            ShowClearButton="true"
+                            Width="170px"
+                            Value="_filterType"
+                            ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        }
+    </Filters>
+</AppFilterPanel>
+
+<!-- ── View panels ───────────────────────────────────────────────────────── -->
+
+@if (_loading)
+{
+    <div class="pa-loading">
+        <span class="um-spin" aria-hidden="true"></span>
+        Loading…
+    </div>
+}
+else
+{
+    <!-- ── Pending view ──────────────────────────────────────────────────── -->
+    @if (_view == 1)
+    {
+        @if (_pendingFiltered.Count == 0)
+        {
+            <div class="pa-empty">
+                <i class="bi bi-hourglass pa-empty-icon" aria-hidden="true"></i>
+                <div class="pa-empty-title">No pending acknowledgements</div>
+                <div class="pa-empty-sub">All required audience members have acknowledged their assigned policies.</div>
+            </div>
+        }
+        else
+        {
+            <SfGrid DataSource="_pendingFiltered"
+                    AllowPaging="true"
+                    AllowSorting="true"
+                    CssClass="e-grid--compact">
+                <GridPageSettings PageSize="25" />
+                <GridColumns>
+                    <GridColumn HeaderText="Policy" MinWidth="220">
+                        <Template>
+                            @{ var r = (PendingAcknowledgementDto)context; }
+                            <div class="pa-policy-cell">
+                                <a href="/compliance/policies/@r.PolicyDocumentId"
+                                   class="pa-policy-link">@r.PolicyTitle</a>
+                                <div class="pa-policy-meta">
+                                    <span class="pa-code">@r.PolicyCode</span>
+                                    <span class="pa-type-badge pa-type-badge--@SlugType(r.PolicyTypeCode)">
+                                        @r.PolicyTypeCode
+                                    </span>
+                                    <span class="pa-version-chip">v@r.Version</span>
+                                </div>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Audience" Width="220">
+                        <Template>
+                            @{ var r = (PendingAcknowledgementDto)context; }
+                            <div class="pa-audience-cell">
+                                <span class="pa-target-type pa-target-type--@r.TargetTypeCode.ToLower()">
+                                    <i class="bi @AudienceIcon(r.TargetTypeCode)" aria-hidden="true"></i>
+                                    @r.TargetTypeCode
+                                </span>
+                                <span class="pa-target-name">@r.TargetName</span>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Effective Date" Width="140">
+                        <Template>
+                            @{ var r = (PendingAcknowledgementDto)context; }
+                            <span>@(r.EffectiveDateUtc?.ToString("dd MMM yyyy") ?? "—")</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Published" Width="130">
+                        <Template>
+                            @{ var r = (PendingAcknowledgementDto)context; }
+                            <span>@(r.PublishedDateUtc?.ToString("dd MMM yyyy") ?? "—")</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Status" Width="140" TextAlign="TextAlign.Center">
+                        <Template>
+                            @{ var r = (PendingAcknowledgementDto)context; }
+                            @if (r.DaysOverdue > 0)
+                            {
+                                <span class="pa-overdue-badge">
+                                    <i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i>
+                                    @r.DaysOverdue day@(r.DaysOverdue == 1 ? "" : "s") overdue
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="pa-pending-badge">
+                                    <i class="bi bi-hourglass-split" aria-hidden="true"></i>
+                                    Pending
+                                </span>
+                            }
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Center">
+                        <Template>
+                            @{ var r = (PendingAcknowledgementDto)context; }
+                            <a href="/compliance/policies/@r.PolicyDocumentId"
+                               class="um-btn um-btn-ghost um-btn--xs" title="View policy">
+                                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                            </a>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        }
+    }
+
+    <!-- ── Overdue view ──────────────────────────────────────────────────── -->
+    @if (_view == 2)
+    {
+        @if (_overdueFiltered.Count == 0)
+        {
+            <div class="pa-empty">
+                <i class="bi bi-check-circle pa-empty-icon pa-empty-icon--good" aria-hidden="true"></i>
+                <div class="pa-empty-title">No overdue acknowledgements</div>
+                <div class="pa-empty-sub">No required acknowledgements have passed their effective date without a response.</div>
+            </div>
+        }
+        else
+        {
+            <div class="pa-overdue-alert">
+                <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                <strong>@_overdueFiltered.Count overdue item@(_overdueFiltered.Count == 1 ? "" : "s")</strong>
+                — these audience members have not acknowledged policies past their effective date.
+            </div>
+
+            <SfGrid DataSource="_overdueFiltered"
+                    AllowPaging="true"
+                    AllowSorting="true"
+                    CssClass="e-grid--compact">
+                <GridPageSettings PageSize="25" />
+                <GridColumns>
+                    <GridColumn HeaderText="Policy" MinWidth="220">
+                        <Template>
+                            @{ var r = (PendingAcknowledgementDto)context; }
+                            <div class="pa-policy-cell">
+                                <a href="/compliance/policies/@r.PolicyDocumentId"
+                                   class="pa-policy-link">@r.PolicyTitle</a>
+                                <div class="pa-policy-meta">
+                                    <span class="pa-code">@r.PolicyCode</span>
+                                    <span class="pa-type-badge pa-type-badge--@SlugType(r.PolicyTypeCode)">
+                                        @r.PolicyTypeCode
+                                    </span>
+                                    <span class="pa-version-chip">v@r.Version</span>
+                                </div>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Audience" Width="220">
+                        <Template>
+                            @{ var r = (PendingAcknowledgementDto)context; }
+                            <div class="pa-audience-cell">
+                                <span class="pa-target-type pa-target-type--@r.TargetTypeCode.ToLower()">
+                                    <i class="bi @AudienceIcon(r.TargetTypeCode)" aria-hidden="true"></i>
+                                    @r.TargetTypeCode
+                                </span>
+                                <span class="pa-target-name">@r.TargetName</span>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Effective Date" Width="140">
+                        <Template>
+                            @{ var r = (PendingAcknowledgementDto)context; }
+                            <span>@(r.EffectiveDateUtc?.ToString("dd MMM yyyy") ?? "—")</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Days Overdue" Width="140" TextAlign="TextAlign.Center">
+                        <Template>
+                            @{ var r = (PendingAcknowledgementDto)context; }
+                            <span class="pa-days-overdue pa-days-overdue--@OverdueSeverity(r.DaysOverdue)">
+                                <i class="bi bi-clock-history" aria-hidden="true"></i>
+                                @r.DaysOverdue day@(r.DaysOverdue == 1 ? "" : "s")
+                            </span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Required" Width="100" TextAlign="TextAlign.Center">
+                        <Template>
+                            @{ var r = (PendingAcknowledgementDto)context; }
+                            <AppStatusBadge Status="@(r.IsRequired ? "Active" : "Inactive")"
+                                            Label="@(r.IsRequired ? "Required" : "Optional")" />
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Center">
+                        <Template>
+                            @{ var r = (PendingAcknowledgementDto)context; }
+                            <a href="/compliance/policies/@r.PolicyDocumentId"
+                               class="um-btn um-btn-ghost um-btn--xs" title="View policy">
+                                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                            </a>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        }
+    }
+
+    <!-- ── Acknowledged view ─────────────────────────────────────────────── -->
+    @if (_view == 3)
+    {
+        @if (_acknowledged.TotalCount == 0 && _ackedPage == 1)
+        {
+            <div class="pa-empty">
+                <i class="bi bi-inbox pa-empty-icon" aria-hidden="true"></i>
+                <div class="pa-empty-title">No acknowledgements recorded</div>
+                <div class="pa-empty-sub">Acknowledgements will appear here once users confirm they have read published policies.</div>
+            </div>
+        }
+        else
+        {
+            <SfGrid DataSource="_acknowledged.Items"
+                    AllowPaging="true"
+                    AllowSorting="true"
+                    CssClass="e-grid--compact">
+                <GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" />
+                <GridEvents PageChanging="OnAckedPageChangingAsync" TValue="AcknowledgementDetailDto" />
+                <GridColumns>
+                    <GridColumn HeaderText="User" Width="220">
+                        <Template>
+                            @{ var a = (AcknowledgementDetailDto)context; }
+                            <div class="pa-user-cell">
+                                <span class="pa-avatar">@Initials(a.UserFullName)</span>
+                                <div>
+                                    <div class="pa-user-name">@a.UserFullName</div>
+                                    <div class="pa-user-email">@a.UserEmail</div>
+                                </div>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Policy" MinWidth="200">
+                        <Template>
+                            @{ var a = (AcknowledgementDetailDto)context; }
+                            <div class="pa-policy-cell">
+                                <a href="/compliance/policies/@a.PolicyDocumentId"
+                                   class="pa-policy-link">@a.PolicyTitle</a>
+                                <div class="pa-policy-meta">
+                                    <span class="pa-code">@a.PolicyCode</span>
+                                    <span class="pa-type-badge pa-type-badge--@SlugType(a.PolicyTypeCode)">
+                                        @a.PolicyTypeCode
+                                    </span>
+                                    <span class="pa-version-chip">v@a.Version</span>
+                                </div>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Acknowledged" Width="170">
+                        <Template>
+                            @{ var a = (AcknowledgementDetailDto)context; }
+                            <span>@a.AcknowledgedDateUtc.ToLocalTime().ToString("dd MMM yyyy HH:mm")</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(AcknowledgementDetailDto.Channel)"   HeaderText="Channel"    Width="120" />
+                    <GridColumn Field="@nameof(AcknowledgementDetailDto.IpAddress)" HeaderText="IP Address"  Width="140" />
+                    <GridColumn HeaderText="Policy Status" Width="130" TextAlign="TextAlign.Center">
+                        <Template>
+                            @{ var a = (AcknowledgementDetailDto)context; }
+                            <AppStatusBadge Status="@a.StatusCode" />
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        }
+    }
+
+    <!-- ── Active Policies view (default) ───────────────────────────────── -->
+    @if (_view == 0)
+    {
+        <div class="pa-overview-grid">
+            @if (_policies.Count == 0)
+            {
+                <div class="pa-empty">
+                    <i class="bi bi-file-earmark-check pa-empty-icon" aria-hidden="true"></i>
+                    <div class="pa-empty-title">No published policies with audience</div>
+                    <div class="pa-empty-sub">Publish policies and define audiences to start tracking acknowledgements.</div>
+                </div>
+            }
+            else
+            {
+                @foreach (var p in _policies)
+                {
+                    var pctRaw  = p.AcknowledgementCount > 0 && _pendingAll.Any()
+                        ? 0 : 100;
+                    var pending = _pendingAll.Count(x => x.PolicyDocumentId == p.PolicyDocumentId);
+                    var overdue = _overdueAll.Count(x => x.PolicyDocumentId == p.PolicyDocumentId);
+                    var acked   = p.AcknowledgementCount;
+                    var total   = pending + acked;
+                    var pct     = total > 0 ? (int)Math.Round(acked * 100.0 / total) : (acked > 0 ? 100 : 0);
+
+                    <div class="pa-policy-card">
+                        <div class="pa-policy-card-header">
+                            <div class="pa-policy-card-info">
+                                <a href="/compliance/policies/@p.PolicyDocumentId"
+                                   class="pa-policy-card-title">@p.PolicyTitle</a>
+                                <div class="pa-policy-card-meta">
+                                    <span class="pa-code">@p.PolicyCode</span>
+                                    <span class="pa-type-badge pa-type-badge--@SlugType(p.PolicyTypeCode)">@p.PolicyTypeCode</span>
+                                    <span class="pa-version-chip">v@p.Version</span>
+                                </div>
+                            </div>
+                            <div class="pa-policy-card-stats">
+                                @if (overdue > 0)
+                                {
+                                    <span class="pa-overdue-badge">
+                                        <i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i>
+                                        @overdue overdue
+                                    </span>
+                                }
+                                @if (pending > 0)
+                                {
+                                    <span class="pa-pending-badge">@pending pending</span>
+                                }
+                                <span class="pa-acked-count">
+                                    <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                                    @acked acked
+                                </span>
+                            </div>
+                        </div>
+                        <div class="pa-progress-wrap">
+                            <div class="pa-progress-bar">
+                                <div class="pa-progress-fill" style="width: @pct%"></div>
+                            </div>
+                            <span class="pa-progress-label">@pct% complete</span>
+                        </div>
+                        @if (p.EffectiveDateUtc.HasValue)
+                        {
+                            <div class="pa-policy-card-footer">
+                                <span class="pa-meta-chip">
+                                    <i class="bi bi-calendar3" aria-hidden="true"></i>
+                                    Effective @p.EffectiveDateUtc.Value.ToString("dd MMM yyyy")
+                                </span>
+                                @if (p.OwnedByFullName is not null)
+                                {
+                                    <span class="pa-meta-chip">
+                                        <i class="bi bi-person" aria-hidden="true"></i>
+                                        @p.OwnedByFullName
+                                    </span>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            }
+        </div>
+    }
+}
+
+@code {
+    // ── Constants ─────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ──────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── View state ────────────────────────────────────────────────────────────
+    private int    _view    = 1;   // 0=overview, 1=pending, 2=overdue, 3=acknowledged
+    private bool   _loading = true;
+    private string _search  = string.Empty;
+    private string _filterType = string.Empty;
+
+    // ── Data ──────────────────────────────────────────────────────────────────
+    private AcknowledgementSummaryDto?                   _summary      = null;
+    private List<PendingAcknowledgementDto>              _pendingAll   = [];
+    private List<PendingAcknowledgementDto>              _pendingFiltered = [];
+    private List<PendingAcknowledgementDto>              _overdueAll   = [];
+    private List<PendingAcknowledgementDto>              _overdueFiltered = [];
+    private PagedResult<AcknowledgementDetailDto>        _acknowledged = new();
+    private List<PolicyDocumentDto>                      _policies     = [];
+    private int                                          _ackedPage    = 1;
+
+    // ── Options ───────────────────────────────────────────────────────────────
+    private readonly List<LabelValue> _typeOptions =
+    [
+        new("Information Security", "Information Security"),
+        new("Privacy",              "Privacy"),
+        new("Human Resources",      "Human Resources"),
+        new("Finance",              "Finance"),
+        new("Operations",           "Operations"),
+        new("Compliance",           "Compliance"),
+        new("IT Governance",        "IT Governance"),
+    ];
+
+    // ── Computed ──────────────────────────────────────────────────────────────
+    private string SearchPlaceholder => _view switch
+    {
+        1 => "Search policy or audience…",
+        2 => "Search policy or audience…",
+        3 => "Search policy or user…",
+        _ => "Search…"
+    };
+
+    private string KpiClass(int v) => _view == v
+        ? "pa-kpi-card pa-kpi-card--sel"
+        : "pa-kpi-card";
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        SetCrumbs();
+        await LoadAsync();
+    }
+
+    private void SetCrumbs() =>
+        Breadcrumbs.SetCrumbs(
+            new("Home",       "/"),
+            new("Compliance", "/compliance"),
+            new("Acknowledgements", null));
+
+    // ── Load ──────────────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var summaryTask  = Api.GetAcknowledgementSummaryAsync(_tenantId);
+            var pendingTask  = Api.GetPendingAcknowledgementsAsync(_tenantId);
+            var overdueTask  = Api.GetOverdueAcknowledgementsAsync(_tenantId);
+            var ackedTask    = Api.SearchAcknowledgedAsync(_tenantId, pageNumber: _ackedPage);
+            var policiesTask = Api.SearchPolicyDocumentsAsync(_tenantId, statusCode: "Published");
+
+            await Task.WhenAll(summaryTask, pendingTask, overdueTask, ackedTask, policiesTask);
+
+            _summary         = await summaryTask;
+            _pendingAll      = (await pendingTask)?.ToList()  ?? [];
+            _overdueAll      = (await overdueTask)?.ToList()  ?? [];
+            _acknowledged    = await ackedTask ?? new();
+            _policies        = (await policiesTask)?.Items.ToList() ?? [];
+        }
+        finally
+        {
+            _loading = false;
+            ApplyFilters();
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        _search     = string.Empty;
+        _filterType = string.Empty;
+        _ackedPage  = 1;
+        await LoadAsync();
+    }
+
+    // ── View switching ────────────────────────────────────────────────────────
+    private void SetView(int v)
+    {
+        _view = v;
+        ApplyFilters();
+    }
+
+    // ── Search / filter ───────────────────────────────────────────────────────
+    private async Task OnSearchAsync()
+    {
+        if (_view == 3)
+        {
+            _ackedPage = 1;
+            await ReloadAckedAsync();
+        }
+        else
+        {
+            ApplyFilters();
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        _pendingFiltered = Filter(_pendingAll);
+        _overdueFiltered = Filter(_overdueAll);
+    }
+
+    private List<PendingAcknowledgementDto> Filter(List<PendingAcknowledgementDto> source)
+    {
+        var q = source.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_filterType))
+            q = q.Where(x => x.PolicyTypeCode == _filterType);
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var s = _search.Trim().ToLower();
+            q = q.Where(x =>
+                x.PolicyCode.Contains(s,  StringComparison.OrdinalIgnoreCase) ||
+                x.PolicyTitle.Contains(s, StringComparison.OrdinalIgnoreCase) ||
+                x.TargetName.Contains(s,  StringComparison.OrdinalIgnoreCase));
+        }
+        return q.ToList();
+    }
+
+    private async Task ReloadAckedAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _acknowledged = await Api.SearchAcknowledgedAsync(
+                _tenantId,
+                searchTerm: string.IsNullOrWhiteSpace(_search) ? null : _search,
+                pageNumber: _ackedPage) ?? new();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnAckedPageChangingAsync(PageChangingEventArgs args)
+    {
+        _ackedPage = args.CurrentPage;
+        await ReloadAckedAsync();
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    private static string Initials(string name)
+    {
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}".ToUpper()
+            : name.Length >= 2 ? name[..2].ToUpper() : name.ToUpper();
+    }
+
+    private static string SlugType(string type) =>
+        type.ToLower().Replace(" ", "-");
+
+    private static string AudienceIcon(string type) => type switch
+    {
+        "User"     => "bi-person",
+        "Role"     => "bi-person-badge",
+        "AllUsers" => "bi-people",
+        _          => "bi-question-circle"
+    };
+
+    private static string OverdueSeverity(int days) => days switch
+    {
+        <= 7  => "low",
+        <= 30 => "medium",
+        _     => "high"
+    };
+
+    // ── Inner types ───────────────────────────────────────────────────────────
+    private record LabelValue(string Label, string Value);
+}

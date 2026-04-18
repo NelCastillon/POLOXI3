@@ -1,0 +1,542 @@
+@page "/governance/approvals"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Governance
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Approval Queue — Governance</PageTitle>
+
+<AppPageHeader Title="Approval Queue"
+               Subtitle="Review and process pending access requests requiring your approval"
+               Icon="bi-clipboard2-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI strip ──────────────────────────────────────────────────────────── -->
+<div class="aq-kpi-strip">
+    <div class="aq-kpi-card">
+        <span class="aq-kpi-icon aq-kpi-icon--queue"><i class="bi bi-clipboard2-list-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="aq-kpi-value">@_all.Count</div>
+            <div class="aq-kpi-label">In Queue</div>
+        </div>
+    </div>
+    <div class="aq-kpi-card @(OverdueCount > 0 ? "aq-kpi-card--alert" : "")">
+        <span class="aq-kpi-icon aq-kpi-icon--overdue"><i class="bi bi-alarm-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="aq-kpi-value">@OverdueCount</div>
+            <div class="aq-kpi-label">Overdue</div>
+        </div>
+    </div>
+    <div class="aq-kpi-card">
+        <span class="aq-kpi-icon aq-kpi-icon--critical"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="aq-kpi-value">@CriticalCount</div>
+            <div class="aq-kpi-label">Critical</div>
+        </div>
+    </div>
+    <div class="aq-kpi-card">
+        <span class="aq-kpi-icon aq-kpi-icon--high"><i class="bi bi-arrow-up-circle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="aq-kpi-value">@HighCount</div>
+            <div class="aq-kpi-label">High Priority</div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Filter row ─────────────────────────────────────────────────────────── -->
+<div class="aq-filter-row">
+    <div class="aq-search-box">
+        <i class="bi bi-search aq-search-icon" aria-hidden="true"></i>
+        <input class="aq-search-input"
+               type="text"
+               placeholder="Search by name, type, ticket…"
+               value="@_searchTerm"
+               @oninput="OnSearchInput" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LabelValue"
+                    DataSource="_typeOptions"
+                    Placeholder="All Types"
+                    ShowClearButton="true"
+                    Width="180px"
+                    Value="_filterType"
+                    ValueChanged="@((string v) => { _filterType = v; ApplyFilter(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LabelValue"
+                    DataSource="_urgencyOptions"
+                    Placeholder="All Urgencies"
+                    ShowClearButton="true"
+                    Width="170px"
+                    Value="_filterUrgency"
+                    ValueChanged="@((string v) => { _filterUrgency = v; ApplyFilter(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+</div>
+
+<!-- ── Grid ──────────────────────────────────────────────────────────────── -->
+@if (_loading)
+{
+    <div class="aq-loading">
+        <span class="um-spin" aria-hidden="true"></span>
+        <span>Loading approval queue…</span>
+    </div>
+}
+else if (_filtered.Count == 0)
+{
+    <div class="aq-empty">
+        <i class="bi bi-clipboard2-check aq-empty-icon" aria-hidden="true"></i>
+        <p class="aq-empty-msg">
+            @(_all.Count == 0
+                ? "The approval queue is empty — nothing needs your attention right now."
+                : "No requests match the current filters.")
+        </p>
+    </div>
+}
+else
+{
+    <div class="aq-table-wrapper">
+        <table class="aq-table">
+            <thead>
+                <tr>
+                    <th class="aq-th-ref">Request #</th>
+                    <th class="aq-th-type">Request Type</th>
+                    <th>Requested For</th>
+                    <th>Requested By</th>
+                    <th class="aq-th-date">Submitted</th>
+                    <th class="aq-th-stage">Stage</th>
+                    <th class="aq-th-due">Due</th>
+                    <th class="aq-th-urgency">Urgency</th>
+                    <th class="aq-th-actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in _filtered)
+                {
+                    var due     = DueDate(item);
+                    var overdue = due < DateTime.UtcNow;
+                    var canAct  = item.StatusCode == "InReview";
+                    <tr class="@(overdue ? "aq-row--overdue" : "")">
+                        <td>
+                            <span class="aq-ref-badge">AR-@item.AccessRequestId.ToString()[..8].ToUpper()</span>
+                        </td>
+                        <td>
+                            <div class="aq-type-cell">
+                                <span class="aq-type-icon aq-type-icon--@item.RequestTypeCode.ToLower()">
+                                    <i class="bi @TypeIcon(item.RequestTypeCode)" aria-hidden="true"></i>
+                                </span>
+                                <span>@TypeLabel(item.RequestTypeCode)</span>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="aq-user-name">@item.RequestedForFullName</div>
+                            <div class="aq-user-sub">@item.RequestedForEmail</div>
+                        </td>
+                        <td>
+                            <div class="aq-user-name">@item.RequestedByFullName</div>
+                        </td>
+                        <td class="aq-td-nowrap">@item.CreatedDateUtc.ToString("dd MMM yyyy")</td>
+                        <td>
+                            <span class="aq-stage-badge aq-stage-badge--@item.StatusCode.ToLower()">
+                                @StageName(item.StatusCode)
+                            </span>
+                        </td>
+                        <td class="aq-td-nowrap">
+                            <span class="@(overdue ? "aq-due--overdue" : "aq-due--ok")">
+                                @if (overdue) { <i class="bi bi-alarm-fill" aria-hidden="true"></i> }
+                                @due.ToLocalTime().ToString("dd MMM HH:mm")
+                            </span>
+                        </td>
+                        <td>
+                            <span class="aq-urgency-badge aq-urgency-badge--@item.UrgencyCode.ToLower()">
+                                @item.UrgencyCode
+                            </span>
+                        </td>
+                        <td class="aq-td-actions">
+                            @if (canAct)
+                            {
+                                <button class="aq-action-btn aq-action-btn--approve" title="Approve"
+                                        @onclick='() => OpenAction(item, "Approve")'>
+                                    <i class="bi bi-check-lg" aria-hidden="true"></i>
+                                </button>
+                                <button class="aq-action-btn aq-action-btn--reject" title="Reject"
+                                        @onclick='() => OpenAction(item, "Reject")'>
+                                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                                </button>
+                                <button class="aq-action-btn aq-action-btn--return" title="Return"
+                                        @onclick='() => OpenAction(item, "Return")'>
+                                    <i class="bi bi-arrow-return-left" aria-hidden="true"></i>
+                                </button>
+                            }
+                            <button class="aq-action-btn aq-action-btn--view" title="View Full Request"
+                                    @onclick="() => ViewRequest(item.AccessRequestId)">
+                                <i class="bi bi-eye" aria-hidden="true"></i>
+                            </button>
+                            <button class="aq-action-btn aq-action-btn--comment" title="Add Comment"
+                                    @onclick='() => OpenAction(item, "Comment")'>
+                                <i class="bi bi-chat-text" aria-hidden="true"></i>
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <div class="aq-results-footer">
+        Showing <strong>@_filtered.Count</strong> of <strong>@_all.Count</strong> items
+    </div>
+}
+
+<!-- ── Action dialog ──────────────────────────────────────────────────────── -->
+<SfDialog Visible="@_dialogVisible"
+          Width="480px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogEvents Closed="OnDialogClosed" />
+    <DialogTemplates>
+        <Header>
+            <span class="@DialogIconClass" aria-hidden="true">
+                <i class="bi @ActionDialogIcon"></i>
+            </span>
+            @ActionDialogTitle
+        </Header>
+        <Content>
+            <div class="aq-dlg-body">
+                @if (!string.IsNullOrEmpty(_dialogError))
+                {
+                    <div class="aq-dlg-error">
+                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                        @_dialogError
+                    </div>
+                }
+                @if (_selectedItem is not null)
+                {
+                    <div class="aq-dlg-request-row">
+                        <span class="aq-ref-badge">AR-@_selectedItem.AccessRequestId.ToString()[..8].ToUpper()</span>
+                        <span class="aq-dlg-type">
+                            <i class="bi @TypeIcon(_selectedItem.RequestTypeCode)" aria-hidden="true"></i>
+                            @TypeLabel(_selectedItem.RequestTypeCode)
+                        </span>
+                        <span class="aq-dlg-for">for <strong>@_selectedItem.RequestedForFullName</strong></span>
+                    </div>
+                }
+                <div class="aq-dlg-field">
+                    <label class="aq-dlg-label">
+                        Comment
+                        @if (CommentRequired) { <span class="aq-req">*</span> }
+                        else { <span class="aq-optional">(optional)</span> }
+                    </label>
+                    <textarea class="aq-dlg-textarea"
+                              rows="3"
+                              placeholder="@CommentPlaceholder"
+                              @bind="_comment"></textarea>
+                </div>
+                @if (_actionMode == "Comment" && _selectedItem?.ApproverComment is not null)
+                {
+                    <div class="aq-dlg-prev-comment">
+                        <span class="aq-dlg-prev-label">Existing comment:</span>
+                        <span>@_selectedItem.ApproverComment</span>
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="aq-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseDialog" disabled="@_processing">
+                    Cancel
+                </button>
+                <button class="@ActionButtonClass" @onclick="ExecuteActionAsync" disabled="@_processing">
+                    @if (_processing)
+                    {
+                        <span class="um-spin" aria-hidden="true"></span>
+                        <span>Processing…</span>
+                    }
+                    else
+                    {
+                        <i class="bi @ActionDialogIcon" aria-hidden="true"></i>
+                        <span>@ActionDialogTitle</span>
+                    }
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Toast ─────────────────────────────────────────────────────────────── -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ──────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId      = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private readonly Guid _currentUserId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private List<AccessRequestDto> _all      = [];
+    private List<AccessRequestDto> _filtered = [];
+
+    // ── Filter state ───────────────────────────────────────────────────────────
+    private bool   _loading       = true;
+    private string _searchTerm    = string.Empty;
+    private string _filterType    = string.Empty;
+    private string _filterUrgency = string.Empty;
+
+    // ── Action dialog state ─────────────────────────────────────────────────────
+    private bool              _dialogVisible = false;
+    private bool              _processing    = false;
+    private string            _actionMode    = string.Empty;
+    private string            _comment       = string.Empty;
+    private string            _dialogError   = string.Empty;
+    private AccessRequestDto? _selectedItem  = null;
+
+    // ── KPI computed ───────────────────────────────────────────────────────────
+    private int OverdueCount  => _all.Count(r => DueDate(r) < DateTime.UtcNow);
+    private int CriticalCount => _all.Count(r => r.UrgencyCode == "Critical");
+    private int HighCount     => _all.Count(r => r.UrgencyCode == "High");
+
+    // ── Filter options ─────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _typeOptions =
+    [
+        new("RoleAccess",         "Role Access"),
+        new("PermissionOverride", "Permission Override"),
+        new("PrivilegedAccess",   "Privileged Access"),
+        new("TemporaryAccess",    "Temporary Access"),
+        new("MfaReset",           "MFA Reset"),
+        new("ExportAccess",       "Export Access"),
+    ];
+
+    private static readonly List<LabelValue> _urgencyOptions =
+    [
+        new("Critical", "Critical"),
+        new("High",     "High"),
+        new("Normal",   "Normal"),
+    ];
+
+    // ── Dialog computed properties ─────────────────────────────────────────────
+    private bool   CommentRequired  => _actionMode is "Reject" or "Return";
+
+    private string DialogIconClass  => string.IsNullOrEmpty(_actionMode)
+        ? "aq-dlg-icon"
+        : $"aq-dlg-icon aq-dlg-icon--{_actionMode.ToLower()}";
+
+    private string ActionDialogTitle => _actionMode switch
+    {
+        "Approve" => "Approve Request",
+        "Reject"  => "Reject Request",
+        "Return"  => "Return Request",
+        "Comment" => "Add Comment",
+        _         => string.Empty,
+    };
+
+    private string ActionDialogIcon => _actionMode switch
+    {
+        "Approve" => "bi-check-circle",
+        "Reject"  => "bi-x-circle",
+        "Return"  => "bi-arrow-return-left",
+        _         => "bi-chat-text",
+    };
+
+    private string ActionButtonClass => _actionMode switch
+    {
+        "Approve" => "um-btn aq-btn-approve",
+        "Reject"  => "um-btn aq-btn-reject",
+        "Return"  => "um-btn aq-btn-return",
+        _         => "um-btn um-btn-primary",
+    };
+
+    private string CommentPlaceholder => _actionMode switch
+    {
+        "Reject"  => "Provide a reason for rejection (required)…",
+        "Return"  => "Describe what needs to be corrected (required)…",
+        _         => "Enter your comment or note…",
+    };
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+        [
+            new("Home", "/"),
+            new("Governance", "/governance"),
+            new("Approval Queue", "/governance/approvals"),
+        ]);
+        await LoadAsync();
+    }
+
+    // ── Data loading ───────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchAccessRequestsAsync(
+                _tenantId,
+                statusCode: "InReview",
+                pageSize: 500);
+            _all = result?.Items?.ToList() ?? [];
+        }
+        catch
+        {
+            _all = [];
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = "Failed to load the approval queue.",
+                CssClass = "e-toast-danger",
+                Icon     = "bi bi-exclamation-triangle",
+            });
+        }
+        finally
+        {
+            _loading = false;
+            ApplyFilter();
+        }
+    }
+
+    // ── Filtering ──────────────────────────────────────────────────────────────
+    private void OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _searchTerm = e.Value?.ToString() ?? string.Empty;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        var q = _searchTerm.Trim().ToLower();
+        _filtered = _all
+            .Where(r =>
+                (string.IsNullOrEmpty(q) ||
+                 (r.RequestedForFullName?.ToLower().Contains(q) == true) ||
+                 (r.RequestedByFullName?.ToLower().Contains(q) == true)  ||
+                 (r.RequestTypeCode?.ToLower().Contains(q)     == true)  ||
+                 (r.TicketReference?.ToLower().Contains(q)     == true))
+                && (string.IsNullOrEmpty(_filterType)    || r.RequestTypeCode == _filterType)
+                && (string.IsNullOrEmpty(_filterUrgency) || r.UrgencyCode     == _filterUrgency))
+            .ToList();
+        StateHasChanged();
+    }
+
+    // ── Action dialog ──────────────────────────────────────────────────────────
+    private void OpenAction(AccessRequestDto item, string actionMode)
+    {
+        _selectedItem  = item;
+        _actionMode    = actionMode;
+        _comment       = string.Empty;
+        _dialogError   = string.Empty;
+        _dialogVisible = true;
+    }
+
+    private void CloseDialog()
+    {
+        _dialogVisible = false;
+        _selectedItem  = null;
+        _actionMode    = string.Empty;
+        _comment       = string.Empty;
+        _dialogError   = string.Empty;
+    }
+
+    private void OnDialogClosed() => CloseDialog();
+
+    private async Task ExecuteActionAsync()
+    {
+        if (_selectedItem is null) return;
+
+        if (CommentRequired && string.IsNullOrWhiteSpace(_comment))
+        {
+            _dialogError = "A comment is required for this action.";
+            return;
+        }
+
+        _processing  = true;
+        _dialogError = string.Empty;
+        try
+        {
+            await Api.ProcessAccessRequestAsync(_selectedItem.AccessRequestId, new ProcessAccessRequestRequest
+            {
+                ActionCode        = _actionMode,
+                Comment           = string.IsNullOrWhiteSpace(_comment) ? null : _comment.Trim(),
+                ProcessedByUserId = _currentUserId,
+            });
+
+            var label = _actionMode switch
+            {
+                "Approve" => "approved",
+                "Reject"  => "rejected",
+                "Return"  => "returned",
+                _         => "updated",
+            };
+
+            CloseDialog();
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = $"Request {label} successfully.",
+                CssClass = "e-toast-success",
+                Icon     = "bi bi-check-circle",
+            });
+            await LoadAsync();
+        }
+        catch
+        {
+            _dialogError = "An error occurred. Please try again.";
+        }
+        finally
+        {
+            _processing = false;
+        }
+    }
+
+    // ── Navigation ─────────────────────────────────────────────────────────────
+    private void ViewRequest(Guid id) => Nav.NavigateTo($"/governance/access-requests/{id}");
+
+    // ── Static helpers ─────────────────────────────────────────────────────────
+    private static DateTime DueDate(AccessRequestDto r) => r.UrgencyCode switch
+    {
+        "Critical" => r.CreatedDateUtc.AddHours(2),
+        "High"     => r.CreatedDateUtc.AddHours(24),
+        _          => r.CreatedDateUtc.AddHours(72),
+    };
+
+    private static string StageName(string statusCode) => statusCode switch
+    {
+        "Pending"  => "Awaiting Review",
+        "InReview" => "Under Review",
+        "Returned" => "Returned",
+        "Approved" => "Approved",
+        "Rejected" => "Rejected",
+        _          => statusCode,
+    };
+
+    private static string TypeIcon(string code) => code switch
+    {
+        "RoleAccess"         => "bi-person-badge",
+        "PermissionOverride" => "bi-key",
+        "PrivilegedAccess"   => "bi-shield-lock",
+        "TemporaryAccess"    => "bi-clock-history",
+        "MfaReset"           => "bi-phone-flip",
+        "ExportAccess"       => "bi-download",
+        _                    => "bi-circle",
+    };
+
+    private static string TypeLabel(string code) => code switch
+    {
+        "RoleAccess"         => "Role Access",
+        "PermissionOverride" => "Permission Override",
+        "PrivilegedAccess"   => "Privileged Access",
+        "TemporaryAccess"    => "Temporary Access",
+        "MfaReset"           => "MFA Reset",
+        "ExportAccess"       => "Export Access",
+        _                    => code,
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+}

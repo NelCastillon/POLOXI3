@@ -1,0 +1,132 @@
+@implements IDisposable
+
+@*
+    AppLookupDialog — modal SfDialog for search-and-select workflows.
+    Provides an optional debounced search box above the content slot.
+
+    Usage:
+        <AppLookupDialog @bind-Visible="_showPicker" Title="Select Account"
+                         @bind-SearchValue="_pickSearch" OnSearch="SearchAccountsAsync">
+            <Content>
+                @foreach (var a in _pickResults) {
+                    <div class="ald-row" @onclick="() => SelectAccount(a)">@a.AccountName</div>
+                }
+            </Content>
+        </AppLookupDialog>
+*@
+
+<SfDialog Visible="_visible"
+          Width="@Width"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogEvents Closed="OnDialogClosed" />
+    <DialogTemplates>
+        <Header>
+            <span class="dlg-hd-icon" aria-hidden="true"><i class="bi bi-search"></i></span>
+            @Title
+        </Header>
+        <Content>
+            @if (ShowSearch)
+            {
+                <div class="ald-search">
+                    <div class="um-search-box">
+                        <i class="bi bi-search" aria-hidden="true"></i>
+                        <input class="um-search-input"
+                               type="search"
+                               placeholder="@(SearchPlaceholder ?? "Search…")"
+                               value="@SearchValue"
+                               @oninput="OnSearchInput"
+                               aria-label="Search" />
+                    </div>
+                </div>
+            }
+            <div class="ald-content">
+                @Content
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="Close">@CancelText</button>
+                @if (Footer is not null)
+                {
+                    @Footer
+                }
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private bool _visible;
+
+    [Parameter]
+    public bool Visible
+    {
+        get => _visible;
+        set => _visible = value;
+    }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+
+    [Parameter] public string Title { get; set; } = "Select";
+
+    /// <summary>Dialog width. Default: 640px.</summary>
+    [Parameter] public string Width { get; set; } = "640px";
+
+    [Parameter] public bool ShowSearch { get; set; } = true;
+
+    [Parameter] public string SearchValue { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> SearchValueChanged { get; set; }
+
+    /// <summary>Fires after the debounce delay with the current search term.</summary>
+    [Parameter] public EventCallback<string> OnSearch { get; set; }
+
+    [Parameter] public string? SearchPlaceholder { get; set; }
+    [Parameter] public string  CancelText        { get; set; } = "Cancel";
+
+    /// <summary>Search results or selectable list rendered in the dialog body.</summary>
+    [Parameter] public RenderFragment? Content { get; set; }
+
+    /// <summary>Additional footer buttons rendered after the Cancel button.</summary>
+    [Parameter] public RenderFragment? Footer  { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    protected override void OnParametersSet() => _visible = Visible;
+
+    private async Task OnDialogClosed(Syncfusion.Blazor.Popups.CloseEventArgs args)
+    {
+        _visible = false;
+        await VisibleChanged.InvokeAsync(false);
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task Close()
+    {
+        _visible = false;
+        await VisibleChanged.InvokeAsync(false);
+        await OnClose.InvokeAsync();
+    }
+
+    private System.Timers.Timer? _debounce;
+
+    private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString() ?? string.Empty;
+        SearchValue = value;
+        await SearchValueChanged.InvokeAsync(value);
+
+        _debounce?.Dispose();
+        _debounce = new System.Timers.Timer(380);
+        _debounce.Elapsed += async (_, _) =>
+        {
+            _debounce?.Dispose();
+            _debounce = null;
+            await InvokeAsync(() => OnSearch.InvokeAsync(value));
+        };
+        _debounce.AutoReset = false;
+        _debounce.Start();
+    }
+
+    public void Dispose() => _debounce?.Dispose();
+}

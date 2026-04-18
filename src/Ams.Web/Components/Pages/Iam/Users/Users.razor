@@ -1,0 +1,679 @@
+@page "/users"
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>Users – AMS Enterprise</PageTitle>
+
+<div class="um-page">
+
+    <!-- ── Page Header ──────────────────────────────────── -->
+    <div class="page-header">
+        <div>
+            <h1 class="page-title"><i class="bi bi-people" aria-hidden="true"></i> Users</h1>
+            <p class="page-subtitle">Manage platform users, access, and security</p>
+        </div>
+        <div class="page-actions">
+            <button class="um-btn um-btn-ghost" @onclick="RefreshAsync" title="Refresh list" aria-label="Refresh">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+            </button>
+            <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+                <i class="bi bi-person-plus" aria-hidden="true"></i> Create User
+            </button>
+        </div>
+    </div>
+
+    <!-- ── KPI strip ────────────────────────────────────── -->
+    <div class="um-kpi-strip">
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-blue"><i class="bi bi-people"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Total Users</div>
+                <div class="kpi-value">@_users.Count</div>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-green"><i class="bi bi-check-circle"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Active</div>
+                <div class="kpi-value">@_users.Count(u => IsActive(u))</div>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-amber"><i class="bi bi-lock"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Locked Out</div>
+                <div class="kpi-value">@_users.Count(u => u.IsLockedOut)</div>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-purple"><i class="bi bi-shield-check"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">MFA Enabled</div>
+                <div class="kpi-value">@_users.Count(u => u.MfaEnabled)</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Toolbar ───────────────────────────────────────── -->
+    <div class="toolbar">
+        <div class="um-search-box">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="um-search-input"
+                   type="search"
+                   placeholder="Search by name, email, or username…"
+                   aria-label="Search users"
+                   value="@_searchTerm"
+                   @oninput="OnSearchInput" />
+        </div>
+        <div class="toolbar-end">
+            @if (_selectedUsers.Count > 0)
+            {
+                <span class="um-sel-count">@_selectedUsers.Count selected</span>
+                <div class="um-bulk-wrap @(_bulkMenuOpen ? "is-open" : "")">
+                    <button class="um-btn um-btn-secondary"
+                            @onclick="() => _bulkMenuOpen = !_bulkMenuOpen"
+                            aria-haspopup="true"
+                            aria-expanded="@_bulkMenuOpen.ToString().ToLowerInvariant()">
+                        Bulk Actions <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                    </button>
+                    <div class="um-bulk-drop" role="menu">
+                        <button role="menuitem" @onclick="BulkEnableAsync">
+                            <i class="bi bi-check-circle" aria-hidden="true"></i> Enable Selected
+                        </button>
+                        <button role="menuitem" @onclick="BulkDisableAsync">
+                            <i class="bi bi-slash-circle" aria-hidden="true"></i> Disable Selected
+                        </button>
+                        <div class="um-bulk-sep"></div>
+                        <button class="danger" role="menuitem" @onclick="BulkDeleteAsync">
+                            <i class="bi bi-trash" aria-hidden="true"></i> Delete Selected
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- ── Grid ─────────────────────────────────────────── -->
+    <div class="um-grid-card">
+        @if (_loading)
+        {
+            <div class="um-loading-overlay" aria-live="polite" aria-label="Loading users">
+                <div class="um-spinner" aria-hidden="true"></div>
+                <span>Loading users…</span>
+            </div>
+        }
+        <SfGrid TValue="UserDto"
+                DataSource="@_users"
+                @ref="_grid"
+                AllowPaging="true"
+                AllowSorting="true"
+                AllowFiltering="true"
+                EnableHover="true"
+                RowHeight="52">
+            <GridPageSettings PageSize="25" PageSizes="@(new[] { 10, 25, 50, 100 })" />
+            <GridFilterSettings Type="@(Syncfusion.Blazor.Grids.FilterType.Menu)" />
+            <GridSelectionSettings Mode="@(Syncfusion.Blazor.Grids.SelectionMode.Row)" Type="@(Syncfusion.Blazor.Grids.SelectionType.Multiple)" />
+            <GridEvents TValue="UserDto"
+                        RowSelected="OnRowSelected"
+                        RowDeselected="OnRowDeselected" />
+            <GridColumns>
+                <GridColumn Type="ColumnType.CheckBox" Width="48" />
+
+                <GridColumn Field="FullName" HeaderText="User" Width="230" AllowSorting="true">
+                    <Template Context="u">
+                        @{ var user = (UserDto)u; }
+                        <div class="um-user-cell">
+                            <div class="um-avatar" style="@AvatarStyle(user.FullName)" aria-hidden="true">@Initials(user.FullName)</div>
+                            <div class="um-user-meta">
+                                <div class="um-user-name">@user.FullName</div>
+                                <div class="um-user-email">@user.Email</div>
+                            </div>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="UserName" HeaderText="Username" Width="150" />
+
+                <GridColumn Field="UserTypeCode" HeaderText="Type" Width="100">
+                    <Template Context="u">
+                        @{ var user = (UserDto)u; }
+                        <span class="badge @TypeBadgeClass(user.UserTypeCode)">@user.UserTypeCode</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="StatusCode" HeaderText="Status" Width="120">
+                    <Template Context="u">
+                        @{ var user = (UserDto)u; }
+                        @if (user.IsLockedOut)
+                        {
+                            <span class="badge badge-amber"><i class="bi bi-lock-fill" aria-hidden="true"></i> Locked</span>
+                        }
+                        else
+                        {
+                            <span class="badge @StatusBadgeClass(user.StatusCode)">
+                                <i class="bi @StatusIcon(user.StatusCode)" aria-hidden="true"></i>
+                                @user.StatusCode
+                            </span>
+                        }
+                    </Template>
+                </GridColumn>
+
+                <GridColumn HeaderText="MFA" Width="68" TextAlign="TextAlign.Center" AllowSorting="false">
+                    <Template Context="u">
+                        @{ var user = (UserDto)u; }
+                        <i class="bi @(user.MfaEnabled ? "bi-shield-fill-check um-mfa-on" : "bi-shield um-mfa-off")"
+                           title="@(user.MfaEnabled ? "MFA Enabled" : "MFA Disabled")"
+                           aria-label="@(user.MfaEnabled ? "MFA enabled" : "MFA disabled")"></i>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="AssignedRoleCount" HeaderText="Roles" Width="75" TextAlign="TextAlign.Center">
+                    <Template Context="u">
+                        @{ var user = (UserDto)u; }
+                        <span class="um-count-pill">@user.AssignedRoleCount</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="LastLoginDateUtc" HeaderText="Last Login" Width="140">
+                    <Template Context="u">
+                        @{ var user = (UserDto)u; }
+                        <span class="um-date" title="@user.LastLoginDateUtc?.ToString("f")">@FormatRelative(user.LastLoginDateUtc)</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="CreatedDateUtc" HeaderText="Created" Width="120">
+                    <Template Context="u">
+                        @{ var user = (UserDto)u; }
+                        <span class="um-date">@user.CreatedDateUtc.ToString("MMM d, yyyy")</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn HeaderText="" Width="128" AllowSorting="false" TextAlign="TextAlign.Right">
+                    <Template Context="u">
+                        @{ var user = (UserDto)u; }
+                        <div class="um-row-actions">
+                            <button class="ra-btn" title="View details" @onclick="() => ViewUser(user)">
+                                <i class="bi bi-eye" aria-hidden="true"></i>
+                            </button>
+                            <button class="ra-btn" title="Edit user" @onclick="() => OpenEdit(user)">
+                                <i class="bi bi-pencil" aria-hidden="true"></i>
+                            </button>
+                            <button class="ra-btn @(IsActive(user) ? "" : "ra-btn-success")" title="@(IsActive(user) ? "Deactivate" : "Activate")" @onclick="() => ToggleActiveAsync(user)">
+                                <i class="bi @(IsActive(user) ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i>
+                            </button>
+                            <button class="ra-btn ra-btn-danger" title="Delete user" @onclick="() => ConfirmDelete(user)">
+                                <i class="bi bi-trash3" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+</div>
+
+<!-- ── Create / Edit Dialog ──────────────────────────── -->
+<SfDialog @bind-Visible="_showForm"
+          Width="620px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogTemplates>
+        <Header>
+            <span class="dlg-hd-icon">
+                <i class="bi @(_editUser is null ? "bi-person-plus" : "bi-pencil-square")" aria-hidden="true"></i>
+            </span>
+            @(_editUser is null ? "Create User" : $"Edit: {_editUser.FullName}")
+        </Header>
+        <Content>
+            <div class="dlg-form">
+                @if (_editUser is null)
+                {
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="f-username">Username <span class="req" aria-hidden="true">*</span></label>
+                            <SfTextBox ID="f-username" @bind-Value="_cForm.UserName"
+                                       Placeholder="john.doe" />
+                        </div>
+                        <div class="form-group">
+                            <label for="f-email">Email <span class="req" aria-hidden="true">*</span></label>
+                            <SfTextBox ID="f-email" @bind-Value="_cForm.Email"
+                                       Placeholder="john.doe@company.com" />
+                        </div>
+                    </div>
+                }
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="f-fullname">Full Name <span class="req" aria-hidden="true">*</span></label>
+                        <SfTextBox ID="f-fullname" @bind-Value="_uForm.FullName"
+                                   Placeholder="John Doe" />
+                    </div>
+                    <div class="form-group">
+                        <label for="f-displayname">Display Name</label>
+                        <SfTextBox ID="f-displayname" @bind-Value="_uForm.DisplayName"
+                                   Placeholder="Optional nickname" />
+                    </div>
+                </div>
+                @if (_editUser is null)
+                {
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>User Type</label>
+                            <SfDropDownList TItem="string" TValue="string"
+                                            DataSource="@_userTypes"
+                                            @bind-Value="_cForm.UserTypeCode"
+                                            Placeholder="Select type…" />
+                        </div>
+                        <div class="form-group"></div>
+                    </div>
+                }
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="f-phone">Phone Number</label>
+                        <SfTextBox ID="f-phone" @bind-Value="_uForm.PhoneNumber"
+                                   Placeholder="+1 555 000 0000" />
+                    </div>
+                    <div class="form-group">
+                        <label for="f-title">Job Title</label>
+                        <SfTextBox ID="f-title" @bind-Value="_uForm.JobTitle"
+                                   Placeholder="Software Engineer" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="f-dept">Department</label>
+                        <SfTextBox ID="f-dept" @bind-Value="_uForm.Department"
+                                   Placeholder="Engineering" />
+                    </div>
+                    <div class="form-group">
+                        <label>Time Zone</label>
+                        <SfDropDownList TItem="string" TValue="string"
+                                        DataSource="@_tzOptions"
+                                        @bind-Value="_uForm.TimeZoneCode"
+                                        Placeholder="Select time zone…" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Locale</label>
+                        <SfDropDownList TItem="string" TValue="string"
+                                        DataSource="@_localeOptions"
+                                        @bind-Value="_uForm.LocaleCode"
+                                        Placeholder="Select locale…" />
+                    </div>
+                    <div class="form-group"></div>
+                </div>
+                @if (!string.IsNullOrEmpty(_formError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveUserAsync" disabled="@_saving">
+                    @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
+                    @(_editUser is null ? "Create User" : "Save Changes")
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Delete Confirmation ───────────────────────────── -->
+<SfDialog @bind-Visible="_showDeleteConfirm"
+          Width="420px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogTemplates>
+        <Header>
+            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Confirm Remove User
+        </Header>
+        <Content>
+            <div class="dlg-confirm-body">
+                <p>Are you sure you want to deactivate <strong>@_deleteTarget?.FullName</strong>?</p>
+                <p class="dlg-confirm-warn">
+                    <i class="bi bi-info-circle" aria-hidden="true"></i>
+                    This user will be disabled and lose access to the platform.
+                </p>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showDeleteConfirm = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">
+                    @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
+                    Remove User
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Toast ─────────────────────────────────────────── -->
+<SfToast @ref="_toast" ID="um-toast" ShowCloseButton="true" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Well-known demo tenant (replace with auth context) ────
+    private static readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    private static readonly string[] _userTypes    = ["Internal", "External", "Service", "System"];
+    private static readonly string[] _tzOptions    = ["UTC", "America/New_York", "America/Chicago",
+                                                       "America/Denver", "America/Los_Angeles",
+                                                       "Europe/London", "Europe/Paris",
+                                                       "Asia/Tokyo", "Asia/Singapore"];
+    private static readonly string[] _localeOptions = ["en-US", "en-GB", "fr-FR",
+                                                        "de-DE", "ja-JP", "es-ES", "zh-CN"];
+
+    // ── Grid state ────────────────────────────────────────────
+    private SfGrid<UserDto>? _grid;
+    private List<UserDto>    _users         = [];
+    private List<UserDto>    _selectedUsers = [];
+    private bool             _loading       = true;
+    private string           _searchTerm    = string.Empty;
+    private bool             _bulkMenuOpen;
+    private CancellationTokenSource _cts = new();
+
+    // ── Form state ────────────────────────────────────────────
+    private bool     _showForm;
+    private bool     _saving;
+    private string   _formError = string.Empty;
+    private UserDto? _editUser;
+    private UForm    _uForm = new();
+    private CForm    _cForm = new();
+
+    // ── Delete confirm ────────────────────────────────────────
+    private bool     _showDeleteConfirm;
+    private UserDto? _deleteTarget;
+
+    // ── Toast ─────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Lifecycle ─────────────────────────────────────────────
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            await _cts.CancelAsync();
+            _cts = new CancellationTokenSource();
+            var result = await Api.SearchUsersAsync(_tenantId, _searchTerm.Trim(), _cts.Token);
+            _users = result?.Items.ToList() ?? [];
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private Task RefreshAsync() => LoadAsync();
+
+    private System.Timers.Timer? _debounce;
+    private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _searchTerm = e.Value?.ToString() ?? string.Empty;
+        _debounce?.Dispose();
+        _debounce = new System.Timers.Timer(380);
+        _debounce.Elapsed += async (_, _) =>
+        {
+            _debounce?.Dispose();
+            _debounce = null;
+            await InvokeAsync(LoadAsync);
+        };
+        _debounce.AutoReset = false;
+        _debounce.Start();
+        await Task.CompletedTask;
+    }
+
+    // ── Grid selection ────────────────────────────────────────
+    private void OnRowSelected(RowSelectEventArgs<UserDto> args)
+    {
+        if (!_selectedUsers.Any(u => u.UserId == args.Data.UserId))
+            _selectedUsers.Add(args.Data);
+    }
+
+    private void OnRowDeselected(RowDeselectEventArgs<UserDto> args)
+        => _selectedUsers.RemoveAll(u => u.UserId == args.Data.UserId);
+
+    // ── Navigation ────────────────────────────────────────────
+    private void ViewUser(UserDto u) => Nav.NavigateTo($"/users/{u.UserId}");
+
+    // ── Create / Edit ─────────────────────────────────────────
+    private void OpenCreate()
+    {
+        _editUser  = null;
+        _uForm     = new UForm();
+        _cForm     = new CForm();
+        _formError = string.Empty;
+        _showForm  = true;
+    }
+
+    private void OpenEdit(UserDto u)
+    {
+        _editUser = u;
+        _uForm = new UForm
+        {
+            FullName     = u.FullName,
+            DisplayName  = u.DisplayName,
+            PhoneNumber  = u.PhoneNumber,
+            JobTitle     = u.JobTitle,
+            Department   = u.Department,
+            TimeZoneCode = u.TimeZoneCode,
+            LocaleCode   = u.LocaleCode,
+        };
+        _formError = string.Empty;
+        _showForm  = true;
+    }
+
+    private void CloseForm() { _showForm = false; _formError = string.Empty; }
+
+    private async Task SaveUserAsync()
+    {
+        if (_saving) return;
+        _formError = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(_uForm.FullName))
+        {
+            _formError = "Full Name is required.";
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            if (_editUser is null)
+            {
+                if (string.IsNullOrWhiteSpace(_cForm.UserName) || string.IsNullOrWhiteSpace(_cForm.Email))
+                {
+                    _formError = "Username and Email are required.";
+                    return;
+                }
+                var req = new CreateUserRequest
+                {
+                    TenantId     = _tenantId,
+                    UserName     = _cForm.UserName.Trim(),
+                    Email        = _cForm.Email.Trim(),
+                    FullName     = _uForm.FullName.Trim(),
+                    DisplayName  = _uForm.DisplayName?.Trim(),
+                    PhoneNumber  = _uForm.PhoneNumber?.Trim(),
+                    JobTitle     = _uForm.JobTitle?.Trim(),
+                    Department   = _uForm.Department?.Trim(),
+                    UserTypeCode = _cForm.UserTypeCode,
+                    TimeZoneCode = _uForm.TimeZoneCode,
+                    LocaleCode   = _uForm.LocaleCode,
+                };
+                var id = await Api.CreateUserAsync(req);
+                CloseForm();
+                await ShowToastAsync($"User '{req.FullName}' created.");
+            }
+            else
+            {
+                var req = new UpdateUserRequest
+                {
+                    UserId       = _editUser.UserId,
+                    FullName     = _uForm.FullName.Trim(),
+                    DisplayName  = _uForm.DisplayName?.Trim(),
+                    PhoneNumber  = _uForm.PhoneNumber?.Trim(),
+                    JobTitle     = _uForm.JobTitle?.Trim(),
+                    Department   = _uForm.Department?.Trim(),
+                    TimeZoneCode = _uForm.TimeZoneCode,
+                    LocaleCode   = _uForm.LocaleCode,
+                };
+                await Api.UpdateUserAsync(_editUser.UserId, req);
+                CloseForm();
+                await ShowToastAsync($"User '{req.FullName}' updated.");
+            }
+            await LoadAsync();
+        }
+        catch (Exception ex) { _formError = $"Error: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    // ── Activate / Deactivate ─────────────────────────────────
+    private static bool IsActive(UserDto u)
+        => u.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase);
+
+    private async Task ToggleActiveAsync(UserDto u)
+    {
+        try
+        {
+            var activate = !IsActive(u);
+            await Api.SetUserActiveAsync(u.UserId, activate);
+            await ShowToastAsync($"User '{u.FullName}' {(activate ? "activated" : "deactivated")}.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+    }
+
+    // ── Delete ────────────────────────────────────────────────
+    private void ConfirmDelete(UserDto u) { _deleteTarget = u; _showDeleteConfirm = true; }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.SetUserActiveAsync(_deleteTarget.UserId, false);
+            _showDeleteConfirm = false;
+            await ShowToastAsync($"User '{_deleteTarget.FullName}' removed.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _saving = false; }
+    }
+
+    // ── Bulk actions ──────────────────────────────────────────
+    private async Task BulkEnableAsync()  => await BulkToggleAsync(true);
+    private async Task BulkDisableAsync() => await BulkToggleAsync(false);
+
+    private async Task BulkToggleAsync(bool activate)
+    {
+        _bulkMenuOpen = false;
+        var targets = _selectedUsers.ToList();
+        foreach (var u in targets)
+            try { await Api.SetUserActiveAsync(u.UserId, activate); } catch { /* continue */ }
+        _selectedUsers.Clear();
+        await ShowToastAsync($"{(activate ? "Activated" : "Disabled")} {targets.Count} user(s).");
+        await LoadAsync();
+    }
+
+    private async Task BulkDeleteAsync()
+    {
+        _bulkMenuOpen = false;
+        var targets = _selectedUsers.ToList();
+        foreach (var u in targets)
+            try { await Api.SetUserActiveAsync(u.UserId, false); } catch { /* continue */ }
+        _selectedUsers.Clear();
+        await ShowToastAsync($"Removed {targets.Count} user(s).");
+        await LoadAsync();
+    }
+
+    // ── Display helpers ───────────────────────────────────────
+    private static string Initials(string? name) =>
+        string.IsNullOrWhiteSpace(name) ? "?" :
+        string.Concat(name.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                          .Take(2).Select(w => char.ToUpperInvariant(w[0])));
+
+    private static readonly string[] _avatarColors =
+        ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4", "#6366f1", "#ec4899"];
+
+    private static string AvatarStyle(string? name)
+    {
+        var idx = Math.Abs((name ?? string.Empty).GetHashCode()) % _avatarColors.Length;
+        return $"background:{_avatarColors[idx]}";
+    }
+
+    private static string TypeBadgeClass(string type) => type.ToLowerInvariant() switch
+    {
+        "internal" => "badge-blue",
+        "external" => "badge-neutral",
+        "service"  => "badge-amber",
+        "system"   => "badge-red",
+        _          => "badge-neutral",
+    };
+
+    private static string StatusBadgeClass(string s) => s.ToLowerInvariant() switch
+    {
+        "active"  => "badge-green",
+        "pending" => "badge-amber",
+        _         => "badge-neutral",
+    };
+
+    private static string StatusIcon(string s) => s.ToLowerInvariant() switch
+    {
+        "active"   => "bi-check-circle-fill",
+        "inactive" => "bi-dash-circle",
+        "pending"  => "bi-clock",
+        _          => "bi-circle",
+    };
+
+    private static string FormatRelative(DateTime? dt) =>
+        dt is null ? "Never" :
+        (DateTime.UtcNow - dt.Value) switch
+        {
+            var d when d.TotalMinutes < 1  => "Just now",
+            var d when d.TotalHours   < 1  => $"{(int)d.TotalMinutes}m ago",
+            var d when d.TotalDays    < 1  => $"{(int)d.TotalHours}h ago",
+            var d when d.TotalDays    < 7  => $"{(int)d.TotalDays}d ago",
+            var d when d.TotalDays    < 30 => $"{(int)(d.TotalDays / 7)}w ago",
+            _                              => dt.Value.ToString("MMM d, yyyy"),
+        };
+
+    private async Task ShowToastAsync(string message, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content  = message,
+            CssClass = isError ? "e-toast-danger" : "e-toast-success",
+            Timeout  = 4000,
+        });
+    }
+
+    // ── Form models ───────────────────────────────────────────
+    private sealed class UForm
+    {
+        public string  FullName     { get; set; } = string.Empty;
+        public string? DisplayName  { get; set; }
+        public string? PhoneNumber  { get; set; }
+        public string? JobTitle     { get; set; }
+        public string? Department   { get; set; }
+        public string? TimeZoneCode { get; set; }
+        public string? LocaleCode   { get; set; }
+    }
+
+    private sealed class CForm
+    {
+        public string UserName     { get; set; } = string.Empty;
+        public string Email        { get; set; } = string.Empty;
+        public string UserTypeCode { get; set; } = "Internal";
+    }
+}

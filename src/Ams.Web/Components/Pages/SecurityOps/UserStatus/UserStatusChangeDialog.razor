@@ -1,0 +1,167 @@
+@*
+    UserStatusChangeDialog — modal dialog for changing a user's status.
+    Captures: New Status (pre-filled, read-only label), Reason (required), Effective Note (optional).
+
+    Usage:
+        <UserStatusChangeDialog @bind-Visible="_showDialog"
+                                User="_targetUser"
+                                NewStatus="_pendingStatus"
+                                IsBusy="_confirming"
+                                OnConfirm="ExecuteStatusChangeAsync" />
+*@
+@using Ams.Application.Common.Dtos
+
+<SfDialog Visible="_visible"
+          Width="480px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogEvents Closed="OnDialogClosed" />
+    <DialogTemplates>
+        <Header>
+            <span class="uscd-hd-icon uscd-hd-icon--@StatusVariant" aria-hidden="true">
+                <i class="bi @StatusIcon"></i>
+            </span>
+            Change User Status
+        </Header>
+        <Content>
+            <div class="uscd-body">
+                @if (!string.IsNullOrEmpty(_errorMsg))
+                {
+                    <div class="uscd-error">
+                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                        @_errorMsg
+                    </div>
+                }
+
+                <!-- User identity -->
+                @if (User is not null)
+                {
+                    <div class="uscd-user-row">
+                        <span class="uscd-avatar" aria-hidden="true">
+                            @(User.FullName.Length > 0 ? User.FullName[0].ToString().ToUpper() : "?")
+                        </span>
+                        <div class="uscd-user-info">
+                            <div class="uscd-user-name">@User.FullName</div>
+                            <div class="uscd-user-email">@User.Email</div>
+                        </div>
+                        <div class="uscd-status-arrow">
+                            <AppStatusBadge Status="@User.StatusCode" />
+                            <i class="bi bi-arrow-right uscd-arrow-icon" aria-hidden="true"></i>
+                            <span class="uscd-new-status-badge uscd-new-status-badge--@StatusVariant">@NewStatus</span>
+                        </div>
+                    </div>
+                }
+
+                <!-- Reason (required) -->
+                <div class="uscd-field">
+                    <label class="uscd-label">
+                        Reason <span class="uscd-req">*</span>
+                    </label>
+                    <SfTextBox @bind-Value="_reason"
+                               Placeholder="Explain why this status change is being made…" />
+                    @if (_showValidation && string.IsNullOrWhiteSpace(_reason))
+                    {
+                        <span class="uscd-validation">Reason is required.</span>
+                    }
+                </div>
+
+                <!-- Effective note (optional) -->
+                <div class="uscd-field">
+                    <label class="uscd-label">Effective Note</label>
+                    <SfTextBox @bind-Value="_effectiveNote"
+                               Multiline="true"
+                               Placeholder="Optional note about effective date, follow-up actions or context…"
+                               HtmlAttributes="@(new Dictionary<string, object> { ["rows"] = "3" })" />
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="Cancel" disabled="@IsBusy">
+                    Cancel
+                </button>
+                <button class="um-btn uscd-confirm--@StatusVariant" @onclick="ConfirmAsync" disabled="@IsBusy">
+                    @if (IsBusy) { <span class="um-spin" aria-hidden="true"></span> }
+                    @ConfirmLabel
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+
+    [Parameter] public UserDto? User      { get; set; }
+    [Parameter] public string   NewStatus { get; set; } = string.Empty;
+    [Parameter] public bool     IsBusy    { get; set; }
+
+    [Parameter] public EventCallback<(string Reason, string? EffectiveNote)> OnConfirm { get; set; }
+
+    private bool   _visible;
+    private string _reason        = string.Empty;
+    private string _effectiveNote = string.Empty;
+    private string _errorMsg      = string.Empty;
+    private bool   _showValidation = false;
+
+    private string StatusVariant => NewStatus switch
+    {
+        "Active"     => "success",
+        "Locked"     => "warning",
+        "Suspended"  => "warning",
+        "Disabled"   => "danger",
+        "Terminated" => "danger",
+        _            => "primary",
+    };
+
+    private string StatusIcon => NewStatus switch
+    {
+        "Active"     => "bi-check-circle-fill",
+        "Locked"     => "bi-lock-fill",
+        "Suspended"  => "bi-pause-circle-fill",
+        "Disabled"   => "bi-slash-circle-fill",
+        "Terminated" => "bi-x-octagon-fill",
+        _            => "bi-arrow-repeat",
+    };
+
+    private string ConfirmLabel => NewStatus switch
+    {
+        "Active"     => "Activate",
+        "Locked"     => "Lock",
+        "Suspended"  => "Suspend",
+        "Disabled"   => "Disable",
+        "Terminated" => "Terminate",
+        _            => "Confirm",
+    };
+
+    protected override void OnParametersSet()
+    {
+        if (Visible != _visible)
+        {
+            _visible        = Visible;
+            _reason         = string.Empty;
+            _effectiveNote  = string.Empty;
+            _errorMsg       = string.Empty;
+            _showValidation = false;
+        }
+    }
+
+    private void OnDialogClosed() => Cancel();
+
+    private void Cancel()
+    {
+        _visible = false;
+        VisibleChanged.InvokeAsync(false);
+    }
+
+    private async Task ConfirmAsync()
+    {
+        _showValidation = true;
+        if (string.IsNullOrWhiteSpace(_reason)) return;
+
+        _errorMsg = string.Empty;
+        await OnConfirm.InvokeAsync((_reason.Trim(), string.IsNullOrWhiteSpace(_effectiveNote) ? null : _effectiveNote.Trim()));
+    }
+}

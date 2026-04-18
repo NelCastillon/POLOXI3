@@ -1,0 +1,178 @@
+@inject ApiClient Api
+
+<div class="tab-section">
+    <div class="ts-header">
+        <h3 class="ts-title">Assigned Roles</h3>
+        <button class="ts-btn-primary" @onclick="OpenAssign">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Assign Role
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="ts-loading" aria-live="polite">
+            <div class="ts-spinner" aria-hidden="true"></div> Loading roles…
+        </div>
+    }
+    else if (_roles.Count == 0)
+    {
+        <div class="ts-empty">
+            <i class="bi bi-shield" aria-hidden="true"></i>
+            <span>No roles assigned to this user.</span>
+        </div>
+    }
+    else
+    {
+        <SfGrid TValue="UserRoleDto" DataSource="@_roles" AllowPaging="true"
+                AllowSorting="true" EnableHover="true" RowHeight="48">
+            <GridPageSettings PageSize="10" />
+            <GridColumns>
+                <GridColumn Field="RoleName" HeaderText="Role" Width="200" />
+                <GridColumn Field="RoleCode" HeaderText="Code" Width="160" />
+                <GridColumn Field="AssignedDateUtc" HeaderText="Assigned" Width="160">
+                    <Template Context="r">
+                        @{ var row = (UserRoleDto)r; }
+                        <span>@row.AssignedDateUtc.ToString("MMM d, yyyy")</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="IsActive" HeaderText="Status" Width="100">
+                    <Template Context="r">
+                        @{ var row = (UserRoleDto)r; }
+                        <span class="badge @(row.IsActive ? "badge-green" : "badge-neutral")">
+                            @(row.IsActive ? "Active" : "Inactive")
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="AssignedByFullName" HeaderText="Assigned By" Width="160" />
+                <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right" AllowSorting="false">
+                    <Template Context="r">
+                        @{ var row = (UserRoleDto)r; }
+                        <button class="ra-btn ra-btn-danger" title="Revoke role"
+                                @onclick="() => RevokeAsync(row)">
+                            <i class="bi bi-x-lg" aria-hidden="true"></i>
+                        </button>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    }
+
+    @if (!string.IsNullOrEmpty(_msg))
+    {
+        <div class="ts-feedback @(_isError ? "ts-feedback-err" : "ts-feedback-ok")" role="alert">
+            <i class="bi @(_isError ? "bi-x-circle" : "bi-check-circle")" aria-hidden="true"></i>
+            @_msg
+        </div>
+    }
+</div>
+
+<!-- ── Assign Role Dialog ────────────────────────────── -->
+<SfDialog @bind-Visible="_showAssign" Width="480px" IsModal="true"
+          ShowCloseIcon="true" CloseOnEscape="true">
+    <DialogTemplates>
+        <Header><i class="bi bi-shield-plus" aria-hidden="true"></i> Assign Role</Header>
+        <Content>
+            <div class="ts-assign-form">
+                <div class="form-group">
+                    <label>Role <span class="req" aria-hidden="true">*</span></label>
+                    <SfDropDownList TItem="RoleDto" TValue="Guid"
+                                    DataSource="@_availableRoles"
+                                    @bind-Value="_selectedRoleId"
+                                    Placeholder="Select a role…">
+                        <DropDownListFieldSettings Text="RoleName" Value="RoleId" />
+                    </SfDropDownList>
+                </div>
+                @if (!string.IsNullOrEmpty(_assignError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_assignError
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="ts-btn-ghost" @onclick="() => _showAssign = false">Cancel</button>
+                <button class="ts-btn-primary" @onclick="AssignAsync" disabled="@_saving">
+                    @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                    Assign Role
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid UserId   { get; set; }
+    [Parameter] public Guid TenantId { get; set; }
+
+    private bool            _loading       = true;
+    private bool            _saving;
+    private List<UserRoleDto> _roles        = [];
+    private List<RoleDto>   _availableRoles = [];
+    private bool            _showAssign;
+    private Guid            _selectedRoleId;
+    private string          _assignError = string.Empty;
+    private string          _msg         = string.Empty;
+    private bool            _isError;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchUserRolesAsync(TenantId, userId: UserId);
+            _roles = result?.Items.ToList() ?? [];
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+        finally { _loading = false; }
+    }
+
+    private async Task OpenAssign()
+    {
+        _selectedRoleId = Guid.Empty;
+        _assignError    = string.Empty;
+        if (_availableRoles.Count == 0)
+        {
+            var result = await Api.SearchRolesAsync(TenantId);
+            _availableRoles = result?.Items.ToList() ?? [];
+        }
+        _showAssign = true;
+    }
+
+    private async Task AssignAsync()
+    {
+        if (_selectedRoleId == Guid.Empty) { _assignError = "Please select a role."; return; }
+        _saving = true;
+        try
+        {
+            var req = new AssignUserRoleRequest
+            {
+                TenantId = TenantId,
+                UserId   = UserId,
+                RoleId   = _selectedRoleId,
+            };
+            await Api.AssignUserRoleAsync(req);
+            _showAssign = false;
+            ShowMsg("Role assigned.", false);
+            await LoadAsync();
+        }
+        catch (Exception ex) { _assignError = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    private async Task RevokeAsync(UserRoleDto row)
+    {
+        try
+        {
+            await Api.RevokeUserRoleAsync(new RevokeUserRoleRequest { UserRoleId = row.UserRoleId });
+            ShowMsg($"Role '{row.RoleName}' revoked.", false);
+            await LoadAsync();
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+    }
+
+    private void ShowMsg(string msg, bool isError) { _msg = msg; _isError = isError; }
+}

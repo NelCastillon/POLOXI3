@@ -1,0 +1,411 @@
+@page "/compliance/dashboard"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Compliance Dashboard</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Compliance Dashboard"
+               Subtitle="Real-time overview of policy compliance across the organisation"
+               Icon="bi-speedometer2">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <a href="/compliance/acknowledgements" class="um-btn um-btn-ghost">
+            <i class="bi bi-check2-all" aria-hidden="true"></i> Acknowledgements
+        </a>
+        <a href="/compliance/policies" class="um-btn um-btn-primary">
+            <i class="bi bi-file-earmark-text" aria-hidden="true"></i> Policies
+        </a>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="cd-loading">
+        <span class="um-spin" aria-hidden="true"></span>
+        Loading dashboard…
+    </div>
+}
+else
+{
+    <!-- ── KPI strip ──────────────────────────────────────────────────────── -->
+    <div class="cd-kpi-strip">
+
+        <div class="cd-kpi-card">
+            <span class="cd-kpi-icon cd-kpi-icon--policies">
+                <i class="bi bi-file-earmark-check-fill" aria-hidden="true"></i>
+            </span>
+            <div class="cd-kpi-body">
+                <div class="cd-kpi-value">@(_summary?.TotalPoliciesWithAudience ?? 0)</div>
+                <div class="cd-kpi-label">Active Policies</div>
+                <div class="cd-kpi-sub">Published with audience</div>
+            </div>
+            <a href="/compliance/policies?status=Published" class="cd-kpi-action" title="View policies">
+                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </a>
+        </div>
+
+        <div class="cd-kpi-card @(_summary?.TotalPending > 0 ? "cd-kpi-card--warn" : "")">
+            <span class="cd-kpi-icon cd-kpi-icon--pending">
+                <i class="bi bi-hourglass-split" aria-hidden="true"></i>
+            </span>
+            <div class="cd-kpi-body">
+                <div class="cd-kpi-value">@(_summary?.TotalPending ?? 0)</div>
+                <div class="cd-kpi-label">Pending</div>
+                <div class="cd-kpi-sub">Awaiting acknowledgement</div>
+            </div>
+            <a href="/compliance/acknowledgements" class="cd-kpi-action" title="View pending">
+                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </a>
+        </div>
+
+        <div class="cd-kpi-card @(_summary?.TotalOverdue > 0 ? "cd-kpi-card--danger" : "")">
+            <span class="cd-kpi-icon cd-kpi-icon--overdue">
+                <i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i>
+            </span>
+            <div class="cd-kpi-body">
+                <div class="cd-kpi-value">@(_summary?.TotalOverdue ?? 0)</div>
+                <div class="cd-kpi-label">Overdue</div>
+                <div class="cd-kpi-sub">Past effective date</div>
+            </div>
+            <a href="/compliance/acknowledgements" class="cd-kpi-action" title="View overdue">
+                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </a>
+        </div>
+
+        <div class="cd-kpi-card cd-kpi-card--rate">
+            <span class="cd-kpi-icon cd-kpi-icon--rate">
+                <i class="bi bi-patch-check-fill" aria-hidden="true"></i>
+            </span>
+            <div class="cd-kpi-body">
+                <div class="cd-kpi-value">@ComplianceRate<span class="cd-kpi-pct">%</span></div>
+                <div class="cd-kpi-label">Compliance Rate</div>
+                <div class="cd-kpi-sub">@(_summary?.TotalAcknowledged ?? 0) of @TotalRequired acknowledged</div>
+            </div>
+            <div class="cd-rate-ring" aria-hidden="true">
+                <svg viewBox="0 0 36 36">
+                    <path class="cd-rate-ring-bg"
+                          d="M18 2.0845 a15.9155 15.9155 0 0 1 0 31.831 a15.9155 15.9155 0 0 1 0 -31.831" />
+                    <path class="cd-rate-ring-fill"
+                          stroke-dasharray="@ComplianceRate, 100"
+                          d="M18 2.0845 a15.9155 15.9155 0 0 1 0 31.831 a15.9155 15.9155 0 0 1 0 -31.831" />
+                </svg>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ── Two-column: overdue spotlight + recent acks ───────────────────── -->
+    <div class="cd-two-col">
+
+        <!-- Overdue spotlight -->
+        <div class="cd-panel">
+            <div class="cd-panel-hd">
+                <span class="cd-panel-title">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    Most Overdue
+                </span>
+                <a href="/compliance/acknowledgements" class="cd-panel-link">View all</a>
+            </div>
+            <div class="cd-panel-body">
+                @if (_topOverdue.Count == 0)
+                {
+                    <div class="cd-panel-empty">
+                        <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                        No overdue acknowledgements
+                    </div>
+                }
+                else
+                {
+                    @foreach (var r in _topOverdue)
+                    {
+                        <div class="cd-overdue-row">
+                            <div class="cd-overdue-info">
+                                <a href="/compliance/policies/@r.PolicyDocumentId"
+                                   class="cd-overdue-policy">@r.PolicyTitle</a>
+                                <div class="cd-overdue-meta">
+                                    <span class="cd-target-type cd-target-type--@r.TargetTypeCode.ToLower()">
+                                        <i class="bi @AudienceIcon(r.TargetTypeCode)" aria-hidden="true"></i>
+                                        @r.TargetName
+                                    </span>
+                                </div>
+                            </div>
+                            <span class="cd-days-chip cd-days-chip--@OverdueSeverity(r.DaysOverdue)">
+                                @r.DaysOverdue<span class="cd-days-unit">d</span>
+                            </span>
+                        </div>
+                    }
+                    @if (_overdueAll.Count > 5)
+                    {
+                        <div class="cd-panel-more">
+                            +@(_overdueAll.Count - 5) more —
+                            <a href="/compliance/acknowledgements">see all overdue</a>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+
+        <!-- Recent acknowledgements -->
+        <div class="cd-panel">
+            <div class="cd-panel-hd">
+                <span class="cd-panel-title">
+                    <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                    Recent Acknowledgements
+                </span>
+                <a href="/compliance/acknowledgements" class="cd-panel-link">View all</a>
+            </div>
+            <div class="cd-panel-body">
+                @if (_recentAcked.Count == 0)
+                {
+                    <div class="cd-panel-empty">
+                        <i class="bi bi-inbox" aria-hidden="true"></i>
+                        No acknowledgements recorded yet
+                    </div>
+                }
+                else
+                {
+                    @foreach (var a in _recentAcked)
+                    {
+                        <div class="cd-ack-row">
+                            <span class="cd-avatar">@Initials(a.UserFullName)</span>
+                            <div class="cd-ack-info">
+                                <div class="cd-ack-user">@a.UserFullName</div>
+                                <div class="cd-ack-policy">
+                                    <a href="/compliance/policies/@a.PolicyDocumentId">@a.PolicyTitle</a>
+                                </div>
+                            </div>
+                            <span class="cd-ack-time" title="@a.AcknowledgedDateUtc.ToLocalTime().ToString("dd MMM yyyy HH:mm")">
+                                @RelativeTime(a.AcknowledgedDateUtc)
+                            </span>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ── Policy compliance table ───────────────────────────────────────── -->
+    <div class="cd-panel cd-panel--full">
+        <div class="cd-panel-hd">
+            <span class="cd-panel-title">
+                <i class="bi bi-bar-chart-steps" aria-hidden="true"></i>
+                Policy Compliance Progress
+            </span>
+            <a href="/compliance/policies" class="cd-panel-link">Manage policies</a>
+        </div>
+        <div class="cd-panel-body">
+            @if (_policies.Count == 0)
+            {
+                <div class="cd-panel-empty">
+                    <i class="bi bi-file-earmark-check" aria-hidden="true"></i>
+                    No published policies found
+                </div>
+            }
+            else
+            {
+                <div class="cd-policy-table">
+                    <div class="cd-policy-table-hd">
+                        <span>Policy</span>
+                        <span>Owner</span>
+                        <span>Effective</span>
+                        <span class="cd-col-center">Acked</span>
+                        <span class="cd-col-center">Pending</span>
+                        <span class="cd-col-center">Overdue</span>
+                        <span>Progress</span>
+                    </div>
+                    @foreach (var p in _policies)
+                    {
+                        var pending = _pendingAll.Count(x => x.PolicyDocumentId == p.PolicyDocumentId);
+                        var overdue = _overdueAll.Count(x => x.PolicyDocumentId == p.PolicyDocumentId);
+                        var acked   = p.AcknowledgementCount;
+                        var total   = pending + acked;
+                        var pct     = total > 0 ? (int)Math.Round(acked * 100.0 / total) : (acked > 0 ? 100 : 0);
+                        var rowCss  = overdue > 0 ? "cd-policy-row cd-policy-row--overdue"
+                                    : pending > 0 ? "cd-policy-row cd-policy-row--pending"
+                                    : "cd-policy-row cd-policy-row--complete";
+
+                        <div class="@rowCss">
+                            <div class="cd-policy-cell">
+                                <a href="/compliance/policies/@p.PolicyDocumentId"
+                                   class="cd-policy-name">@p.PolicyTitle</a>
+                                <div class="cd-policy-meta">
+                                    <span class="cd-code">@p.PolicyCode</span>
+                                    <span class="cd-type-badge cd-type-badge--@SlugType(p.PolicyTypeCode)">
+                                        @p.PolicyTypeCode
+                                    </span>
+                                    <span class="cd-version">v@p.Version</span>
+                                </div>
+                            </div>
+                            <div class="cd-owner-cell">
+                                @if (p.OwnedByFullName is not null)
+                                {
+                                    <span class="cd-avatar cd-avatar--sm">@Initials(p.OwnedByFullName)</span>
+                                    <span class="cd-owner-name">@p.OwnedByFullName</span>
+                                }
+                                else
+                                {
+                                    <span class="cd-unassigned">—</span>
+                                }
+                            </div>
+                            <div class="cd-effective-cell">
+                                @(p.EffectiveDateUtc?.ToString("dd MMM yyyy") ?? "—")
+                            </div>
+                            <div class="cd-col-center">
+                                <span class="cd-stat-acked">@acked</span>
+                            </div>
+                            <div class="cd-col-center">
+                                @if (pending > 0)
+                                {
+                                    <span class="cd-stat-pending">@pending</span>
+                                }
+                                else
+                                {
+                                    <span class="cd-stat-zero">0</span>
+                                }
+                            </div>
+                            <div class="cd-col-center">
+                                @if (overdue > 0)
+                                {
+                                    <span class="cd-stat-overdue">@overdue</span>
+                                }
+                                else
+                                {
+                                    <span class="cd-stat-zero">0</span>
+                                }
+                            </div>
+                            <div class="cd-progress-cell">
+                                <div class="cd-progress-bar">
+                                    <div class="cd-progress-fill @(pct == 100 ? "cd-progress-fill--complete" : overdue > 0 ? "cd-progress-fill--danger" : "")"
+                                         style="width: @pct%"></div>
+                                </div>
+                                <span class="cd-progress-pct">@pct%</span>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    // ── Constants ─────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ──────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    private bool _loading = true;
+
+    // ── Data ──────────────────────────────────────────────────────────────────
+    private AcknowledgementSummaryDto?         _summary     = null;
+    private List<PendingAcknowledgementDto>    _overdueAll  = [];
+    private List<PendingAcknowledgementDto>    _topOverdue  = [];
+    private List<PendingAcknowledgementDto>    _pendingAll  = [];
+    private List<AcknowledgementDetailDto>     _recentAcked = [];
+    private List<PolicyDocumentDto>            _policies    = [];
+
+    // ── Computed ──────────────────────────────────────────────────────────────
+    private int TotalRequired  => (_summary?.TotalPending ?? 0) + (_summary?.TotalAcknowledged ?? 0);
+    private int ComplianceRate => TotalRequired > 0
+        ? (int)Math.Round((_summary!.TotalAcknowledged) * 100.0 / TotalRequired)
+        : (_summary?.TotalAcknowledged > 0 ? 100 : 0);
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",       "/"),
+            new("Compliance", "/compliance"),
+            new("Dashboard",  null));
+
+        await LoadAsync();
+    }
+
+    // ── Load ──────────────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var summaryTask  = Api.GetAcknowledgementSummaryAsync(_tenantId);
+            var overdueTask  = Api.GetOverdueAcknowledgementsAsync(_tenantId);
+            var pendingTask  = Api.GetPendingAcknowledgementsAsync(_tenantId);
+            var ackedTask    = Api.SearchAcknowledgedAsync(_tenantId, pageSize: 5);
+            var policiesTask = Api.SearchPolicyDocumentsAsync(_tenantId, statusCode: "Published");
+
+            await Task.WhenAll(summaryTask, overdueTask, pendingTask, ackedTask, policiesTask);
+
+            _summary     = await summaryTask;
+            _overdueAll  = (await overdueTask)?.ToList()  ?? [];
+            _pendingAll  = (await pendingTask)?.ToList()  ?? [];
+            _recentAcked = (await ackedTask)?.Items.ToList() ?? [];
+            _policies    = (await policiesTask)?.Items.ToList() ?? [];
+
+            _topOverdue = _overdueAll
+                .OrderByDescending(x => x.DaysOverdue)
+                .Take(5)
+                .ToList();
+        }
+        catch
+        {
+            await (_toast?.ShowAsync(new ToastModel
+            {
+                Content     = "Failed to load compliance dashboard.",
+                CssClass    = "e-toast-danger",
+                ShowCloseButton = true
+            }) ?? Task.CompletedTask);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    private static string Initials(string name)
+    {
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}".ToUpper()
+            : name.Length >= 2 ? name[..2].ToUpper() : name.ToUpper();
+    }
+
+    private static string SlugType(string type) =>
+        type.ToLower().Replace(" ", "-");
+
+    private static string AudienceIcon(string type) => type switch
+    {
+        "User"     => "bi-person",
+        "Role"     => "bi-person-badge",
+        "AllUsers" => "bi-people",
+        _          => "bi-question-circle"
+    };
+
+    private static string OverdueSeverity(int days) => days switch
+    {
+        <= 7  => "low",
+        <= 30 => "medium",
+        _     => "high"
+    };
+
+    private static string RelativeTime(DateTime utc)
+    {
+        var diff = DateTime.UtcNow - utc;
+        if (diff.TotalMinutes < 2)  return "just now";
+        if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalHours   < 24) return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays    < 7)  return $"{(int)diff.TotalDays}d ago";
+        return utc.ToLocalTime().ToString("dd MMM yyyy");
+    }
+}

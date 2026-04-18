@@ -1,0 +1,224 @@
+@*
+    PermissionScopeDrawer — add / remove scope restrictions on a single permission override.
+    Usage: <PermissionScopeDrawer @bind-Visible="_show" Override="_selected" OnChanged="ReloadAsync" />
+*@
+@inject ApiClient Api
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="3500" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppCrudDrawer @bind-Visible="_open"
+               Title="Manage Scopes"
+               Icon="bi-layers"
+               Width="520px"
+               IsBusy="_busy"
+               OnClose="HandleCloseAsync">
+    <Footer>
+        <button class="um-btn um-btn-ghost" @onclick="HandleCloseAsync">Close</button>
+    </Footer>
+    <Content>
+        @if (_loading)
+        {
+            <div class="psd-loading">
+                <span class="um-spin" aria-hidden="true"></span>
+                <span>Loading scopes…</span>
+            </div>
+        }
+        else
+        {
+            @if (!string.IsNullOrEmpty(_errorMsg))
+            {
+                <div class="psd-error">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    @_errorMsg
+                </div>
+            }
+
+            @if (Override is not null)
+            {
+                <div class="psd-context">
+                    <span class="@(Override.IsGranted ? "psd-badge psd-badge--allow" : "psd-badge psd-badge--deny")">
+                        @(Override.IsGranted ? "Allow" : "Deny")
+                    </span>
+                    <span class="psd-context-perm">@Override.PermissionName</span>
+                    <span class="psd-context-sep">for</span>
+                    <span class="psd-context-user">@Override.UserFullName</span>
+                </div>
+            }
+
+            <!-- Current scopes -->
+            <div class="psd-section">
+                <h4 class="psd-section-title">
+                    Active Scopes
+                    <span class="psd-count">@_scopes.Count</span>
+                </h4>
+                @if (_scopes.Count == 0)
+                {
+                    <div class="psd-empty">
+                        <i class="bi bi-layers" aria-hidden="true"></i>
+                        <span>No scope restrictions — override applies globally.</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="psd-scope-list">
+                        @foreach (var scope in _scopes)
+                        {
+                            <div class="psd-scope-row">
+                                <span class="psd-scope-type">@scope.ScopeTypeCode</span>
+                                <span class="psd-scope-value">@scope.ScopeValue</span>
+                                <button class="um-btn um-btn-xs um-btn-ghost psd-remove-btn"
+                                        @onclick="() => RemoveScopeAsync(scope)"
+                                        title="Remove scope"
+                                        disabled="@_busy">
+                                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            <!-- Add scope -->
+            <div class="psd-section">
+                <h4 class="psd-section-title">Add Scope</h4>
+                <div class="psd-add-form">
+                    <div class="psd-field">
+                        <label class="psd-label">Scope Type <span class="req">*</span></label>
+                        <SfDropDownList TValue="string" TItem="LabelValue"
+                                        DataSource="_scopeTypeOptions"
+                                        @bind-Value="_newScopeType"
+                                        Placeholder="Select type">
+                            <DropDownListFieldSettings Value="Value" Text="Label" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="psd-field">
+                        <label class="psd-label">Scope Value <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_newScopeValue"
+                                   Placeholder="e.g. project-001 or region-us-east" />
+                    </div>
+                    <div class="psd-add-actions">
+                        <button class="um-btn um-btn-primary um-btn-sm"
+                                @onclick="AddScopeAsync"
+                                disabled="@(string.IsNullOrWhiteSpace(_newScopeType) || string.IsNullOrWhiteSpace(_newScopeValue) || _busy)">
+                            @if (_busy) { <span class="um-spin" aria-hidden="true"></span> }
+                            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Scope
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    [Parameter] public bool                Visible        { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public UserPermissionDto?  Override       { get; set; }
+    [Parameter] public EventCallback       OnChanged      { get; set; }
+
+    private SfToast? _toast;
+    private bool     _open        = false;
+    private bool     _loading     = false;
+    private bool     _busy        = false;
+    private string   _errorMsg    = string.Empty;
+    private bool     _prevVisible = false;
+
+    private List<UserPermissionScopeDto> _scopes        = [];
+    private string                       _newScopeType  = string.Empty;
+    private string                       _newScopeValue = string.Empty;
+
+    protected override void OnParametersSet() => _open = Visible;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var justOpened = Visible && !_prevVisible;
+        _prevVisible   = Visible;
+        if (justOpened) await LoadScopesAsync();
+    }
+
+    private async Task LoadScopesAsync()
+    {
+        if (Override is null) return;
+        _loading  = true;
+        _errorMsg = string.Empty;
+        StateHasChanged();
+        try
+        {
+            _scopes = await Api.GetPermissionScopesAsync(Override.UserPermissionId) ?? [];
+        }
+        catch { _errorMsg = "Failed to load scopes."; }
+        finally { _loading = false; }
+    }
+
+    private async Task AddScopeAsync()
+    {
+        if (Override is null || string.IsNullOrWhiteSpace(_newScopeType) || string.IsNullOrWhiteSpace(_newScopeValue)) return;
+        _busy = true;
+        _errorMsg = string.Empty;
+        try
+        {
+            await Api.AddPermissionScopeAsync(Override.UserPermissionId, new AddPermissionScopeRequest
+            {
+                UserPermissionId = Override.UserPermissionId,
+                ScopeTypeCode    = _newScopeType,
+                ScopeValue       = _newScopeValue.Trim(),
+            });
+            _newScopeType  = string.Empty;
+            _newScopeValue = string.Empty;
+            await LoadScopesAsync();
+            await OnChanged.InvokeAsync();
+            await ToastAsync("Scope added.");
+        }
+        catch { _errorMsg = "Failed to add scope."; }
+        finally { _busy = false; }
+    }
+
+    private async Task RemoveScopeAsync(UserPermissionScopeDto scope)
+    {
+        if (Override is null) return;
+        _busy = true;
+        try
+        {
+            await Api.RemovePermissionScopeAsync(Override.UserPermissionId, scope.UserPermissionScopeId);
+            await LoadScopesAsync();
+            await OnChanged.InvokeAsync();
+            await ToastAsync("Scope removed.");
+        }
+        catch { _errorMsg = "Failed to remove scope."; }
+        finally { _busy = false; }
+    }
+
+    private async Task HandleCloseAsync()
+    {
+        _open = false;
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    private async Task ToastAsync(string msg, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content         = msg,
+            CssClass        = isError ? "e-toast-danger" : "e-toast-success",
+            Icon            = isError ? "e-error toast-icons" : "e-success toast-icons",
+            ShowCloseButton = true,
+            Timeout         = 3500,
+        });
+    }
+
+    // ── Inner types ───────────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Value, string Label);
+
+    private static readonly List<LabelValue> _scopeTypeOptions =
+    [
+        new("Resource",   "Resource"),
+        new("Project",    "Project"),
+        new("Department", "Department"),
+        new("Region",     "Region"),
+        new("Branch",     "Branch"),
+        new("Custom",     "Custom"),
+    ];
+}

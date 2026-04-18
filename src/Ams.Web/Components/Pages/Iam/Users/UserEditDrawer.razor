@@ -1,0 +1,478 @@
+@*
+    UserEditDrawer — reusable right-side drawer for creating or editing an IAM user.
+    Create mode:  <UserEditDrawer @bind-Visible="_show" OnSaved="ReloadAsync" />
+    Edit mode:    <UserEditDrawer @bind-Visible="_show" UserId="_userId" OnSaved="ReloadAsync" />
+*@
+@inject ApiClient Api
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppCrudDrawer @bind-Visible="_open"
+               Title="@DrawerTitle"
+               Icon="@DrawerIcon"
+               Width="580px"
+               IsBusy="_busy"
+               OnClose="HandleCloseAsync">
+    <Content>
+        @if (_loading)
+        {
+            <div class="ued-loading">
+                <span class="um-spin" aria-hidden="true"></span>
+                <span>Loading user…</span>
+            </div>
+        }
+        else
+        {
+            @if (!string.IsNullOrEmpty(_errorMsg))
+            {
+                <div class="ued-error">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    @_errorMsg
+                </div>
+            }
+
+            <!-- Account -->
+            <div class="ued-section">
+                <h4 class="ued-section-title">Account</h4>
+                <div class="ued-grid">
+                    <div class="ued-field">
+                        <label class="ued-label">User Number</label>
+                        @if (IsCreate)
+                        {
+                            <SfTextBox @bind-Value="_form.UserNumber" Placeholder="Auto-assigned if blank" />
+                        }
+                        else
+                        {
+                            <span class="ued-readonly">@(_form.UserNumber ?? "—")</span>
+                        }
+                    </div>
+                    <div class="ued-field">
+                        <label class="ued-label">Status</label>
+                        @if (IsCreate)
+                        {
+                            <SfDropDownList TValue="string" TItem="LabelValue"
+                                            DataSource="_statusOptions"
+                                            @bind-Value="_form.StatusCode">
+                                <DropDownListFieldSettings Value="Value" Text="Label" />
+                            </SfDropDownList>
+                        }
+                        else
+                        {
+                            <span class="ued-readonly">@_form.StatusCode</span>
+                        }
+                    </div>
+                    <div class="ued-field">
+                        <label class="ued-label">Username <span class="req">*</span></label>
+                        @if (IsCreate)
+                        {
+                            <SfTextBox @bind-Value="_form.UserName" Placeholder="e.g. jsmith" />
+                        }
+                        else
+                        {
+                            <span class="ued-readonly">@_form.UserName</span>
+                        }
+                    </div>
+                    <div class="ued-field">
+                        <label class="ued-label">Email <span class="req">*</span></label>
+                        @if (IsCreate)
+                        {
+                            <SfTextBox @bind-Value="_form.Email" Placeholder="user@example.com" />
+                        }
+                        else
+                        {
+                            <span class="ued-readonly">@_form.Email</span>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <!-- Identity -->
+            <div class="ued-section">
+                <h4 class="ued-section-title">Identity</h4>
+                <div class="ued-grid">
+                    <div class="ued-field">
+                        <label class="ued-label">First Name <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.FirstName" Placeholder="First name" />
+                    </div>
+                    <div class="ued-field">
+                        <label class="ued-label">Last Name <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.LastName" Placeholder="Last name" />
+                    </div>
+                    <div class="ued-field ued-field--full">
+                        <label class="ued-label">Display Name</label>
+                        <SfTextBox @bind-Value="_form.DisplayName" Placeholder="Optional preferred name" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Organisation -->
+            <div class="ued-section">
+                <h4 class="ued-section-title">Organisation</h4>
+                <div class="ued-grid">
+                    @if (IsCreate)
+                    {
+                        <div class="ued-field">
+                            <label class="ued-label">User Type</label>
+                            <SfDropDownList TValue="string" TItem="LabelValue"
+                                            DataSource="_userTypeOptions"
+                                            @bind-Value="_form.UserTypeCode">
+                                <DropDownListFieldSettings Value="Value" Text="Label" />
+                            </SfDropDownList>
+                        </div>
+                    }
+                    <div class="ued-field">
+                        <label class="ued-label">Department</label>
+                        <SfTextBox @bind-Value="_form.Department" Placeholder="e.g. Finance" />
+                    </div>
+                    <div class="ued-field">
+                        <label class="ued-label">Branch</label>
+                        <SfDropDownList TValue="string" TItem="BranchDto"
+                                        DataSource="_branches"
+                                        ShowClearButton="true"
+                                        Value="_form.BranchCode"
+                                        ValueChanged="@((string v) => _form.BranchCode = v)">
+                            <DropDownListFieldSettings Value="BranchCode" Text="BranchName" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="ued-field">
+                        <label class="ued-label">Region</label>
+                        <SfTextBox @bind-Value="_form.Region" Placeholder="e.g. APAC, EMEA" />
+                    </div>
+                    <div class="ued-field">
+                        <label class="ued-label">Job Title</label>
+                        <SfTextBox @bind-Value="_form.JobTitle" Placeholder="e.g. Account Manager" />
+                    </div>
+                    <div class="ued-field">
+                        <label class="ued-label">Phone</label>
+                        <SfTextBox @bind-Value="_form.PhoneNumber" Placeholder="+1 555 000 0000" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings -->
+            <div class="ued-section">
+                <h4 class="ued-section-title">Settings</h4>
+                <div class="ued-grid">
+                    <div class="ued-field">
+                        <label class="ued-label">Time Zone</label>
+                        <SfTextBox @bind-Value="_form.TimeZoneCode" Placeholder="e.g. America/New_York" />
+                    </div>
+                    <div class="ued-field">
+                        <label class="ued-label">Locale</label>
+                        <SfTextBox @bind-Value="_form.LocaleCode" Placeholder="e.g. en-US" />
+                    </div>
+                    <div class="ued-field ued-field--full">
+                        <label class="ued-toggle">
+                            <SfCheckBox @bind-Checked="_form.MfaRequired" />
+                            <span class="ued-toggle-text">Require MFA on next login</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        }
+    </Content>
+    <Footer>
+        <button class="um-btn um-btn-ghost" @onclick="HandleCloseAsync" disabled="@_busy">Cancel</button>
+        @if (IsCreate)
+        {
+            <button class="um-btn um-btn-ghost" @onclick="SaveAndAddAnotherAsync" disabled="@(_busy || _loading)">
+                @if (_busy && _addAnother) { <span class="um-spin" aria-hidden="true"></span> }
+                Save &amp; Add Another
+            </button>
+        }
+        <button class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@(_busy || _loading)">
+            @if (_busy && !_addAnother) { <span class="um-spin" aria-hidden="true"></span> }
+            @(IsCreate ? "Create User" : "Save Changes")
+        </button>
+    </Footer>
+</AppCrudDrawer>
+
+@code {
+    // ── Constants ─────────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ──────────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Parameters ────────────────────────────────────────────────────────────────
+    [Parameter] public bool              Visible       { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public Guid?             UserId        { get; set; }
+    [Parameter] public EventCallback     OnSaved       { get; set; }
+
+    // ── Internal state ────────────────────────────────────────────────────────────
+    private bool   _open;
+    private bool   _prevVisible;
+    private bool   _busy;
+    private bool   _loading;
+    private bool   _addAnother;
+    private string _errorMsg     = string.Empty;
+    private Guid?  _loadedUserId;
+
+    // ── Form + reference data ─────────────────────────────────────────────────────
+    private FormModel       _form     = new();
+    private List<BranchDto> _branches = [];
+
+    // ── Computed ──────────────────────────────────────────────────────────────────
+    private bool   IsCreate    => UserId is null;
+    private string DrawerTitle => IsCreate ? "New User" : "Edit User";
+    private string DrawerIcon  => IsCreate ? "bi-person-plus" : "bi-person-gear";
+
+    // ── Static options ────────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Active",   "Active"),
+        new("Inactive", "Inactive"),
+        new("Pending",  "Pending"),
+    ];
+
+    private static readonly List<LabelValue> _userTypeOptions =
+    [
+        new("Internal", "Internal"),
+        new("External", "External"),
+        new("Service",  "Service"),
+    ];
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadBranchesAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        _open = Visible;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        bool justOpened = Visible && !_prevVisible;
+        _prevVisible = Visible;
+
+        if (Visible && (justOpened || UserId != _loadedUserId))
+        {
+            _loadedUserId = UserId;
+            await RefreshFormAsync();
+        }
+    }
+
+    // ── Data ──────────────────────────────────────────────────────────────────────
+    private async Task LoadBranchesAsync()
+    {
+        if (_branches.Count > 0) return;
+        var result = await Api.SearchBranchesAsync(_tenantId);
+        _branches = result?.Items.ToList() ?? [];
+    }
+
+    private async Task RefreshFormAsync()
+    {
+        _errorMsg = string.Empty;
+
+        if (IsCreate)
+        {
+            _form = new();
+            return;
+        }
+
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var user = await Api.GetUserByIdAsync(UserId!.Value);
+            if (user is not null) PopulateForm(user);
+        }
+        catch
+        {
+            _errorMsg = "Failed to load user data.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void PopulateForm(UserDto user)
+    {
+        var nameParts = user.FullName.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        _form = new()
+        {
+            UserNumber   = user.UserNumber,
+            UserName     = user.UserName,
+            Email        = user.Email,
+            StatusCode   = user.StatusCode,
+            UserTypeCode = user.UserTypeCode,
+            FirstName    = nameParts.Length > 0 ? nameParts[0] : string.Empty,
+            LastName     = nameParts.Length > 1 ? nameParts[1] : string.Empty,
+            DisplayName  = user.DisplayName,
+            Department   = user.Department,
+            BranchCode   = _branches.FirstOrDefault(b => b.BranchId == user.BranchId)?.BranchCode,
+            Region       = user.Region,
+            JobTitle     = user.JobTitle,
+            PhoneNumber  = user.PhoneNumber,
+            TimeZoneCode = user.TimeZoneCode,
+            LocaleCode   = user.LocaleCode,
+            MfaRequired  = false,
+        };
+    }
+
+    // ── Save actions ──────────────────────────────────────────────────────────────
+    private async Task SaveAsync()
+    {
+        _addAnother = false;
+        await ExecuteSaveAsync();
+    }
+
+    private async Task SaveAndAddAnotherAsync()
+    {
+        _addAnother = true;
+        await ExecuteSaveAsync();
+    }
+
+    private async Task ExecuteSaveAsync()
+    {
+        _errorMsg = string.Empty;
+        if (!Validate()) return;
+
+        _busy = true;
+        try
+        {
+            if (IsCreate)
+            {
+                var branchId = string.IsNullOrEmpty(_form.BranchCode)
+                    ? (Guid?)null
+                    : _branches.FirstOrDefault(b => b.BranchCode == _form.BranchCode)?.BranchId;
+
+                await Api.CreateUserAsync(new CreateUserRequest
+                {
+                    TenantId     = _tenantId,
+                    BranchId     = branchId,
+                    UserNumber   = _form.UserNumber,
+                    UserName     = _form.UserName.Trim(),
+                    Email        = _form.Email.Trim(),
+                    FullName     = _form.FullName,
+                    DisplayName  = _form.DisplayName,
+                    UserTypeCode = _form.UserTypeCode,
+                    StatusCode   = _form.StatusCode,
+                    PhoneNumber  = _form.PhoneNumber,
+                    Department   = _form.Department,
+                    Region       = _form.Region,
+                    JobTitle     = _form.JobTitle,
+                    TimeZoneCode = _form.TimeZoneCode,
+                    LocaleCode   = _form.LocaleCode,
+                    MfaRequired  = _form.MfaRequired,
+                });
+                await ShowToastAsync("User created successfully.");
+            }
+            else
+            {
+                await Api.UpdateUserAsync(UserId!.Value, new UpdateUserRequest
+                {
+                    UserId       = UserId.Value,
+                    FullName     = _form.FullName,
+                    DisplayName  = _form.DisplayName,
+                    PhoneNumber  = _form.PhoneNumber,
+                    Department   = _form.Department,
+                    Region       = _form.Region,
+                    JobTitle     = _form.JobTitle,
+                    TimeZoneCode = _form.TimeZoneCode,
+                    LocaleCode   = _form.LocaleCode,
+                    MfaRequired  = _form.MfaRequired,
+                });
+                await ShowToastAsync("User saved successfully.");
+            }
+
+            await OnSaved.InvokeAsync();
+
+            if (_addAnother)
+            {
+                _form         = new();
+                _loadedUserId = Guid.Empty;
+            }
+            else
+            {
+                await HandleCloseAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _errorMsg = "Save failed: " + ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private bool Validate()
+    {
+        if (string.IsNullOrWhiteSpace(_form.FirstName) || string.IsNullOrWhiteSpace(_form.LastName))
+        {
+            _errorMsg = "First name and last name are required.";
+            return false;
+        }
+        if (IsCreate && string.IsNullOrWhiteSpace(_form.UserName))
+        {
+            _errorMsg = "Username is required.";
+            return false;
+        }
+        if (IsCreate && string.IsNullOrWhiteSpace(_form.Email))
+        {
+            _errorMsg = "Email address is required.";
+            return false;
+        }
+        return true;
+    }
+
+    // ── Close ─────────────────────────────────────────────────────────────────────
+    private async Task HandleCloseAsync()
+    {
+        _errorMsg = string.Empty;
+        _open     = false;
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    // ── Toast ─────────────────────────────────────────────────────────────────────
+    private async Task ShowToastAsync(string message, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content         = message,
+            CssClass        = isError ? "e-toast-danger" : "e-toast-success",
+            Icon            = isError ? "e-error toast-icons" : "e-success toast-icons",
+            ShowCloseButton = true,
+            Timeout         = 4000,
+        });
+    }
+
+    // ── Inner types ───────────────────────────────────────────────────────────────
+    private sealed class FormModel
+    {
+        // Account
+        public string? UserNumber   { get; set; }
+        public string  UserName     { get; set; } = string.Empty;
+        public string  Email        { get; set; } = string.Empty;
+        public string  StatusCode   { get; set; } = "Active";
+        public string  UserTypeCode { get; set; } = "Internal";
+        // Identity
+        public string  FirstName   { get; set; } = string.Empty;
+        public string  LastName    { get; set; } = string.Empty;
+        public string? DisplayName { get; set; }
+        // Organisation
+        public string? Department  { get; set; }
+        public string? BranchCode  { get; set; }
+        public string? Region      { get; set; }
+        public string? JobTitle    { get; set; }
+        public string? PhoneNumber { get; set; }
+        // Settings
+        public string? TimeZoneCode { get; set; }
+        public string? LocaleCode   { get; set; }
+        public bool    MfaRequired  { get; set; }
+        // Computed
+        public string FullName => (FirstName.Trim() + " " + LastName.Trim()).Trim();
+    }
+
+    private sealed record LabelValue(string Value, string Label);
+}

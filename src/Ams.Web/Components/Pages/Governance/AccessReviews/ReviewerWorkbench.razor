@@ -1,0 +1,451 @@
+@page "/governance/access-reviews/{Id:guid}/review"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Governance
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>@(_campaign?.CampaignName is not null ? $"Review — {_campaign.CampaignName}" : "Reviewer Workbench")</PageTitle>
+
+<div class="arw-shell">
+
+    @if (_loading)
+    {
+        <div class="arw-loading">
+            <span class="um-spin" aria-hidden="true"></span>
+            Loading workbench…
+        </div>
+    }
+    else if (_campaign is null)
+    {
+        <div class="arw-not-found">
+            <i class="bi bi-clipboard2-x arw-nf-icon" aria-hidden="true"></i>
+            <p>Campaign not found.</p>
+            <a href="/governance/access-reviews" class="um-btn um-btn-ghost">Back to Campaigns</a>
+        </div>
+    }
+    else
+    {
+        <!-- ── Header ──────────────────────────────────────────────────────── -->
+        <div class="arw-header">
+            <div class="arw-header-left">
+                <nav class="arw-breadcrumb" aria-label="breadcrumb">
+                    <a href="/governance" class="arw-bc-link">Governance</a>
+                    <span class="arw-bc-sep" aria-hidden="true">›</span>
+                    <a href="/governance/access-reviews" class="arw-bc-link">Access Reviews</a>
+                    <span class="arw-bc-sep" aria-hidden="true">›</span>
+                    <a href="/governance/access-reviews/@_campaign.CampaignId" class="arw-bc-link">@_campaign.CampaignName</a>
+                    <span class="arw-bc-sep" aria-hidden="true">›</span>
+                    <span class="arw-bc-current">Reviewer Workbench</span>
+                </nav>
+                <div class="arw-title-row">
+                    <h1 class="arw-title">
+                        <i class="bi bi-clipboard2-check" aria-hidden="true"></i>
+                        Reviewer Workbench
+                    </h1>
+                    <span class="arw-status-badge arw-status-badge--@_campaign.StatusCode.ToLower()">@_campaign.StatusCode</span>
+                </div>
+                <p class="arw-subtitle">@_campaign.CampaignName</p>
+            </div>
+            <div class="arw-header-right">
+                <a href="/governance/access-reviews/@_campaign.CampaignId" class="um-btn um-btn-ghost um-btn-sm">
+                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                    Back to Detail
+                </a>
+            </div>
+        </div>
+
+        <!-- ── Progress strip ─────────────────────────────────────────────── -->
+        <div class="arw-progress-strip">
+            <div class="arw-prog-bar">
+                @if (_allItems.Count > 0)
+                {
+                    var pct = (int)Math.Round(100.0 * ReviewedCount / _allItems.Count);
+                    <div class="arw-prog-fill" style="width:@pct%"></div>
+                }
+            </div>
+            <div class="arw-prog-stats">
+                <span class="arw-prog-label">
+                    <strong>@ReviewedCount</strong> of <strong>@_allItems.Count</strong> reviewed
+                    @if (_allItems.Count > 0)
+                    {
+                        <span class="arw-prog-pct">(@((int)Math.Round(100.0 * ReviewedCount / _allItems.Count))%)</span>
+                    }
+                </span>
+                <div class="arw-prog-decisions">
+                    <span class="arw-dec-pill arw-dec-pill--keep">
+                        <i class="bi bi-check-circle" aria-hidden="true"></i>
+                        @KeepCount Keep
+                    </span>
+                    <span class="arw-dec-pill arw-dec-pill--remove">
+                        <i class="bi bi-x-circle" aria-hidden="true"></i>
+                        @RemoveCount Remove
+                    </span>
+                    <span class="arw-dec-pill arw-dec-pill--escalate">
+                        <i class="bi bi-arrow-up-circle" aria-hidden="true"></i>
+                        @EscalateCount Escalate
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Tabs ────────────────────────────────────────────────────────── -->
+        <div class="arw-tabs">
+            <button class="@TabClass("All")"     @onclick='() => SetTab("All")'>
+                All
+                <span class="arw-tab-badge">@_allItems.Count</span>
+            </button>
+            <button class="@TabClass("Pending")" @onclick='() => SetTab("Pending")'>
+                Pending
+                <span class="arw-tab-badge arw-tab-badge--pending">@PendingCount</span>
+            </button>
+            <button class="@TabClass("Reviewed")" @onclick='() => SetTab("Reviewed")'>
+                Reviewed
+                <span class="arw-tab-badge arw-tab-badge--reviewed">@ReviewedCount</span>
+            </button>
+        </div>
+
+        <!-- ── Cards grid ─────────────────────────────────────────────────── -->
+        @if (VisibleItems.Count == 0)
+        {
+            <div class="arw-empty">
+                <i class="bi bi-inbox arw-empty-icon" aria-hidden="true"></i>
+                <p>No @(_activeTab == "All" ? "" : _activeTab.ToLower() + " ") items to display.</p>
+            </div>
+        }
+        else
+        {
+            <div class="arw-grid">
+                @foreach (var item in VisibleItems)
+                {
+                    var isPending = item.DecisionCode is null;
+                    <div class="arw-card @(!isPending ? "arw-card--reviewed" : "")">
+                        <!-- Card header -->
+                        <div class="arw-card-header">
+                            <div class="arw-user-row">
+                                <span class="arw-avatar">@UserInitials(item.UserFullName)</span>
+                                <div class="arw-user-info">
+                                    <span class="arw-user-name">@item.UserFullName</span>
+                                    <span class="arw-user-email">@item.UserEmail</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Card body -->
+                        <div class="arw-card-body">
+                            <div class="arw-card-row">
+                                <span class="arw-type-badge arw-type-badge--@item.AccessTypeCode.ToLower()">
+                                    <i class="bi @AccessTypeIcon(item.AccessTypeCode)" aria-hidden="true"></i>
+                                    @item.AccessTypeCode
+                                </span>
+                                @if (!string.IsNullOrEmpty(item.RiskLevel))
+                                {
+                                    <span class="arw-risk-badge arw-risk-badge--@item.RiskLevel.ToLower()">@item.RiskLevel</span>
+                                }
+                            </div>
+                            <div class="arw-access-name">@item.AccessName</div>
+
+                            @if (!isPending && !string.IsNullOrEmpty(item.ReviewerNotes))
+                            {
+                                <div class="arw-notes">
+                                    <i class="bi bi-chat-text" aria-hidden="true"></i>
+                                    @item.ReviewerNotes
+                                </div>
+                            }
+
+                            @if (!isPending)
+                            {
+                                <div class="arw-decision-row">
+                                    <span class="arw-decision-badge arw-decision-badge--@item.DecisionCode!.ToLower()">
+                                        <i class="bi @DecisionIcon(item.DecisionCode)" aria-hidden="true"></i>
+                                        @item.DecisionCode
+                                    </span>
+                                    <span class="arw-reviewed-meta">
+                                        @item.ReviewedByFullName · @item.ReviewedDateUtc?.ToString("dd MMM yyyy")
+                                    </span>
+                                </div>
+                            }
+                        </div>
+
+                        <!-- Card footer -->
+                        <div class="arw-card-footer">
+                            @if (isPending)
+                            {
+                                <button class="arw-action-btn arw-action-btn--keep"
+                                        @onclick='() => OpenDecision(item, "Keep")'>
+                                    <i class="bi bi-check-circle" aria-hidden="true"></i>
+                                    Keep
+                                </button>
+                                <button class="arw-action-btn arw-action-btn--remove"
+                                        @onclick='() => OpenDecision(item, "Remove")'>
+                                    <i class="bi bi-x-circle" aria-hidden="true"></i>
+                                    Remove
+                                </button>
+                                <button class="arw-action-btn arw-action-btn--escalate"
+                                        @onclick='() => OpenDecision(item, "Escalate")'>
+                                    <i class="bi bi-arrow-up-circle" aria-hidden="true"></i>
+                                    Escalate
+                                </button>
+                            }
+                            else
+                            {
+                                <button class="arw-action-btn arw-action-btn--change"
+                                        @onclick='() => OpenDecision(item, item.DecisionCode ?? "Keep")'>
+                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                    Change Decision
+                                </button>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    }
+</div>
+
+<!-- ── Decision dialog ────────────────────────────────────────────────────── -->
+<SfDialog Width="460px"
+          Visible="_dialogVisible"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CssClass="arw-dialog"
+          CloseOnEscape="true">
+    <DialogEvents Closed="OnDialogClosed" />
+    <DialogTemplates>
+        <Header>
+            <span class="arw-dlg-icon-wrap arw-dlg-icon-wrap--@_decisionMode.ToLower()" aria-hidden="true">
+                <i class="bi @DecisionIcon(_decisionMode)"></i>
+            </span>
+            @DecisionTitle
+        </Header>
+        <Content>
+            <div class="arw-dlg-body">
+                @if (!string.IsNullOrEmpty(_dialogError))
+                {
+                    <div class="arw-dlg-error">
+                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                        @_dialogError
+                    </div>
+                }
+                @if (_selectedItem is not null)
+                {
+                    <div class="arw-dlg-item-row">
+                        <span class="arw-avatar arw-avatar--sm">@UserInitials(_selectedItem.UserFullName)</span>
+                        <div>
+                            <div class="arw-dlg-user-name">@_selectedItem.UserFullName</div>
+                            <div class="arw-dlg-access">@_selectedItem.AccessName</div>
+                        </div>
+                    </div>
+                }
+                <div class="arw-dlg-field">
+                    <label class="arw-dlg-label">
+                        Notes
+                        <span class="arw-optional">(optional)</span>
+                    </label>
+                    <textarea class="arw-dlg-textarea"
+                              rows="3"
+                              placeholder="Add any notes or justification for this decision…"
+                              @bind="_notes"></textarea>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="arw-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseDialog" disabled="@_processing">Cancel</button>
+                <button class="@DecisionButtonClass" @onclick="SubmitDecisionAsync" disabled="@_processing">
+                    @if (_processing)
+                    {
+                        <span class="um-spin" aria-hidden="true"></span>
+                        <span>Saving…</span>
+                    }
+                    else
+                    {
+                        <i class="bi @DecisionIcon(_decisionMode)" aria-hidden="true"></i>
+                        <span>@DecisionTitle</span>
+                    }
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Toast ─────────────────────────────────────────────────────────────── -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    // ── Constants ──────────────────────────────────────────────────────────────
+    private readonly Guid _currentUserId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private bool                       _loading  = true;
+    private AccessReviewCampaignDto?   _campaign = null;
+    private List<AccessReviewItemDto>  _allItems = [];
+
+    // ── Tab state ──────────────────────────────────────────────────────────────
+    private string _activeTab = "All";
+
+    // ── Dialog state ───────────────────────────────────────────────────────────
+    private bool                 _dialogVisible = false;
+    private bool                 _processing    = false;
+    private string               _decisionMode  = string.Empty;
+    private string               _notes         = string.Empty;
+    private string               _dialogError   = string.Empty;
+    private AccessReviewItemDto? _selectedItem  = null;
+
+    // ── Computed ───────────────────────────────────────────────────────────────
+    private List<AccessReviewItemDto> VisibleItems => _activeTab switch
+    {
+        "Pending"  => _allItems.Where(i => i.DecisionCode is null).ToList(),
+        "Reviewed" => _allItems.Where(i => i.DecisionCode is not null).ToList(),
+        _          => _allItems,
+    };
+
+    private int ReviewedCount => _allItems.Count(i => i.DecisionCode is not null);
+    private int PendingCount  => _allItems.Count(i => i.DecisionCode is null);
+    private int KeepCount     => _allItems.Count(i => i.DecisionCode == "Keep");
+    private int RemoveCount   => _allItems.Count(i => i.DecisionCode == "Remove");
+    private int EscalateCount => _allItems.Count(i => i.DecisionCode == "Escalate");
+
+    // ── Decision computed ──────────────────────────────────────────────────────
+    private string DecisionTitle => _decisionMode switch
+    {
+        "Keep"     => "Keep Access",
+        "Remove"   => "Remove Access",
+        "Escalate" => "Escalate for Review",
+        _          => "Record Decision",
+    };
+
+    private string DecisionButtonClass => _decisionMode switch
+    {
+        "Keep"     => "um-btn um-btn-success",
+        "Remove"   => "um-btn um-btn-danger",
+        "Escalate" => "um-btn um-btn-warning",
+        _          => "um-btn um-btn-primary",
+    };
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var campaignTask = Api.GetAccessReviewCampaignByIdAsync(Id);
+            var itemsTask    = Api.GetAccessReviewItemsAsync(Id);
+            await Task.WhenAll(campaignTask, itemsTask);
+            _campaign = await campaignTask;
+            _allItems  = (await itemsTask)?.ToList() ?? [];
+        }
+        catch
+        {
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = "Failed to load workbench data.",
+                CssClass = "e-toast-danger",
+                Icon     = "bi bi-exclamation-triangle",
+            });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    // ── Tabs ───────────────────────────────────────────────────────────────────
+    private void SetTab(string tab)
+    {
+        _activeTab = tab;
+    }
+
+    private string TabClass(string tab) =>
+        "arw-tab" + (_activeTab == tab ? " arw-tab--active" : "");
+
+    // ── Decision dialog ────────────────────────────────────────────────────────
+    private void OpenDecision(AccessReviewItemDto item, string decision)
+    {
+        _selectedItem  = item;
+        _decisionMode  = decision;
+        _notes         = item.ReviewerNotes ?? string.Empty;
+        _dialogError   = string.Empty;
+        _dialogVisible = true;
+    }
+
+    private void CloseDialog()
+    {
+        _dialogVisible = false;
+        _selectedItem  = null;
+        _decisionMode  = string.Empty;
+        _notes         = string.Empty;
+        _dialogError   = string.Empty;
+    }
+
+    private void OnDialogClosed() => CloseDialog();
+
+    private async Task SubmitDecisionAsync()
+    {
+        if (_selectedItem is null) return;
+        _processing  = true;
+        _dialogError = string.Empty;
+        try
+        {
+            await Api.SubmitReviewDecisionAsync(Id, _selectedItem.ReviewItemId, new SubmitReviewDecisionRequest
+            {
+                DecisionCode     = _decisionMode,
+                ReviewerNotes    = string.IsNullOrWhiteSpace(_notes) ? null : _notes.Trim(),
+                ReviewedByUserId = _currentUserId,
+            });
+            CloseDialog();
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = $"Decision recorded: {_decisionMode}.",
+                CssClass = "e-toast-success",
+                Icon     = "bi bi-check-circle",
+            });
+            await LoadAsync();
+        }
+        catch
+        {
+            _dialogError = "Failed to save the decision. Please try again.";
+        }
+        finally
+        {
+            _processing = false;
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    private static string UserInitials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "?";
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}".ToUpper()
+            : name[..Math.Min(2, name.Length)].ToUpper();
+    }
+
+    private static string AccessTypeIcon(string? code) => code switch
+    {
+        "Role"       => "bi-person-badge",
+        "Permission" => "bi-shield-check",
+        _            => "bi-key",
+    };
+
+    private static string DecisionIcon(string? decision) => decision switch
+    {
+        "Keep"     => "bi-check-circle",
+        "Remove"   => "bi-x-circle",
+        "Escalate" => "bi-arrow-up-circle",
+        _          => "bi-question-circle",
+    };
+}

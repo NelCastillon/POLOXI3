@@ -1,0 +1,464 @@
+@page "/governance/access-reviews/{Id:guid}"
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>@(_campaign?.CampaignName ?? "Campaign Detail")</PageTitle>
+
+<div class="arcd-shell">
+
+    @if (_loading)
+    {
+        <div class="arcd-loading">
+            <span class="um-spin" aria-hidden="true"></span>
+            Loading campaign…
+        </div>
+    }
+    else if (_campaign is null)
+    {
+        <div class="arcd-not-found">
+            <i class="bi bi-clipboard2-x arcd-not-found-icon" aria-hidden="true"></i>
+            <p>Campaign not found.</p>
+            <a href="/governance/access-reviews" class="um-btn um-btn-ghost">Back to Campaigns</a>
+        </div>
+    }
+    else
+    {
+        <!-- ── Header ──────────────────────────────────────────────────────── -->
+        <div class="arcd-header">
+            <div class="arcd-header-left">
+                <nav class="arcd-breadcrumb" aria-label="breadcrumb">
+                    <a href="/governance" class="arcd-bc-link">Governance</a>
+                    <span class="arcd-bc-sep" aria-hidden="true">›</span>
+                    <a href="/governance/access-reviews" class="arcd-bc-link">Access Reviews</a>
+                    <span class="arcd-bc-sep" aria-hidden="true">›</span>
+                    <span class="arcd-bc-current">@_campaign.CampaignName</span>
+                </nav>
+                <div class="arcd-title-row">
+                    <h1 class="arcd-title">@_campaign.CampaignName</h1>
+                    <span class="arcd-status-badge arcd-status-badge--@_campaign.StatusCode.ToLower()">@_campaign.StatusCode</span>
+                </div>
+                @if (!string.IsNullOrEmpty(_campaign.Description))
+                {
+                    <p class="arcd-description">@_campaign.Description</p>
+                }
+            </div>
+            <div class="arcd-header-right">
+                @if (_campaign.StatusCode == "Draft")
+                {
+                    <a href="/governance/access-reviews/@_campaign.CampaignId/edit"
+                       class="um-btn um-btn-ghost um-btn-sm">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                        Edit
+                    </a>
+                    <button class="um-btn um-btn-success um-btn-sm"
+                            @onclick='() => OpenStatusChange("Activate")'>
+                        <i class="bi bi-play-circle" aria-hidden="true"></i>
+                        Activate
+                    </button>
+                }
+                @if (_campaign.StatusCode == "Active")
+                {
+                    <a href="/governance/access-reviews/@_campaign.CampaignId/review"
+                       class="um-btn um-btn-primary um-btn-sm">
+                        <i class="bi bi-clipboard2-check" aria-hidden="true"></i>
+                        Open Workbench
+                    </a>
+                    <button class="um-btn um-btn-ghost um-btn-sm"
+                            @onclick='() => OpenStatusChange("Complete")'>
+                        <i class="bi bi-check-circle" aria-hidden="true"></i>
+                        Complete
+                    </button>
+                }
+                @if (_campaign.StatusCode is "Draft" or "Active")
+                {
+                    <button class="um-btn um-btn-danger um-btn-sm"
+                            @onclick='() => OpenStatusChange("Cancel")'>
+                        <i class="bi bi-x-circle" aria-hidden="true"></i>
+                        Cancel
+                    </button>
+                }
+            </div>
+        </div>
+
+        <!-- ── Info card ───────────────────────────────────────────────────── -->
+        <div class="arcd-info-card">
+            <div class="arcd-info-row">
+                <div class="arcd-info-item">
+                    <span class="arcd-info-label">Scope</span>
+                    <span class="arcd-info-value">
+                        @if (_campaign.ScopeTypeCode == "ByRole")
+                        {
+                            <span class="arcd-scope-badge arcd-scope-badge--role">
+                                <i class="bi bi-person-badge" aria-hidden="true"></i>
+                                @(_campaign.ScopeReferenceName ?? "Role")
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="arcd-scope-badge arcd-scope-badge--all">
+                                <i class="bi bi-people" aria-hidden="true"></i>
+                                All Users
+                            </span>
+                        }
+                    </span>
+                </div>
+                <div class="arcd-info-item">
+                    <span class="arcd-info-label">Reviewer</span>
+                    <span class="arcd-info-value">@_campaign.ReviewerFullName</span>
+                </div>
+                <div class="arcd-info-item">
+                    <span class="arcd-info-label">Start</span>
+                    <span class="arcd-info-value">@_campaign.StartDateUtc.ToString("dd MMM yyyy")</span>
+                </div>
+                <div class="arcd-info-item">
+                    <span class="arcd-info-label">End</span>
+                    <span class="arcd-info-value @(_campaign.StatusCode == "Active" && _campaign.EndDateUtc < DateTime.UtcNow ? "arcd-overdue" : "")">
+                        @_campaign.EndDateUtc.ToString("dd MMM yyyy")
+                        @if (_campaign.StatusCode == "Active" && _campaign.EndDateUtc < DateTime.UtcNow)
+                        {
+                            <span class="arcd-overdue-tag">Overdue</span>
+                        }
+                    </span>
+                </div>
+                <div class="arcd-info-item">
+                    <span class="arcd-info-label">Created By</span>
+                    <span class="arcd-info-value">@_campaign.CreatedByFullName</span>
+                </div>
+                <div class="arcd-info-item">
+                    <span class="arcd-info-label">Created</span>
+                    <span class="arcd-info-value">@_campaign.CreatedDateUtc.ToString("dd MMM yyyy")</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── KPI strip ───────────────────────────────────────────────────── -->
+        <div class="arcd-kpi-strip">
+            <div class="arcd-kpi">
+                <span class="arcd-kpi-value">@_campaign.TotalItemCount</span>
+                <span class="arcd-kpi-label">Total</span>
+            </div>
+            <div class="arcd-kpi arcd-kpi--reviewed">
+                <span class="arcd-kpi-value">@_campaign.ReviewedItemCount</span>
+                <span class="arcd-kpi-label">Reviewed</span>
+            </div>
+            <div class="arcd-kpi arcd-kpi--keep">
+                <span class="arcd-kpi-value">@_campaign.KeepCount</span>
+                <span class="arcd-kpi-label">Keep</span>
+            </div>
+            <div class="arcd-kpi arcd-kpi--remove">
+                <span class="arcd-kpi-value">@_campaign.RemoveCount</span>
+                <span class="arcd-kpi-label">Remove</span>
+            </div>
+            <div class="arcd-kpi arcd-kpi--escalate">
+                <span class="arcd-kpi-value">@_campaign.EscalateCount</span>
+                <span class="arcd-kpi-label">Escalate</span>
+            </div>
+            <div class="arcd-kpi arcd-kpi--pending">
+                <span class="arcd-kpi-value">@(_campaign.TotalItemCount - _campaign.ReviewedItemCount)</span>
+                <span class="arcd-kpi-label">Pending</span>
+            </div>
+        </div>
+
+        <!-- ── Progress bar ────────────────────────────────────────────────── -->
+        @if (_campaign.TotalItemCount > 0)
+        {
+            var total    = (double)_campaign.TotalItemCount;
+            var keepPct  = _campaign.KeepCount     / total * 100;
+            var remPct   = _campaign.RemoveCount   / total * 100;
+            var escPct   = _campaign.EscalateCount / total * 100;
+            var donePct  = (int)Math.Round((_campaign.ReviewedItemCount / total) * 100);
+            <div class="arcd-prog-wrap">
+                <div class="arcd-prog-bar">
+                    <div class="arcd-prog-seg arcd-prog-seg--keep"     style="width:@keepPct.ToString("F1")%"></div>
+                    <div class="arcd-prog-seg arcd-prog-seg--remove"   style="width:@remPct.ToString("F1")%"></div>
+                    <div class="arcd-prog-seg arcd-prog-seg--escalate" style="width:@escPct.ToString("F1")%"></div>
+                </div>
+                <span class="arcd-prog-label">@donePct% complete</span>
+            </div>
+        }
+
+        <!-- ── Items table ─────────────────────────────────────────────────── -->
+        <div class="arcd-section-title-row">
+            <h2 class="arcd-section-heading">Review Items</h2>
+            <span class="arcd-items-count">@_items.Count items</span>
+        </div>
+
+        @if (_items.Count == 0)
+        {
+            <div class="arcd-empty-items">
+                <i class="bi bi-inbox arcd-empty-icon" aria-hidden="true"></i>
+                <p>No items in this campaign yet.</p>
+            </div>
+        }
+        else
+        {
+            <div class="arcd-table-wrap">
+                <table class="arcd-table">
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Access Type</th>
+                            <th>Access Name</th>
+                            <th>Risk</th>
+                            <th>Decision</th>
+                            <th>Notes</th>
+                            <th>Reviewed</th>
+                            <th>Reviewed By</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in _items)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="arcd-user-cell">
+                                        <span class="arcd-avatar">@Initials(item.UserFullName)</span>
+                                        <div>
+                                            <div class="arcd-user-name">@item.UserFullName</div>
+                                            <div class="arcd-user-email">@item.UserEmail</div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="arcd-type-badge arcd-type-badge--@item.AccessTypeCode.ToLower()">
+                                        <i class="bi @AccessTypeIcon(item.AccessTypeCode)" aria-hidden="true"></i>
+                                        @item.AccessTypeCode
+                                    </span>
+                                </td>
+                                <td class="arcd-access-name">@item.AccessName</td>
+                                <td>
+                                    @if (!string.IsNullOrEmpty(item.RiskLevel))
+                                    {
+                                        <span class="arcd-risk-badge arcd-risk-badge--@item.RiskLevel.ToLower()">@item.RiskLevel</span>
+                                    }
+                                </td>
+                                <td>
+                                    <span class="arcd-decision-badge arcd-decision-badge--@(item.DecisionCode?.ToLower() ?? "pending")">
+                                        @(item.DecisionCode ?? "Pending")
+                                    </span>
+                                </td>
+                                <td class="arcd-notes">@item.ReviewerNotes</td>
+                                <td class="arcd-date">@(item.ReviewedDateUtc?.ToString("dd MMM yyyy") ?? "—")</td>
+                                <td class="arcd-reviewed-by">@item.ReviewedByFullName</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+</div>
+
+<!-- ── Status-change dialog ──────────────────────────────────────────────── -->
+<SfDialog Width="420px"
+          Visible="_dialogVisible"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CssClass="arcd-dialog"
+          CloseOnEscape="true">
+    <DialogEvents Closed="OnDialogClosed" />
+    <DialogTemplates>
+        <Header>
+            <span class="arcd-dlg-icon-wrap arcd-dlg-icon-wrap--@_actionMode.ToLower()" aria-hidden="true">
+                <i class="bi @ActionIcon"></i>
+            </span>
+            @ActionTitle
+        </Header>
+        <Content>
+            <div class="arcd-dlg-body">
+                @if (!string.IsNullOrEmpty(_dialogError))
+                {
+                    <div class="arcd-dlg-error">
+                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                        @_dialogError
+                    </div>
+                }
+                <p class="arcd-dlg-confirm-msg">
+                    @ActionConfirmText
+                    @if (_campaign is not null) { <strong>@_campaign.CampaignName</strong> } <span>?</span>
+                </p>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="arcd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseDialog" disabled="@_processing">Cancel</button>
+                <button class="@ActionButtonClass" @onclick="ExecuteStatusChangeAsync" disabled="@_processing">
+                    @if (_processing)
+                    {
+                        <span class="um-spin" aria-hidden="true"></span>
+                        <span>Processing…</span>
+                    }
+                    else
+                    {
+                        <i class="bi @ActionIcon" aria-hidden="true"></i>
+                        <span>@ActionTitle</span>
+                    }
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Toast ─────────────────────────────────────────────────────────────── -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    // ── Constants ──────────────────────────────────────────────────────────────
+    private readonly Guid _currentUserId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private bool _loading = true;
+    private AccessReviewCampaignDto?         _campaign = null;
+    private List<AccessReviewItemDto>         _items    = [];
+
+    // ── Dialog state ───────────────────────────────────────────────────────────
+    private bool   _dialogVisible = false;
+    private bool   _processing    = false;
+    private string _actionMode    = string.Empty;
+    private string _dialogError   = string.Empty;
+
+    // ── Action computed ────────────────────────────────────────────────────────
+    private string ActionTitle => _actionMode switch
+    {
+        "Activate" => "Activate Campaign",
+        "Complete" => "Complete Campaign",
+        "Cancel"   => "Cancel Campaign",
+        _          => string.Empty,
+    };
+
+    private string ActionIcon => _actionMode switch
+    {
+        "Activate" => "bi-play-circle",
+        "Complete" => "bi-check-circle",
+        "Cancel"   => "bi-x-circle",
+        _          => "bi-question-circle",
+    };
+
+    private string ActionButtonClass => _actionMode switch
+    {
+        "Activate" => "um-btn um-btn-success",
+        "Complete" => "um-btn um-btn-primary",
+        "Cancel"   => "um-btn um-btn-danger",
+        _          => "um-btn um-btn-primary",
+    };
+
+    private string ActionConfirmText => _actionMode switch
+    {
+        "Activate" => "Are you sure you want to activate",
+        "Complete" => "Are you sure you want to complete",
+        "Cancel"   => "Are you sure you want to cancel",
+        _          => "Confirm action on",
+    };
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var campaignTask = Api.GetAccessReviewCampaignByIdAsync(Id);
+            var itemsTask    = Api.GetAccessReviewItemsAsync(Id);
+            await Task.WhenAll(campaignTask, itemsTask);
+            _campaign = await campaignTask;
+            _items    = (await itemsTask)?.ToList() ?? [];
+        }
+        catch
+        {
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = "Failed to load campaign details.",
+                CssClass = "e-toast-danger",
+                Icon     = "bi bi-exclamation-triangle",
+            });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    // ── Status change dialog ───────────────────────────────────────────────────
+    private void OpenStatusChange(string actionMode)
+    {
+        _actionMode    = actionMode;
+        _dialogError   = string.Empty;
+        _dialogVisible = true;
+    }
+
+    private void CloseDialog()
+    {
+        _dialogVisible = false;
+        _actionMode    = string.Empty;
+        _dialogError   = string.Empty;
+    }
+
+    private void OnDialogClosed() => CloseDialog();
+
+    private async Task ExecuteStatusChangeAsync()
+    {
+        _processing  = true;
+        _dialogError = string.Empty;
+        try
+        {
+            switch (_actionMode)
+            {
+                case "Activate":
+                    await Api.ActivateAccessReviewCampaignAsync(Id, _currentUserId);
+                    break;
+                case "Complete":
+                    await Api.CompleteAccessReviewCampaignAsync(Id, _currentUserId);
+                    break;
+                case "Cancel":
+                    await Api.CancelAccessReviewCampaignAsync(Id, _currentUserId);
+                    break;
+            }
+            CloseDialog();
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = $"Campaign {_actionMode.ToLower()}d successfully.",
+                CssClass = "e-toast-success",
+                Icon     = "bi bi-check-circle",
+            });
+            await LoadAsync();
+        }
+        catch
+        {
+            _dialogError = $"Failed to {_actionMode.ToLower()} the campaign. Please try again.";
+        }
+        finally
+        {
+            _processing = false;
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    private static string Initials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "?";
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}".ToUpper()
+            : name[..Math.Min(2, name.Length)].ToUpper();
+    }
+
+    private static string AccessTypeIcon(string? code) => code switch
+    {
+        "Role"       => "bi-person-badge",
+        "Permission" => "bi-shield-check",
+        _            => "bi-key",
+    };
+}

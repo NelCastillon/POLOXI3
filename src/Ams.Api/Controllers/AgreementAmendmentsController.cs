@@ -1,0 +1,31 @@
+using Ams.Application.Abstractions.Services;
+using Ams.Application.Features.Operations;
+using Microsoft.AspNetCore.Mvc;
+
+namespace Ams.Api.Controllers;
+
+[ApiController]
+[Route("api/ops/amendments")]
+public sealed class AgreementAmendmentsController : ControllerBase
+{
+    private readonly IAgreementAmendmentService _service;
+    public AgreementAmendmentsController(IAgreementAmendmentService service) => _service = service;
+
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
+    {
+        var item = await _service.GetByIdAsync(id, cancellationToken);
+        return item is null ? NotFound() : Ok(item);
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] Guid? agreementId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
+        => Ok(await _service.SearchAsync(tenantId, agreementId, searchTerm, pageNumber, pageSize, cancellationToken));
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateAgreementAmendmentRequest request, CancellationToken cancellationToken)
+    {
+        var id = await _service.CreateAsync(request, cancellationToken);
+        return Ok(id);
+    }
+}

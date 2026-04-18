@@ -1,0 +1,260 @@
+using Ams.Application;
+using Ams.Application.Abstractions.Persistence;
+using Ams.Application.Abstractions.Services;
+using Ams.Infrastructure.Configuration;
+using Ams.Infrastructure.Persistence;
+using Ams.Infrastructure.Persistence.ConnectionFactory;
+using Ams.Infrastructure.Persistence.Repositories;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Ams.Infrastructure.DependencyInjection;
+
+public static class ServiceCollectionExtensions
+{
+    public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
+    {
+        services.Configure<SqlOptions>(options =>
+        {
+            options.ConnectionString = configuration.GetConnectionString("DefaultConnection") ?? string.Empty;
+        });
+
+        services.AddScoped<ISqlConnectionFactory, SqlConnectionFactory>();
+        services.AddTransient<DatabaseMigrator>();
+
+        // ── Existing repositories ────────────────────────────────────
+        services.AddScoped<ILeadRepository, LeadRepository>();
+        services.AddScoped<IAccountRepository, AccountRepository>();
+        services.AddScoped<IOpportunityRepository, OpportunityRepository>();
+        services.AddScoped<IAgreementRepository, AgreementRepository>();
+        services.AddScoped<IInvoiceRepository, InvoiceRepository>();
+        services.AddScoped<ICommissionPlanRepository, CommissionPlanRepository>();
+        services.AddScoped<IWorkflowRepository, WorkflowRepository>();
+        services.AddScoped<IAuditRepository, AuditRepository>();
+        services.AddScoped<IAssistantRepository, AssistantRepository>();
+
+        // ── New repositories ─────────────────────────────────────────
+        services.AddScoped<ITenantRepository, TenantRepository>();
+        services.AddScoped<IBranchRepository, BranchRepository>();
+        services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IRoleRepository, RoleRepository>();
+        services.AddScoped<IContactRepository, ContactRepository>();
+        services.AddScoped<IEngagementRepository, EngagementRepository>();
+        services.AddScoped<ITimeEntryRepository, TimeEntryRepository>();
+        services.AddScoped<IExpenseRepository, ExpenseRepository>();
+        services.AddScoped<IPaymentRepository, PaymentRepository>();
+        services.AddScoped<IGLAccountRepository, GLAccountRepository>();
+        services.AddScoped<IJournalEntryRepository, JournalEntryRepository>();
+        services.AddScoped<ICommissionPayeeRepository, CommissionPayeeRepository>();
+        services.AddScoped<ICommissionTransactionRepository, CommissionTransactionRepository>();
+        services.AddScoped<ICommissionPayoutRepository, CommissionPayoutRepository>();
+        services.AddScoped<IDocumentRepository, DocumentRepository>();
+        services.AddScoped<IAssistantMessageRepository, AssistantMessageRepository>();
+        services.AddScoped<IDashboardRepository, DashboardRepository>();
+
+        // ── Existing services ────────────────────────────────────────
+        services.AddScoped<ILeadService, LeadService>();
+        services.AddScoped<IAccountService, AccountService>();
+        services.AddScoped<IOpportunityService, OpportunityService>();
+        services.AddScoped<IAgreementService, AgreementService>();
+        services.AddScoped<IInvoiceService, InvoiceService>();
+        services.AddScoped<ICommissionPlanService, CommissionPlanService>();
+        services.AddScoped<IWorkflowService, WorkflowService>();
+        services.AddScoped<IAuditService, AuditService>();
+        services.AddScoped<IAssistantService, AssistantService>();
+
+        // ── New services ─────────────────────────────────────────────
+        services.AddScoped<ITenantService, TenantService>();
+        services.AddScoped<IBranchService, BranchService>();
+        services.AddScoped<IUserService, UserService>();
+        services.AddScoped<IRoleService, RoleService>();
+        services.AddScoped<IContactService, ContactService>();
+        services.AddScoped<IEngagementService, EngagementService>();
+        services.AddScoped<ITimeEntryService, TimeEntryService>();
+        services.AddScoped<IExpenseService, ExpenseService>();
+        services.AddScoped<IPaymentService, PaymentService>();
+        services.AddScoped<IFinanceService, FinanceService>();
+        services.AddScoped<ICommissionService, CommissionService>();
+        services.AddScoped<IDocumentService, DocumentService>();
+        services.AddScoped<IDashboardService, DashboardService>();
+
+        // ── Platform Core engines ────────────────────────────────────
+        services.AddScoped<ITenantBrandingRepository, TenantBrandingRepository>();
+        services.AddScoped<INotificationRepository, NotificationRepository>();
+        services.AddScoped<IReportRepository, ReportRepository>();
+        services.AddScoped<IConfigurationRepository, ConfigurationRepository>();
+        services.AddScoped<ISupportedLocaleRepository, SupportedLocaleRepository>();
+        services.AddScoped<IWorkflowDefinitionRepository, WorkflowDefinitionRepository>();
+        services.AddScoped<IUserSessionRepository, UserSessionRepository>();
+        services.AddScoped<ISecurityAuditRepository, SecurityAuditRepository>();
+
+        services.AddScoped<ITenantBrandingService, TenantBrandingService>();
+        services.AddScoped<INotificationService, NotificationService>();
+        services.AddScoped<IReportService, ReportService>();
+        services.AddScoped<IConfigurationService, ConfigurationService>();
+        services.AddScoped<ISupportedLocaleService, SupportedLocaleService>();
+        services.AddScoped<IWorkflowDefinitionService, WorkflowDefinitionService>();
+        services.AddScoped<IUserSessionService, UserSessionService>();
+        services.AddScoped<ISecurityAuditService, SecurityAuditService>();
+
+        // ── IAM extended engines ─────────────────────────────────────
+        services.AddScoped<IUserGroupRepository, UserGroupRepository>();
+        services.AddScoped<IExternalUserProfileRepository, ExternalUserProfileRepository>();
+        services.AddScoped<IUserProfileRepository, UserProfileRepository>();
+        services.AddScoped<ISsoConfigurationRepository, SsoConfigurationRepository>();
+        services.AddScoped<IMfaDeviceRepository, MfaDeviceRepository>();
+        services.AddScoped<ITrustedDeviceRepository, TrustedDeviceRepository>();
+        services.AddScoped<IIamPolicyRepository, IamPolicyRepository>();
+        services.AddScoped<IPrivilegedAccessRepository, PrivilegedAccessRepository>();
+        services.AddScoped<ISodRuleRepository, SodRuleRepository>();
+        services.AddScoped<IAccessReviewRepository, AccessReviewRepository>();
+
+        services.AddScoped<IUserGroupService, UserGroupService>();
+        services.AddScoped<IExternalUserProfileService, ExternalUserProfileService>();
+        services.AddScoped<IUserProfileService, UserProfileService>();
+        services.AddScoped<ISsoConfigurationService, SsoConfigurationService>();
+        services.AddScoped<IMfaDeviceService, MfaDeviceService>();
+        services.AddScoped<ITrustedDeviceService, TrustedDeviceService>();
+        services.AddScoped<IIamPolicyService, IamPolicyService>();
+        services.AddScoped<IPrivilegedAccessService, PrivilegedAccessService>();
+        services.AddScoped<ISodRuleService, SodRuleService>();
+        services.AddScoped<ISodConflictRepository, SodConflictRepository>();
+        services.AddScoped<ISodConflictService, SodConflictService>();
+        services.AddScoped<IAccessReviewService, AccessReviewService>();
+        services.AddScoped<IPermissionRepository, PermissionRepository>();
+        services.AddScoped<IUserRoleRepository, UserRoleRepository>();
+        services.AddScoped<IUserScopeRepository, UserScopeRepository>();
+        services.AddScoped<ISecurityPolicyRepository, SecurityPolicyRepository>();
+        services.AddScoped<IRoleBundleRepository, RoleBundleRepository>();
+        services.AddScoped<IUserPermissionRepository, UserPermissionRepository>();
+        services.AddScoped<IPermissionService, PermissionService>();
+        services.AddScoped<IUserRoleService, UserRoleService>();
+        services.AddScoped<IUserScopeService, UserScopeService>();
+        services.AddScoped<ISecurityPolicyService, SecurityPolicyService>();
+        services.AddScoped<IRoleBundleService, RoleBundleService>();
+        services.AddScoped<IUserPermissionService, UserPermissionService>();
+
+        // ── Access Governance ────────────────────────────────────────
+        services.AddScoped<IAccessRequestRepository, AccessRequestRepository>();
+        services.AddScoped<IAccessRequestService, AccessRequestService>();
+
+        // ── CRM and Sales engines ────────────────────────────────────
+        services.AddScoped<IQuoteRepository, QuoteRepository>();
+        services.AddScoped<ILeadActivityRepository, LeadActivityRepository>();
+        services.AddScoped<IPricingRuleRepository, PricingRuleRepository>();
+        services.AddScoped<IForecastRepository, ForecastRepository>();
+
+        services.AddScoped<IQuoteService, QuoteService>();
+        services.AddScoped<ILeadActivityService, LeadActivityService>();
+        services.AddScoped<IPricingRuleService, PricingRuleService>();
+        services.AddScoped<IForecastService, ForecastService>();
+
+        // ── Client and Account engines ───────────────────────────────
+        services.AddScoped<IAccountNoteRepository, AccountNoteRepository>();
+        services.AddScoped<IAccountSegmentRepository, AccountSegmentRepository>();
+        services.AddScoped<IPortalInviteRepository, PortalInviteRepository>();
+        services.AddScoped<IAccountOwnerHistoryRepository, AccountOwnerHistoryRepository>();
+
+        services.AddScoped<IAccountNoteService, AccountNoteService>();
+        services.AddScoped<IAccountSegmentService, AccountSegmentService>();
+        services.AddScoped<IPortalInviteService, PortalInviteService>();
+        services.AddScoped<IAccountOwnerHistoryService, AccountOwnerHistoryService>();
+
+        // ── Operations extended engines ──────────────────────────────
+        services.AddScoped<IEngagementMilestoneRepository, EngagementMilestoneRepository>();
+        services.AddScoped<IServiceIssueRepository, ServiceIssueRepository>();
+        services.AddScoped<IAgreementAmendmentRepository, AgreementAmendmentRepository>();
+        services.AddScoped<IAgreementRenewalRepository, AgreementRenewalRepository>();
+        services.AddScoped<IServiceRequestRepository, ServiceRequestRepository>();
+        services.AddScoped<IOperationalActivityRepository, OperationalActivityRepository>();
+
+        services.AddScoped<IEngagementMilestoneService, EngagementMilestoneService>();
+        services.AddScoped<IServiceIssueService, ServiceIssueService>();
+        services.AddScoped<IAgreementAmendmentService, AgreementAmendmentService>();
+        services.AddScoped<IAgreementRenewalService, AgreementRenewalService>();
+        services.AddScoped<IServiceRequestService, ServiceRequestService>();
+        services.AddScoped<IOperationalActivityService, OperationalActivityService>();
+
+        // ── Billing extended engines ─────────────────────────────────
+        services.AddScoped<IRateCardRepository, RateCardRepository>();
+        services.AddScoped<IRateCardLineRepository, RateCardLineRepository>();
+        services.AddScoped<IPrebillBatchRepository, PrebillBatchRepository>();
+        services.AddScoped<IInvoiceLineRepository, InvoiceLineRepository>();
+        services.AddScoped<IRecurringBillingScheduleRepository, RecurringBillingScheduleRepository>();
+        services.AddScoped<IMilestoneBillingLinkRepository, MilestoneBillingLinkRepository>();
+        services.AddScoped<IRetainerAccountRepository, RetainerAccountRepository>();
+        services.AddScoped<IRetainerDrawdownRepository, RetainerDrawdownRepository>();
+        services.AddScoped<IBillingAdjustmentRepository, BillingAdjustmentRepository>();
+        services.AddScoped<IArAgingSnapshotRepository, ArAgingSnapshotRepository>();
+        services.AddScoped<IDelinquencyFlagRepository, DelinquencyFlagRepository>();
+        services.AddScoped<ICollectionsNoteRepository, CollectionsNoteRepository>();
+
+        services.AddScoped<IRateCardService, RateCardService>();
+        services.AddScoped<IRateCardLineService, RateCardLineService>();
+        services.AddScoped<IPrebillBatchService, PrebillBatchService>();
+        services.AddScoped<IInvoiceLineService, InvoiceLineService>();
+        services.AddScoped<IRecurringBillingScheduleService, RecurringBillingScheduleService>();
+        services.AddScoped<IMilestoneBillingLinkService, MilestoneBillingLinkService>();
+        services.AddScoped<IRetainerAccountService, RetainerAccountService>();
+        services.AddScoped<IRetainerDrawdownService, RetainerDrawdownService>();
+        services.AddScoped<IBillingAdjustmentService, BillingAdjustmentService>();
+        services.AddScoped<IArAgingSnapshotService, ArAgingSnapshotService>();
+        services.AddScoped<IDelinquencyFlagService, DelinquencyFlagService>();
+        services.AddScoped<ICollectionsNoteService, CollectionsNoteService>();
+
+        // ── Finance extended engines ──────────────────────────
+        services.AddScoped<IVendorRepository, VendorRepository>();
+        services.AddScoped<IApInvoiceRepository, ApInvoiceRepository>();
+        services.AddScoped<IApInvoiceLineRepository, ApInvoiceLineRepository>();
+        services.AddScoped<IApPaymentRepository, ApPaymentRepository>();
+        services.AddScoped<IAccountingPeriodRepository, AccountingPeriodRepository>();
+        services.AddScoped<IPeriodCloseEntryRepository, PeriodCloseEntryRepository>();
+        services.AddScoped<IDeferredRevenueScheduleRepository, DeferredRevenueScheduleRepository>();
+        services.AddScoped<IDeferredRevenueRecognitionRepository, DeferredRevenueRecognitionRepository>();
+        services.AddScoped<IBadDebtEntryRepository, BadDebtEntryRepository>();
+        services.AddScoped<ICashReceiptEntryRepository, CashReceiptEntryRepository>();
+        services.AddScoped<ITrialBalanceSnapshotRepository, TrialBalanceSnapshotRepository>();
+        services.AddScoped<IBankReconciliationRepository, BankReconciliationRepository>();
+        services.AddScoped<IJournalEntryLineRepository, JournalEntryLineRepository>();
+        services.AddScoped<IVendorService, VendorService>();
+        services.AddScoped<IApInvoiceService, ApInvoiceService>();
+        services.AddScoped<IApInvoiceLineService, ApInvoiceLineService>();
+        services.AddScoped<IApPaymentService, ApPaymentService>();
+        services.AddScoped<IAccountingPeriodService, AccountingPeriodService>();
+        services.AddScoped<IPeriodCloseEntryService, PeriodCloseEntryService>();
+        services.AddScoped<IDeferredRevenueScheduleService, DeferredRevenueScheduleService>();
+        services.AddScoped<IDeferredRevenueRecognitionService, DeferredRevenueRecognitionService>();
+        services.AddScoped<IBadDebtEntryService, BadDebtEntryService>();
+        services.AddScoped<ICashReceiptEntryService, CashReceiptEntryService>();
+        services.AddScoped<ITrialBalanceSnapshotService, TrialBalanceSnapshotService>();
+        services.AddScoped<IBankReconciliationService, BankReconciliationService>();
+        services.AddScoped<IJournalEntryLineService, JournalEntryLineService>();
+
+        // ── Commission extended engines ──────────────────────────
+        services.AddScoped<ICommissionPlanVersionRepository, CommissionPlanVersionRepository>();
+        services.AddScoped<ICommissionSplitRuleRepository, CommissionSplitRuleRepository>();
+        services.AddScoped<ICommissionCalculationResultRepository, CommissionCalculationResultRepository>();
+        services.AddScoped<ICommissionClawbackRepository, CommissionClawbackRepository>();
+        services.AddScoped<ICommissionPayoutBatchRepository, CommissionPayoutBatchRepository>();
+        services.AddScoped<ICommissionDisputeRepository, CommissionDisputeRepository>();
+        services.AddScoped<ICommissionPayoutStatementRepository, CommissionPayoutStatementRepository>();
+        services.AddScoped<ICommissionAccrualEntryRepository, CommissionAccrualEntryRepository>();
+
+        services.AddScoped<ICommissionPlanVersionService, CommissionPlanVersionService>();
+        services.AddScoped<ICommissionSplitRuleService, CommissionSplitRuleService>();
+        services.AddScoped<ICommissionCalculationResultService, CommissionCalculationResultService>();
+        services.AddScoped<ICommissionClawbackService, CommissionClawbackService>();
+        services.AddScoped<ICommissionPayoutBatchService, CommissionPayoutBatchService>();
+        services.AddScoped<ICommissionDisputeService, CommissionDisputeService>();
+        services.AddScoped<ICommissionPayoutStatementService, CommissionPayoutStatementService>();
+        services.AddScoped<ICommissionAccrualEntryService, CommissionAccrualEntryService>();
+
+        // ── Compliance engines ───────────────────────────────────────────────
+        services.AddScoped<IPolicyDocumentRepository, PolicyDocumentRepository>();
+        services.AddScoped<IPolicyDocumentService, PolicyDocumentService>();
+        services.AddScoped<IAcknowledgementRepository, AcknowledgementRepository>();
+        services.AddScoped<IAcknowledgementService, AcknowledgementService>();
+
+        return services;
+    }
+}

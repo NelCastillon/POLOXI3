@@ -1,0 +1,274 @@
+@*
+    TrustedDeviceDetailDrawer — right-side drawer for viewing device detail and submitting risk reviews.
+    DrawerMode: "detail" = read-only info panel | "risk" = risk review with editable notes
+    Usage: <TrustedDeviceDetailDrawer @bind-Visible="_show" Device="_device" DrawerMode="_mode"
+                                      OnRevokeRequested="OpenRevoke" OnReviewSaved="HandleSavedAsync" />
+*@
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Security
+@inject ApiClient Api
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppCrudDrawer @bind-Visible="_open"
+               Title="@DrawerTitle"
+               Icon="@DrawerIcon"
+               Width="520px"
+               IsBusy="_busy"
+               OnClose="HandleCloseAsync">
+    <Footer>
+        <button class="um-btn um-btn-ghost" @onclick="HandleCloseAsync" disabled="@_busy">Close</button>
+        @if (DrawerMode == "risk" && Device is not null)
+        {
+            <button class="um-btn um-btn-primary" @onclick="SaveReviewAsync" disabled="@_busy">
+                @if (_busy) { <span class="um-spin" aria-hidden="true"></span> }
+                Save Review
+            </button>
+        }
+        @if (DrawerMode == "detail" && Device is { IsActive: true })
+        {
+            <button class="um-btn um-btn-warning" @onclick="RequestRevoke" disabled="@_busy">
+                <i class="bi bi-shield-slash" aria-hidden="true"></i> Revoke
+            </button>
+        }
+    </Footer>
+    <Content>
+        @if (Device is null)
+        {
+            <div class="tdd-empty">No device selected.</div>
+        }
+        else
+        {
+            @if (!string.IsNullOrEmpty(_errorMsg))
+            {
+                <div class="tdd-error">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    @_errorMsg
+                </div>
+            }
+
+            <!-- Device identity header -->
+            <div class="tdd-device-header">
+                <span class="tdd-device-icon" aria-hidden="true">
+                    <i class="@DeviceIcon" aria-hidden="true"></i>
+                </span>
+                <div class="tdd-device-title">
+                    <div class="tdd-device-name">@Device.DeviceName</div>
+                    <div class="tdd-device-sub">@Device.BrowserName @(Device.OperatingSystem is not null ? $"— {Device.OperatingSystem}" : "")</div>
+                </div>
+                <AppStatusBadge Status="@(Device.IsActive ? "Active" : "Revoked")" />
+            </div>
+
+            @if (DrawerMode == "detail")
+            {
+                <!-- Device Info -->
+                <div class="tdd-section">
+                    <h4 class="tdd-section-title">Device Information</h4>
+                    <dl class="tdd-dl">
+                        <dt>Device Name</dt>    <dd>@Device.DeviceName</dd>
+                        <dt>Device Type</dt>    <dd>@(Device.DeviceTypeCode ?? "—")</dd>
+                        <dt>Browser</dt>        <dd>@(Device.BrowserName ?? "—")</dd>
+                        <dt>Operating System</dt><dd>@(Device.OperatingSystem ?? "—")</dd>
+                        <dt>IP Address</dt>     <dd>@(Device.IpAddress ?? "—")</dd>
+                        <dt>User Agent</dt>
+                        <dd class="tdd-truncate" title="@Device.UserAgent">
+                            @(Device.UserAgent?.Length > 80 ? Device.UserAgent[..80] + "…" : Device.UserAgent ?? "—")
+                        </dd>
+                        <dt>Fingerprint</dt>
+                        <dd class="tdd-mono" title="@Device.DeviceFingerprint">
+                            @(Device.DeviceFingerprint?.Length > 24 ? Device.DeviceFingerprint[..24] + "…" : Device.DeviceFingerprint ?? "—")
+                        </dd>
+                    </dl>
+                </div>
+
+                <!-- Trust timeline -->
+                <div class="tdd-section">
+                    <h4 class="tdd-section-title">Trust Timeline</h4>
+                    <dl class="tdd-dl">
+                        <dt>Trusted Since</dt>   <dd>@Device.TrustedDateUtc.ToString("f")</dd>
+                        <dt>Expires</dt>          <dd>@(Device.ExpiresDateUtc?.ToString("f") ?? "Never")</dd>
+                        <dt>Last Seen</dt>        <dd>@(Device.LastSeenDateUtc?.ToString("f") ?? "Never")</dd>
+                        @if (!Device.IsActive)
+                        {
+                            <dt>Revoked</dt>      <dd>@(Device.RevokedDateUtc?.ToString("f") ?? "—")</dd>
+                            <dt>Revoked By</dt>   <dd>@(Device.RevokedByUserName ?? "—")</dd>
+                            <dt>Reason</dt>       <dd>@(Device.RevokedReason ?? "—")</dd>
+                        }
+                    </dl>
+                </div>
+
+                <!-- Risk summary (read-only in detail mode) -->
+                <div class="tdd-section">
+                    <h4 class="tdd-section-title">Risk Summary</h4>
+                    <div class="tdd-risk-row">
+                        <span class="tdd-risk-label">Score</span>
+                        <span class="@RiskPillClass(Device.RiskScore)" title="Risk score: @Device.RiskScore">@Device.RiskScore</span>
+                        <span class="tdd-risk-level">@RiskLabel(Device.RiskScore)</span>
+                    </div>
+                    @if (!string.IsNullOrEmpty(Device.RiskFlags))
+                    {
+                        <div class="tdd-flag-list">
+                            @foreach (var flag in Device.RiskFlags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                            {
+                                <span class="tdd-flag-chip"><i class="bi bi-flag-fill" aria-hidden="true"></i> @flag</span>
+                            }
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(Device.RiskNotes))
+                    {
+                        <div class="tdd-risk-notes-readonly">@Device.RiskNotes</div>
+                    }
+                </div>
+
+                <!-- User -->
+                <div class="tdd-section">
+                    <h4 class="tdd-section-title">User</h4>
+                    <dl class="tdd-dl">
+                        <dt>Full Name</dt> <dd>@(Device.UserFullName ?? "—")</dd>
+                        <dt>Email</dt>     <dd>@(Device.Email ?? "—")</dd>
+                    </dl>
+                </div>
+            }
+
+            @if (DrawerMode == "risk")
+            {
+                <!-- Risk Review form -->
+                <div class="tdd-section">
+                    <h4 class="tdd-section-title">Risk Score</h4>
+                    <div class="tdd-risk-row">
+                        <span class="@RiskPillClass(Device.RiskScore)" title="Risk score: @Device.RiskScore">@Device.RiskScore</span>
+                        <span class="tdd-risk-level">@RiskLabel(Device.RiskScore)</span>
+                    </div>
+                    @if (!string.IsNullOrEmpty(Device.RiskFlags))
+                    {
+                        <div class="tdd-flag-list">
+                            @foreach (var flag in Device.RiskFlags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                            {
+                                <span class="tdd-flag-chip"><i class="bi bi-flag-fill" aria-hidden="true"></i> @flag</span>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="tdd-section">
+                    <h4 class="tdd-section-title">Review Notes</h4>
+                    <div class="tdd-field">
+                        <label class="tdd-label">Notes</label>
+                        <SfTextBox @bind-Value="_riskNotes"
+                                   Multiline="true"
+                                   Placeholder="Describe the risk assessment, findings, or any follow-up actions…"
+                                   HtmlAttributes="@(new Dictionary<string, object> { ["rows"] = "5" })" />
+                        <span class="tdd-hint">Notes are saved against this device and visible in the audit log.</span>
+                    </div>
+                </div>
+
+                <!-- Device context for reference -->
+                <div class="tdd-section">
+                    <h4 class="tdd-section-title">Device Context</h4>
+                    <dl class="tdd-dl">
+                        <dt>IP Address</dt>   <dd>@(Device.IpAddress ?? "—")</dd>
+                        <dt>Browser</dt>      <dd>@(Device.BrowserName ?? "—")</dd>
+                        <dt>OS</dt>           <dd>@(Device.OperatingSystem ?? "—")</dd>
+                        <dt>Trusted Since</dt><dd>@Device.TrustedDateUtc.ToString("f")</dd>
+                        <dt>Last Seen</dt>    <dd>@(Device.LastSeenDateUtc?.ToString("f") ?? "Never")</dd>
+                    </dl>
+                </div>
+            }
+        }
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+
+    [Parameter] public TrustedDeviceDto? Device { get; set; }
+    [Parameter] public string DrawerMode { get; set; } = "detail";
+
+    [Parameter] public EventCallback<TrustedDeviceDto> OnRevokeRequested { get; set; }
+    [Parameter] public EventCallback OnReviewSaved { get; set; }
+
+    private SfToast? _toast;
+    private bool     _open;
+    private bool     _busy;
+    private string   _errorMsg  = string.Empty;
+    private string   _riskNotes = string.Empty;
+
+    private string DrawerTitle => DrawerMode == "risk" ? "Risk Review" : "Device Detail";
+    private string DrawerIcon  => DrawerMode == "risk" ? "bi-flag"     : "bi-device-hdd";
+
+    private string DeviceIcon => Device?.DeviceTypeCode?.ToUpper() switch
+    {
+        "MOBILE"  => "bi bi-phone",
+        "TABLET"  => "bi bi-tablet",
+        "DESKTOP" => "bi bi-display",
+        _         => "bi bi-device-hdd",
+    };
+
+    protected override void OnParametersSet()
+    {
+        if (Visible != _open)
+        {
+            _open = Visible;
+            if (_open)
+            {
+                _errorMsg  = string.Empty;
+                _riskNotes = Device?.RiskNotes ?? string.Empty;
+            }
+        }
+    }
+
+    private async Task HandleCloseAsync()
+    {
+        _open = false;
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    private async Task RequestRevoke()
+    {
+        if (Device is null) return;
+        await HandleCloseAsync();
+        await OnRevokeRequested.InvokeAsync(Device);
+    }
+
+    private async Task SaveReviewAsync()
+    {
+        if (Device is null) return;
+        _errorMsg = string.Empty;
+        _busy = true;
+        try
+        {
+            await Api.SubmitRiskReviewAsync(Device.TrustedDeviceId, new RiskReviewRequest
+            {
+                TrustedDeviceId  = Device.TrustedDeviceId,
+                RiskNotes        = _riskNotes,
+                ReviewedByUserId = Guid.Empty,
+            });
+            await OnReviewSaved.InvokeAsync();
+        }
+        catch
+        {
+            _errorMsg = "Failed to save review. Please try again.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string RiskPillClass(int score) => score switch
+    {
+        <= 30 => "tdd-risk-pill tdd-risk-pill--low",
+        <= 70 => "tdd-risk-pill tdd-risk-pill--medium",
+        _     => "tdd-risk-pill tdd-risk-pill--high",
+    };
+
+    private static string RiskLabel(int score) => score switch
+    {
+        <= 30 => "Low Risk",
+        <= 70 => "Medium Risk",
+        _     => "High Risk",
+    };
+}

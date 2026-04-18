@@ -1,0 +1,518 @@
+@page "/security/trusted-devices"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Security
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Trusted Devices — Security</PageTitle>
+
+<AppPageHeader Title="Trusted Devices"
+               Subtitle="Review, revoke and risk-assess devices trusted for authentication"
+               Icon="bi-device-hdd">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="td-kpi-strip">
+    <div class="td-kpi-card td-kpi-card--total" role="button" tabindex="0" @onclick="() => ApplyKpi(0)">
+        <span class="td-kpi-icon td-kpi-icon--total"><i class="bi bi-device-hdd-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="td-kpi-value">@_totalCount</div>
+            <div class="td-kpi-label">Total Devices</div>
+        </div>
+        @if (_kpiActive == 0) { <span class="td-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass(1, "td-kpi-card--active")" role="button" tabindex="0" @onclick="() => ApplyKpi(1)">
+        <span class="td-kpi-icon td-kpi-icon--active"><i class="bi bi-shield-check-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="td-kpi-value">@_activeCount</div>
+            <div class="td-kpi-label">Active</div>
+        </div>
+        @if (_kpiActive == 1) { <span class="td-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass(2, "td-kpi-card--revoked")" role="button" tabindex="0" @onclick="() => ApplyKpi(2)">
+        <span class="td-kpi-icon td-kpi-icon--revoked"><i class="bi bi-shield-slash-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="td-kpi-value">@_revokedCount</div>
+            <div class="td-kpi-label">Revoked</div>
+        </div>
+        @if (_kpiActive == 2) { <span class="td-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass(3, "td-kpi-card--risk")" role="button" tabindex="0" @onclick="() => ApplyKpi(3)">
+        <span class="td-kpi-icon td-kpi-icon--risk"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="td-kpi-value">@_highRiskCount</div>
+            <div class="td-kpi-label">High Risk</div>
+        </div>
+        @if (_kpiActive == 3) { <span class="td-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search by user, device name, IP or browser…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_statusOptions"
+                        Placeholder="Status"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterStatus"
+                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_riskOptions"
+                        Placeholder="Risk"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterRisk"
+                        ValueChanged="@((string v) => { _filterRisk = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </Filters>
+    <Actions>
+        @if (_selected.Count > 0)
+        {
+            <span class="td-sel-count">
+                <i class="bi bi-check2-square" aria-hidden="true"></i> @_selected.Count selected
+            </span>
+            <button class="um-btn um-btn-sm um-btn-warning"
+                    @onclick="OpenRevokeSelected"
+                    title="Revoke selected devices">
+                <i class="bi bi-shield-slash" aria-hidden="true"></i> Revoke Selected
+            </button>
+        }
+    </Actions>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading trusted devices…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="TrustedDeviceDto"
+            DataSource="@_devices"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="56">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row"
+                               Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
+        <GridEvents TValue="TrustedDeviceDto"
+                    RowSelected="OnRowSelected"
+                    RowDeselected="OnRowDeselected" />
+        <GridColumns>
+            <GridColumn Type="ColumnType.CheckBox" Width="48" />
+
+            <GridColumn Field="@nameof(TrustedDeviceDto.UserFullName)" HeaderText="User" Width="220">
+                <Template>
+                    @{ var d = (TrustedDeviceDto)context; }
+                    <div class="td-user-cell">
+                        <span class="td-user-avatar" aria-hidden="true">
+                            @(d.UserFullName?.Length > 0 ? d.UserFullName[0].ToString().ToUpper() : "?")
+                        </span>
+                        <div class="td-user-info">
+                            <div class="td-user-name">@d.UserFullName</div>
+                            <div class="td-user-email">@d.Email</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(TrustedDeviceDto.DeviceName)" HeaderText="Device" Width="200">
+                <Template>
+                    @{ var d = (TrustedDeviceDto)context; }
+                    <div class="td-device-cell">
+                        <div class="td-device-name">@d.DeviceName</div>
+                        @if (!string.IsNullOrEmpty(d.DeviceTypeCode))
+                        {
+                            <span class="td-device-type-badge">@d.DeviceTypeCode</span>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(TrustedDeviceDto.IpAddress)" HeaderText="IP Address" Width="140" />
+
+            <GridColumn Field="@nameof(TrustedDeviceDto.BrowserName)" HeaderText="Browser / OS" Width="180">
+                <Template>
+                    @{ var d = (TrustedDeviceDto)context; }
+                    <div class="td-browser-cell">
+                        <span>@d.BrowserName</span>
+                        @if (!string.IsNullOrEmpty(d.OperatingSystem))
+                        {
+                            <span class="td-os-label">@d.OperatingSystem</span>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(TrustedDeviceDto.RiskScore)" HeaderText="Risk" Width="100" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var d = (TrustedDeviceDto)context; }
+                    <span class="@RiskPillClass(d.RiskScore)" title="Risk score: @d.RiskScore">@d.RiskScore</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(TrustedDeviceDto.TrustedDateUtc)" HeaderText="Trusted Since" Width="140">
+                <Template>
+                    @{ var d = (TrustedDeviceDto)context; }
+                    <span title="@d.TrustedDateUtc.ToString("g")">@FormatRelative(d.TrustedDateUtc)</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(TrustedDeviceDto.LastSeenDateUtc)" HeaderText="Last Seen" Width="130">
+                <Template>
+                    @{ var d = (TrustedDeviceDto)context; }
+                    <span title="@(d.LastSeenDateUtc?.ToString("g") ?? "Never")">
+                        @(d.LastSeenDateUtc.HasValue ? FormatRelative(d.LastSeenDateUtc.Value) : "Never")
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(TrustedDeviceDto.IsActive)" HeaderText="Status" Width="110" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var d = (TrustedDeviceDto)context; }
+                    <AppStatusBadge Status="@(d.IsActive ? "Active" : "Revoked")" />
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText="" Width="130" AllowSorting="false" AllowFiltering="false">
+                <Template>
+                    @{ var d = (TrustedDeviceDto)context; }
+                    <div class="um-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenDetail(d)"
+                                title="View device detail">
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenRiskReview(d)"
+                                title="Risk review">
+                            <i class="bi bi-flag" aria-hidden="true"></i>
+                        </button>
+                        @if (d.IsActive)
+                        {
+                            <button class="um-btn um-btn-xs um-btn-warning"
+                                    @onclick="() => OpenRevoke(d)"
+                                    title="Revoke device">
+                                <i class="bi bi-shield-slash" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Detail / Risk Review drawer -->
+<TrustedDeviceDetailDrawer @bind-Visible="_showDrawer"
+                           Device="_drawerDevice"
+                           DrawerMode="_drawerMode"
+                           OnRevokeRequested="OpenRevoke"
+                           OnReviewSaved="HandleReviewSavedAsync" />
+
+<!-- Revoke confirm -->
+<AppConfirmActionDialog @bind-Visible="_showRevoke"
+                        Title="Revoke Trusted Device"
+                        Message="@($"Revoke trust for \"{_revokeTarget?.DeviceName}\"?")"
+                        Detail="The device will no longer be trusted. The user will be prompted to re-verify on next login."
+                        Variant="warning"
+                        ConfirmText="Revoke"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteRevokeAsync" />
+
+<!-- Revoke selected confirm -->
+<AppConfirmActionDialog @bind-Visible="_showRevokeSelected"
+                        Title="Revoke Selected Devices"
+                        Message="@($"Revoke {_selected.Count} selected device(s)?")"
+                        Detail="All selected devices will be marked as revoked."
+                        Variant="warning"
+                        ConfirmText="Revoke All"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteRevokeSelectedAsync" />
+
+<!-- Toast -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ──────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    private SfGrid<TrustedDeviceDto>? _grid;
+    private SfToast? _toast;
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private List<TrustedDeviceDto> _all     = [];
+    private List<TrustedDeviceDto> _devices = [];
+    private List<TrustedDeviceDto> _selected = [];
+
+    // ── KPI ────────────────────────────────────────────────────────────────────
+    private int _totalCount;
+    private int _activeCount;
+    private int _revokedCount;
+    private int _highRiskCount;
+    private int _kpiActive = 0;
+
+    // ── Loading / busy ─────────────────────────────────────────────────────────
+    private bool _loading    = false;
+    private bool _confirming = false;
+
+    // ── Dialog visibility ──────────────────────────────────────────────────────
+    private bool _showRevoke         = false;
+    private bool _showRevokeSelected = false;
+    private bool _showDrawer         = false;
+
+    // ── Active targets ─────────────────────────────────────────────────────────
+    private TrustedDeviceDto? _revokeTarget;
+    private TrustedDeviceDto? _drawerDevice;
+    private string            _drawerMode = "detail";
+
+    // ── Filters ────────────────────────────────────────────────────────────────
+    private string _search       = string.Empty;
+    private string _filterStatus = string.Empty;
+    private string _filterRisk   = string.Empty;
+
+    // ── Static options ─────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Active",  "active"),
+        new("Revoked", "revoked"),
+    ];
+    private static readonly List<LabelValue> _riskOptions =
+    [
+        new("High Risk", "high"),
+    ];
+
+    // ── KPI helpers ────────────────────────────────────────────────────────────
+    private string KpiClass(int n, string modifier) =>
+        $"td-kpi-card {modifier}" + (_kpiActive == n ? " td-kpi-card--selected" : "");
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",     "/"),
+            new("Security", "/security"),
+            new("Trusted Devices", "/security/trusted-devices"));
+
+        await LoadAsync();
+    }
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchTrustedDevicesAsync(_tenantId, pageSize: 1000);
+            _all = result?.Items.ToList() ?? [];
+            _selected.Clear();
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount    = _all.Count;
+        _activeCount   = _all.Count(x => x.IsActive);
+        _revokedCount  = _all.Count(x => !x.IsActive);
+        _highRiskCount = _all.Count(x => x.RiskScore >= 70);
+    }
+
+    private void ApplyFilters()
+    {
+        var q = _all.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var s = _search.Trim().ToLower();
+            q = q.Where(x =>
+                (x.UserFullName?.ToLower().Contains(s) ?? false) ||
+                (x.Email?.ToLower().Contains(s) ?? false) ||
+                (x.DeviceName?.ToLower().Contains(s) ?? false) ||
+                (x.IpAddress?.ToLower().Contains(s) ?? false) ||
+                (x.BrowserName?.ToLower().Contains(s) ?? false));
+        }
+
+        q = _filterStatus switch
+        {
+            "active"  => q.Where(x => x.IsActive),
+            "revoked" => q.Where(x => !x.IsActive),
+            _         => q,
+        };
+
+        if (_filterRisk == "high")
+            q = q.Where(x => x.RiskScore >= 70);
+
+        // KPI active override
+        if (_kpiActive == 1) q = q.Where(x => x.IsActive);
+        if (_kpiActive == 2) q = q.Where(x => !x.IsActive);
+        if (_kpiActive == 3) q = q.Where(x => x.RiskScore >= 70);
+
+        _devices = q.ToList();
+    }
+
+    private void ApplyKpi(int n)
+    {
+        _kpiActive = n;
+        _filterStatus = string.Empty;
+        _filterRisk   = string.Empty;
+        ApplyFilters();
+    }
+
+    private async Task OnSearchAsync()
+    {
+        ApplyFilters();
+        await Task.CompletedTask;
+    }
+
+    // ── Row selection ──────────────────────────────────────────────────────────
+    private void OnRowSelected(RowSelectEventArgs<TrustedDeviceDto> args)
+    {
+        if (!_selected.Contains(args.Data))
+            _selected.Add(args.Data);
+    }
+
+    private void OnRowDeselected(RowDeselectEventArgs<TrustedDeviceDto> args)
+    {
+        _selected.Remove(args.Data);
+    }
+
+    // ── Drawer actions ─────────────────────────────────────────────────────────
+    private void OpenDetail(TrustedDeviceDto d)
+    {
+        _drawerDevice = d;
+        _drawerMode   = "detail";
+        _showDrawer   = true;
+    }
+
+    private void OpenRiskReview(TrustedDeviceDto d)
+    {
+        _drawerDevice = d;
+        _drawerMode   = "risk";
+        _showDrawer   = true;
+    }
+
+    private async Task HandleReviewSavedAsync()
+    {
+        _showDrawer = false;
+        await ShowToastAsync("Risk review saved.", "Success");
+        await LoadAsync();
+    }
+
+    // ── Revoke ─────────────────────────────────────────────────────────────────
+    private void OpenRevoke(TrustedDeviceDto d)
+    {
+        _revokeTarget = d;
+        _showDrawer   = false;
+        _showRevoke   = true;
+    }
+
+    private void OpenRevokeSelected()
+    {
+        _showRevokeSelected = true;
+    }
+
+    private async Task ExecuteRevokeAsync()
+    {
+        if (_revokeTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.RevokeTrustedDeviceAsync(_revokeTarget.TrustedDeviceId, reason: "Admin revoked");
+            _showRevoke = false;
+            await ShowToastAsync($"\"{_revokeTarget.DeviceName}\" revoked.", "Success");
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToastAsync("Failed to revoke device. Please try again.", "Error");
+        }
+        finally
+        {
+            _confirming = false;
+        }
+    }
+
+    private async Task ExecuteRevokeSelectedAsync()
+    {
+        _confirming = true;
+        try
+        {
+            foreach (var d in _selected.Where(x => x.IsActive))
+                await Api.RevokeTrustedDeviceAsync(d.TrustedDeviceId, reason: "Bulk admin revoke");
+
+            _showRevokeSelected = false;
+            await ShowToastAsync($"{_selected.Count} device(s) revoked.", "Success");
+            _selected.Clear();
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToastAsync("Failed to revoke some devices. Please try again.", "Error");
+        }
+        finally
+        {
+            _confirming = false;
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    private static string RiskPillClass(int score) => score switch
+    {
+        <= 30 => "td-risk-pill td-risk-pill--low",
+        <= 70 => "td-risk-pill td-risk-pill--medium",
+        _     => "td-risk-pill td-risk-pill--high",
+    };
+
+    private sealed record LabelValue(string Label, string Value);
+
+    private static string FormatRelative(DateTime utc)
+    {
+        var diff = DateTime.UtcNow - utc;
+        return diff.TotalDays switch
+        {
+            < 1   => "Today",
+            < 2   => "Yesterday",
+            < 7   => $"{(int)diff.TotalDays}d ago",
+            < 30  => $"{(int)(diff.TotalDays / 7)}w ago",
+            < 365 => $"{(int)(diff.TotalDays / 30)}mo ago",
+            _     => $"{(int)(diff.TotalDays / 365)}y ago",
+        };
+    }
+
+    private async Task ShowToastAsync(string message, string title)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title   = title,
+            Content = message,
+            CssClass = title == "Error" ? "e-toast-danger" : "e-toast-success",
+        });
+    }
+}

@@ -1,0 +1,103 @@
+@inject ApiClient Api
+
+<div class="tab-section">
+    <div class="ts-header">
+        <h3 class="ts-title">Audit Trail</h3>
+        <button class="ts-btn-ghost" @onclick="LoadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="ts-loading" aria-live="polite">
+            <div class="ts-spinner" aria-hidden="true"></div> Loading audit records…
+        </div>
+    }
+    else if (_result is null || _result.Items.Count == 0)
+    {
+        <div class="ts-empty">
+            <i class="bi bi-journal-text" aria-hidden="true"></i>
+            <span>No audit records found for this user.</span>
+        </div>
+    }
+    else
+    {
+        <SfGrid TValue="AuditLogDto" DataSource="@_result.Items.ToList()"
+                AllowSorting="true" EnableHover="true" RowHeight="48">
+            <GridColumns>
+                <GridColumn Field="EventTypeCode" HeaderText="Event" Width="160">
+                    <Template Context="a">
+                        @{ var log = (AuditLogDto)a; }
+                        <span class="badge @AuditBadgeClass(log.EventTypeCode)">
+                            @log.EventTypeCode
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="ActionName" HeaderText="Action" Width="200" />
+                <GridColumn Field="EntityName" HeaderText="Entity" Width="150" />
+                <GridColumn Field="PerformedDateUtc" HeaderText="Date / Time" Width="170">
+                    <Template Context="a">
+                        @{ var log = (AuditLogDto)a; }
+                        <span>@log.PerformedDateUtc.ToString("MMM d, yyyy HH:mm")</span>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+
+        <!-- Pagination controls -->
+        <div class="ts-pager">
+            <button class="ts-btn-ghost ts-pager-btn"
+                    @onclick="PrevPage" disabled="@(_page <= 1)">
+                <i class="bi bi-chevron-left" aria-hidden="true"></i> Prev
+            </button>
+            <span class="ts-pager-info">
+                Page @_page of @TotalPages
+                &nbsp;·&nbsp; @_result.TotalCount records
+            </span>
+            <button class="ts-btn-ghost ts-pager-btn"
+                    @onclick="NextPage" disabled="@(_page >= TotalPages)">
+                Next <i class="bi bi-chevron-right" aria-hidden="true"></i>
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public Guid UserId   { get; set; }
+    [Parameter] public Guid TenantId { get; set; }
+
+    private bool _loading = true;
+    private int  _page    = 1;
+    private const int PageSize = 25;
+
+    private PagedResult<AuditLogDto>? _result;
+
+    private int TotalPages => _result is null ? 1
+        : (int)Math.Ceiling((double)_result.TotalCount / PageSize);
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _result = await Api.GetEntityHistoryAsync(
+                TenantId, "User", UserId, _page, PageSize);
+        }
+        catch { /* non-critical */ }
+        finally { _loading = false; }
+    }
+
+    private async Task PrevPage() { if (_page > 1) { _page--; await LoadAsync(); } }
+    private async Task NextPage() { if (_page < TotalPages) { _page++; await LoadAsync(); } }
+
+    private static string AuditBadgeClass(string code) => code.ToLowerInvariant() switch
+    {
+        "create" or "created" => "badge-green",
+        "delete" or "deleted" => "badge-red",
+        "update" or "updated" => "badge-blue",
+        _                     => "badge-neutral",
+    };
+}

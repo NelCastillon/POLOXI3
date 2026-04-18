@@ -1,0 +1,529 @@
+@page "/governance/access-requests/new"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Governance
+@using Microsoft.AspNetCore.Components.Forms
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>New Access Request — Governance</PageTitle>
+
+<AppPageHeader Title="New Access Request"
+               Subtitle="Submit a request for role access, permissions, privileged access or other access types"
+               Icon="bi-shield-plus">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/governance/access-requests")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> All Requests
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_submitted)
+{
+    <!-- ── Success state ─────────────────────────────────────────────────── -->
+    <div class="arn-success-card">
+        <div class="arn-success-icon" aria-hidden="true">
+            <i class="bi bi-check-circle-fill"></i>
+        </div>
+        <div class="arn-success-body">
+            <h3 class="arn-success-title">Request Submitted</h3>
+            <p class="arn-success-msg">
+                Your access request has been submitted and is pending review.<br />
+                Reference: <span class="arn-success-ref">@_submittedId.ToString()[..8].ToUpper()</span>
+            </p>
+            <div class="arn-success-actions">
+                <button class="um-btn um-btn-primary" @onclick="ResetForm">
+                    <i class="bi bi-plus-circle" aria-hidden="true"></i> Submit Another
+                </button>
+                <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/governance/access-requests")'>
+                    <i class="bi bi-list-ul" aria-hidden="true"></i> View All Requests
+                </button>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="arn-form-layout">
+        <!-- ── Left: form sections ──────────────────────────────────────── -->
+        <div class="arn-form-body">
+
+            @if (!string.IsNullOrEmpty(_errorMsg))
+            {
+                <div class="arn-error-banner">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    @_errorMsg
+                </div>
+            }
+
+            <!-- Section 1: Requested For -->
+            <div class="arn-section">
+                <div class="arn-section-header">
+                    <span class="arn-section-num">1</span>
+                    <div>
+                        <h3 class="arn-section-title">Who is this request for?</h3>
+                        <p class="arn-section-sub">The user who requires access.</p>
+                    </div>
+                </div>
+                <div class="arn-field-grid">
+                    <div class="arn-field arn-field--full">
+                        <label class="arn-label">Requested For <span class="arn-req">*</span></label>
+                        <SfDropDownList TValue="Guid" TItem="UserDto"
+                                        DataSource="@_users"
+                                        @bind-Value="_form.RequestedForUserId"
+                                        AllowFiltering="true"
+                                        Placeholder="Search for a user…">
+                            <DropDownListFieldSettings Value="UserId" Text="FullName" />
+                        </SfDropDownList>
+                        @if (_validate && _form.RequestedForUserId == Guid.Empty)
+                        {
+                            <span class="arn-validation">Please select a user.</span>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 2: Request Type -->
+            <div class="arn-section">
+                <div class="arn-section-header">
+                    <span class="arn-section-num">2</span>
+                    <div>
+                        <h3 class="arn-section-title">Request Type</h3>
+                        <p class="arn-section-sub">Select the type of access you are requesting.</p>
+                    </div>
+                </div>
+                <div class="arn-type-grid">
+                    @foreach (var t in _requestTypes)
+                    {
+                        <div class="@TypeCardClass(t.Code)" role="button" tabindex="0"
+                             @onclick="() => SelectType(t.Code)"
+                             @onkeydown="@(e => { if (e.Key == "Enter" || e.Key == " ") SelectType(t.Code); })">
+                            <span class="arn-type-icon"><i class="bi @t.Icon" aria-hidden="true"></i></span>
+                            <div class="arn-type-label">@t.Label</div>
+                            <div class="arn-type-desc">@t.Description</div>
+                            @if (_form.RequestTypeCode == t.Code)
+                            {
+                                <span class="arn-type-check" aria-hidden="true"><i class="bi bi-check-circle-fill"></i></span>
+                            }
+                        </div>
+                    }
+                </div>
+                @if (_validate && string.IsNullOrEmpty(_form.RequestTypeCode))
+                {
+                    <span class="arn-validation">Please select a request type.</span>
+                }
+            </div>
+
+            <!-- Section 3: Target (contextual) -->
+            @if (ShowRoleField || ShowPermissionField)
+            {
+                <div class="arn-section">
+                    <div class="arn-section-header">
+                        <span class="arn-section-num">3</span>
+                        <div>
+                            <h3 class="arn-section-title">@TargetSectionTitle</h3>
+                            <p class="arn-section-sub">@TargetSectionSub</p>
+                        </div>
+                    </div>
+                    <div class="arn-field-grid">
+                        @if (ShowRoleField)
+                        {
+                            <div class="arn-field arn-field--full">
+                                <label class="arn-label">Role <span class="arn-req">*</span></label>
+                                <SfDropDownList TValue="Guid?" TItem="RoleDto"
+                                                DataSource="@_roles"
+                                                @bind-Value="_form.RoleId"
+                                                AllowFiltering="true"
+                                                Placeholder="Search for a role…">
+                                    <DropDownListFieldSettings Value="RoleId" Text="RoleName" />
+                                </SfDropDownList>
+                                @if (_validate && ShowRoleField && _form.RoleId is null)
+                                {
+                                    <span class="arn-validation">Please select a role.</span>
+                                }
+                            </div>
+                        }
+                        @if (ShowPermissionField)
+                        {
+                            <div class="arn-field arn-field--full">
+                                <label class="arn-label">Permission <span class="arn-req">*</span></label>
+                                <SfDropDownList TValue="Guid?" TItem="PermissionDto"
+                                                DataSource="@_permissions"
+                                                @bind-Value="_form.PermissionId"
+                                                AllowFiltering="true"
+                                                Placeholder="Search for a permission…">
+                                    <DropDownListFieldSettings Value="PermissionId" Text="PermissionName" />
+                                </SfDropDownList>
+                                @if (_validate && ShowPermissionField && _form.PermissionId is null)
+                                {
+                                    <span class="arn-validation">Please select a permission.</span>
+                                }
+                            </div>
+                        }
+                        <div class="arn-field arn-field--full">
+                            <label class="arn-label">Scope</label>
+                            <SfTextBox @bind-Value="_form.ScopeCode"
+                                       Placeholder="e.g. finance-reports, region-emea, client-123…" />
+                            <span class="arn-hint">Optional scope or resource boundary this access applies to.</span>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <!-- Section 4: Timeline -->
+            <div class="arn-section">
+                <div class="arn-section-header">
+                    <span class="arn-section-num">@TimelineSectionNum</span>
+                    <div>
+                        <h3 class="arn-section-title">Timeline</h3>
+                        <p class="arn-section-sub">When should access be active? Leave blank for indefinite.</p>
+                    </div>
+                </div>
+                <div class="arn-field-grid">
+                    <div class="arn-field">
+                        <label class="arn-label">Start Date</label>
+                        <SfDatePicker TValue="DateTime?" @bind-Value="_form.StartDateUtc"
+                                      Placeholder="Select start date"
+                                      Format="dd MMM yyyy" />
+                    </div>
+                    <div class="arn-field">
+                        <label class="arn-label">End Date</label>
+                        <SfDatePicker TValue="DateTime?" @bind-Value="_form.EndDateUtc"
+                                      Placeholder="Select end date"
+                                      Format="dd MMM yyyy"
+                                      Min="@(_form.StartDateUtc ?? DateTime.Today)" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 5: Details -->
+            <div class="arn-section">
+                <div class="arn-section-header">
+                    <span class="arn-section-num">@DetailsSectionNum</span>
+                    <div>
+                        <h3 class="arn-section-title">Details</h3>
+                        <p class="arn-section-sub">Provide context and justification for this request.</p>
+                    </div>
+                </div>
+                <div class="arn-field-grid">
+                    <div class="arn-field arn-field--full">
+                        <label class="arn-label">Business Justification <span class="arn-req">*</span></label>
+                        <SfTextBox @bind-Value="_form.BusinessJustification"
+                                   Multiline="true"
+                                   Placeholder="Explain why this access is required, what business process it supports, and any relevant context…"
+                                   HtmlAttributes="@(new Dictionary<string, object> { ["rows"] = "4" })" />
+                        @if (_validate && string.IsNullOrWhiteSpace(_form.BusinessJustification))
+                        {
+                            <span class="arn-validation">Business justification is required.</span>
+                        }
+                    </div>
+                    <div class="arn-field">
+                        <label class="arn-label">Ticket Reference</label>
+                        <SfTextBox @bind-Value="_form.TicketReference"
+                                   Placeholder="e.g. JIRA-1234, CHG-567…" />
+                        <span class="arn-hint">Link to your change management or ITSM ticket.</span>
+                    </div>
+                    <div class="arn-field">
+                        <label class="arn-label">Urgency <span class="arn-req">*</span></label>
+                        <SfDropDownList TValue="string" TItem="LabelValue"
+                                        DataSource="@_urgencyOptions"
+                                        @bind-Value="_form.UrgencyCode"
+                                        Placeholder="Select urgency">
+                            <DropDownListFieldSettings Value="Value" Text="Label" />
+                        </SfDropDownList>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 6: Attachment -->
+            <div class="arn-section">
+                <div class="arn-section-header">
+                    <span class="arn-section-num">@AttachmentSectionNum</span>
+                    <div>
+                        <h3 class="arn-section-title">Evidence / Attachment</h3>
+                        <p class="arn-section-sub">Upload supporting documentation (optional).</p>
+                    </div>
+                </div>
+                <div class="arn-field arn-field--full">
+                    @if (!string.IsNullOrEmpty(_form.AttachmentFileName))
+                    {
+                        <div class="arn-attachment-preview">
+                            <i class="bi bi-paperclip" aria-hidden="true"></i>
+                            <span class="arn-attachment-name">@_form.AttachmentFileName</span>
+                            <button class="arn-attachment-remove" @onclick="ClearAttachment" title="Remove">
+                                <i class="bi bi-x" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    }
+                    else
+                    {
+                        <label class="arn-file-drop">
+                            <i class="bi bi-cloud-upload" aria-hidden="true"></i>
+                            <span>Drop a file here or <span class="arn-file-link">browse</span></span>
+                            <span class="arn-file-hint">PDF, PNG, JPG, DOCX — max 10 MB</span>
+                            <InputFile OnChange="HandleFileSelectedAsync" accept=".pdf,.png,.jpg,.jpeg,.docx" class="arn-file-input" />
+                        </label>
+                    }
+                </div>
+            </div>
+
+            <!-- Submit bar -->
+            <div class="arn-submit-bar">
+                <button class="um-btn um-btn-ghost" @onclick="ResetForm" disabled="@_submitting">
+                    Clear Form
+                </button>
+                <button class="um-btn um-btn-primary arn-submit-btn" @onclick="SubmitAsync" disabled="@_submitting">
+                    @if (_submitting)
+                    {
+                        <span class="um-spin" aria-hidden="true"></span>
+                        <span>Submitting…</span>
+                    }
+                    else
+                    {
+                        <i class="bi bi-send-fill" aria-hidden="true"></i>
+                        <span>Submit Request</span>
+                    }
+                </button>
+            </div>
+        </div>
+
+        <!-- ── Right: summary sidebar ───────────────────────────────────── -->
+        <aside class="arn-sidebar">
+            <div class="arn-sidebar-card">
+                <h4 class="arn-sidebar-title">Request Summary</h4>
+
+                <dl class="arn-summary-dl">
+                    <dt>Type</dt>
+                    <dd>
+                        @if (!string.IsNullOrEmpty(_form.RequestTypeCode))
+                        {
+                            var t = _requestTypes.FirstOrDefault(x => x.Code == _form.RequestTypeCode);
+                            <span class="arn-summary-type">
+                                <i class="bi @(t?.Icon ?? "bi-circle")" aria-hidden="true"></i>
+                                @(t?.Label ?? _form.RequestTypeCode)
+                            </span>
+                        }
+                        else { <span class="arn-summary-empty">—</span> }
+                    </dd>
+
+                    <dt>Requested For</dt>
+                    <dd>@(SelectedUserName ?? "—")</dd>
+
+                    <dt>Urgency</dt>
+                    <dd>
+                        @if (!string.IsNullOrEmpty(_form.UrgencyCode))
+                        {
+                            <span class="@UrgencyBadgeClass">@_form.UrgencyCode</span>
+                        }
+                        else { <span>—</span> }
+                    </dd>
+
+                    <dt>Timeline</dt>
+                    <dd>@TimelineSummary</dd>
+
+                    @if (!string.IsNullOrEmpty(_form.TicketReference))
+                    {
+                        <dt>Ticket</dt>
+                        <dd class="arn-summary-ticket">@_form.TicketReference</dd>
+                    }
+                </dl>
+            </div>
+
+            <div class="arn-sidebar-card arn-sidebar-card--tip">
+                <h4 class="arn-sidebar-title">
+                    <i class="bi bi-info-circle" aria-hidden="true"></i> Tips
+                </h4>
+                <ul class="arn-tips">
+                    <li>Be specific about <strong>why</strong> access is needed.</li>
+                    <li>Set an end date for temporary access to ensure auto-expiry.</li>
+                    <li>Attach a change ticket to speed up approval.</li>
+                    <li>Critical requests are reviewed within 2 hours.</li>
+                </ul>
+            </div>
+        </aside>
+    </div>
+}
+
+<!-- Toast -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="5000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ──────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId        = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private readonly Guid _currentUserId   = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Lookup data ────────────────────────────────────────────────────────────
+    private List<UserDto>       _users       = [];
+    private List<RoleDto>       _roles       = [];
+    private List<PermissionDto> _permissions = [];
+
+    // ── Form model ─────────────────────────────────────────────────────────────
+    private SubmitAccessRequestRequest _form = new()
+    {
+        UrgencyCode = "Normal",
+    };
+
+    // ── State ──────────────────────────────────────────────────────────────────
+    private bool   _submitting  = false;
+    private bool   _validate    = false;
+    private bool   _submitted   = false;
+    private Guid   _submittedId = Guid.Empty;
+    private string _errorMsg    = string.Empty;
+
+    // ── Request type definitions ───────────────────────────────────────────────
+    private static readonly List<RequestTypeInfo> _requestTypes =
+    [
+        new("RoleAccess",        "Role Access",        "bi-person-badge",      "Grant access to a specific role."),
+        new("PermissionOverride","Permission Override", "bi-key",              "Override a single permission directly."),
+        new("PrivilegedAccess",  "Privileged Access",  "bi-shield-lock",       "Elevated / admin-level access."),
+        new("TemporaryAccess",   "Temporary Access",   "bi-clock-history",     "Time-limited access with auto-expiry."),
+        new("MfaReset",          "MFA Reset",          "bi-phone-flip",        "Reset multi-factor authentication."),
+        new("ExportAccess",      "Export Access",      "bi-download",          "Access to export data or reports."),
+    ];
+
+    // ── Urgency options ────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _urgencyOptions =
+    [
+        new("Normal",   "Normal"),
+        new("High",     "High"),
+        new("Critical", "Critical"),
+    ];
+
+    // ── Computed helpers ───────────────────────────────────────────────────────
+    private bool ShowRoleField       => _form.RequestTypeCode is "RoleAccess" or "PrivilegedAccess" or "TemporaryAccess";
+    private bool ShowPermissionField => _form.RequestTypeCode is "PermissionOverride" or "ExportAccess";
+
+    private int TimelineSectionNum   => (ShowRoleField || ShowPermissionField) ? 4 : 3;
+    private int DetailsSectionNum    => TimelineSectionNum + 1;
+    private int AttachmentSectionNum => DetailsSectionNum + 1;
+
+    private string TargetSectionTitle => ShowRoleField ? "Role & Scope" : "Permission & Scope";
+    private string TargetSectionSub   => ShowRoleField
+        ? "Select the role and optionally the scope of access."
+        : "Select the permission and optionally the resource scope.";
+
+    private string? SelectedUserName =>
+        _users.FirstOrDefault(u => u.UserId == _form.RequestedForUserId)?.FullName;
+
+    private string TimelineSummary
+    {
+        get
+        {
+            if (_form.StartDateUtc is null && _form.EndDateUtc is null) return "Indefinite";
+            if (_form.StartDateUtc is not null && _form.EndDateUtc is not null)
+                return $"{_form.StartDateUtc:dd MMM yy} – {_form.EndDateUtc:dd MMM yy}";
+            if (_form.StartDateUtc is not null) return $"From {_form.StartDateUtc:dd MMM yy}";
+            return $"Until {_form.EndDateUtc:dd MMM yy}";
+        }
+    }
+
+    private string UrgencyBadgeClass => _form.UrgencyCode switch
+    {
+        "High"     => "arn-urgency-badge arn-urgency-badge--high",
+        "Critical" => "arn-urgency-badge arn-urgency-badge--critical",
+        _          => "arn-urgency-badge arn-urgency-badge--normal",
+    };
+
+    private string TypeCardClass(string code) =>
+        "arn-type-card" + (_form.RequestTypeCode == code ? " arn-type-card--active" : "");
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",       "/"),
+            new("Governance", "/governance"),
+            new("Access Requests", "/governance/access-requests"),
+            new("New",        "/governance/access-requests/new"));
+
+        await LoadLookupsAsync();
+    }
+
+    private async Task LoadLookupsAsync()
+    {
+        var usersTask       = Api.SearchUsersAsync(_tenantId);
+        var rolesTask       = Api.SearchRolesAsync(_tenantId);
+        var permissionsTask = Api.SearchPermissionsAsync(_tenantId);
+
+        await Task.WhenAll(usersTask, rolesTask, permissionsTask);
+
+        _users       = (await usersTask)?.Items.ToList()       ?? [];
+        _roles       = (await rolesTask)?.Items.ToList()       ?? [];
+        _permissions = (await permissionsTask)?.Items.ToList() ?? [];
+    }
+
+    // ── Actions ────────────────────────────────────────────────────────────────
+    private void SelectType(string code)
+    {
+        _form.RequestTypeCode = code;
+        // Clear contextual fields when type changes
+        _form.RoleId       = null;
+        _form.PermissionId = null;
+    }
+
+    private async Task HandleFileSelectedAsync(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file is not null)
+            _form.AttachmentFileName = file.Name;
+        await Task.CompletedTask;
+    }
+
+    private void ClearAttachment() => _form.AttachmentFileName = null;
+
+    private async Task SubmitAsync()
+    {
+        _validate = true;
+        _errorMsg = string.Empty;
+
+        if (!IsFormValid()) return;
+
+        _submitting = true;
+        try
+        {
+            _form.TenantId          = _tenantId;
+            _form.RequestedByUserId = _currentUserId;
+
+            _submittedId = await Api.SubmitAccessRequestAsync(_form);
+            _submitted   = true;
+        }
+        catch
+        {
+            _errorMsg = "Failed to submit the request. Please check your inputs and try again.";
+            if (_toast is not null)
+                await _toast.ShowAsync(new ToastModel { Title = "Error", Content = _errorMsg, CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _submitting = false;
+        }
+    }
+
+    private bool IsFormValid()
+    {
+        if (_form.RequestedForUserId == Guid.Empty)              return false;
+        if (string.IsNullOrEmpty(_form.RequestTypeCode))         return false;
+        if (string.IsNullOrWhiteSpace(_form.BusinessJustification)) return false;
+        if (ShowRoleField && _form.RoleId is null)               return false;
+        if (ShowPermissionField && _form.PermissionId is null)   return false;
+        return true;
+    }
+
+    private void ResetForm()
+    {
+        _form        = new() { UrgencyCode = "Normal" };
+        _validate    = false;
+        _submitted   = false;
+        _submittedId = Guid.Empty;
+        _errorMsg    = string.Empty;
+    }
+
+    // ── Inner types ────────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Label, string Value);
+    private sealed record RequestTypeInfo(string Code, string Label, string Icon, string Description);
+}

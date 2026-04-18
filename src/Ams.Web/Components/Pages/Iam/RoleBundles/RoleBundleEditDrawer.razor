@@ -1,0 +1,251 @@
+@*
+    RoleBundleEditDrawer — right-side drawer for creating or editing a role bundle.
+    Create mode:  <RoleBundleEditDrawer @bind-Visible="_show" OnSaved="ReloadAsync" />
+    Edit mode:    <RoleBundleEditDrawer @bind-Visible="_show" BundleId="_bundleId" OnSaved="ReloadAsync" />
+*@
+@inject ApiClient Api
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppCrudDrawer @bind-Visible="_open"
+               Title="@DrawerTitle"
+               Icon="@DrawerIcon"
+               Width="520px"
+               IsBusy="_busy"
+               OnClose="HandleCloseAsync">
+    <Footer>
+        <button class="um-btn um-btn-ghost" @onclick="HandleCloseAsync" disabled="@_busy">Cancel</button>
+        @if (IsCreate)
+        {
+            <button class="um-btn um-btn-ghost" @onclick="() => SaveAsync(addAnother: true)" disabled="@_busy">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> Save &amp; Add Another
+            </button>
+        }
+        <button class="um-btn um-btn-primary" @onclick="() => SaveAsync(addAnother: false)" disabled="@_busy">
+            @if (_busy) { <span class="um-spin" aria-hidden="true"></span> }
+            @DrawerConfirmText
+        </button>
+    </Footer>
+    <Content>
+        @if (_formLoading)
+        {
+            <div class="rbed-loading">
+                <span class="um-spin" aria-hidden="true"></span>
+                <span>Loading bundle…</span>
+            </div>
+        }
+        else
+        {
+            @if (!string.IsNullOrEmpty(_errorMsg))
+            {
+                <div class="rbed-error">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    @_errorMsg
+                </div>
+            }
+
+            <!-- Identity -->
+            <div class="rbed-section">
+                <h4 class="rbed-section-title">Identity</h4>
+                <div class="rbed-grid">
+                    <div class="rbed-field">
+                        <label class="rbed-label">Bundle Code <span class="req">*</span></label>
+                        @if (IsCreate)
+                        {
+                            <SfTextBox @bind-Value="_form.BundleCode" Placeholder="e.g. ONBOARDING" />
+                        }
+                        else
+                        {
+                            <span class="rbed-readonly">@_form.BundleCode</span>
+                        }
+                    </div>
+                    <div class="rbed-field">
+                        <label class="rbed-label">Sort Order</label>
+                        <SfTextBox @bind-Value="_form.SortOrderText" Placeholder="e.g. 10" />
+                    </div>
+                    <div class="rbed-field rbed-field--full">
+                        <label class="rbed-label">Bundle Name <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.BundleName" Placeholder="Full descriptive name" />
+                    </div>
+                    <div class="rbed-field rbed-field--full">
+                        <label class="rbed-label">Description</label>
+                        <SfTextBox @bind-Value="_form.Description"
+                                   Placeholder="Purpose and scope of this bundle"
+                                   Multiline="true" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Flags -->
+            <div class="rbed-section">
+                <h4 class="rbed-section-title">Flags</h4>
+                <div class="rbed-flags">
+                    <label class="rbed-toggle">
+                        <SfCheckBox @bind-Checked="_form.IsSystemBundle" />
+                        <span class="rbed-toggle-text">System Bundle — built-in, protected from deletion</span>
+                    </label>
+                </div>
+            </div>
+        }
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    [Parameter] public bool                Visible        { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public Guid?               BundleId       { get; set; }
+    [Parameter] public EventCallback       OnSaved        { get; set; }
+
+    private SfToast? _toast;
+
+    private bool       _open        = false;
+    private bool       _formLoading = false;
+    private bool       _busy        = false;
+    private string     _errorMsg    = string.Empty;
+    private bool       _prevVisible = false;
+    private Guid?      _prevBundleId;
+    private FormModel  _form        = new();
+
+    private bool   IsCreate          => BundleId is null;
+    private string DrawerTitle       => IsCreate ? "New Bundle"       : "Edit Bundle";
+    private string DrawerIcon        => IsCreate ? "bi-layers-half"   : "bi-pencil";
+    private string DrawerConfirmText => IsCreate ? "Create Bundle"    : "Save Changes";
+
+    protected override void OnParametersSet() => _open = Visible;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var justOpened    = Visible && !_prevVisible;
+        var bundleChanged = Visible && BundleId != _prevBundleId;
+        _prevVisible  = Visible;
+        _prevBundleId = BundleId;
+
+        if (justOpened || bundleChanged)
+            await RefreshFormAsync();
+    }
+
+    private async Task RefreshFormAsync()
+    {
+        _errorMsg = string.Empty;
+        if (IsCreate) { _form = new(); return; }
+
+        _formLoading = true;
+        StateHasChanged();
+        try
+        {
+            var bundle = await Api.GetRoleBundleByIdAsync(BundleId!.Value);
+            if (bundle is not null) PopulateForm(bundle);
+        }
+        finally
+        {
+            _formLoading = false;
+        }
+    }
+
+    private void PopulateForm(RoleBundleDto bundle)
+    {
+        _form = new()
+        {
+            BundleCode    = bundle.BundleCode,
+            BundleName    = bundle.BundleName,
+            Description   = bundle.Description,
+            SortOrderText = bundle.SortOrder.ToString(),
+            IsSystemBundle = bundle.IsSystemBundle,
+        };
+    }
+
+    private async Task SaveAsync(bool addAnother)
+    {
+        _errorMsg = Validate();
+        if (!string.IsNullOrEmpty(_errorMsg)) return;
+
+        _busy = true;
+        try
+        {
+            if (IsCreate)
+            {
+                var req = new CreateRoleBundleRequest
+                {
+                    TenantId       = Guid.Parse("00000000-0000-0000-0000-000000000001"),
+                    BundleCode     = _form.BundleCode.Trim().ToUpperInvariant(),
+                    BundleName     = _form.BundleName.Trim(),
+                    Description    = _form.Description,
+                    IsSystemBundle = _form.IsSystemBundle,
+                    SortOrder      = int.TryParse(_form.SortOrderText, out var so) ? so : 0,
+                };
+                await Api.CreateRoleBundleAsync(req);
+                await ToastAsync("Bundle created successfully.");
+            }
+            else
+            {
+                var req = new UpdateRoleBundleRequest
+                {
+                    BundleId    = BundleId!.Value,
+                    BundleName  = _form.BundleName.Trim(),
+                    Description = _form.Description,
+                    SortOrder   = int.TryParse(_form.SortOrderText, out var so) ? so : 0,
+                };
+                await Api.UpdateRoleBundleAsync(BundleId!.Value, req);
+                await ToastAsync("Bundle updated successfully.");
+            }
+
+            await OnSaved.InvokeAsync();
+
+            if (addAnother && IsCreate)
+                _form = new();
+            else
+                await HandleCloseAsync();
+        }
+        catch
+        {
+            _errorMsg = "An error occurred. Please try again.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private string Validate()
+    {
+        if (string.IsNullOrWhiteSpace(_form.BundleName))
+            return "Bundle Name is required.";
+        if (IsCreate && string.IsNullOrWhiteSpace(_form.BundleCode))
+            return "Bundle Code is required.";
+        if (!string.IsNullOrWhiteSpace(_form.SortOrderText) &&
+            !int.TryParse(_form.SortOrderText, out _))
+            return "Sort Order must be a whole number.";
+        return string.Empty;
+    }
+
+    private async Task HandleCloseAsync()
+    {
+        _open = false;
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    private async Task ToastAsync(string msg, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content         = msg,
+            CssClass        = isError ? "e-toast-danger" : "e-toast-success",
+            Icon            = isError ? "e-error toast-icons" : "e-success toast-icons",
+            ShowCloseButton = true,
+            Timeout         = 4000,
+        });
+    }
+
+    // ── Inner types ──────────────────────────────────────────────────────────────
+    private sealed class FormModel
+    {
+        public string  BundleCode    { get; set; } = string.Empty;
+        public string  BundleName    { get; set; } = string.Empty;
+        public string? Description   { get; set; }
+        public string  SortOrderText { get; set; } = "0";
+        public bool    IsSystemBundle { get; set; }
+    }
+}

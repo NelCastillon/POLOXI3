@@ -1,0 +1,545 @@
+@page "/iam/scope-management"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Scope Management — IAM</PageTitle>
+
+<AppPageHeader Title="Scope Management"
+               Subtitle="View and manage data-access scope assignments for all users"
+               Icon="bi-diagram-3">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAssign">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> Assign Scope
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="sco-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0" aria-label="Filter: Total Scopes">
+        <span class="sco-kpi-icon sco-kpi-icon--total"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="sco-kpi-value">@_totalCount</div>
+            <div class="sco-kpi-label">Total Scopes</div>
+        </div>
+        @if (_kpiActive == 1) { <span class="sco-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0" aria-label="Filter: Active">
+        <span class="sco-kpi-icon sco-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="sco-kpi-value">@_activeCount</div>
+            <div class="sco-kpi-label">Active</div>
+        </div>
+        @if (_kpiActive == 2) { <span class="sco-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0" aria-label="Filter: Expiring Soon">
+        <span class="sco-kpi-icon sco-kpi-icon--expiring"><i class="bi bi-clock-history" aria-hidden="true"></i></span>
+        <div>
+            <div class="sco-kpi-value">@_expiringCount</div>
+            <div class="sco-kpi-label">Expiring Soon</div>
+        </div>
+        @if (_kpiActive == 3) { <span class="sco-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass4" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0" aria-label="Filter: Inactive">
+        <span class="sco-kpi-icon sco-kpi-icon--inactive"><i class="bi bi-slash-circle" aria-hidden="true"></i></span>
+        <div>
+            <div class="sco-kpi-value">@_inactiveCount</div>
+            <div class="sco-kpi-label">Inactive</div>
+        </div>
+        @if (_kpiActive == 4) { <span class="sco-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search user or scope…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_scopeTypeOptions"
+                        Placeholder="All Scope Types"
+                        ShowClearButton="true"
+                        Width="180px"
+                        Value="_filterScopeType"
+                        ValueChanged="@((string v) => { _filterScopeType = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_statusOptions"
+                        Placeholder="All Statuses"
+                        ShowClearButton="true"
+                        Width="150px"
+                        Value="_filterStatus"
+                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </Filters>
+    <Actions>
+        @if (_selected.Count > 0)
+        {
+            <span class="sco-sel-count">
+                <i class="bi bi-check2-square" aria-hidden="true"></i> @_selected.Count selected
+            </span>
+            <button class="um-btn um-btn-sm um-btn-warning"
+                    @onclick="() => OpenRevoke(_selected[0])"
+                    disabled="@(_selected.Count != 1)"
+                    title="Revoke scope">
+                <i class="bi bi-x-circle" aria-hidden="true"></i> Revoke
+            </button>
+        }
+    </Actions>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading scopes…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading scopes…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="UserScopeDto"
+            DataSource="@_scopes"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row"
+                               Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
+        <GridEvents TValue="UserScopeDto"
+                    RowSelected="OnRowSelected"
+                    RowDeselected="OnRowDeselected" />
+        <GridColumns>
+
+            <GridColumn Type="ColumnType.CheckBox" Width="48" />
+
+            <GridColumn Field="@nameof(UserScopeDto.UserFullName)"
+                        HeaderText="User"
+                        Width="200">
+                <Template>
+                    @{ var r = (UserScopeDto)context; }
+                    <div class="sco-user-cell">
+                        <span class="sco-user-avatar" aria-hidden="true">
+                            <i class="bi bi-person-fill"></i>
+                        </span>
+                        <div class="sco-user-name">@r.UserFullName</div>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserScopeDto.ScopeTypeCode)"
+                        HeaderText="Scope Type"
+                        Width="150">
+                <Template>
+                    @{ var r = (UserScopeDto)context; }
+                    <span class="sco-type-badge">@r.ScopeTypeCode</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserScopeDto.ScopeValue)"
+                        HeaderText="Scope Value"
+                        Width="200">
+                <Template>
+                    @{ var r = (UserScopeDto)context; }
+                    <span class="sco-value" title="@r.ScopeValue">@r.ScopeValue</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserScopeDto.IsActive)"
+                        HeaderText="Status"
+                        Width="110">
+                <Template>
+                    @{ var r = (UserScopeDto)context; }
+                    <AppStatusBadge Status="@(r.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserScopeDto.GrantedDateUtc)"
+                        HeaderText="Granted"
+                        Width="130">
+                <Template>
+                    @{ var r = (UserScopeDto)context; }
+                    <span title="@r.GrantedDateUtc.ToString("g")">@FormatRelative(r.GrantedDateUtc)</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserScopeDto.ExpiresDateUtc)"
+                        HeaderText="Expires"
+                        Width="130">
+                <Template>
+                    @{ var r = (UserScopeDto)context; }
+                    @if (r.ExpiresDateUtc.HasValue)
+                    {
+                        var isExpiring = r.ExpiresDateUtc.Value < DateTime.UtcNow.AddDays(30);
+                        <span class="@(isExpiring ? "sco-expiring-soon" : "")"
+                              title="@r.ExpiresDateUtc.Value.ToString("d")">
+                            @r.ExpiresDateUtc.Value.ToString("MMM d, yyyy")
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="sco-no-expiry">Permanent</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserScopeDto.GrantedByFullName)"
+                        HeaderText="Granted By"
+                        Width="160">
+                <Template>
+                    @{ var r = (UserScopeDto)context; }
+                    <span>@(string.IsNullOrEmpty(r.GrantedByFullName) ? "—" : r.GrantedByFullName)</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText=""
+                        Width="80"
+                        AllowSorting="false"
+                        AllowFiltering="false">
+                <Template>
+                    @{ var r = (UserScopeDto)context; }
+                    <div class="um-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenRevoke(r)"
+                                title="Revoke scope"
+                                disabled="@(!r.IsActive)">
+                            <i class="bi bi-x-circle" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Assign Scope dialog -->
+<SfDialog @bind-Visible="_showAssign"
+          Width="520px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogTemplates>
+        <Header><i class="bi bi-plus-circle" aria-hidden="true"></i> Assign Scope to User</Header>
+        <Content>
+            <div class="sco-assign-form">
+                <div class="form-group">
+                    <label>User <span class="req" aria-hidden="true">*</span></label>
+                    <SfDropDownList TItem="UserDto" TValue="Guid"
+                                    DataSource="@_availableUsers"
+                                    @bind-Value="_assignUserId"
+                                    Placeholder="Select a user…"
+                                    AllowFiltering="true">
+                        <DropDownListFieldSettings Text="FullName" Value="UserId" />
+                    </SfDropDownList>
+                </div>
+                <div class="form-group">
+                    <label>Scope Type <span class="req" aria-hidden="true">*</span></label>
+                    <SfDropDownList TValue="string" TItem="LabelValue"
+                                    DataSource="_scopeTypeOptions"
+                                    @bind-Value="_assignScopeType"
+                                    Placeholder="Select a scope type…"
+                                    AllowFiltering="true">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                </div>
+                <div class="form-group">
+                    <label>Scope Value <span class="req" aria-hidden="true">*</span></label>
+                    <input class="form-control" type="text" @bind="_assignScopeValue" placeholder="e.g. branch-id, region-code…" />
+                </div>
+                @if (!string.IsNullOrEmpty(_assignError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_assignError
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showAssign = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ExecuteAssignAsync" disabled="@_saving">
+                    @if (_saving) { <span class="um-spinner-xs" aria-hidden="true"></span> }
+                    Assign Scope
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- Revoke confirmation -->
+<AppConfirmActionDialog @bind-Visible="_showRevoke"
+                        Title="Revoke Scope Assignment"
+                        Message="@($"Revoke '{_revokeTarget?.ScopeTypeCode}:{_revokeTarget?.ScopeValue}' from {_revokeTarget?.UserFullName}?")"
+                        Detail="The user will immediately lose data access granted by this scope. This action can be undone by re-assigning the scope."
+                        Variant="warning"
+                        ConfirmText="Revoke"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteRevokeAsync" />
+
+<!-- Toast -->
+<SfToast @ref="_toast"
+         ShowCloseButton="true"
+         Timeout="4000"
+         NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ─────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ──────────────────────────────────────────────────────────────────
+    private SfGrid<UserScopeDto>? _grid;
+    private SfToast?              _toast;
+
+    // ── Data ──────────────────────────────────────────────────────────────────
+    private List<UserScopeDto> _allScopes      = [];
+    private List<UserScopeDto> _scopes         = [];
+    private List<UserScopeDto> _selected       = [];
+    private List<UserDto>      _availableUsers = [];
+
+    // ── Loading / action flags ────────────────────────────────────────────────
+    private bool _loading    = false;
+    private bool _saving     = false;
+    private bool _confirming = false;
+
+    // ── Dialog visibility ─────────────────────────────────────────────────────
+    private bool _showAssign = false;
+    private bool _showRevoke = false;
+
+    // ── Active targets ────────────────────────────────────────────────────────
+    private UserScopeDto? _revokeTarget;
+    private Guid          _assignUserId;
+    private string        _assignScopeType  = string.Empty;
+    private string        _assignScopeValue = string.Empty;
+    private string        _assignError      = string.Empty;
+
+    // ── Filters ───────────────────────────────────────────────────────────────
+    private string _search           = string.Empty;
+    private string _filterScopeType  = string.Empty;
+    private string _filterStatus     = string.Empty;
+
+    // ── KPI state ─────────────────────────────────────────────────────────────
+    private int _kpiActive = 0; // 0=none 1=total 2=active 3=expiring 4=inactive
+
+    private string KpiClass1 => "sco-kpi-card sco-kpi-card--total"    + (_kpiActive == 1 ? " sco-kpi-card--sel" : "");
+    private string KpiClass2 => "sco-kpi-card sco-kpi-card--active"   + (_kpiActive == 2 ? " sco-kpi-card--sel" : "");
+    private string KpiClass3 => "sco-kpi-card sco-kpi-card--expiring" + (_kpiActive == 3 ? " sco-kpi-card--sel" : "");
+    private string KpiClass4 => "sco-kpi-card sco-kpi-card--inactive" + (_kpiActive == 4 ? " sco-kpi-card--sel" : "");
+
+    // ── KPI counters ──────────────────────────────────────────────────────────
+    private int _totalCount;
+    private int _activeCount;
+    private int _expiringCount;
+    private int _inactiveCount;
+
+    // ── Static options ────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Active",   "Active"),
+        new("Inactive", "Inactive"),
+    ];
+
+    private static readonly List<LabelValue> _scopeTypeOptions =
+    [
+        new("Branch",     "Branch"),
+        new("Region",     "Region"),
+        new("Department", "Department"),
+        new("CostCenter", "Cost Center"),
+        new("Entity",     "Entity"),
+    ];
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",             "/"),
+            new("IAM",              "/iam"),
+            new("Scope Management", "/iam/scope-management"));
+
+        await LoadAsync();
+    }
+
+    // ── Data loading ──────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchUserScopesAsync(_tenantId);
+            _allScopes = result?.Items.ToList() ?? [];
+            _selected.Clear();
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        var term = _search.Trim();
+        _scopes = _allScopes.Where(r =>
+            (string.IsNullOrEmpty(_filterStatus) ||
+                (r.IsActive ? "Active" : "Inactive") == _filterStatus) &&
+            (string.IsNullOrEmpty(_filterScopeType) ||
+                r.ScopeTypeCode == _filterScopeType) &&
+            (string.IsNullOrEmpty(term) ||
+                (r.UserFullName?.Contains(term, StringComparison.OrdinalIgnoreCase)  ?? false) ||
+                (r.ScopeTypeCode?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (r.ScopeValue?.Contains(term, StringComparison.OrdinalIgnoreCase)    ?? false))
+        ).ToList();
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive   = _kpiActive == n ? 0 : n;
+        _filterStatus = string.Empty;
+        switch (_kpiActive)
+        {
+            case 2: _filterStatus = "Active";   break;
+            case 4: _filterStatus = "Inactive"; break;
+        }
+        if (_kpiActive == 3)
+        {
+            var cutoff = DateTime.UtcNow.AddDays(30);
+            _scopes = _allScopes
+                .Where(r => r.IsActive && r.ExpiresDateUtc.HasValue && r.ExpiresDateUtc.Value <= cutoff)
+                .ToList();
+            StateHasChanged();
+        }
+        else
+        {
+            ApplyFilters();
+        }
+    }
+
+    private void ComputeKpi()
+    {
+        var cutoff     = DateTime.UtcNow.AddDays(30);
+        _totalCount    = _allScopes.Count;
+        _activeCount   = _allScopes.Count(r => r.IsActive);
+        _expiringCount = _allScopes.Count(r => r.IsActive && r.ExpiresDateUtc.HasValue && r.ExpiresDateUtc.Value <= cutoff);
+        _inactiveCount = _allScopes.Count(r => !r.IsActive);
+    }
+
+    // ── Row selection ─────────────────────────────────────────────────────────
+    private void OnRowSelected(RowSelectEventArgs<UserScopeDto> args)
+    {
+        if (!_selected.Contains(args.Data))
+            _selected.Add(args.Data);
+    }
+
+    private void OnRowDeselected(RowDeselectEventArgs<UserScopeDto> args)
+    {
+        _selected.Remove(args.Data);
+    }
+
+    // ── Assign ────────────────────────────────────────────────────────────────
+    private async Task OpenAssign()
+    {
+        _assignUserId     = Guid.Empty;
+        _assignScopeType  = string.Empty;
+        _assignScopeValue = string.Empty;
+        _assignError      = string.Empty;
+
+        if (_availableUsers.Count == 0)
+        {
+            var users = await Api.SearchUsersAsync(_tenantId);
+            _availableUsers = users?.Items.ToList() ?? [];
+        }
+        _showAssign = true;
+    }
+
+    private async Task ExecuteAssignAsync()
+    {
+        if (_assignUserId == Guid.Empty)           { _assignError = "Please select a user.";           return; }
+        if (string.IsNullOrEmpty(_assignScopeType)) { _assignError = "Please select a scope type.";    return; }
+        if (string.IsNullOrEmpty(_assignScopeValue)){ _assignError = "Please enter a scope value.";    return; }
+
+        _saving = true;
+        try
+        {
+            await Api.AssignUserScopeAsync(new AssignUserScopeRequest
+            {
+                TenantId      = _tenantId,
+                UserId        = _assignUserId,
+                ScopeTypeCode = _assignScopeType,
+                ScopeValue    = _assignScopeValue,
+            });
+            _showAssign = false;
+            await ShowToastAsync("Scope assigned successfully.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _assignError = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // ── Revoke ────────────────────────────────────────────────────────────────
+    private void OpenRevoke(UserScopeDto r) { _revokeTarget = r; _showRevoke = true; }
+
+    private async Task ExecuteRevokeAsync()
+    {
+        if (_revokeTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.RevokeUserScopeAsync(_revokeTarget.UserScopeId);
+            await ShowToastAsync($"Scope '{_revokeTarget.ScopeTypeCode}:{_revokeTarget.ScopeValue}' revoked from {_revokeTarget.UserFullName}.", "e-toast-warning");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _confirming   = false;
+            _revokeTarget = null;
+        }
+    }
+
+    // ── Toast helper ──────────────────────────────────────────────────────────
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    private static string FormatRelative(DateTime dt)
+    {
+        var diff = DateTime.UtcNow - dt;
+        return diff.TotalDays switch
+        {
+            < 1   => diff.TotalHours < 1 ? "Just now" : $"{(int)diff.TotalHours}h ago",
+            < 7   => $"{(int)diff.TotalDays}d ago",
+            < 30  => $"{(int)(diff.TotalDays / 7)}w ago",
+            < 365 => $"{(int)(diff.TotalDays / 30)}mo ago",
+            _     => dt.ToString("d"),
+        };
+    }
+
+    // ── Inner models ──────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Value, string Label);
+}

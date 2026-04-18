@@ -1,0 +1,819 @@
+@page "/iam/permissions/{PermissionId:guid}"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>@(_permission?.PermissionCode ?? "Permission") – AMS Enterprise</PageTitle>
+
+@if (_loading)
+{
+    <div class="pd-loading" aria-live="polite">
+        <div class="pd-spinner" aria-hidden="true"></div>
+        <span>Loading permission…</span>
+    </div>
+}
+else if (_permission is null)
+{
+    <div class="pd-not-found">
+        <i class="bi bi-key-x" aria-hidden="true"></i>
+        <h2>Permission not found</h2>
+        <p>The requested permission could not be loaded.</p>
+        <button class="um-btn um-btn-ghost" @onclick="GoBack">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Permissions
+        </button>
+    </div>
+}
+else
+{
+    <div class="pd-page">
+
+        <!-- ── Breadcrumb ──────────────────────────────────── -->
+        <nav class="pd-breadcrumb" aria-label="Breadcrumb">
+            <button class="um-btn um-btn-ghost pd-back-btn" @onclick="GoBack">
+                <i class="bi bi-arrow-left" aria-hidden="true"></i> Permissions
+            </button>
+            <span class="pd-breadcrumb-sep" aria-hidden="true"><i class="bi bi-chevron-right"></i></span>
+            <span class="pd-breadcrumb-cur">@_permission.PermissionCode</span>
+        </nav>
+
+        <!-- ── Header Card ────────────────────────────────── -->
+        <div class="pd-header-card">
+            <div class="pd-header-left">
+                <div class="pd-avatar @ActionAvatarClass(_permission.ActionCode)" aria-hidden="true">
+                    <i class="bi @ActionIcon(_permission.ActionCode)"></i>
+                </div>
+                <div class="pd-header-info">
+                    <div class="pd-header-name-row">
+                        <h1 class="pd-full-name">@_permission.PermissionName</h1>
+                    </div>
+                    <div class="pd-sub-row">
+                        <code class="pd-perm-code">@_permission.PermissionCode</code>
+                    </div>
+                    <div class="pd-badge-row">
+                        <span class="badge @(_permission.IsActive ? "badge-green" : "badge-neutral")">
+                            <i class="bi @(_permission.IsActive ? "bi-check-circle-fill" : "bi-dash-circle")" aria-hidden="true"></i>
+                            @(_permission.IsActive ? "Active" : "Inactive")
+                        </span>
+                        <span class="pd-action-badge @ActionBadgeClass(_permission.ActionCode)">
+                            @_permission.ActionCode
+                        </span>
+                        @if (!string.IsNullOrEmpty(GetModule(_permission.ResourceCode)))
+                        {
+                            <span class="pd-module-pill">@GetModule(_permission.ResourceCode)</span>
+                        }
+                        @if (_permission.IsBuiltIn)
+                        {
+                            <span class="badge badge-amber">
+                                <i class="bi bi-star-fill" aria-hidden="true"></i> Privileged
+                            </span>
+                        }
+                        <span class="badge badge-neutral">
+                            <i class="bi bi-shield" aria-hidden="true"></i>
+                            @_permission.RoleCount role@(_permission.RoleCount == 1 ? "" : "s")
+                        </span>
+                    </div>
+                </div>
+            </div>
+            <div class="pd-header-actions">
+                @if (_permission.IsActive)
+                {
+                    <button class="um-btn um-btn-warning" @onclick="DeactivateAsync">
+                        <i class="bi bi-slash-circle" aria-hidden="true"></i> Deactivate
+                    </button>
+                }
+                else
+                {
+                    <span class="badge badge-neutral pd-inactive-note">
+                        <i class="bi bi-info-circle" aria-hidden="true"></i> Inactive
+                    </span>
+                }
+            </div>
+        </div>
+
+        <!-- ── Tabs ───────────────────────────────────────── -->
+        <div class="pd-tabs">
+            <div class="pd-tab-list" role="tablist">
+                <button role="tab"
+                        class="pd-tab @(_activeTab == "overview" ? "pd-tab-active" : "")"
+                        @onclick='() => _activeTab = "overview"'>
+                    <i class="bi bi-info-circle" aria-hidden="true"></i> Overview
+                </button>
+                <button role="tab"
+                        class="pd-tab @(_activeTab == "roles" ? "pd-tab-active" : "")"
+                        @onclick='() => SetTab("roles")'>
+                    <i class="bi bi-shield-lock" aria-hidden="true"></i> Assigned Roles
+                    <span class="pd-tab-badge">@_permission.RoleCount</span>
+                </button>
+                <button role="tab"
+                        class="pd-tab @(_activeTab == "users" ? "pd-tab-active" : "")"
+                        @onclick='() => SetTab("users")'>
+                    <i class="bi bi-person-badge" aria-hidden="true"></i> Direct Overrides
+                    @if (_directUsers.Count > 0)
+                    {
+                        <span class="pd-tab-badge pd-tab-badge-warn">@_directUsers.Count</span>
+                    }
+                </button>
+                <button role="tab"
+                        class="pd-tab @(_activeTab == "audit" ? "pd-tab-active" : "")"
+                        @onclick='() => SetTab("audit")'>
+                    <i class="bi bi-clock-history" aria-hidden="true"></i> Audit History
+                </button>
+            </div>
+
+            <!-- ── Overview Tab ────────────────────────────── -->
+            @if (_activeTab == "overview")
+            {
+                <div class="pd-tab-panel" role="tabpanel">
+                    <div class="pd-info-grid">
+
+                        <div class="pd-info-section">
+                            <h3 class="pd-section-title">Permission Details</h3>
+                            <div class="pd-info-list">
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Permission Code</span>
+                                    <span class="pd-info-value"><code>@_permission.PermissionCode</code></span>
+                                </div>
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Permission Name</span>
+                                    <span class="pd-info-value">@_permission.PermissionName</span>
+                                </div>
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Resource Code</span>
+                                    <span class="pd-info-value"><code>@_permission.ResourceCode</code></span>
+                                </div>
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Module</span>
+                                    <span class="pd-info-value">
+                                        @{ var mod = GetModule(_permission.ResourceCode); }
+                                        @if (!string.IsNullOrEmpty(mod))
+                                        {
+                                            <span class="pd-module-pill">@mod</span>
+                                        }
+                                        else { <span class="pd-na">—</span> }
+                                    </span>
+                                </div>
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Entity</span>
+                                    <span class="pd-info-value">
+                                        @{ var ent = GetEntity(_permission.ResourceCode); }
+                                        @(string.IsNullOrEmpty(ent) ? "—" : ent)
+                                    </span>
+                                </div>
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Action</span>
+                                    <span class="pd-info-value">
+                                        <span class="pd-action-badge @ActionBadgeClass(_permission.ActionCode)">@_permission.ActionCode</span>
+                                    </span>
+                                </div>
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Description</span>
+                                    <span class="pd-info-value">@(_permission.Description ?? "—")</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="pd-info-section">
+                            <h3 class="pd-section-title">Flags &amp; Usage</h3>
+                            <div class="pd-info-list">
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Active</span>
+                                    <span class="pd-info-value">
+                                        <i class="bi @(_permission.IsActive ? "bi-check-circle-fill pd-flag-on" : "bi-dash-circle pd-flag-off")" aria-hidden="true"></i>
+                                        @(_permission.IsActive ? "Yes" : "No")
+                                    </span>
+                                </div>
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Privileged / Built-in</span>
+                                    <span class="pd-info-value">
+                                        <i class="bi @(_permission.IsBuiltIn ? "bi-star-fill pd-flag-priv" : "bi-star pd-flag-off")" aria-hidden="true"></i>
+                                        @(_permission.IsBuiltIn ? "Yes" : "No")
+                                    </span>
+                                </div>
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Roles Using This</span>
+                                    <span class="pd-info-value">@_permission.RoleCount</span>
+                                </div>
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Permission ID</span>
+                                    <code class="pd-info-id">@_permission.PermissionId</code>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="pd-info-section">
+                            <h3 class="pd-section-title">Audit</h3>
+                            <div class="pd-info-list">
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Created</span>
+                                    <span class="pd-info-value">@_permission.CreatedDateUtc.ToString("MMM d, yyyy HH:mm") UTC</span>
+                                </div>
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Last Modified</span>
+                                    <span class="pd-info-value">@(_permission.ModifiedDateUtc?.ToString("MMM d, yyyy HH:mm") + " UTC" ?? "—")</span>
+                                </div>
+                                <div class="pd-info-row">
+                                    <span class="pd-info-label">Tenant ID</span>
+                                    <code class="pd-info-id">@_permission.TenantId</code>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            }
+
+            <!-- ── Assigned Roles Tab ──────────────────────── -->
+            @if (_activeTab == "roles")
+            {
+                <div class="pd-tab-panel" role="tabpanel">
+                    @if (_loadingRoles)
+                    {
+                        <div class="pd-tab-loading" aria-live="polite">
+                            <div class="pd-spinner" aria-hidden="true"></div>
+                            <span>Loading roles…</span>
+                        </div>
+                    }
+                    else if (_assignedRoles.Count == 0)
+                    {
+                        <div class="pd-empty">
+                            <i class="bi bi-shield-lock" aria-hidden="true"></i>
+                            <p>This permission has not been assigned to any roles.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="pd-panel-toolbar">
+                            <div class="um-search-box">
+                                <i class="bi bi-search" aria-hidden="true"></i>
+                                <input class="um-search-input"
+                                       type="search"
+                                       placeholder="Filter roles…"
+                                       value="@_roleSearch"
+                                       @oninput="e => _roleSearch = e.Value?.ToString() ?? string.Empty" />
+                            </div>
+                        </div>
+                        <SfGrid TValue="RolePermissionDto"
+                                DataSource="@FilteredRoles"
+                                AllowPaging="true"
+                                AllowSorting="true"
+                                RowHeight="52">
+                            <GridPageSettings PageSize="25" />
+                            <GridColumns>
+                                <GridColumn Field="RoleName" HeaderText="Role" Width="240" AllowSorting="true">
+                                    <Template>
+                                        @{ var rp = (RolePermissionDto)context; }
+                                        <div class="pd-role-cell">
+                                            <div class="pd-role-icon" aria-hidden="true">
+                                                <i class="bi bi-shield-lock"></i>
+                                            </div>
+                                            <button class="pd-role-link" @onclick="() => ViewRole(rp.RoleId)">
+                                                @rp.RoleName
+                                            </button>
+                                        </div>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="GrantedByFullName" HeaderText="Granted By" Width="200">
+                                    <Template>
+                                        @{ var rp = (RolePermissionDto)context; }
+                                        <span>@(rp.GrantedByFullName ?? "—")</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="GrantedDateUtc" HeaderText="Granted On" Width="160" AllowSorting="true">
+                                    <Template>
+                                        @{ var rp = (RolePermissionDto)context; }
+                                        <span class="um-date">@rp.GrantedDateUtc.ToString("MMM d, yyyy")</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn HeaderText="" Width="80" AllowSorting="false" TextAlign="TextAlign.Right">
+                                    <Template>
+                                        @{ var rp = (RolePermissionDto)context; }
+                                        <div class="um-row-actions">
+                                            <button class="um-btn um-btn-xs um-btn-ghost"
+                                                    @onclick="() => ViewRole(rp.RoleId)"
+                                                    title="View role">
+                                                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                    </Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    }
+                </div>
+            }
+
+            <!-- ── Users with Direct Override Tab ──────────── -->
+            @if (_activeTab == "users")
+            {
+                <div class="pd-tab-panel" role="tabpanel">
+                    @if (_loadingDirectUsers)
+                    {
+                        <div class="pd-tab-loading" aria-live="polite">
+                            <div class="pd-spinner" aria-hidden="true"></div>
+                            <span>Loading direct overrides…</span>
+                        </div>
+                    }
+                    else if (_directUsers.Count == 0)
+                    {
+                        <div class="pd-empty">
+                            <i class="bi bi-person-badge" aria-hidden="true"></i>
+                            <p>No users have a direct override for this permission.</p>
+                            <span class="pd-empty-hint">Direct overrides are explicit grants or denies assigned to individual users, separate from role-based access.</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="pd-override-summary">
+                            <div class="pd-override-stat pd-override-granted">
+                                <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                                <span class="pd-override-count">@_directUsers.Count(u => u.IsGranted)</span>
+                                <span class="pd-override-label">Granted</span>
+                            </div>
+                            <div class="pd-override-stat pd-override-denied">
+                                <i class="bi bi-x-circle-fill" aria-hidden="true"></i>
+                                <span class="pd-override-count">@_directUsers.Count(u => !u.IsGranted)</span>
+                                <span class="pd-override-label">Denied</span>
+                            </div>
+                        </div>
+                        <div class="pd-panel-toolbar">
+                            <div class="um-search-box">
+                                <i class="bi bi-search" aria-hidden="true"></i>
+                                <input class="um-search-input"
+                                       type="search"
+                                       placeholder="Filter users…"
+                                       value="@_userSearch"
+                                       @oninput="e => _userSearch = e.Value?.ToString() ?? string.Empty" />
+                            </div>
+                            <div class="pd-override-filter-chips">
+                                <button class="pd-chip @(_userFilter == "all"     ? "pd-chip-active" : "")" @onclick='() => _userFilter = "all"'>All</button>
+                                <button class="pd-chip @(_userFilter == "granted" ? "pd-chip-active" : "")" @onclick='() => _userFilter = "granted"'>Granted</button>
+                                <button class="pd-chip @(_userFilter == "denied"  ? "pd-chip-active" : "")" @onclick='() => _userFilter = "denied"'>Denied</button>
+                            </div>
+                        </div>
+                        <SfGrid TValue="UserPermissionDto"
+                                DataSource="@FilteredDirectUsers"
+                                AllowPaging="true"
+                                AllowSorting="true"
+                                RowHeight="56">
+                            <GridPageSettings PageSize="25" />
+                            <GridColumns>
+
+                                <GridColumn Field="UserFullName" HeaderText="User" Width="240" AllowSorting="true">
+                                    <Template>
+                                        @{ var up = (UserPermissionDto)context; }
+                                        <div class="pd-user-cell">
+                                            <div class="pd-user-avatar" style="@AvatarStyle(up.UserFullName)" aria-hidden="true">
+                                                @Initials(up.UserFullName)
+                                            </div>
+                                            <div class="pd-user-meta">
+                                                <button class="pd-role-link" @onclick="() => ViewUser(up.UserId)">
+                                                    @up.UserFullName
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </Template>
+                                </GridColumn>
+
+                                <GridColumn Field="IsGranted" HeaderText="Override" Width="120">
+                                    <Template>
+                                        @{ var up = (UserPermissionDto)context; }
+                                        @if (up.IsGranted)
+                                        {
+                                            <span class="pd-override-badge pd-override-badge-grant">
+                                                <i class="bi bi-check-circle-fill" aria-hidden="true"></i> Granted
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span class="pd-override-badge pd-override-badge-deny">
+                                                <i class="bi bi-x-circle-fill" aria-hidden="true"></i> Denied
+                                            </span>
+                                        }
+                                    </Template>
+                                </GridColumn>
+
+                                <GridColumn Field="GrantedByFullName" HeaderText="By" Width="180">
+                                    <Template>
+                                        @{ var up = (UserPermissionDto)context; }
+                                        <span class="pd-by-name">@(up.GrantedByFullName ?? "—")</span>
+                                    </Template>
+                                </GridColumn>
+
+                                <GridColumn Field="GrantedDateUtc" HeaderText="When" Width="140" AllowSorting="true">
+                                    <Template>
+                                        @{ var up = (UserPermissionDto)context; }
+                                        <span class="um-date" title="@FormatLong(up.GrantedDateUtc)">
+                                            @FormatRelative(up.GrantedDateUtc)
+                                        </span>
+                                    </Template>
+                                </GridColumn>
+
+                                <GridColumn Field="ExpiresDateUtc" HeaderText="Expires" Width="140" AllowSorting="true">
+                                    <Template>
+                                        @{ var up = (UserPermissionDto)context; }
+                                        @if (up.ExpiresDateUtc is null)
+                                        {
+                                            <span class="pd-na">Never</span>
+                                        }
+                                        else if (up.ExpiresDateUtc < DateTime.UtcNow)
+                                        {
+                                            <span class="pd-expired" title="@FormatLong(up.ExpiresDateUtc.Value)">
+                                                <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                                                Expired
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span class="um-date" title="@FormatLong(up.ExpiresDateUtc.Value)">
+                                                @up.ExpiresDateUtc.Value.ToString("MMM d, yyyy")
+                                            </span>
+                                        }
+                                    </Template>
+                                </GridColumn>
+
+                                <GridColumn HeaderText="" Width="60" AllowSorting="false" TextAlign="TextAlign.Right">
+                                    <Template>
+                                        @{ var up = (UserPermissionDto)context; }
+                                        <div class="um-row-actions">
+                                            <button class="um-btn um-btn-xs um-btn-ghost"
+                                                    @onclick="() => ViewUser(up.UserId)"
+                                                    title="View user">
+                                                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                    </Template>
+                                </GridColumn>
+
+                            </GridColumns>
+                        </SfGrid>
+                    }
+                </div>
+            }
+
+            <!-- ── Audit History Tab ───────────────────────── -->
+            @if (_activeTab == "audit")
+            {
+                <div class="pd-tab-panel" role="tabpanel">
+                    <div class="pd-audit-subtabs" role="tablist">
+                        <button class="pd-audit-subtab @(_auditSubTab == "timeline" ? "pd-audit-subtab-active" : "")"
+                                @onclick='() => _auditSubTab = "timeline"'>
+                            <i class="bi bi-clock-history" aria-hidden="true"></i> Timeline
+                            @if (_timeline.Count > 0) { <span class="pd-tab-badge">@_timeline.Count</span> }
+                        </button>
+                        <button class="pd-audit-subtab @(_auditSubTab == "fieldchanges" ? "pd-audit-subtab-active" : "")"
+                                @onclick='() => _auditSubTab = "fieldchanges"'>
+                            <i class="bi bi-pencil-square" aria-hidden="true"></i> Field Changes
+                            @if (_fieldChanges.Count > 0) { <span class="pd-tab-badge">@_fieldChanges.Count</span> }
+                        </button>
+                    </div>
+                    @if (_loadingAudit)
+                    {
+                        <div class="pd-tab-loading" aria-live="polite">
+                            <div class="pd-spinner" aria-hidden="true"></div>
+                            <span>Loading audit history…</span>
+                        </div>
+                    }
+                    else if (_auditSubTab == "timeline")
+                    {
+                        @if (_timeline.Count == 0)
+                        {
+                            <div class="pd-empty">
+                                <i class="bi bi-clock-history" aria-hidden="true"></i>
+                                <p>No audit events recorded for this permission.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="pd-timeline">
+                                @foreach (var entry in _timeline.OrderByDescending(e => e.OccurredDateUtc))
+                                {
+                                    <div class="pd-tl-item">
+                                        <div class="pd-tl-dot @TimelineSourceClass(entry.SourceType)" aria-hidden="true">
+                                            <i class="bi @TimelineSourceIcon(entry.SourceType)"></i>
+                                        </div>
+                                        <div class="pd-tl-content">
+                                            <div class="pd-tl-summary">@entry.Summary</div>
+                                            @if (!string.IsNullOrEmpty(entry.Detail))
+                                            {
+                                                <div class="pd-tl-detail">@entry.Detail</div>
+                                            }
+                                            <div class="pd-tl-meta">
+                                                <span class="pd-tl-source">@entry.SourceType</span>
+                                                <span class="pd-tl-time">@FormatRelative(entry.OccurredDateUtc)</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        @if (_fieldChanges.Count == 0)
+                        {
+                            <div class="pd-empty">
+                                <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                <p>No field changes recorded for this permission.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="pd-panel-toolbar">
+                                <div class="um-search-box">
+                                    <i class="bi bi-search" aria-hidden="true"></i>
+                                    <input class="um-search-input" type="search" placeholder="Filter field changes…"
+                                           value="@_auditSearch"
+                                           @oninput="e => _auditSearch = e.Value?.ToString() ?? string.Empty" />
+                                </div>
+                            </div>
+                            <SfGrid TValue="FieldChangeLogDto"
+                                    DataSource="@FilteredFieldChanges"
+                                    AllowPaging="true"
+                                    AllowSorting="true"
+                                    RowHeight="48">
+                                <GridPageSettings PageSize="20" />
+                                <GridColumns>
+                                    <GridColumn Field="FieldName"     HeaderText="Field"          Width="160" />
+                                    <GridColumn Field="OldValue"      HeaderText="Previous Value" Width="200">
+                                        <Template>
+                                            @{ var chg = (FieldChangeLogDto)context; }
+                                            <span class="pd-fc-old">@(chg.OldValue ?? "—")</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="NewValue"      HeaderText="New Value"      Width="200">
+                                        <Template>
+                                            @{ var chg = (FieldChangeLogDto)context; }
+                                            <span class="pd-fc-new">@(chg.NewValue ?? "—")</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="ChangeSource"  HeaderText="Source"         Width="130" />
+                                    <GridColumn Field="IpAddress"     HeaderText="IP"             Width="130" />
+                                    <GridColumn Field="ChangedDateUtc" HeaderText="When"          Width="150">
+                                        <Template>
+                                            @{ var chg = (FieldChangeLogDto)context; }
+                                            <span class="um-date" title="@chg.ChangedDateUtc.ToString("f")">@FormatRelative(chg.ChangedDateUtc)</span>
+                                        </Template>
+                                    </GridColumn>
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    }
+                </div>
+            }
+
+        </div>
+    </div>
+}
+
+<!-- ── Toast ─────────────────────────────────────────── -->
+<SfToast @ref="_toast" ShowCloseButton="true" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    [Parameter] public Guid PermissionId { get; set; }
+
+    private static readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Page state ────────────────────────────────────────────
+    private PermissionDto? _permission;
+    private bool           _loading   = true;
+    private string         _activeTab = "overview";
+
+    // ── Assigned Roles tab ────────────────────────────────────
+    private List<RolePermissionDto> _assignedRoles = [];
+    private bool                    _loadingRoles;
+    private string                  _roleSearch = string.Empty;
+
+    // ── Direct override users tab ─────────────────────────────
+    private List<UserPermissionDto> _directUsers       = [];
+    private bool                    _loadingDirectUsers;
+    private bool                    _directUsersLoaded;
+    private string                  _userSearch = string.Empty;
+    private string                  _userFilter = "all";
+
+    private IReadOnlyList<UserPermissionDto> FilteredDirectUsers
+    {
+        get
+        {
+            var q = _directUsers.AsEnumerable();
+            if (_userFilter == "granted") q = q.Where(u => u.IsGranted);
+            if (_userFilter == "denied")  q = q.Where(u => !u.IsGranted);
+            if (!string.IsNullOrWhiteSpace(_userSearch))
+                q = q.Where(u =>
+                    (u.UserFullName ?? "").Contains(_userSearch, StringComparison.OrdinalIgnoreCase));
+            return q.ToList();
+        }
+    }
+
+    private IReadOnlyList<RolePermissionDto> FilteredRoles =>
+        string.IsNullOrWhiteSpace(_roleSearch)
+            ? _assignedRoles
+            : _assignedRoles.Where(r =>
+                (r.RoleName ?? "").Contains(_roleSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+
+    private IReadOnlyList<FieldChangeLogDto> FilteredFieldChanges =>
+        string.IsNullOrWhiteSpace(_auditSearch)
+            ? _fieldChanges
+            : _fieldChanges.Where(c =>
+                c.FieldName.Contains(_auditSearch, StringComparison.OrdinalIgnoreCase) ||
+                (c.OldValue ?? "").Contains(_auditSearch, StringComparison.OrdinalIgnoreCase) ||
+                (c.NewValue ?? "").Contains(_auditSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+
+    // ── Audit tab ─────────────────────────────────────────────
+    private List<RecordTimelineEntryDto> _timeline     = [];
+    private List<FieldChangeLogDto>      _fieldChanges = [];
+    private bool                         _loadingAudit;
+    private bool                         _auditLoaded;
+    private string                       _auditSubTab  = "timeline";
+    private string                       _auditSearch  = string.Empty;
+
+    // ── Toast ─────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Lifecycle ─────────────────────────────────────────────
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _permission = await Api.GetPermissionByIdAsync(PermissionId);
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private async Task SetTab(string tab)
+    {
+        _activeTab = tab;
+        if (tab == "roles" && _assignedRoles.Count == 0 && !_loadingRoles)
+            await LoadRolesAsync();
+        if (tab == "users" && !_directUsersLoaded && !_loadingDirectUsers)
+            await LoadDirectUsersAsync();
+        if (tab == "audit" && !_auditLoaded && !_loadingAudit)
+            await LoadAuditAsync();
+    }
+
+    private async Task LoadDirectUsersAsync()
+    {
+        _loadingDirectUsers = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.GetPermissionDirectUsersAsync(PermissionId);
+            _directUsers = result?.ToList() ?? [];
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loadingDirectUsers = false; _directUsersLoaded = true; StateHasChanged(); }
+    }
+
+    private async Task LoadRolesAsync()
+    {
+        _loadingRoles = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.GetPermissionRolesAsync(PermissionId);
+            _assignedRoles = result?.ToList() ?? [];
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loadingRoles = false; StateHasChanged(); }
+    }
+
+    private async Task LoadAuditAsync()
+    {
+        _loadingAudit = true;
+        StateHasChanged();
+        try
+        {
+            var timelineTask    = Api.GetRecordTimelineAsync(_tenantId, "Permission", PermissionId, top: 100);
+            var fieldChangeTask = Api.SearchFieldChangesAsync(_tenantId, "Permission", PermissionId);
+            await Task.WhenAll(timelineTask, fieldChangeTask);
+            _timeline     = timelineTask.Result?.ToList() ?? [];
+            _fieldChanges = fieldChangeTask.Result?.Items.ToList() ?? [];
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loadingAudit = false; _auditLoaded = true; StateHasChanged(); }
+    }
+
+    // ── Actions ───────────────────────────────────────────────
+    private async Task DeactivateAsync()
+    {
+        if (_permission is null) return;
+        try
+        {
+            await Api.DeactivatePermissionAsync(_permission.PermissionId);
+            await ShowToastAsync($"Permission '{_permission.PermissionCode}' deactivated.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+    }
+
+    private void GoBack() => Nav.NavigateTo("/iam/permissions");
+
+    private void ViewRole(Guid roleId) => Nav.NavigateTo($"/iam/roles/{roleId}");
+
+    private void ViewUser(Guid userId) => Nav.NavigateTo($"/iam/users/{userId}");
+
+    private static string Initials(string? name) =>
+        string.IsNullOrWhiteSpace(name) ? "?" :
+        string.Concat(name.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                          .Take(2).Select(w => char.ToUpperInvariant(w[0])));
+
+    private static readonly string[] _avatarColors =
+        ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4", "#6366f1", "#ec4899"];
+
+    private static string AvatarStyle(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "background:#6b7280";
+        var idx = Math.Abs(name.GetHashCode()) % _avatarColors.Length;
+        return $"background:{_avatarColors[idx]}";
+    }
+
+    // ── Display helpers ───────────────────────────────────────
+    private static string GetModule(string resourceCode)
+    {
+        if (string.IsNullOrEmpty(resourceCode)) return string.Empty;
+        var dot = resourceCode.IndexOf('.');
+        return dot > 0 ? resourceCode[..dot] : resourceCode;
+    }
+
+    private static string GetEntity(string resourceCode)
+    {
+        if (string.IsNullOrEmpty(resourceCode)) return string.Empty;
+        var dot = resourceCode.IndexOf('.');
+        return dot > 0 && dot < resourceCode.Length - 1 ? resourceCode[(dot + 1)..] : string.Empty;
+    }
+
+    private static string ActionBadgeClass(string action) => action.ToUpperInvariant() switch
+    {
+        "VIEW"   or "READ"                => "pd-action-read",
+        "CREATE" or "WRITE" or "UPDATE"   => "pd-action-write",
+        "DELETE"                          => "pd-action-delete",
+        "MANAGE"                          => "pd-action-manage",
+        "ADMIN"                           => "pd-action-admin",
+        _                                 => "pd-action-other",
+    };
+
+    private static string ActionIcon(string action) => action.ToUpperInvariant() switch
+    {
+        "VIEW"   or "READ"              => "bi-eye",
+        "CREATE" or "WRITE" or "UPDATE" => "bi-pencil",
+        "DELETE"                        => "bi-trash",
+        "MANAGE"                        => "bi-sliders",
+        "ADMIN"                         => "bi-shield-shaded",
+        _                               => "bi-key",
+    };
+
+    private static string ActionAvatarClass(string action) => action.ToUpperInvariant() switch
+    {
+        "VIEW"   or "READ"              => "pd-avatar-read",
+        "CREATE" or "WRITE" or "UPDATE" => "pd-avatar-write",
+        "DELETE"                        => "pd-avatar-delete",
+        "MANAGE"                        => "pd-avatar-manage",
+        "ADMIN"                         => "pd-avatar-admin",
+        _                               => "pd-avatar-other",
+    };
+
+    private static string TimelineSourceClass(string? source) => source?.ToLowerInvariant() switch
+    {
+        "user"   => "pd-tl-dot-user",
+        "system" => "pd-tl-dot-system",
+        "api"    => "pd-tl-dot-api",
+        _        => "pd-tl-dot-other",
+    };
+
+    private static string TimelineSourceIcon(string? source) => source?.ToLowerInvariant() switch
+    {
+        "user"   => "bi-person",
+        "system" => "bi-gear",
+        "api"    => "bi-lightning",
+        _        => "bi-circle",
+    };
+
+    private static string FormatRelative(DateTime utc)
+    {
+        var diff = DateTime.UtcNow - utc;
+        return diff.TotalMinutes < 1   ? "just now"
+             : diff.TotalHours   < 1   ? $"{(int)diff.TotalMinutes}m ago"
+             : diff.TotalDays    < 1   ? $"{(int)diff.TotalHours}h ago"
+             : diff.TotalDays    < 30  ? $"{(int)diff.TotalDays}d ago"
+             : utc.ToString("MMM d, yyyy");
+    }
+
+    private static string FormatLong(DateTime utc) => utc.ToString("f") + " UTC";
+
+    private async Task ShowToastAsync(string message, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content  = message,
+            CssClass = isError ? "e-toast-danger" : "e-toast-success",
+            Timeout  = 4000,
+        });
+    }
+}

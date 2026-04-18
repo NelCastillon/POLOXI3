@@ -1,0 +1,479 @@
+@page "/documents"
+@inject ApiClient Api
+@using Ams.Application.Features.Documents
+
+<PageTitle>Document Management</PageTitle>
+<h1>Document Management</h1>
+
+<div class="toolbar-row">
+    <SfDropDownList TItem="CategoryOption" TValue="string" DataSource="_categories" @bind-Value="_categoryFilter" Placeholder="All Categories" Width="200px">
+        <DropDownListFieldSettings Text="Label" Value="Code"></DropDownListFieldSettings>
+    </SfDropDownList>
+    <SfTextBox Placeholder="Search files, types, tags..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
+    <SfButton CssClass="e-primary" OnClick="LoadAsync">Search</SfButton>
+    <SfButton CssClass="e-success" OnClick="() => _showUpload = true">Upload Document</SfButton>
+</div>
+
+@if (_items is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="480px">
+        <GridEvents RowSelected="OnRowSelected" TValue="DocumentDto"></GridEvents>
+        <GridPageSettings PageSize="10"></GridPageSettings>
+        <GridColumns>
+            <GridColumn Field="@nameof(DocumentDto.FileName)" HeaderText="File Name" Width="240"></GridColumn>
+            <GridColumn Field="@nameof(DocumentDto.CategoryCode)" HeaderText="Category" Width="140"></GridColumn>
+            <GridColumn Field="@nameof(DocumentDto.DocumentTypeCode)" HeaderText="Type" Width="130"></GridColumn>
+            <GridColumn Field="@nameof(DocumentDto.EntityName)" HeaderText="Linked Entity" Width="130"></GridColumn>
+            <GridColumn Field="@nameof(DocumentDto.VersionNumber)" HeaderText="Ver" Width="70" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center"></GridColumn>
+            <GridColumn Field="@nameof(DocumentDto.Tags)" HeaderText="Tags" Width="160"></GridColumn>
+            <GridColumn Field="@nameof(DocumentDto.StatusCode)" HeaderText="Status" Width="100"></GridColumn>
+            <GridColumn Field="@nameof(DocumentDto.RetentionDate)" HeaderText="Retention" Width="120"></GridColumn>
+            <GridColumn Field="@nameof(DocumentDto.CreatedDateUtc)" HeaderText="Uploaded" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
+        </GridColumns>
+    </SfGrid>
+}
+
+@* ── Upload Dialog ─────────────────────────────────────── *@
+<SfDialog Width="560px" IsModal="true" @bind-Visible="_showUpload" Header="Upload Document">
+    <DialogTemplates>
+        <Content>
+            <div class="form-group mb-2">
+                <label>File Name</label>
+                <SfTextBox @bind-Value="_newDoc.FileName"></SfTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <label>Storage Path</label>
+                <SfTextBox @bind-Value="_newDoc.StoragePath"></SfTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <label>Category</label>
+                <SfDropDownList TItem="CategoryOption" TValue="string" DataSource="_uploadCategories" @bind-Value="_newDoc.CategoryCode" Width="100%">
+                    <DropDownListFieldSettings Text="Label" Value="Code"></DropDownListFieldSettings>
+                </SfDropDownList>
+            </div>
+            <div class="form-group mb-2">
+                <label>Document Type Code</label>
+                <SfTextBox @bind-Value="_newDoc.DocumentTypeCode"></SfTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <label>Content Type</label>
+                <SfTextBox @bind-Value="_newDoc.ContentType"></SfTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <label>Entity Name (e.g. Account, Agreement)</label>
+                <SfTextBox @bind-Value="_newDoc.EntityName"></SfTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <label>Description</label>
+                <SfTextBox @bind-Value="_newDoc.Description" Multiline="true"></SfTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <label>Tags (comma-separated)</label>
+                <SfTextBox @bind-Value="_newDoc.Tags"></SfTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <label>Uploaded By</label>
+                <SfTextBox @bind-Value="_newDoc.UploadedByName"></SfTextBox>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Upload" IsPrimary="true" OnClick="SubmitUploadAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showUpload = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+@* ── Detail / Actions Dialog ──────────────────────────── *@
+<SfDialog Width="720px" IsModal="true" @bind-Visible="_showDetail" Header="@(_selected?.FileName ?? "Document Details")">
+    <DialogTemplates>
+        <Content>
+            @if (_selected is not null)
+            {
+                <SfTab>
+                    <TabItems>
+                        <TabItem>
+                            <ChildContent><TabHeader Text="Details"></TabHeader></ChildContent>
+                            <ContentTemplate>
+                                <div class="row mt-3">
+                                    <div class="col-6"><strong>Category:</strong> @_selected.CategoryCode</div>
+                                    <div class="col-6"><strong>Type:</strong> @_selected.DocumentTypeCode</div>
+                                </div>
+                                <div class="row mt-2">
+                                    <div class="col-6"><strong>Status:</strong> @_selected.StatusCode</div>
+                                    <div class="col-6"><strong>Version:</strong> @_selected.VersionNumber</div>
+                                </div>
+                                <div class="row mt-2">
+                                    <div class="col-6"><strong>Content Type:</strong> @_selected.ContentType</div>
+                                    <div class="col-6"><strong>Size:</strong> @FormatSize(_selected.FileSizeBytes)</div>
+                                </div>
+                                <div class="row mt-2">
+                                    <div class="col-6"><strong>Linked Entity:</strong> @_selected.EntityName</div>
+                                    <div class="col-6"><strong>Retention:</strong> @_selected.RetentionDate</div>
+                                </div>
+                                <div class="row mt-2">
+                                    <div class="col-12"><strong>Description:</strong> @_selected.Description</div>
+                                </div>
+                                <div class="row mt-2">
+                                    <div class="col-12"><strong>Tags:</strong> @_selected.Tags</div>
+                                </div>
+                                <hr />
+                                <div class="d-flex gap-2 flex-wrap">
+                                    <SfButton CssClass="e-warning" OnClick="ArchiveSelectedAsync">Archive</SfButton>
+                                    <SfButton CssClass="e-info" OnClick="() => _showMetadata = true">Edit Metadata</SfButton>
+                                    <SfButton CssClass="e-success" OnClick="() => _showNewVersion = true">New Version</SfButton>
+                                    <SfButton CssClass="e-primary" OnClick="() => _showShareDialog = true">Share</SfButton>
+                                    <SfButton CssClass="e-secondary" OnClick="OpenRenameDialog">Rename</SfButton>
+                                    <SfButton CssClass="e-danger" OnClick="DeleteSelectedAsync">Delete</SfButton>
+                                </div>
+                            </ContentTemplate>
+                        </TabItem>
+                        <TabItem>
+                            <ChildContent><TabHeader Text="Versions"></TabHeader></ChildContent>
+                            <ContentTemplate>
+                                @if (_versions is null) { <p>Loading...</p> }
+                                else
+                                {
+                                    <SfGrid DataSource="_versions" AllowSorting="true" Height="260px">
+                                        <GridColumns>
+                                            <GridColumn Field="@nameof(DocumentVersionDto.VersionNumber)" HeaderText="Ver" Width="60"></GridColumn>
+                                            <GridColumn Field="@nameof(DocumentVersionDto.FileName)" HeaderText="File" Width="200"></GridColumn>
+                                            <GridColumn Field="@nameof(DocumentVersionDto.ChangeNotes)" HeaderText="Notes" Width="200"></GridColumn>
+                                            <GridColumn Field="@nameof(DocumentVersionDto.CreatedDateUtc)" HeaderText="Date" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
+                                        </GridColumns>
+                                    </SfGrid>
+                                }
+                            </ContentTemplate>
+                        </TabItem>
+                        <TabItem>
+                            <ChildContent><TabHeader Text="Share Links"></TabHeader></ChildContent>
+                            <ContentTemplate>
+                                @if (_shareLinks is null) { <p>Loading...</p> }
+                                else
+                                {
+                                    <SfGrid DataSource="_shareLinks" AllowSorting="true" Height="260px">
+                                        <GridColumns>
+                                            <GridColumn Field="@nameof(DocumentShareLinkDto.Token)" HeaderText="Token" Width="180"></GridColumn>
+                                            <GridColumn Field="@nameof(DocumentShareLinkDto.ExpiresDateUtc)" HeaderText="Expires" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
+                                            <GridColumn Field="@nameof(DocumentShareLinkDto.AccessCount)" HeaderText="Accessed" Width="90"></GridColumn>
+                                            <GridColumn Field="@nameof(DocumentShareLinkDto.MaxAccessCount)" HeaderText="Max" Width="70"></GridColumn>
+                                            <GridColumn Field="@nameof(DocumentShareLinkDto.IsRevoked)" HeaderText="Revoked" Width="90"></GridColumn>
+                                            <GridColumn HeaderText="Actions" Width="90">
+                                                <Template>
+                                                    @{
+                                                        var lnk = (DocumentShareLinkDto)context;
+                                                    }
+                                                    @if (!lnk.IsRevoked)
+                                                    {
+                                                        <SfButton CssClass="e-danger e-small" OnClick="@(() => RevokeShareLinkAsync(lnk.ShareLinkId))">Revoke</SfButton>
+                                                    }
+                                                </Template>
+                                            </GridColumn>
+                                        </GridColumns>
+                                    </SfGrid>
+                                }
+                            </ContentTemplate>
+                        </TabItem>
+                        <TabItem>
+                            <ChildContent><TabHeader Text="Audit Trail"></TabHeader></ChildContent>
+                            <ContentTemplate>
+                                @if (_accessLog is null) { <p>Loading...</p> }
+                                else
+                                {
+                                    <SfGrid DataSource="_accessLog" AllowSorting="true" Height="260px">
+                                        <GridColumns>
+                                            <GridColumn Field="@nameof(DocumentAccessLogDto.ActionCode)" HeaderText="Action" Width="120"></GridColumn>
+                                            <GridColumn Field="@nameof(DocumentAccessLogDto.UserId)" HeaderText="User" Width="200"></GridColumn>
+                                            <GridColumn Field="@nameof(DocumentAccessLogDto.IpAddress)" HeaderText="IP" Width="140"></GridColumn>
+                                            <GridColumn Field="@nameof(DocumentAccessLogDto.AccessDateUtc)" HeaderText="Date" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
+                                        </GridColumns>
+                                    </SfGrid>
+                                }
+                            </ContentTemplate>
+                        </TabItem>
+                    </TabItems>
+                </SfTab>
+            }
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Close" OnClick="() => _showDetail = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+@* ── Edit Metadata Dialog ─────────────────────────────── *@
+<SfDialog Width="480px" IsModal="true" @bind-Visible="_showMetadata" Header="Edit Metadata">
+    <DialogTemplates>
+        <Content>
+            <div class="form-group mb-2">
+                <label>Description</label>
+                <SfTextBox @bind-Value="_metaRequest.Description" Multiline="true"></SfTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <label>Tags</label>
+                <SfTextBox @bind-Value="_metaRequest.Tags"></SfTextBox>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Save" IsPrimary="true" OnClick="SubmitMetadataAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showMetadata = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+@* ── New Version Dialog ───────────────────────────────── *@
+<SfDialog Width="480px" IsModal="true" @bind-Visible="_showNewVersion" Header="Upload New Version">
+    <DialogTemplates>
+        <Content>
+            <div class="form-group mb-2">
+                <label>File Name</label>
+                <SfTextBox @bind-Value="_versionRequest.FileName"></SfTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <label>Storage Path</label>
+                <SfTextBox @bind-Value="_versionRequest.StoragePath"></SfTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <label>Content Type</label>
+                <SfTextBox @bind-Value="_versionRequest.ContentType"></SfTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <label>Change Notes</label>
+                <SfTextBox @bind-Value="_versionRequest.ChangeNotes" Multiline="true"></SfTextBox>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Upload Version" IsPrimary="true" OnClick="SubmitVersionAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showNewVersion = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+@* ── Share Link Dialog ────────────────────────────────── *@
+<SfDialog Width="480px" IsModal="true" @bind-Visible="_showShareDialog" Header="Create Share Link">
+    <DialogTemplates>
+        <Content>
+            <div class="form-group mb-2">
+                <label>Expires (UTC)</label>
+                <SfDateTimePicker TValue="DateTime" @bind-Value="_shareExpires" Width="100%"></SfDateTimePicker>
+            </div>
+            <div class="form-group mb-2">
+                <label>Max Access Count (blank = unlimited)</label>
+                <SfNumericTextBox TValue="int?" @bind-Value="_shareMaxAccess" Width="100%"></SfNumericTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <SfCheckBox Label="Require PIN" @bind-Checked="_shareRequiresPin"></SfCheckBox>
+            </div>
+            @if (_shareRequiresPin)
+            {
+                <div class="form-group mb-2">
+                    <label>PIN</label>
+                    <SfTextBox @bind-Value="_sharePin" Type="InputType.Password"></SfTextBox>
+                </div>
+            }
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Create Link" IsPrimary="true" OnClick="SubmitShareLinkAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showShareDialog = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+@* ── Rename Dialog ───────────────────────────────────────── *@
+<SfDialog Width="400px" IsModal="true" @bind-Visible="_showRename" Header="Rename Document">
+    <DialogTemplates>
+        <Content>
+            <div class="form-group mb-2">
+                <label>New File Name</label>
+                <SfTextBox @bind-Value="_renameRequest.NewFileName"></SfTextBox>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Rename" IsPrimary="true" OnClick="SubmitRenameAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showRename = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private string? _searchTerm;
+    private string? _categoryFilter;
+    private List<DocumentDto>? _items;
+
+    // Detail panel
+    private DocumentDto? _selected;
+    private bool _showDetail;
+    private List<DocumentVersionDto>? _versions;
+    private List<DocumentShareLinkDto>? _shareLinks;
+    private List<DocumentAccessLogDto>? _accessLog;
+
+    // Upload
+    private bool _showUpload;
+    private CreateDocumentRequest _newDoc = new();
+
+    // Metadata edit
+    private bool _showMetadata;
+    private UpdateDocumentMetadataRequest _metaRequest = new();
+
+    // New version
+    private bool _showNewVersion;
+    private CreateDocumentVersionRequest _versionRequest = new();
+
+    // Share link
+    private bool _showShareDialog;
+    private DateTime _shareExpires = DateTime.UtcNow.AddDays(7);
+    private int? _shareMaxAccess;
+    private bool _shareRequiresPin;
+    private string? _sharePin;
+
+    // Rename
+    private bool _showRename;
+    private RenameDocumentRequest _renameRequest = new();
+
+    // Category options
+    private readonly List<CategoryOption> _categories = new()
+    {
+        new("", "All Categories"),
+        new("Proposal", "Proposal"),
+        new("Contract", "Contract"),
+        new("Invoice", "Invoice"),
+        new("Statement", "Statement"),
+        new("ClientUpload", "Client Upload"),
+        new("ServiceDocument", "Service Document"),
+        new("CommissionStatement", "Commission Statement"),
+        new("AuditEvidence", "Audit Evidence"),
+        new("Other", "Other")
+    };
+
+    private List<CategoryOption> _uploadCategories => _categories.Where(c => !string.IsNullOrEmpty(c.Code)).ToList();
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var result = await Api.SearchDocumentsAsync(_tenantId, _categoryFilter, null, null, _searchTerm);
+        _items = result?.Items.ToList() ?? [];
+    }
+
+    private async Task OnRowSelected(RowSelectEventArgs<DocumentDto> args)
+    {
+        _selected = args.Data;
+        _versions = null;
+        _shareLinks = null;
+        _accessLog = null;
+        _showDetail = true;
+
+        var versionsTask = Api.GetDocumentVersionsAsync(_selected.DocumentId);
+        var linksTask = Api.GetDocumentShareLinksAsync(_selected.DocumentId);
+        var logTask = Api.GetDocumentAccessLogAsync(_selected.DocumentId);
+        await Task.WhenAll(versionsTask, linksTask, logTask);
+
+        _versions = (await versionsTask)?.ToList() ?? [];
+        _shareLinks = (await linksTask)?.ToList() ?? [];
+        _accessLog = (await logTask)?.ToList() ?? [];
+    }
+
+    private async Task SubmitUploadAsync()
+    {
+        _newDoc.TenantId = _tenantId;
+        await Api.CreateDocumentAsync(_newDoc);
+        _newDoc = new();
+        _showUpload = false;
+        await LoadAsync();
+    }
+
+    private async Task SubmitMetadataAsync()
+    {
+        if (_selected is null) return;
+        _metaRequest.DocumentId = _selected.DocumentId;
+        await Api.UpdateDocumentMetadataAsync(_metaRequest);
+        _showMetadata = false;
+        _selected = await Api.GetDocumentByIdAsync(_selected.DocumentId);
+    }
+
+    private async Task ArchiveSelectedAsync()
+    {
+        if (_selected is null) return;
+        await Api.ArchiveDocumentAsync(_selected.DocumentId);
+        _showDetail = false;
+        await LoadAsync();
+    }
+
+    private async Task SubmitVersionAsync()
+    {
+        if (_selected is null) return;
+        _versionRequest.TenantId = _tenantId;
+        _versionRequest.DocumentId = _selected.DocumentId;
+        await Api.CreateDocumentVersionAsync(_versionRequest);
+        _versionRequest = new();
+        _showNewVersion = false;
+        _versions = (await Api.GetDocumentVersionsAsync(_selected.DocumentId))?.ToList() ?? [];
+        _selected = await Api.GetDocumentByIdAsync(_selected.DocumentId);
+    }
+
+    private async Task SubmitShareLinkAsync()
+    {
+        if (_selected is null) return;
+        var request = new CreateDocumentShareLinkRequest
+        {
+            TenantId = _tenantId,
+            DocumentId = _selected.DocumentId,
+            CreatedByUserId = Guid.Empty,
+            ExpiresDateUtc = _shareExpires,
+            MaxAccessCount = _shareMaxAccess,
+            RequiresPin = _shareRequiresPin,
+            Pin = _sharePin
+        };
+        await Api.CreateDocumentShareLinkAsync(request);
+        _showShareDialog = false;
+        _shareLinks = (await Api.GetDocumentShareLinksAsync(_selected.DocumentId))?.ToList() ?? [];
+    }
+
+    private void OpenRenameDialog()
+    {
+        if (_selected is null) return;
+        _renameRequest = new RenameDocumentRequest { DocumentId = _selected.DocumentId, NewFileName = _selected.FileName };
+        _showRename = true;
+    }
+
+    private async Task SubmitRenameAsync()
+    {
+        await Api.RenameDocumentAsync(_renameRequest);
+        _showRename = false;
+        _selected = await Api.GetDocumentByIdAsync(_selected!.DocumentId);
+        await LoadAsync();
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        if (_selected is null) return;
+        await Api.DeleteDocumentAsync(_selected.DocumentId);
+        _showDetail = false;
+        await LoadAsync();
+    }
+
+    private async Task RevokeShareLinkAsync(Guid shareLinkId)
+    {
+        await Api.RevokeDocumentShareLinkAsync(shareLinkId);
+        if (_selected is not null)
+            _shareLinks = (await Api.GetDocumentShareLinksAsync(_selected.DocumentId))?.ToList() ?? [];
+    }
+
+    private static string FormatSize(long? bytes)
+    {
+        if (bytes is null) return "—";
+        return bytes switch
+        {
+            < 1024 => $"{bytes} B",
+            < 1048576 => $"{bytes / 1024.0:F1} KB",
+            < 1073741824 => $"{bytes / 1048576.0:F1} MB",
+            _ => $"{bytes / 1073741824.0:F2} GB"
+        };
+    }
+
+    private sealed record CategoryOption(string Code, string Label);
+}

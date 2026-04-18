@@ -1,0 +1,796 @@
+@page "/security/mfa"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>MFA Management — Security</PageTitle>
+
+<AppPageHeader Title="MFA Management"
+               Subtitle="Manage multi-factor authentication methods and requirements for all users"
+               Icon="bi-shield-lock">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        @if (_view == "detail" && _detailUser is not null)
+        {
+            <button class="um-btn um-btn-primary" @onclick="OpenAddMethod">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> Add Method
+            </button>
+        }
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="mfa-kpi-strip">
+    <div class="@KpiClass1" role="button" tabindex="0">
+        <span class="mfa-kpi-icon mfa-kpi-icon--total"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="mfa-kpi-value">@(_withCount + _withoutCount)</div>
+            <div class="mfa-kpi-label">Total Users</div>
+        </div>
+    </div>
+    <div class="@KpiClass2" @onclick='() => SwitchView("with")' role="button" tabindex="0">
+        <span class="mfa-kpi-icon mfa-kpi-icon--enabled"><i class="bi bi-shield-check-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="mfa-kpi-value">@_withCount</div>
+            <div class="mfa-kpi-label">MFA Enabled</div>
+        </div>
+        @if (_kpiActive == 2) { <span class="mfa-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick='() => SwitchView("without")' role="button" tabindex="0">
+        <span class="mfa-kpi-icon mfa-kpi-icon--none"><i class="bi bi-shield-x" aria-hidden="true"></i></span>
+        <div>
+            <div class="mfa-kpi-value">@_withoutCount</div>
+            <div class="mfa-kpi-label">No MFA</div>
+        </div>
+        @if (_kpiActive == 3) { <span class="mfa-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass4" role="button" tabindex="0">
+        <span class="mfa-kpi-icon mfa-kpi-icon--required"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span>
+        <div>
+            <div class="mfa-kpi-value">@_requiredCount</div>
+            <div class="mfa-kpi-label">Required</div>
+        </div>
+    </div>
+</div>
+
+<!-- View tab strip -->
+<div class="mfa-view-tabs">
+    <button class="@TabClass("with")" @onclick='() => SwitchView("with")'>
+        <i class="bi bi-shield-check" aria-hidden="true"></i> With MFA
+        <span class="mfa-tab-count">@_withCount</span>
+    </button>
+    <button class="@TabClass("without")" @onclick='() => SwitchView("without")'>
+        <i class="bi bi-shield-x" aria-hidden="true"></i> Without MFA
+        <span class="mfa-tab-count">@_withoutCount</span>
+    </button>
+    @if (_view == "detail" && _detailUser is not null)
+    {
+        <button class="mfa-view-tab mfa-view-tab--active">
+            <i class="bi bi-person-badge" aria-hidden="true"></i> @_detailUser.UserFullName
+            <span class="mfa-tab-close" @onclick='() => SwitchView(_prevView)' title="Close">
+                <i class="bi bi-x" aria-hidden="true"></i>
+            </span>
+        </button>
+    }
+</div>
+
+<!-- Filter toolbar (hidden in detail view) -->
+@if (_view != "detail")
+{
+    <AppFilterPanel @bind-SearchValue="_search"
+                    OnSearch="OnSearchAsync"
+                    SearchPlaceholder="Search by name or email…">
+        <Filters>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_requiredOptions"
+                            Placeholder="Required?"
+                            ShowClearButton="true"
+                            Width="140px"
+                            Value="_filterRequired"
+                            ValueChanged="@((string v) => { _filterRequired = v; ApplyFilters(); })">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </Filters>
+        <Actions>
+            @if (_selectedUsers.Count > 0)
+            {
+                <span class="mfa-sel-count">
+                    <i class="bi bi-check2-square" aria-hidden="true"></i> @_selectedUsers.Count selected
+                </span>
+                <button class="um-btn um-btn-sm um-btn-ghost"
+                        @onclick="() => OpenAddMethodForUser(_selectedUsers[0])"
+                        disabled="@(_selectedUsers.Count != 1)"
+                        title="Add method to user">
+                    <i class="bi bi-plus-circle" aria-hidden="true"></i> Add Method
+                </button>
+                <button class="um-btn um-btn-sm um-btn-warning"
+                        @onclick="() => OpenReset(_selectedUsers[0])"
+                        disabled="@(_selectedUsers.Count != 1)"
+                        title="Reset MFA">
+                    <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset MFA
+                </button>
+            }
+        </Actions>
+    </AppFilterPanel>
+}
+
+<!-- ── With MFA grid ──────────────────────────────────────────────────────── -->
+@if (_view == "with")
+{
+    <div class="um-grid-card app-datagrid">
+        @if (_loading)
+        {
+            <div class="um-loading-overlay" aria-live="polite" aria-label="Loading…">
+                <div class="um-spinner" aria-hidden="true"></div>
+                <span>Loading users with MFA…</span>
+            </div>
+        }
+        <SfGrid @ref="_withGrid"
+                TValue="UserMfaStatusDto"
+                DataSource="@_withUsers"
+                AllowPaging="true"
+                AllowSorting="true"
+                EnableHover="true"
+                RowHeight="52">
+            <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+            <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row"
+                                   Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
+            <GridEvents TValue="UserMfaStatusDto"
+                        RowSelected="OnUserRowSelected"
+                        RowDeselected="OnUserRowDeselected" />
+            <GridColumns>
+                <GridColumn Type="ColumnType.CheckBox" Width="48" />
+
+                <GridColumn Field="@nameof(UserMfaStatusDto.UserFullName)" HeaderText="User" Width="230">
+                    <Template>
+                        @{ var u = (UserMfaStatusDto)context; }
+                        <div class="mfa-user-cell">
+                            <span class="mfa-user-avatar" aria-hidden="true">
+                                @(u.UserFullName.Length > 0 ? u.UserFullName[0].ToString().ToUpper() : "?")
+                            </span>
+                            <div class="mfa-user-info">
+                                <div class="mfa-user-name">@u.UserFullName</div>
+                                <div class="mfa-user-email">@u.Email</div>
+                            </div>
+                        </div>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(UserMfaStatusDto.DeviceCount)" HeaderText="Devices" Width="100" TextAlign="TextAlign.Center">
+                    <Template>
+                        @{ var u = (UserMfaStatusDto)context; }
+                        <span class="um-count-pill">@u.DeviceCount</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(UserMfaStatusDto.VerifiedDeviceCount)" HeaderText="Verified" Width="100" TextAlign="TextAlign.Center">
+                    <Template>
+                        @{ var u = (UserMfaStatusDto)context; }
+                        <span class="@(u.VerifiedDeviceCount > 0 ? "mfa-count-verified" : "mfa-count-zero")">@u.VerifiedDeviceCount</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(UserMfaStatusDto.MfaRequired)" HeaderText="Required" Width="110" TextAlign="TextAlign.Center">
+                    <Template>
+                        @{ var u = (UserMfaStatusDto)context; }
+                        @if (u.MfaRequired) { <span class="mfa-required-on"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> Yes</span> }
+                        else                { <span class="mfa-required-off"><i class="bi bi-dash-circle" aria-hidden="true"></i> No</span> }
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(UserMfaStatusDto.LastMfaUsedDateUtc)" HeaderText="Last Used" Width="140">
+                    <Template>
+                        @{ var u = (UserMfaStatusDto)context; }
+                        <span title="@(u.LastMfaUsedDateUtc?.ToString("g") ?? "Never")">
+                            @(u.LastMfaUsedDateUtc.HasValue ? FormatRelative(u.LastMfaUsedDateUtc.Value) : "Never")
+                        </span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn HeaderText="" Width="170" AllowSorting="false" AllowFiltering="false">
+                    <Template>
+                        @{ var u = (UserMfaStatusDto)context; }
+                        <div class="um-row-actions">
+                            <button class="um-btn um-btn-xs um-btn-ghost" @onclick="() => OpenDetail(u)" title="View devices">
+                                <i class="bi bi-eye" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-xs um-btn-ghost" @onclick="() => OpenAddMethodForUser(u)" title="Add method">
+                                <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-xs @(u.MfaRequired ? "um-btn-warning" : "um-btn-ghost")"
+                                    @onclick="() => OpenRequire(u)"
+                                    title="@(u.MfaRequired ? "Remove requirement" : "Require MFA")">
+                                <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-xs um-btn-ghost" @onclick="() => OpenReset(u)" title="Reset MFA">
+                                <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- ── Without MFA grid ───────────────────────────────────────────────────── -->
+@if (_view == "without")
+{
+    <div class="um-grid-card app-datagrid">
+        @if (_loading)
+        {
+            <div class="um-loading-overlay" aria-live="polite" aria-label="Loading…">
+                <div class="um-spinner" aria-hidden="true"></div>
+                <span>Loading users without MFA…</span>
+            </div>
+        }
+        <SfGrid @ref="_withoutGrid"
+                TValue="UserMfaStatusDto"
+                DataSource="@_withoutUsers"
+                AllowPaging="true"
+                AllowSorting="true"
+                EnableHover="true"
+                RowHeight="52">
+            <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+            <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row"
+                                   Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
+            <GridEvents TValue="UserMfaStatusDto"
+                        RowSelected="OnUserRowSelected"
+                        RowDeselected="OnUserRowDeselected" />
+            <GridColumns>
+                <GridColumn Type="ColumnType.CheckBox" Width="48" />
+
+                <GridColumn Field="@nameof(UserMfaStatusDto.UserFullName)" HeaderText="User" Width="280">
+                    <Template>
+                        @{ var u = (UserMfaStatusDto)context; }
+                        <div class="mfa-user-cell">
+                            <span class="mfa-user-avatar mfa-user-avatar--none" aria-hidden="true">
+                                @(u.UserFullName.Length > 0 ? u.UserFullName[0].ToString().ToUpper() : "?")
+                            </span>
+                            <div class="mfa-user-info">
+                                <div class="mfa-user-name">@u.UserFullName</div>
+                                <div class="mfa-user-email">@u.Email</div>
+                            </div>
+                        </div>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(UserMfaStatusDto.MfaRequired)" HeaderText="Required" Width="110" TextAlign="TextAlign.Center">
+                    <Template>
+                        @{ var u = (UserMfaStatusDto)context; }
+                        @if (u.MfaRequired) { <span class="mfa-required-on"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> Yes</span> }
+                        else                { <span class="mfa-required-off"><i class="bi bi-dash-circle" aria-hidden="true"></i> No</span> }
+                    </Template>
+                </GridColumn>
+
+                <GridColumn HeaderText="" Width="140" AllowSorting="false" AllowFiltering="false">
+                    <Template>
+                        @{ var u = (UserMfaStatusDto)context; }
+                        <div class="um-row-actions">
+                            <button class="um-btn um-btn-xs um-btn-primary" @onclick="() => OpenAddMethodForUser(u)" title="Add MFA method">
+                                <i class="bi bi-plus-circle" aria-hidden="true"></i> Add
+                            </button>
+                            <button class="um-btn um-btn-xs @(u.MfaRequired ? "um-btn-warning" : "um-btn-ghost")"
+                                    @onclick="() => OpenRequire(u)"
+                                    title="@(u.MfaRequired ? "Remove requirement" : "Require MFA")">
+                                <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- ── User detail view ───────────────────────────────────────────────────── -->
+@if (_view == "detail" && _detailUser is not null)
+{
+    <div class="mfa-detail-banner">
+        <button class="um-btn um-btn-ghost mfa-back-btn" @onclick='() => SwitchView(_prevView)'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back
+        </button>
+        <span class="mfa-user-avatar mfa-user-avatar--lg" aria-hidden="true">
+            @(_detailUser.UserFullName.Length > 0 ? _detailUser.UserFullName[0].ToString().ToUpper() : "?")
+        </span>
+        <div class="mfa-detail-identity">
+            <div class="mfa-detail-name">@_detailUser.UserFullName</div>
+            <div class="mfa-detail-email">@_detailUser.Email</div>
+        </div>
+        <div class="mfa-detail-badges">
+            <span class="@(_detailUser.MfaRequired ? "mfa-required-on" : "mfa-required-off")">
+                <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+                @(_detailUser.MfaRequired ? "MFA Required" : "Not Required")
+            </span>
+        </div>
+        <div class="mfa-detail-actions">
+            <button class="um-btn um-btn-sm @(_detailUser.MfaRequired ? "um-btn-warning" : "um-btn-ghost")"
+                    @onclick="() => OpenRequire(_detailUser)">
+                <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+                @(_detailUser.MfaRequired ? "Remove Requirement" : "Require MFA")
+            </button>
+            <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => OpenReset(_detailUser)">
+                <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset All
+            </button>
+        </div>
+    </div>
+
+    <div class="um-grid-card app-datagrid mfa-devices-grid">
+        @if (_devicesLoading)
+        {
+            <div class="um-loading-overlay" aria-live="polite" aria-label="Loading devices…">
+                <div class="um-spinner" aria-hidden="true"></div>
+                <span>Loading MFA methods…</span>
+            </div>
+        }
+        @if (!_devicesLoading && _devices.Count == 0)
+        {
+            <div class="mfa-empty-state">
+                <i class="bi bi-shield-slash" aria-hidden="true"></i>
+                <span>No MFA methods registered for this user.</span>
+                <button class="um-btn um-btn-primary" @onclick="OpenAddMethod">
+                    <i class="bi bi-plus-circle" aria-hidden="true"></i> Add First Method
+                </button>
+            </div>
+        }
+        else
+        {
+            <SfGrid TValue="MfaDeviceDto"
+                    DataSource="@_devices"
+                    AllowPaging="false"
+                    AllowSorting="true"
+                    EnableHover="true"
+                    RowHeight="52">
+                <GridColumns>
+                    <GridColumn Field="@nameof(MfaDeviceDto.DeviceTypeCode)" HeaderText="Type" Width="160">
+                        <Template>
+                            @{ var d = (MfaDeviceDto)context; }
+                            <span class="@DeviceTypePillClass(d.DeviceTypeCode)">
+                                <i class="@DeviceTypeIcon(d.DeviceTypeCode)" aria-hidden="true"></i>
+                                @DeviceTypeLabel(d.DeviceTypeCode)
+                            </span>
+                        </Template>
+                    </GridColumn>
+
+                    <GridColumn Field="@nameof(MfaDeviceDto.DeviceName)" HeaderText="Device Name" Width="200" />
+
+                    <GridColumn Field="@nameof(MfaDeviceDto.IsVerified)" HeaderText="Verified" Width="110" TextAlign="TextAlign.Center">
+                        <Template>
+                            @{ var d = (MfaDeviceDto)context; }
+                            <AppStatusBadge Status="@(d.IsVerified ? "Verified" : "Pending")" />
+                        </Template>
+                    </GridColumn>
+
+                    <GridColumn Field="@nameof(MfaDeviceDto.IsActive)" HeaderText="Status" Width="110" TextAlign="TextAlign.Center">
+                        <Template>
+                            @{ var d = (MfaDeviceDto)context; }
+                            <AppStatusBadge Status="@(d.IsActive ? "Active" : "Disabled")" />
+                        </Template>
+                    </GridColumn>
+
+                    <GridColumn Field="@nameof(MfaDeviceDto.LastUsedDateUtc)" HeaderText="Last Used" Width="140">
+                        <Template>
+                            @{ var d = (MfaDeviceDto)context; }
+                            <span title="@(d.LastUsedDateUtc?.ToString("g") ?? "Never")">
+                                @(d.LastUsedDateUtc.HasValue ? FormatRelative(d.LastUsedDateUtc.Value) : "Never")
+                            </span>
+                        </Template>
+                    </GridColumn>
+
+                    <GridColumn Field="@nameof(MfaDeviceDto.CreatedDateUtc)" HeaderText="Added" Width="130">
+                        <Template>
+                            @{ var d = (MfaDeviceDto)context; }
+                            <span title="@d.CreatedDateUtc.ToString("g")">@FormatRelative(d.CreatedDateUtc)</span>
+                        </Template>
+                    </GridColumn>
+
+                    <GridColumn HeaderText="" Width="120" AllowSorting="false" AllowFiltering="false">
+                        <Template>
+                            @{ var d = (MfaDeviceDto)context; }
+                            <div class="um-row-actions">
+                                @if (!d.IsVerified && d.IsActive)
+                                {
+                                    <button class="um-btn um-btn-xs um-btn-ghost" @onclick="() => OpenVerifyDevice(d)" title="Verify">
+                                        <i class="bi bi-patch-check" aria-hidden="true"></i>
+                                    </button>
+                                }
+                                @if (d.IsActive)
+                                {
+                                    <button class="um-btn um-btn-xs um-btn-ghost" @onclick="() => OpenDisableDevice(d)" title="Disable">
+                                        <i class="bi bi-slash-circle" aria-hidden="true"></i>
+                                    </button>
+                                }
+                            </div>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        }
+    </div>
+}
+
+<!-- ── Drawers ─────────────────────────────────────────────────────────────── -->
+<MfaMethodDrawer @bind-Visible="_showAddMethod"
+                 TenantId="_tenantId"
+                 UserId="_addMethodUserId"
+                 OnSaved="HandleMethodSavedAsync" />
+
+<!-- ── Confirm dialogs ────────────────────────────────────────────────────── -->
+<AppConfirmActionDialog @bind-Visible="_showReset"
+                        Title="Reset MFA"
+                        Message="@($"Reset all MFA methods for {_actionTarget?.UserFullName}?")"
+                        Detail="All registered MFA devices will be removed. The user must re-enrol."
+                        Variant="warning"
+                        ConfirmText="Reset MFA"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteResetAsync" />
+
+<AppConfirmActionDialog @bind-Visible="_showRequire"
+                        Title="@RequireDialogTitle"
+                        Message="@RequireDialogMessage"
+                        Detail="@RequireDialogDetail"
+                        Variant="@(_actionTarget is { MfaRequired: true } ? "warning" : "primary")"
+                        ConfirmText="@(_actionTarget is { MfaRequired: true } ? "Remove Requirement" : "Require MFA")"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteRequireAsync" />
+
+<AppConfirmActionDialog @bind-Visible="_showVerify"
+                        Title="Verify MFA Method"
+                        Message="@($"Mark \"{_deviceTarget?.DeviceName}\" as verified?")"
+                        Detail="The method will be marked as administrator-verified and treated as active."
+                        Variant="primary"
+                        ConfirmText="Verify"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteVerifyAsync" />
+
+<AppConfirmActionDialog @bind-Visible="_showDisable"
+                        Title="Disable MFA Method"
+                        Message="@($"Disable \"{_deviceTarget?.DeviceName}\"?")"
+                        Detail="The user will not be able to use this method for authentication."
+                        Variant="warning"
+                        ConfirmText="Disable"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteDisableAsync" />
+
+<!-- Toast -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ──────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    private SfGrid<UserMfaStatusDto>? _withGrid;
+    private SfGrid<UserMfaStatusDto>? _withoutGrid;
+    private SfToast? _toast;
+
+    // ── View state ─────────────────────────────────────────────────────────────
+    private string _view     = "with";
+    private string _prevView = "with";
+    private int    _kpiActive = 2;
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private List<UserMfaStatusDto> _allWithUsers    = [];
+    private List<UserMfaStatusDto> _allWithoutUsers = [];
+    private List<UserMfaStatusDto> _withUsers       = [];
+    private List<UserMfaStatusDto> _withoutUsers    = [];
+    private List<UserMfaStatusDto> _selectedUsers   = [];
+    private List<MfaDeviceDto>     _devices         = [];
+
+    // ── KPI counters ───────────────────────────────────────────────────────────
+    private int _withCount;
+    private int _withoutCount;
+    private int _requiredCount;
+
+    // ── Loading / busy flags ───────────────────────────────────────────────────
+    private bool _loading        = false;
+    private bool _devicesLoading = false;
+    private bool _confirming     = false;
+
+    // ── Dialog visibility ──────────────────────────────────────────────────────
+    private bool _showAddMethod = false;
+    private bool _showReset     = false;
+    private bool _showRequire   = false;
+    private bool _showVerify    = false;
+    private bool _showDisable   = false;
+
+    // ── Active targets ─────────────────────────────────────────────────────────
+    private UserMfaStatusDto? _actionTarget;
+    private UserMfaStatusDto? _detailUser;
+    private MfaDeviceDto?     _deviceTarget;
+    private Guid              _addMethodUserId;
+
+    // ── Filters ────────────────────────────────────────────────────────────────
+    private string _search         = string.Empty;
+    private string _filterRequired = string.Empty;
+
+    // ── Static options ─────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _requiredOptions =
+    [
+        new("Yes", "Required"),
+        new("No",  "Not Required"),
+    ];
+
+    // ── KPI CSS ────────────────────────────────────────────────────────────────
+    private string KpiClass1 => "mfa-kpi-card mfa-kpi-card--total";
+    private string KpiClass2 => "mfa-kpi-card mfa-kpi-card--enabled"  + (_kpiActive == 2 ? " mfa-kpi-card--active" : "");
+    private string KpiClass3 => "mfa-kpi-card mfa-kpi-card--none"     + (_kpiActive == 3 ? " mfa-kpi-card--active" : "");
+    private string KpiClass4 => "mfa-kpi-card mfa-kpi-card--required";
+
+    private string TabClass(string view) => "mfa-view-tab" + (_view == view ? " mfa-view-tab--active" : "");
+
+    // ── Require dialog computed strings ────────────────────────────────────────
+    private string RequireDialogTitle =>
+        _actionTarget is { MfaRequired: true } ? "Remove MFA Requirement" : "Require MFA";
+    private string RequireDialogMessage =>
+        _actionTarget is { MfaRequired: true }
+            ? $"Remove the MFA requirement for {_actionTarget.UserFullName}?"
+            : $"Require MFA for {_actionTarget?.UserFullName}?";
+    private string RequireDialogDetail =>
+        _actionTarget is { MfaRequired: true }
+            ? "MFA will no longer be enforced for this user."
+            : "The user will be required to authenticate with MFA on next login.";
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",     "/"),
+            new("Security", "/security"),
+            new("MFA",      "/security/mfa"));
+
+        await LoadAsync();
+    }
+
+    // ── Data loading ───────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var withResult    = await Api.SearchUsersWithMfaAsync(_tenantId, _search, pageSize: 1000);
+            var withoutResult = await Api.SearchUsersWithoutMfaAsync(_tenantId, _search, pageSize: 1000);
+
+            _allWithUsers    = withResult?.Items.ToList()    ?? [];
+            _allWithoutUsers = withoutResult?.Items.ToList() ?? [];
+            _selectedUsers.Clear();
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LoadUserDevicesAsync()
+    {
+        if (_detailUser is null) return;
+        _devicesLoading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.GetUserMfaDevicesAsync(_detailUser.UserId);
+            _devices = result?.ToList() ?? [];
+        }
+        finally
+        {
+            _devicesLoading = false;
+        }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _withUsers = _allWithUsers.Where(u =>
+            string.IsNullOrEmpty(_filterRequired) ||
+            (u.MfaRequired ? "Yes" : "No") == _filterRequired
+        ).ToList();
+
+        _withoutUsers = _allWithoutUsers.Where(u =>
+            string.IsNullOrEmpty(_filterRequired) ||
+            (u.MfaRequired ? "Yes" : "No") == _filterRequired
+        ).ToList();
+
+        StateHasChanged();
+    }
+
+    private void ComputeKpi()
+    {
+        _withCount     = _allWithUsers.Count;
+        _withoutCount  = _allWithoutUsers.Count;
+        _requiredCount = _allWithUsers.Count(u => u.MfaRequired) + _allWithoutUsers.Count(u => u.MfaRequired);
+    }
+
+    // ── View switching ─────────────────────────────────────────────────────────
+    private void SwitchView(string view)
+    {
+        if (_view != "detail") _prevView = _view;
+        _view      = view;
+        _kpiActive = view == "with" ? 2 : view == "without" ? 3 : _kpiActive;
+        if (view != "detail") _detailUser = null;
+        StateHasChanged();
+    }
+
+    // ── Row selection ──────────────────────────────────────────────────────────
+    private void OnUserRowSelected(RowSelectEventArgs<UserMfaStatusDto> args)
+    {
+        if (!_selectedUsers.Contains(args.Data)) _selectedUsers.Add(args.Data);
+    }
+
+    private void OnUserRowDeselected(RowDeselectEventArgs<UserMfaStatusDto> args)
+    {
+        _selectedUsers.Remove(args.Data);
+    }
+
+    // ── Detail view ────────────────────────────────────────────────────────────
+    private async Task OpenDetail(UserMfaStatusDto user)
+    {
+        _prevView   = _view;
+        _detailUser = user;
+        _view       = "detail";
+        _kpiActive  = 0;
+        await LoadUserDevicesAsync();
+    }
+
+    // ── Add Method ─────────────────────────────────────────────────────────────
+    private void OpenAddMethod()
+    {
+        _addMethodUserId = _detailUser?.UserId ?? Guid.Empty;
+        _showAddMethod   = true;
+    }
+
+    private void OpenAddMethodForUser(UserMfaStatusDto user)
+    {
+        _addMethodUserId = user.UserId;
+        _showAddMethod   = true;
+    }
+
+    private async Task HandleMethodSavedAsync()
+    {
+        await LoadAsync();
+        if (_view == "detail") await LoadUserDevicesAsync();
+    }
+
+    // ── Reset MFA ──────────────────────────────────────────────────────────────
+    private void OpenReset(UserMfaStatusDto user) { _actionTarget = user; _showReset = true; }
+
+    private async Task ExecuteResetAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.ResetMfaAsync(_actionTarget.UserId);
+            await ShowToastAsync($"MFA reset for {_actionTarget.UserFullName}.", "e-toast-warning");
+            await LoadAsync();
+            if (_view == "detail") await LoadUserDevicesAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger"); }
+        finally { _confirming = false; _actionTarget = null; }
+    }
+
+    // ── Require MFA ────────────────────────────────────────────────────────────
+    private void OpenRequire(UserMfaStatusDto user) { _actionTarget = user; _showRequire = true; }
+
+    private async Task ExecuteRequireAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            var setRequired = !_actionTarget.MfaRequired;
+            await Api.RequireMfaAsync(_actionTarget.UserId, setRequired);
+            var msg = setRequired
+                ? $"MFA is now required for {_actionTarget.UserFullName}."
+                : $"MFA requirement removed for {_actionTarget.UserFullName}.";
+            await ShowToastAsync(msg, setRequired ? "e-toast-success" : "e-toast-warning");
+            await LoadAsync();
+            if (_view == "detail" && _detailUser?.UserId == _actionTarget.UserId)
+            {
+                _detailUser = _allWithUsers.FirstOrDefault(u => u.UserId == _actionTarget.UserId)
+                           ?? _allWithoutUsers.FirstOrDefault(u => u.UserId == _actionTarget.UserId)
+                           ?? _detailUser;
+            }
+        }
+        catch (Exception ex) { await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger"); }
+        finally { _confirming = false; _actionTarget = null; }
+    }
+
+    // ── Verify device ──────────────────────────────────────────────────────────
+    private void OpenVerifyDevice(MfaDeviceDto device) { _deviceTarget = device; _showVerify = true; }
+
+    private async Task ExecuteVerifyAsync()
+    {
+        if (_deviceTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.VerifyMfaMethodAsync(_deviceTarget.MfaDeviceId);
+            await ShowToastAsync($"\"{_deviceTarget.DeviceName}\" verified.", "e-toast-success");
+            await LoadUserDevicesAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger"); }
+        finally { _confirming = false; _deviceTarget = null; }
+    }
+
+    // ── Disable device ─────────────────────────────────────────────────────────
+    private void OpenDisableDevice(MfaDeviceDto device) { _deviceTarget = device; _showDisable = true; }
+
+    private async Task ExecuteDisableAsync()
+    {
+        if (_deviceTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.DisableMfaMethodAsync(_deviceTarget.MfaDeviceId);
+            await ShowToastAsync($"\"{_deviceTarget.DeviceName}\" disabled.", "e-toast-warning");
+            await LoadAsync();
+            await LoadUserDevicesAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger"); }
+        finally { _confirming = false; _deviceTarget = null; }
+    }
+
+    // ── Export stub ────────────────────────────────────────────────────────────
+    private Task ExportAsync() => ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+
+    // ── Toast helper ───────────────────────────────────────────────────────────
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    private static string FormatRelative(DateTime utc)
+    {
+        var delta = DateTime.UtcNow - utc;
+        return delta.TotalMinutes < 1  ? "Just now"
+             : delta.TotalHours   < 1  ? $"{(int)delta.TotalMinutes}m ago"
+             : delta.TotalDays    < 1  ? $"{(int)delta.TotalHours}h ago"
+             : delta.TotalDays    < 30 ? $"{(int)delta.TotalDays}d ago"
+             : utc.ToString("d MMM yyyy");
+    }
+
+    private static string DeviceTypePillClass(string code) => code switch
+    {
+        "TOTP"          => "mfa-type-pill mfa-type-totp",
+        "SMS"           => "mfa-type-pill mfa-type-sms",
+        "Email"         => "mfa-type-pill mfa-type-email",
+        "HardwareToken" => "mfa-type-pill mfa-type-hw",
+        "BackupCode"    => "mfa-type-pill mfa-type-backup",
+        _               => "mfa-type-pill",
+    };
+
+    private static string DeviceTypeIcon(string code) => code switch
+    {
+        "TOTP"          => "bi bi-qr-code",
+        "SMS"           => "bi bi-phone",
+        "Email"         => "bi bi-envelope",
+        "HardwareToken" => "bi bi-usb-drive",
+        "BackupCode"    => "bi bi-key",
+        _               => "bi bi-shield",
+    };
+
+    private static string DeviceTypeLabel(string code) => code switch
+    {
+        "TOTP"          => "Authenticator",
+        "SMS"           => "SMS",
+        "Email"         => "Email",
+        "HardwareToken" => "Hardware Token",
+        "BackupCode"    => "Backup Code",
+        _               => code,
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+}

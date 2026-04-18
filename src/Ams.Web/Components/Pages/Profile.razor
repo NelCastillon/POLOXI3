@@ -1,0 +1,1188 @@
+@page "/profile"
+@inject ApiClient Api
+@inject IJSRuntime JS
+
+<PageTitle>My Profile – AMS Enterprise</PageTitle>
+
+@if (_loading)
+{
+    <div class="pf-loading">
+        <div class="pf-spinner" aria-hidden="true"></div>
+        <span>Loading profile…</span>
+    </div>
+}
+else if (_user is null)
+{
+    <div class="pf-error">
+        <i class="bi bi-person-x" aria-hidden="true"></i>
+        <p>Profile could not be loaded.</p>
+        <button class="ts-btn-ghost" @onclick="LoadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Retry
+        </button>
+    </div>
+}
+else
+{
+    <div class="pf-page">
+
+        <!-- ── Page Header ──────────────────────────────────── -->
+        <div class="page-header">
+            <div>
+                <h1 class="page-title">
+                    <i class="bi bi-person-circle" aria-hidden="true"></i> My Profile
+                </h1>
+                <p class="page-subtitle">Manage your personal information, contact details, and preferences</p>
+            </div>
+            <div class="page-actions">
+                @if (_anyEditing)
+                {
+                    <span class="pf-editing-badge">
+                        <i class="bi bi-pencil" aria-hidden="true"></i> Editing in progress
+                    </span>
+                }
+            </div>
+        </div>
+
+        <!-- ── Global save feedback ─────────────────────────── -->
+        @if (!string.IsNullOrEmpty(_globalMsg))
+        {
+            <div class="pf-global-bar ts-feedback @(_globalErr ? "ts-feedback-err" : "ts-feedback-ok")"
+                 role="status">
+                <i class="bi @(_globalErr ? "bi-x-circle" : "bi-check-circle-fill")" aria-hidden="true"></i>
+                @_globalMsg
+            </div>
+        }
+
+        <!-- ── Two-column layout ────────────────────────────── -->
+        <div class="pf-layout">
+
+            <!-- ═══ Sidebar ═══════════════════════════════════ -->
+            <aside class="pf-sidebar">
+
+                <!-- Avatar card -->
+                <div class="pf-avatar-card card">
+                    <div class="pf-avatar-display">
+                        <div class="pf-avatar-circle"
+                             style="background:@_avatarColor;"
+                             aria-label="Avatar for @_user.FullName">
+                            @Initials(_user.FullName)
+                        </div>
+                        <div class="pf-avatar-meta">
+                            <div class="pf-av-name">@_user.FullName</div>
+                            @if (!string.IsNullOrEmpty(_user.DisplayName) && _user.DisplayName != _user.FullName)
+                            {
+                                <div class="pf-av-sub">@_user.DisplayName</div>
+                            }
+                            @if (!string.IsNullOrEmpty(_user.JobTitle))
+                            {
+                                <div class="pf-av-sub">@_user.JobTitle</div>
+                            }
+                            <div class="pf-av-badges">
+                                <span class="badge @TypeBadge(_user.UserTypeCode)">@_user.UserTypeCode</span>
+                                <span class="badge @StatusBadge(_user.StatusCode)">@_user.StatusCode</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="pf-color-section">
+                        <span class="pf-color-label">Avatar color</span>
+                        <div class="pf-color-strip" role="group" aria-label="Choose avatar color">
+                            @foreach (var c in AvatarColors)
+                            {
+                                <button class="pf-color-swatch @(c == _avatarColor ? "is-active" : "")"
+                                        style="background:@c;"
+                                        title="Set avatar color"
+                                        aria-pressed="@(c == _avatarColor ? "true" : "false")"
+                                        @onclick="() => PickColorAsync(c)">
+                                </button>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="pf-avatar-url-section">
+                        <span class="pf-color-label">Avatar image URL <span class="pf-optional">(optional)</span></span>
+                        @if (!_editAvatarUrl)
+                        {
+                            <div class="pf-avatar-url-row">
+                                <span class="pf-avatar-url-val pf-ellipsis" title="@(_profile?.AvatarUrl ?? "")">
+                                    @(string.IsNullOrEmpty(_profile?.AvatarUrl) ? "None set" : _profile.AvatarUrl)
+                                </span>
+                                <button class="pf-url-edit-btn"
+                                        title="Edit avatar URL"
+                                        @onclick="() => { _editAvatarUrl = true; _avatarUrlInput = _profile?.AvatarUrl ?? string.Empty; }">
+                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="pf-avatar-url-edit">
+                                <SfTextBox @bind-Value="_avatarUrlInput" Placeholder="https://…" />
+                                <div class="pf-avatar-url-actions">
+                                    <button class="ts-btn-ghost" @onclick="() => _editAvatarUrl = false">Cancel</button>
+                                    <button class="ts-btn-primary" @onclick="SaveAvatarUrlAsync" disabled="@_saving">
+                                        @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                                        Save
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <!-- Account summary card -->
+                <div class="pf-info-card card">
+                    <div class="pf-card-hd">
+                        <i class="bi bi-shield" aria-hidden="true"></i> Account
+                    </div>
+                    <dl class="ts-dl">
+                        <div class="ts-dl-row">
+                            <dt>Username</dt>
+                            <dd><code class="ts-id">@_user.UserName</code></dd>
+                        </div>
+                        <div class="ts-dl-row">
+                            <dt>Email</dt>
+                            <dd>
+                                <span class="pf-ellipsis" title="@_user.Email">@_user.Email</span>
+                            </dd>
+                        </div>
+                        <div class="ts-dl-row">
+                            <dt>Member Since</dt>
+                            <dd>@_user.CreatedDateUtc.ToString("MMMM yyyy")</dd>
+                        </div>
+                        <div class="ts-dl-row">
+                            <dt>Last Login</dt>
+                            <dd>@(_user.LastLoginDateUtc?.ToString("MMM d, yyyy") ?? "Never")</dd>
+                        </div>
+                        <div class="ts-dl-row">
+                            <dt>MFA</dt>
+                            <dd>
+                                <span class="badge @(_user.MfaEnabled ? "badge-green" : "badge-amber")">
+                                    @(_user.MfaEnabled ? "Enabled" : "Not set up")
+                                </span>
+                            </dd>
+                        </div>
+                        <div class="ts-dl-row">
+                            <dt>Roles</dt>
+                            <dd>
+                                @_user.AssignedRoleCount assigned
+                            </dd>
+                        </div>
+                    </dl>
+                </div>
+
+            </aside>
+
+            <!-- ═══ Main ════════════════════════════════════════ -->
+            <div class="pf-main">
+
+                <!-- ── Personal Information ───────────────────── -->
+                <section class="pf-section card" aria-label="Personal Information">
+                    <div class="pf-card-hd">
+                        <div class="pf-card-title">
+                            <i class="bi bi-person" aria-hidden="true"></i> Personal Information
+                        </div>
+                        @if (!_editPersonal)
+                        {
+                            <button class="ts-edit-btn" @onclick="OpenPersonal">
+                                <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+                            </button>
+                        }
+                    </div>
+                    <div class="card-body">
+                        @if (!_editPersonal)
+                        {
+                            <div class="pf-field-grid">
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Full Name</div>
+                                    <div class="pf-field-value">@_user.FullName</div>
+                                </div>
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Display Name</div>
+                                    <div class="pf-field-value">@(_user.DisplayName ?? "—")</div>
+                                </div>
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Username</div>
+                                    <div class="pf-field-value">
+                                        <code class="ts-id">@_user.UserName</code>
+                                        <span class="pf-ro-tag">read-only</span>
+                                    </div>
+                                </div>
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Email</div>
+                                    <div class="pf-field-value">
+                                        <a href="mailto:@_user.Email">@_user.Email</a>
+                                        <span class="pf-ro-tag">read-only</span>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="ts-edit-form">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Full Name <span class="req" aria-hidden="true">*</span></label>
+                                        <SfTextBox @bind-Value="_pForm.FullName" Placeholder="John Doe" />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Display Name <span class="pf-optional">(optional)</span></label>
+                                        <SfTextBox @bind-Value="_pForm.DisplayName" Placeholder="e.g. Johnny" />
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Username</label>
+                                        <SfTextBox Value="@_user.UserName" Enabled="false" />
+                                        <span class="field-hint">Username cannot be changed here.</span>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Email</label>
+                                        <SfTextBox Value="@_user.Email" Enabled="false" />
+                                        <span class="field-hint">Contact your administrator to update your email.</span>
+                                    </div>
+                                </div>
+                                @if (!string.IsNullOrEmpty(_pError))
+                                {
+                                    <div class="form-alert" role="alert">
+                                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_pError
+                                    </div>
+                                }
+                                <div class="ts-edit-actions">
+                                    <button class="ts-btn-ghost" @onclick="CancelPersonal">Cancel</button>
+                                    <button class="ts-btn-primary" @onclick="SavePersonalAsync" disabled="@_saving">
+                                        @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                                        Save Changes
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </section>
+
+                <!-- ── Contact Information ────────────────────── -->
+                <section class="pf-section card" aria-label="Contact Information">
+                    <div class="pf-card-hd">
+                        <div class="pf-card-title">
+                            <i class="bi bi-telephone" aria-hidden="true"></i> Contact Information
+                        </div>
+                        @if (!_editContact)
+                        {
+                            <button class="ts-edit-btn" @onclick="OpenContact">
+                                <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+                            </button>
+                        }
+                    </div>
+                    <div class="card-body">
+                        @if (!_editContact)
+                        {
+                            <div class="pf-field-grid">
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Phone Number</div>
+                                    <div class="pf-field-value">
+                                        @if (!string.IsNullOrEmpty(_user.PhoneNumber))
+                                        {
+                                            <i class="bi bi-telephone" aria-hidden="true"></i>
+                                            <a href="tel:@_user.PhoneNumber">@_user.PhoneNumber</a>
+                                        }
+                                        else
+                                        {
+                                            <span class="pf-no-val">Not provided</span>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Mobile Number</div>
+                                    <div class="pf-field-value">
+                                        @if (!string.IsNullOrEmpty(_profile?.MobileNumber))
+                                        {
+                                            <i class="bi bi-phone" aria-hidden="true"></i>
+                                            <a href="tel:@_profile.MobileNumber">@_profile.MobileNumber</a>
+                                        }
+                                        else
+                                        {
+                                            <span class="pf-no-val">Not provided</span>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Email Address</div>
+                                    <div class="pf-field-value">
+                                        <i class="bi bi-envelope" aria-hidden="true"></i>
+                                        <a href="mailto:@_user.Email">@_user.Email</a>
+                                        <span class="pf-ro-tag">read-only</span>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="ts-edit-form">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Phone Number</label>
+                                        <SfTextBox @bind-Value="_cForm.PhoneNumber"
+                                                   Placeholder="+1 555 000 0000"
+                                                   Type="InputType.Tel" />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Mobile Number <span class="pf-optional">(optional)</span></label>
+                                        <SfTextBox @bind-Value="_cForm.MobileNumber"
+                                                   Placeholder="+1 555 000 0000"
+                                                   Type="InputType.Tel" />
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Email</label>
+                                        <SfTextBox Value="@_user.Email" Enabled="false" />
+                                        <span class="field-hint">Contact your administrator to update your email.</span>
+                                    </div>
+                                    <div class="form-group"></div>
+                                </div>
+                                @if (!string.IsNullOrEmpty(_cError))
+                                {
+                                    <div class="form-alert" role="alert">
+                                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_cError
+                                    </div>
+                                }
+                                <div class="ts-edit-actions">
+                                    <button class="ts-btn-ghost" @onclick="CancelContact">Cancel</button>
+                                    <button class="ts-btn-primary" @onclick="SaveContactAsync" disabled="@_saving">
+                                        @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                                        Save Changes
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </section>
+
+                <!-- ── Address ────────────────────────────────── -->
+                <section class="pf-section card" aria-label="Address">
+                    <div class="pf-card-hd">
+                        <div class="pf-card-title">
+                            <i class="bi bi-house" aria-hidden="true"></i> Address
+                        </div>
+                        @if (!_editAddress)
+                        {
+                            <button class="ts-edit-btn" @onclick="OpenAddress">
+                                <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+                            </button>
+                        }
+                    </div>
+                    <div class="card-body">
+                        @if (!_editAddress)
+                        {
+                            <div class="pf-field-grid">
+                                <div class="pf-field pf-field-wide">
+                                    <div class="pf-field-label">Street Address</div>
+                                    <div class="pf-field-value pf-field-value-block">
+                                        @if (!string.IsNullOrEmpty(_profile?.AddressLine1))
+                                        {
+                                            <div>@_profile.AddressLine1</div>
+                                            @if (!string.IsNullOrEmpty(_profile.AddressLine2))
+                                            {
+                                                <div>@_profile.AddressLine2</div>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <span class="pf-no-val">Not provided</span>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="pf-field">
+                                    <div class="pf-field-label">City</div>
+                                    <div class="pf-field-value">@(_profile?.City ?? "—")</div>
+                                </div>
+                                <div class="pf-field">
+                                    <div class="pf-field-label">State / Province</div>
+                                    <div class="pf-field-value">@(_profile?.StateProvince ?? "—")</div>
+                                </div>
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Postal Code</div>
+                                    <div class="pf-field-value">@(_profile?.PostalCode ?? "—")</div>
+                                </div>
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Country</div>
+                                    <div class="pf-field-value">@(_profile?.CountryCode ?? "—")</div>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="ts-edit-form">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Address Line 1</label>
+                                        <SfTextBox @bind-Value="_aForm.AddressLine1" Placeholder="Street address" />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Address Line 2 <span class="pf-optional">(optional)</span></label>
+                                        <SfTextBox @bind-Value="_aForm.AddressLine2" Placeholder="Suite, unit, etc." />
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>City</label>
+                                        <SfTextBox @bind-Value="_aForm.City" Placeholder="City" />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>State / Province</label>
+                                        <SfTextBox @bind-Value="_aForm.StateProvince" Placeholder="State or province" />
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Postal Code</label>
+                                        <SfTextBox @bind-Value="_aForm.PostalCode" Placeholder="00000" />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Country Code</label>
+                                        <SfTextBox @bind-Value="_aForm.CountryCode" Placeholder="US" />
+                                        <span class="field-hint">2-letter ISO country code (e.g. US, GB, AU)</span>
+                                    </div>
+                                </div>
+                                @if (!string.IsNullOrEmpty(_aError))
+                                {
+                                    <div class="form-alert" role="alert">
+                                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_aError
+                                    </div>
+                                }
+                                <div class="ts-edit-actions">
+                                    <button class="ts-btn-ghost" @onclick="CancelAddress">Cancel</button>
+                                    <button class="ts-btn-primary" @onclick="SaveAddressAsync" disabled="@_saving">
+                                        @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                                        Save Changes
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </section>
+
+                <!-- ── Work & Organization ────────────────────── -->
+                <section class="pf-section card" aria-label="Work and Organization">
+                    <div class="pf-card-hd">
+                        <div class="pf-card-title">
+                            <i class="bi bi-building" aria-hidden="true"></i> Work &amp; Organization
+                        </div>
+                        @if (!_editOrg)
+                        {
+                            <button class="ts-edit-btn" @onclick="OpenOrg">
+                                <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+                            </button>
+                        }
+                    </div>
+                    <div class="card-body">
+                        @if (!_editOrg)
+                        {
+                            <div class="pf-field-grid">
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Job Title</div>
+                                    <div class="pf-field-value">@(_user.JobTitle ?? "—")</div>
+                                </div>
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Department</div>
+                                    <div class="pf-field-value">@(_user.Department ?? "—")</div>
+                                </div>
+                                <div class="pf-field pf-field-wide">
+                                    <div class="pf-field-label">Branch</div>
+                                    <div class="pf-field-value pf-field-value-block">
+                                        @if (_branch is not null)
+                                        {
+                                            <div class="pf-branch-chip">
+                                                <div class="pf-branch-icon">
+                                                    <i class="bi bi-geo-alt" aria-hidden="true"></i>
+                                                </div>
+                                                <div class="pf-branch-body">
+                                                    <div class="pf-branch-name">@_branch.BranchName</div>
+                                                    @{
+                                                        var loc = string.Join(", ", new[] { _branch.City, _branch.StateProvince }
+                                                            .Where(x => !string.IsNullOrEmpty(x)));
+                                                    }
+                                                    @if (!string.IsNullOrEmpty(loc))
+                                                    {
+                                                        <div class="pf-branch-sub">
+                                                            @loc
+                                                            @if (!string.IsNullOrEmpty(_branch.CountryCode))
+                                                            { <span class="pf-branch-cc">· @_branch.CountryCode</span> }
+                                                        </div>
+                                                    }
+                                                </div>
+                                                <span class="pf-ro-tag">read-only</span>
+                                            </div>
+                                        }
+                                        else if (_user.BranchId.HasValue)
+                                        {
+                                            <code class="ts-id">@_user.BranchId</code>
+                                            <span class="pf-ro-tag">read-only</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="pf-no-val">No branch assigned</span>
+                                        }
+                                    </div>
+                                </div>
+                                @if (_branch is not null && !string.IsNullOrEmpty(_branch.StateProvince))
+                                {
+                                    <div class="pf-field">
+                                        <div class="pf-field-label">Region</div>
+                                        <div class="pf-field-value">
+                                            <i class="bi bi-map" aria-hidden="true"></i>
+                                            @_branch.StateProvince
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="ts-edit-form">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Job Title</label>
+                                        <SfTextBox @bind-Value="_oForm.JobTitle"
+                                                   Placeholder="e.g. Senior Account Manager" />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Department</label>
+                                        <SfTextBox @bind-Value="_oForm.Department"
+                                                   Placeholder="e.g. Sales" />
+                                    </div>
+                                </div>
+                                @if (_branch is not null)
+                                {
+                                    <div class="pf-org-branch-row">
+                                        <div class="pf-org-branch-lbl">
+                                            Branch <span class="pf-ro-tag">assigned by administrator</span>
+                                        </div>
+                                        <div class="pf-branch-chip">
+                                            <div class="pf-branch-icon">
+                                                <i class="bi bi-geo-alt" aria-hidden="true"></i>
+                                            </div>
+                                            <div class="pf-branch-body">
+                                                <div class="pf-branch-name">@_branch.BranchName</div>
+                                                @{
+                                                    var locEdit = string.Join(", ", new[] { _branch.City, _branch.StateProvince }
+                                                        .Where(x => !string.IsNullOrEmpty(x)));
+                                                }
+                                                @if (!string.IsNullOrEmpty(locEdit))
+                                                {
+                                                    <div class="pf-branch-sub">@locEdit</div>
+                                                }
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+                                @if (!string.IsNullOrEmpty(_oError))
+                                {
+                                    <div class="form-alert" role="alert">
+                                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_oError
+                                    </div>
+                                }
+                                <div class="ts-edit-actions">
+                                    <button class="ts-btn-ghost" @onclick="CancelOrg">Cancel</button>
+                                    <button class="ts-btn-primary" @onclick="SaveOrgAsync" disabled="@_saving">
+                                        @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                                        Save Changes
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </section>
+
+                <!-- ── Localization ───────────────────────────── -->
+                <section class="pf-section card" aria-label="Localization">
+                    <div class="pf-card-hd">
+                        <div class="pf-card-title">
+                            <i class="bi bi-globe" aria-hidden="true"></i> Localization &amp; Preferences
+                        </div>
+                        @if (!_editLocale)
+                        {
+                            <button class="ts-edit-btn" @onclick="OpenLocale">
+                                <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+                            </button>
+                        }
+                    </div>
+                    <div class="card-body">
+                        @if (!_editLocale)
+                        {
+                            <div class="pf-field-grid">
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Time Zone</div>
+                                    <div class="pf-field-value">
+                                        <i class="bi bi-clock" aria-hidden="true"></i>
+                                        @(TimeZoneLabel(_user.TimeZoneCode) ?? _user.TimeZoneCode ?? "UTC")
+                                    </div>
+                                </div>
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Locale</div>
+                                    <div class="pf-field-value">
+                                        <i class="bi bi-translate" aria-hidden="true"></i>
+                                        @(LocaleLabel(_user.LocaleCode) ?? _user.LocaleCode ?? "en-US")
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="ts-edit-form">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Time Zone</label>
+                                        <SfDropDownList TItem="TzItem" TValue="string"
+                                                        DataSource="@_timeZones"
+                                                        @bind-Value="_lForm.TimeZoneCode"
+                                                        Placeholder="Select time zone…"
+                                                        AllowFiltering="true">
+                                            <DropDownListFieldSettings Text="Label" Value="Code" />
+                                        </SfDropDownList>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Locale</label>
+                                        <SfDropDownList TItem="LocaleItem" TValue="string"
+                                                        DataSource="@_locales"
+                                                        @bind-Value="_lForm.LocaleCode"
+                                                        Placeholder="Select locale…"
+                                                        AllowFiltering="true">
+                                            <DropDownListFieldSettings Text="Label" Value="Code" />
+                                        </SfDropDownList>
+                                    </div>
+                                </div>
+                                @if (!string.IsNullOrEmpty(_lError))
+                                {
+                                    <div class="form-alert" role="alert">
+                                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_lError
+                                    </div>
+                                }
+                                <div class="ts-edit-actions">
+                                    <button class="ts-btn-ghost" @onclick="CancelLocale">Cancel</button>
+                                    <button class="ts-btn-primary" @onclick="SaveLocaleAsync" disabled="@_saving">
+                                        @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                                        Save Preferences
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </section>
+
+                <!-- ── Emergency Contact ─────────────────────── -->
+                <section class="pf-section card" aria-label="Emergency Contact">
+                    <div class="pf-card-hd">
+                        <div class="pf-card-title">
+                            <i class="bi bi-heart-pulse" aria-hidden="true"></i> Emergency Contact
+                        </div>
+                        @if (!_editEmergency)
+                        {
+                            <button class="ts-edit-btn" @onclick="OpenEmergency">
+                                <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+                            </button>
+                        }
+                    </div>
+                    <div class="card-body">
+                        @if (!_editEmergency)
+                        {
+                            <div class="pf-field-grid">
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Contact Name</div>
+                                    <div class="pf-field-value">
+                                        @if (!string.IsNullOrEmpty(_profile?.EmergencyContactName))
+                                        {
+                                            <i class="bi bi-person" aria-hidden="true"></i>
+                                            @_profile.EmergencyContactName
+                                        }
+                                        else
+                                        {
+                                            <span class="pf-no-val">Not provided</span>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="pf-field">
+                                    <div class="pf-field-label">Contact Phone</div>
+                                    <div class="pf-field-value">
+                                        @if (!string.IsNullOrEmpty(_profile?.EmergencyContactPhone))
+                                        {
+                                            <i class="bi bi-telephone" aria-hidden="true"></i>
+                                            <a href="tel:@_profile.EmergencyContactPhone">@_profile.EmergencyContactPhone</a>
+                                        }
+                                        else
+                                        {
+                                            <span class="pf-no-val">Not provided</span>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="ts-edit-form">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Contact Name</label>
+                                        <SfTextBox @bind-Value="_eForm.Name" Placeholder="Full name" />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Contact Phone</label>
+                                        <SfTextBox @bind-Value="_eForm.Phone"
+                                                   Placeholder="+1 555 000 0000"
+                                                   Type="InputType.Tel" />
+                                    </div>
+                                </div>
+                                @if (!string.IsNullOrEmpty(_eError))
+                                {
+                                    <div class="form-alert" role="alert">
+                                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_eError
+                                    </div>
+                                }
+                                <div class="ts-edit-actions">
+                                    <button class="ts-btn-ghost" @onclick="CancelEmergency">Cancel</button>
+                                    <button class="ts-btn-primary" @onclick="SaveEmergencyAsync" disabled="@_saving">
+                                        @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                                        Save Changes
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </section>
+
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    // TODO: replace with real auth context / identity service
+    private static readonly Guid _currentUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+    private static readonly Guid _tenantId       = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Page state ────────────────────────────────────────────────
+    private UserDto?        _user;
+    private BranchDto?      _branch;
+    private UserProfileDto? _profile;
+    private bool            _loading     = true;
+    private bool            _saving;
+    private string          _avatarColor = "#2563eb";
+
+    // ── Edit section toggles ──────────────────────────────────────
+    private bool   _editPersonal;
+    private bool   _editContact;
+    private bool   _editOrg;
+    private bool   _editLocale;
+    private bool   _editAddress;
+    private bool   _editEmergency;
+    private bool   _editAvatarUrl;
+    private string _avatarUrlInput = string.Empty;
+    private bool   _anyEditing => _editPersonal || _editContact || _editOrg || _editLocale || _editAddress || _editEmergency;
+
+    // ── Per-section error messages ────────────────────────────────
+    private string _pError    = string.Empty;
+    private string _cError    = string.Empty;
+    private string _oError    = string.Empty;
+    private string _lError    = string.Empty;
+    private string _aError    = string.Empty;
+    private string _eError    = string.Empty;
+    private string _globalMsg = string.Empty;
+    private bool   _globalErr;
+
+    // ── Section form models ───────────────────────────────────────
+    private PersonalForm         _pForm = new();
+    private ContactForm          _cForm = new();
+    private OrgForm              _oForm = new();
+    private LocaleForm           _lForm = new();
+    private AddressForm          _aForm = new();
+    private EmergencyContactForm _eForm = new();
+
+    // ── Lifecycle ─────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _user is null) return;
+        try
+        {
+            var saved = await JS.InvokeAsync<string?>("localStorage.getItem", $"ams.avatar.{_currentUserId}");
+            if (!string.IsNullOrEmpty(saved)) { _avatarColor = saved; StateHasChanged(); }
+        }
+        catch { /* JS not yet available or user declined storage */ }
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _user    = await Api.GetUserByIdAsync(_currentUserId);
+            _profile = await Api.GetUserProfileAsync(_currentUserId);
+            if (_user is not null && _user.BranchId.HasValue)
+            {
+                var branches = await Api.SearchBranchesAsync(_tenantId);
+                _branch = branches?.Items.FirstOrDefault(b => b.BranchId == _user.BranchId);
+            }
+        }
+        finally { _loading = false; }
+    }
+
+    // ── Avatar color ──────────────────────────────────────────────
+    private async Task PickColorAsync(string color)
+    {
+        _avatarColor = color;
+        try { await JS.InvokeVoidAsync("localStorage.setItem", $"ams.avatar.{_currentUserId}", color); }
+        catch { /* storage may be unavailable */ }
+    }
+
+    // ── Personal section ──────────────────────────────────────────
+    private void OpenPersonal()
+    {
+        _pForm        = new() { FullName = _user!.FullName, DisplayName = _user.DisplayName };
+        _pError       = string.Empty;
+        _editPersonal = true;
+    }
+    private void CancelPersonal() { _editPersonal = false; _pError = string.Empty; }
+
+    private async Task SavePersonalAsync()
+    {
+        if (_user is null || _saving) return;
+        if (string.IsNullOrWhiteSpace(_pForm.FullName)) { _pError = "Full Name is required."; return; }
+        _saving = true;
+        try
+        {
+            await Api.UpdateUserAsync(_user.UserId, new UpdateUserRequest
+            {
+                UserId       = _user.UserId,
+                FullName     = _pForm.FullName.Trim(),
+                DisplayName  = _pForm.DisplayName?.Trim(),
+                PhoneNumber  = _user.PhoneNumber,
+                JobTitle     = _user.JobTitle,
+                Department   = _user.Department,
+                TimeZoneCode = _user.TimeZoneCode,
+                LocaleCode   = _user.LocaleCode,
+            });
+            _editPersonal = false;
+            await ReloadAndNotify("Personal information updated.");
+        }
+        catch (Exception ex) { _pError = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    // ── Contact section ───────────────────────────────────────────
+    private void OpenContact()
+    {
+        _cForm       = new() { PhoneNumber = _user!.PhoneNumber, MobileNumber = _profile?.MobileNumber };
+        _cError      = string.Empty;
+        _editContact = true;
+    }
+    private void CancelContact() { _editContact = false; _cError = string.Empty; }
+
+    private async Task SaveContactAsync()
+    {
+        if (_user is null || _saving) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateUserAsync(_user.UserId, new UpdateUserRequest
+            {
+                UserId       = _user.UserId,
+                FullName     = _user.FullName,
+                DisplayName  = _user.DisplayName,
+                PhoneNumber  = _cForm.PhoneNumber?.Trim(),
+                JobTitle     = _user.JobTitle,
+                Department   = _user.Department,
+                TimeZoneCode = _user.TimeZoneCode,
+                LocaleCode   = _user.LocaleCode,
+            });
+            var req = CurrentProfileRequest();
+            req.MobileNumber = _cForm.MobileNumber?.Trim();
+            await Api.UpdateUserProfileAsync(_user.UserId, req);
+            _editContact = false;
+            await ReloadAndNotify("Contact information updated.");
+        }
+        catch (Exception ex) { _cError = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    // ── Organization section ──────────────────────────────────────
+    private void OpenOrg()
+    {
+        _oForm   = new() { JobTitle = _user!.JobTitle, Department = _user.Department };
+        _oError  = string.Empty;
+        _editOrg = true;
+    }
+    private void CancelOrg() { _editOrg = false; _oError = string.Empty; }
+
+    private async Task SaveOrgAsync()
+    {
+        if (_user is null || _saving) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateUserAsync(_user.UserId, new UpdateUserRequest
+            {
+                UserId       = _user.UserId,
+                FullName     = _user.FullName,
+                DisplayName  = _user.DisplayName,
+                PhoneNumber  = _user.PhoneNumber,
+                JobTitle     = _oForm.JobTitle?.Trim(),
+                Department   = _oForm.Department?.Trim(),
+                TimeZoneCode = _user.TimeZoneCode,
+                LocaleCode   = _user.LocaleCode,
+            });
+            _editOrg = false;
+            await ReloadAndNotify("Work information updated.");
+        }
+        catch (Exception ex) { _oError = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    // ── Localization section ──────────────────────────────────────
+    private void OpenLocale()
+    {
+        _lForm      = new() { TimeZoneCode = _user!.TimeZoneCode ?? "UTC", LocaleCode = _user.LocaleCode ?? "en-US" };
+        _lError     = string.Empty;
+        _editLocale = true;
+    }
+    private void CancelLocale() { _editLocale = false; _lError = string.Empty; }
+
+    private async Task SaveLocaleAsync()
+    {
+        if (_user is null || _saving) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateUserAsync(_user.UserId, new UpdateUserRequest
+            {
+                UserId       = _user.UserId,
+                FullName     = _user.FullName,
+                DisplayName  = _user.DisplayName,
+                PhoneNumber  = _user.PhoneNumber,
+                JobTitle     = _user.JobTitle,
+                Department   = _user.Department,
+                TimeZoneCode = _lForm.TimeZoneCode,
+                LocaleCode   = _lForm.LocaleCode,
+            });
+            _editLocale = false;
+            await ReloadAndNotify("Localization preferences updated.");
+        }
+        catch (Exception ex) { _lError = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    // ── Address section ───────────────────────────────────────────
+    private void OpenAddress()
+    {
+        _aForm = new()
+        {
+            AddressLine1  = _profile?.AddressLine1,
+            AddressLine2  = _profile?.AddressLine2,
+            City          = _profile?.City,
+            StateProvince = _profile?.StateProvince,
+            PostalCode    = _profile?.PostalCode,
+            CountryCode   = _profile?.CountryCode,
+        };
+        _aError      = string.Empty;
+        _editAddress = true;
+    }
+    private void CancelAddress() { _editAddress = false; _aError = string.Empty; }
+
+    private async Task SaveAddressAsync()
+    {
+        if (_user is null || _saving) return;
+        _saving = true;
+        try
+        {
+            var req = CurrentProfileRequest();
+            req.AddressLine1  = _aForm.AddressLine1?.Trim();
+            req.AddressLine2  = _aForm.AddressLine2?.Trim();
+            req.City          = _aForm.City?.Trim();
+            req.StateProvince = _aForm.StateProvince?.Trim();
+            req.PostalCode    = _aForm.PostalCode?.Trim();
+            req.CountryCode   = _aForm.CountryCode?.Trim();
+            await Api.UpdateUserProfileAsync(_user.UserId, req);
+            _editAddress = false;
+            await ReloadAndNotify("Address updated.");
+        }
+        catch (Exception ex) { _aError = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    // ── Emergency Contact section ─────────────────────────────────
+    private void OpenEmergency()
+    {
+        _eForm = new() { Name = _profile?.EmergencyContactName, Phone = _profile?.EmergencyContactPhone };
+        _eError        = string.Empty;
+        _editEmergency = true;
+    }
+    private void CancelEmergency() { _editEmergency = false; _eError = string.Empty; }
+
+    private async Task SaveEmergencyAsync()
+    {
+        if (_user is null || _saving) return;
+        _saving = true;
+        try
+        {
+            var req = CurrentProfileRequest();
+            req.EmergencyContactName  = _eForm.Name?.Trim();
+            req.EmergencyContactPhone = _eForm.Phone?.Trim();
+            await Api.UpdateUserProfileAsync(_user.UserId, req);
+            _editEmergency = false;
+            await ReloadAndNotify("Emergency contact updated.");
+        }
+        catch (Exception ex) { _eError = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    // ── Avatar URL ────────────────────────────────────────────────
+    private async Task SaveAvatarUrlAsync()
+    {
+        if (_user is null || _saving) return;
+        _saving = true;
+        try
+        {
+            var req = CurrentProfileRequest();
+            req.AvatarUrl = string.IsNullOrWhiteSpace(_avatarUrlInput) ? null : _avatarUrlInput.Trim();
+            await Api.UpdateUserProfileAsync(_user.UserId, req);
+            _editAvatarUrl = false;
+            await ReloadAndNotify("Avatar image updated.");
+        }
+        catch { /* swallow — cosmetic field */ }
+        finally { _saving = false; }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────
+    private async Task ReloadAndNotify(string msg)
+    {
+        await LoadAsync();
+        _globalMsg = msg; _globalErr = false;
+        _ = Task.Delay(4000).ContinueWith(_ => InvokeAsync(() => { _globalMsg = string.Empty; StateHasChanged(); }));
+    }
+
+    private UpdateUserProfileRequest CurrentProfileRequest() => new()
+    {
+        UserId                = _user!.UserId,
+        PhoneNumber           = _profile?.PhoneNumber,
+        MobileNumber          = _profile?.MobileNumber,
+        CountryCode           = _profile?.CountryCode,
+        AddressLine1          = _profile?.AddressLine1,
+        AddressLine2          = _profile?.AddressLine2,
+        City                  = _profile?.City,
+        StateProvince         = _profile?.StateProvince,
+        PostalCode            = _profile?.PostalCode,
+        AvatarUrl             = _profile?.AvatarUrl,
+        EmergencyContactName  = _profile?.EmergencyContactName,
+        EmergencyContactPhone = _profile?.EmergencyContactPhone,
+    };
+
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}".ToUpper()
+            : name.Length >= 1 ? name[..Math.Min(2, name.Length)].ToUpper() : "?";
+    }
+
+    private static string TypeBadge(string t) => t.ToLowerInvariant() switch
+    {
+        "internal" => "badge-blue",
+        "external" => "badge-neutral",
+        "system"   => "badge-red",
+        _          => "badge-neutral",
+    };
+
+    private static string StatusBadge(string s) => s.ToLowerInvariant() switch
+    {
+        "active"   => "badge-green",
+        "inactive" => "badge-neutral",
+        "pending"  => "badge-amber",
+        "locked"   => "badge-red",
+        _          => "badge-neutral",
+    };
+
+    private static string? TimeZoneLabel(string? code) => _timeZones.FirstOrDefault(t => t.Code == code)?.Label;
+    private static string? LocaleLabel(string? code)   => _locales.FirstOrDefault(l => l.Code == code)?.Label;
+
+    // ── Avatar colors ─────────────────────────────────────────────
+    private static readonly string[] AvatarColors =
+    [
+        "#2563eb", "#7c3aed", "#059669", "#d97706",
+        "#dc2626", "#0891b2", "#db2777", "#4f46e5",
+    ];
+
+    // ── Form models ───────────────────────────────────────────────
+    private sealed class PersonalForm { public string FullName { get; set; } = string.Empty; public string? DisplayName { get; set; } }
+    private sealed class ContactForm  { public string? PhoneNumber { get; set; } public string? MobileNumber { get; set; } }
+    private sealed class OrgForm      { public string? JobTitle { get; set; } public string? Department { get; set; } }
+    private sealed class LocaleForm   { public string TimeZoneCode { get; set; } = "UTC"; public string LocaleCode { get; set; } = "en-US"; }
+    private sealed class AddressForm  { public string? AddressLine1 { get; set; } public string? AddressLine2 { get; set; } public string? City { get; set; } public string? StateProvince { get; set; } public string? PostalCode { get; set; } public string? CountryCode { get; set; } }
+    private sealed class EmergencyContactForm { public string? Name { get; set; } public string? Phone { get; set; } }
+
+    private sealed record TzItem(string Code, string Label);
+    private sealed record LocaleItem(string Code, string Label);
+
+    private static readonly List<TzItem> _timeZones =
+    [
+        new("UTC",                  "UTC — Coordinated Universal Time"),
+        new("America/New_York",     "Eastern Time (US & Canada)"),
+        new("America/Chicago",      "Central Time (US & Canada)"),
+        new("America/Denver",       "Mountain Time (US & Canada)"),
+        new("America/Los_Angeles",  "Pacific Time (US & Canada)"),
+        new("America/Anchorage",    "Alaska"),
+        new("Pacific/Honolulu",     "Hawaii"),
+        new("America/Phoenix",      "Arizona"),
+        new("America/Toronto",      "Eastern Time — Toronto"),
+        new("America/Vancouver",    "Pacific Time — Vancouver"),
+        new("America/Sao_Paulo",    "Brasilia"),
+        new("America/Buenos_Aires", "Buenos Aires"),
+        new("Europe/London",        "London (GMT/BST)"),
+        new("Europe/Paris",         "Paris (CET/CEST)"),
+        new("Europe/Berlin",        "Berlin (CET/CEST)"),
+        new("Europe/Amsterdam",     "Amsterdam"),
+        new("Europe/Madrid",        "Madrid"),
+        new("Europe/Rome",          "Rome"),
+        new("Europe/Warsaw",        "Warsaw"),
+        new("Europe/Athens",        "Athens"),
+        new("Europe/Istanbul",      "Istanbul"),
+        new("Europe/Moscow",        "Moscow"),
+        new("Asia/Dubai",           "Dubai (GST)"),
+        new("Asia/Kolkata",         "India Standard Time"),
+        new("Asia/Bangkok",         "Bangkok, Hanoi, Jakarta"),
+        new("Asia/Singapore",       "Singapore"),
+        new("Asia/Shanghai",        "China Standard Time"),
+        new("Asia/Tokyo",           "Tokyo"),
+        new("Asia/Seoul",           "Seoul"),
+        new("Australia/Sydney",     "Sydney (AEST/AEDT)"),
+        new("Pacific/Auckland",     "Auckland"),
+    ];
+
+    private static readonly List<LocaleItem> _locales =
+    [
+        new("en-US", "English (United States)"),
+        new("en-GB", "English (United Kingdom)"),
+        new("en-AU", "English (Australia)"),
+        new("en-CA", "English (Canada)"),
+        new("fr-FR", "French (France)"),
+        new("fr-CA", "French (Canada)"),
+        new("de-DE", "German (Germany)"),
+        new("de-AT", "German (Austria)"),
+        new("es-ES", "Spanish (Spain)"),
+        new("es-MX", "Spanish (Mexico)"),
+        new("pt-BR", "Portuguese (Brazil)"),
+        new("pt-PT", "Portuguese (Portugal)"),
+        new("it-IT", "Italian (Italy)"),
+        new("nl-NL", "Dutch (Netherlands)"),
+        new("pl-PL", "Polish (Poland)"),
+        new("ru-RU", "Russian (Russia)"),
+        new("tr-TR", "Turkish (Turkey)"),
+        new("ar-SA", "Arabic (Saudi Arabia)"),
+        new("zh-CN", "Chinese Simplified (China)"),
+        new("zh-TW", "Chinese Traditional (Taiwan)"),
+        new("ja-JP", "Japanese (Japan)"),
+        new("ko-KR", "Korean (South Korea)"),
+        new("hi-IN", "Hindi (India)"),
+        new("th-TH", "Thai (Thailand)"),
+        new("vi-VN", "Vietnamese (Vietnam)"),
+    ];
+}

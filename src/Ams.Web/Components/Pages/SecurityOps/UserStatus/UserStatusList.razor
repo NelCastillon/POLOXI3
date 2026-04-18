@@ -1,0 +1,467 @@
+@page "/security/user-status"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Security
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>User Status Management — Security</PageTitle>
+
+<AppPageHeader Title="User Status Management"
+               Subtitle="Activate, suspend, lock, disable or terminate user accounts"
+               Icon="bi-person-badge">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="us-kpi-strip">
+    <div class="@KpiClass(0, "us-kpi-card--total")" role="button" tabindex="0" @onclick="() => ApplyKpi(0)">
+        <span class="us-kpi-icon us-kpi-icon--total"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="us-kpi-value">@_totalCount</div>
+            <div class="us-kpi-label">Total Users</div>
+        </div>
+        @if (_kpiActive == 0) { <span class="us-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass(1, "us-kpi-card--active")" role="button" tabindex="0" @onclick="() => ApplyKpi(1)">
+        <span class="us-kpi-icon us-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="us-kpi-value">@_activeCount</div>
+            <div class="us-kpi-label">Active</div>
+        </div>
+        @if (_kpiActive == 1) { <span class="us-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass(2, "us-kpi-card--suspended")" role="button" tabindex="0" @onclick="() => ApplyKpi(2)">
+        <span class="us-kpi-icon us-kpi-icon--suspended"><i class="bi bi-pause-circle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="us-kpi-value">@_suspendedCount</div>
+            <div class="us-kpi-label">Suspended</div>
+        </div>
+        @if (_kpiActive == 2) { <span class="us-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass(3, "us-kpi-card--locked")" role="button" tabindex="0" @onclick="() => ApplyKpi(3)">
+        <span class="us-kpi-icon us-kpi-icon--locked"><i class="bi bi-lock-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="us-kpi-value">@_lockedCount</div>
+            <div class="us-kpi-label">Locked</div>
+        </div>
+        @if (_kpiActive == 3) { <span class="us-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass(4, "us-kpi-card--restricted")" role="button" tabindex="0" @onclick="() => ApplyKpi(4)">
+        <span class="us-kpi-icon us-kpi-icon--restricted"><i class="bi bi-slash-circle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="us-kpi-value">@(_disabledCount + _terminatedCount)</div>
+            <div class="us-kpi-label">Disabled / Terminated</div>
+        </div>
+        @if (_kpiActive == 4) { <span class="us-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search by name, email or username…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_statusOptions"
+                        Placeholder="Status"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterStatus"
+                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_typeOptions"
+                        Placeholder="User Type"
+                        ShowClearButton="true"
+                        Width="150px"
+                        Value="_filterType"
+                        ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </Filters>
+    <Actions>
+        @if (_selected.Count > 0)
+        {
+            <span class="us-sel-count">
+                <i class="bi bi-check2-square" aria-hidden="true"></i> @_selected.Count selected
+            </span>
+        }
+    </Actions>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading users…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="UserDto"
+            DataSource="@_users"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="56">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row"
+                               Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
+        <GridEvents TValue="UserDto"
+                    RowSelected="OnRowSelected"
+                    RowDeselected="OnRowDeselected" />
+        <GridColumns>
+            <GridColumn Type="ColumnType.CheckBox" Width="48" />
+
+            <GridColumn Field="@nameof(UserDto.FullName)" HeaderText="User" Width="240">
+                <Template>
+                    @{ var u = (UserDto)context; }
+                    <div class="us-user-cell">
+                        <span class="us-user-avatar" aria-hidden="true">
+                            @(u.FullName.Length > 0 ? u.FullName[0].ToString().ToUpper() : "?")
+                        </span>
+                        <div class="us-user-info">
+                            <div class="us-user-name">@u.FullName</div>
+                            <div class="us-user-email">@u.Email</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserDto.UserTypeCode)" HeaderText="Type" Width="120">
+                <Template>
+                    @{ var u = (UserDto)context; }
+                    <span class="us-type-badge">@u.UserTypeCode</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserDto.Department)" HeaderText="Department" Width="150" />
+
+            <GridColumn Field="@nameof(UserDto.StatusCode)" HeaderText="Status" Width="130" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var u = (UserDto)context; }
+                    <AppStatusBadge Status="@u.StatusCode" />
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserDto.IsLockedOut)" HeaderText="Locked Out" Width="115" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var u = (UserDto)context; }
+                    @if (u.IsLockedOut)
+                    {
+                        <span class="us-locked-badge" title="@(u.LockoutEndDateUtc.HasValue ? $"Until {u.LockoutEndDateUtc:g}" : "Indefinite")">
+                            <i class="bi bi-lock-fill" aria-hidden="true"></i> Locked
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="us-unlocked-badge"><i class="bi bi-unlock" aria-hidden="true"></i></span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserDto.LastLoginDateUtc)" HeaderText="Last Login" Width="130">
+                <Template>
+                    @{ var u = (UserDto)context; }
+                    <span title="@(u.LastLoginDateUtc?.ToString("g") ?? "Never")">
+                        @(u.LastLoginDateUtc.HasValue ? FormatRelative(u.LastLoginDateUtc.Value) : "Never")
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText="" Width="200" AllowSorting="false" AllowFiltering="false">
+                <Template>
+                    @{ var u = (UserDto)context; }
+                    <div class="um-row-actions">
+                        @if (u.StatusCode != "Active")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost"
+                                    @onclick='() => OpenDialog(u, "Active")'
+                                    title="Activate">
+                                <i class="bi bi-check-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (u.StatusCode == "Active")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost"
+                                    @onclick='() => OpenDialog(u, "Suspended")'
+                                    title="Suspend">
+                                <i class="bi bi-pause-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (!u.IsLockedOut)
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost"
+                                    @onclick='() => OpenDialog(u, "Locked")'
+                                    title="Lock">
+                                <i class="bi bi-lock" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (u.IsLockedOut || u.StatusCode == "Locked")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost"
+                                    @onclick='() => OpenDialog(u, "Active")'
+                                    title="Unlock">
+                                <i class="bi bi-unlock" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (u.StatusCode is not ("Disabled" or "Terminated"))
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost"
+                                    @onclick='() => OpenDialog(u, "Disabled")'
+                                    title="Disable">
+                                <i class="bi bi-slash-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (u.StatusCode != "Terminated")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-warning"
+                                    @onclick='() => OpenDialog(u, "Terminated")'
+                                    title="Terminate">
+                                <i class="bi bi-x-octagon" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Status change dialog -->
+<UserStatusChangeDialog @bind-Visible="_showDialog"
+                        User="_dialogUser"
+                        NewStatus="_dialogNewStatus"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteStatusChangeAsync" />
+
+<!-- Toast -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ──────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    private SfGrid<UserDto>? _grid;
+    private SfToast?         _toast;
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private List<UserDto> _all      = [];
+    private List<UserDto> _users    = [];
+    private List<UserDto> _selected = [];
+
+    // ── KPI ────────────────────────────────────────────────────────────────────
+    private int _totalCount;
+    private int _activeCount;
+    private int _suspendedCount;
+    private int _lockedCount;
+    private int _disabledCount;
+    private int _terminatedCount;
+    private int _kpiActive = 0;
+
+    // ── Busy ───────────────────────────────────────────────────────────────────
+    private bool _loading    = false;
+    private bool _confirming = false;
+
+    // ── Dialog ─────────────────────────────────────────────────────────────────
+    private bool    _showDialog      = false;
+    private UserDto? _dialogUser     = null;
+    private string   _dialogNewStatus = string.Empty;
+
+    // ── Filters ────────────────────────────────────────────────────────────────
+    private string _search       = string.Empty;
+    private string _filterStatus = string.Empty;
+    private string _filterType   = string.Empty;
+
+    // ── Static options ─────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Active",      "Active"),
+        new("Suspended",   "Suspended"),
+        new("Locked",      "Locked"),
+        new("Disabled",    "Disabled"),
+        new("Terminated",  "Terminated"),
+        new("Inactive",    "Inactive"),
+        new("Pending Setup","PendingSetup"),
+    ];
+
+    private static readonly List<LabelValue> _typeOptions =
+    [
+        new("Internal", "Internal"),
+        new("External", "External"),
+        new("Portal",   "Portal"),
+        new("System",   "System"),
+    ];
+
+    // ── KPI CSS ────────────────────────────────────────────────────────────────
+    private string KpiClass(int n, string modifier) =>
+        $"us-kpi-card {modifier}" + (_kpiActive == n ? " us-kpi-card--selected" : "");
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",     "/"),
+            new("Security", "/security"),
+            new("User Status", "/security/user-status"));
+
+        await LoadAsync();
+    }
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchUsersForStatusAsync(_tenantId, pageSize: 1000);
+            _all = result?.Items.ToList() ?? [];
+            _selected.Clear();
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount      = _all.Count;
+        _activeCount     = _all.Count(x => x.StatusCode == "Active");
+        _suspendedCount  = _all.Count(x => x.StatusCode == "Suspended");
+        _lockedCount     = _all.Count(x => x.StatusCode == "Locked" || x.IsLockedOut);
+        _disabledCount   = _all.Count(x => x.StatusCode == "Disabled");
+        _terminatedCount = _all.Count(x => x.StatusCode == "Terminated");
+    }
+
+    private void ApplyFilters()
+    {
+        var q = _all.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var s = _search.Trim().ToLower();
+            q = q.Where(x =>
+                x.FullName.ToLower().Contains(s) ||
+                x.Email.ToLower().Contains(s)    ||
+                x.UserName.ToLower().Contains(s));
+        }
+
+        if (!string.IsNullOrEmpty(_filterStatus))
+            q = q.Where(x => string.Equals(x.StatusCode, _filterStatus, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrEmpty(_filterType))
+            q = q.Where(x => string.Equals(x.UserTypeCode, _filterType, StringComparison.OrdinalIgnoreCase));
+
+        q = _kpiActive switch
+        {
+            1 => q.Where(x => x.StatusCode == "Active"),
+            2 => q.Where(x => x.StatusCode == "Suspended"),
+            3 => q.Where(x => x.StatusCode == "Locked" || x.IsLockedOut),
+            4 => q.Where(x => x.StatusCode is "Disabled" or "Terminated"),
+            _ => q,
+        };
+
+        _users = q.ToList();
+    }
+
+    private void ApplyKpi(int n)
+    {
+        _kpiActive    = n;
+        _filterStatus = string.Empty;
+        ApplyFilters();
+    }
+
+    private async Task OnSearchAsync()
+    {
+        ApplyFilters();
+        await Task.CompletedTask;
+    }
+
+    // ── Row selection ──────────────────────────────────────────────────────────
+    private void OnRowSelected(RowSelectEventArgs<UserDto> args)
+    {
+        if (!_selected.Contains(args.Data)) _selected.Add(args.Data);
+    }
+
+    private void OnRowDeselected(RowDeselectEventArgs<UserDto> args)
+    {
+        _selected.Remove(args.Data);
+    }
+
+    // ── Dialog ─────────────────────────────────────────────────────────────────
+    private void OpenDialog(UserDto user, string newStatus)
+    {
+        _dialogUser      = user;
+        _dialogNewStatus = newStatus;
+        _showDialog      = true;
+    }
+
+    private async Task ExecuteStatusChangeAsync((string Reason, string? EffectiveNote) args)
+    {
+        if (_dialogUser is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.ChangeUserStatusAsync(_dialogUser.UserId, new ChangeUserStatusRequest
+            {
+                UserId        = _dialogUser.UserId,
+                NewStatus     = _dialogNewStatus,
+                Reason        = args.Reason,
+                EffectiveNote = args.EffectiveNote,
+            });
+            _showDialog = false;
+            await ShowToastAsync($"{_dialogUser.FullName} — status changed to {_dialogNewStatus}.", "Success");
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToastAsync("Failed to change status. Please try again.", "Error");
+        }
+        finally
+        {
+            _confirming = false;
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Label, string Value);
+
+    private static string FormatRelative(DateTime utc)
+    {
+        var diff = DateTime.UtcNow - utc;
+        return diff.TotalDays switch
+        {
+            < 1   => "Today",
+            < 2   => "Yesterday",
+            < 7   => $"{(int)diff.TotalDays}d ago",
+            < 30  => $"{(int)(diff.TotalDays / 7)}w ago",
+            < 365 => $"{(int)(diff.TotalDays / 30)}mo ago",
+            _     => $"{(int)(diff.TotalDays / 365)}y ago",
+        };
+    }
+
+    private async Task ShowToastAsync(string message, string title)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = title,
+            Content  = message,
+            CssClass = title == "Error" ? "e-toast-danger" : "e-toast-success",
+        });
+    }
+}

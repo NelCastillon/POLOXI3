@@ -1,0 +1,611 @@
+@page "/monitoring/security-events"
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Security Event Dashboard</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Security Event Dashboard"
+               Subtitle="Real-time overview of authentication, access, and data-export events"
+               Icon="bi-shield-exclamation">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <a href="/audit" class="um-btn um-btn-ghost">
+            <i class="bi bi-journal-text" aria-hidden="true"></i> Audit Log
+        </a>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="sed-loading">
+        <span class="um-spin" aria-hidden="true"></span>
+        Loading dashboard&hellip;
+    </div>
+}
+else
+{
+    <!-- ── KPI strip ─────────────────────────────────────────────────────── -->
+    <div class="sed-kpi-strip">
+
+        <div class="sed-kpi-card @(_summary?.TotalHighSeverity > 0 ? "sed-kpi-card--danger" : "")">
+            <span class="sed-kpi-icon sed-kpi-icon--high">
+                <i class="bi bi-exclamation-octagon-fill" aria-hidden="true"></i>
+            </span>
+            <div class="sed-kpi-body">
+                <div class="sed-kpi-value">@(_summary?.TotalHighSeverity ?? 0)</div>
+                <div class="sed-kpi-label">High Severity</div>
+                <div class="sed-kpi-sub">Risk score &ge; 70</div>
+            </div>
+            <button class="sed-kpi-action" @onclick='() => QuickFilterAsync("", "High")' title="Filter grid">
+                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </button>
+        </div>
+
+        <div class="sed-kpi-card @(_summary?.TotalFailedLogins > 0 ? "sed-kpi-card--warn" : "")">
+            <span class="sed-kpi-icon sed-kpi-icon--failed">
+                <i class="bi bi-x-circle-fill" aria-hidden="true"></i>
+            </span>
+            <div class="sed-kpi-body">
+                <div class="sed-kpi-value">@(_summary?.TotalFailedLogins ?? 0)</div>
+                <div class="sed-kpi-label">Failed Logins</div>
+                <div class="sed-kpi-sub">Login failures recorded</div>
+            </div>
+            <button class="sed-kpi-action" @onclick='() => QuickFilterAsync("LOGIN_FAILED", "")' title="Filter grid">
+                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </button>
+        </div>
+
+        <div class="sed-kpi-card">
+            <span class="sed-kpi-icon sed-kpi-icon--mfa">
+                <i class="bi bi-phone-fill" aria-hidden="true"></i>
+            </span>
+            <div class="sed-kpi-body">
+                <div class="sed-kpi-value">@(_summary?.TotalMfaResets ?? 0)</div>
+                <div class="sed-kpi-label">MFA Resets</div>
+                <div class="sed-kpi-sub">Multi-factor resets</div>
+            </div>
+            <button class="sed-kpi-action" @onclick='() => QuickFilterAsync("MFA_RESET", "")' title="Filter grid">
+                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </button>
+        </div>
+
+        <div class="sed-kpi-card">
+            <span class="sed-kpi-icon sed-kpi-icon--role">
+                <i class="bi bi-person-badge-fill" aria-hidden="true"></i>
+            </span>
+            <div class="sed-kpi-body">
+                <div class="sed-kpi-value">@(_summary?.TotalRoleAssignments ?? 0)</div>
+                <div class="sed-kpi-label">Role Assignments</div>
+                <div class="sed-kpi-sub">Role changes recorded</div>
+            </div>
+            <button class="sed-kpi-action" @onclick='() => QuickFilterAsync("ROLE_ASSIGNED", "")' title="Filter grid">
+                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </button>
+        </div>
+
+        <div class="sed-kpi-card">
+            <span class="sed-kpi-icon sed-kpi-icon--impersonate">
+                <i class="bi bi-person-fill-gear" aria-hidden="true"></i>
+            </span>
+            <div class="sed-kpi-body">
+                <div class="sed-kpi-value">@(_summary?.TotalImpersonations ?? 0)</div>
+                <div class="sed-kpi-label">Impersonations</div>
+                <div class="sed-kpi-sub">User impersonation events</div>
+            </div>
+            <button class="sed-kpi-action" @onclick='() => QuickFilterAsync("IMPERSONATION_STARTED", "")' title="Filter grid">
+                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </button>
+        </div>
+
+        <div class="sed-kpi-card">
+            <span class="sed-kpi-icon sed-kpi-icon--export">
+                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+            </span>
+            <div class="sed-kpi-body">
+                <div class="sed-kpi-value">@(_summary?.TotalExports ?? 0)</div>
+                <div class="sed-kpi-label">Exports</div>
+                <div class="sed-kpi-sub">Data exports in period</div>
+            </div>
+            <button class="sed-kpi-action" @onclick='() => QuickFilterAsync("EXPORT", "")' title="Filter grid">
+                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </button>
+        </div>
+
+    </div>
+
+    <!-- ── Two-column: trends + recent high severity ─────────────────────── -->
+    <div class="sed-two-col">
+
+        <!-- Suspicious login trends -->
+        <div class="sed-panel">
+            <div class="sed-panel-hd">
+                <span class="sed-panel-title">
+                    <i class="bi bi-graph-up-arrow" aria-hidden="true"></i>
+                    Suspicious Login Trends &mdash; 14 days
+                </span>
+            </div>
+            <div class="sed-panel-body">
+                @if (_trends.Count == 0)
+                {
+                    <div class="sed-panel-empty">
+                        <i class="bi bi-bar-chart" aria-hidden="true"></i>
+                        No trend data available
+                    </div>
+                }
+                else
+                {
+                    <div class="sed-trend-table">
+                        <div class="sed-trend-hd">
+                            <span>Date</span>
+                            <span class="sed-col-right">Failed Logins</span>
+                            <span class="sed-col-right">High Severity</span>
+                            <span class="sed-col-right">Total</span>
+                        </div>
+                        @foreach (var t in _trends.OrderByDescending(x => x.EventDate).Take(14))
+                        {
+                            <div class="sed-trend-row @(t.HighSeverityCount > 0 ? "sed-trend-row--alert" : t.FailedLoginCount > 0 ? "sed-trend-row--warn" : "")">
+                                <span>@t.EventDate.ToLocalTime().ToString("dd MMM")</span>
+                                <span class="sed-col-right @(t.FailedLoginCount > 0 ? "sed-count--warn" : "sed-count--zero")">@t.FailedLoginCount</span>
+                                <span class="sed-col-right @(t.HighSeverityCount > 0 ? "sed-count--danger" : "sed-count--zero")">@t.HighSeverityCount</span>
+                                <span class="sed-col-right">@t.TotalCount</span>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Recent high severity -->
+        <div class="sed-panel">
+            <div class="sed-panel-hd">
+                <span class="sed-panel-title">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    Recent High Severity
+                </span>
+                <button class="sed-panel-link" @onclick='() => QuickFilterAsync("", "High")'>
+                    Show in grid
+                </button>
+            </div>
+            <div class="sed-panel-body">
+                @if (_recentHighSeverity.Count == 0)
+                {
+                    <div class="sed-panel-empty">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        No high severity events
+                    </div>
+                }
+                else
+                {
+                    @foreach (var e in _recentHighSeverity)
+                    {
+                        <div class="sed-event-row" @onclick="() => OpenEvent(e)" title="Open detail">
+                            <span class="sed-risk-chip sed-risk-chip--@RiskLevel(e.RiskScore)">
+                                @(e.RiskScore?.ToString() ?? "—")
+                            </span>
+                            <div class="sed-event-info">
+                                <div class="sed-event-type">@e.EventTypeCode</div>
+                                <div class="sed-event-desc">@e.EventDescription</div>
+                                <div class="sed-event-meta">
+                                    @if (e.UserFullName is not null)
+                                    {
+                                        <span><i class="bi bi-person" aria-hidden="true"></i> @e.UserFullName</span>
+                                    }
+                                    @if (e.IpAddress is not null)
+                                    {
+                                        <span><i class="bi bi-geo" aria-hidden="true"></i> @e.IpAddress</span>
+                                    }
+                                </div>
+                            </div>
+                            <span class="sed-event-time"
+                                  title="@e.CreatedDateUtc.ToLocalTime().ToString("dd MMM yyyy HH:mm")">
+                                @RelativeTime(e.CreatedDateUtc)
+                            </span>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ── Full events grid ───────────────────────────────────────────────── -->
+    <div class="sed-panel sed-panel--full">
+        <div class="sed-panel-hd">
+            <span class="sed-panel-title">
+                <i class="bi bi-table" aria-hidden="true"></i>
+                Security Events
+                @if (_events.Any())
+                {
+                    <span class="sed-count-badge">@_events.Count()</span>
+                }
+            </span>
+            </div>
+
+        <div class="sed-grid-toolbar">
+            <SfTextBox Placeholder="Search description / IP / user&hellip;"
+                       @bind-Value="_searchTerm"
+                       Width="260px">
+            </SfTextBox>
+            <SfDropDownList TItem="LabelValue" TValue="string"
+                            DataSource="_eventTypeOptions"
+                            @bind-Value="_eventTypeFilter"
+                            Width="180px"
+                            Placeholder="Event type">
+                <DropDownListFieldSettings Text="Label" Value="Value"></DropDownListFieldSettings>
+            </SfDropDownList>
+            <SfDropDownList TItem="LabelValue" TValue="string"
+                            DataSource="_severityOptions"
+                            @bind-Value="_riskScoreFilter"
+                            Width="155px"
+                            Placeholder="Severity">
+                <DropDownListFieldSettings Text="Label" Value="Value"></DropDownListFieldSettings>
+            </SfDropDownList>
+            <SfDropDownList TItem="LabelValue" TValue="string"
+                            DataSource="_successOptions"
+                            @bind-Value="_successFilter"
+                            Width="145px"
+                            Placeholder="Outcome">
+                <DropDownListFieldSettings Text="Label" Value="Value"></DropDownListFieldSettings>
+            </SfDropDownList>
+            <SfButton CssClass="e-primary" OnClick="SearchAsync">Search</SfButton>
+            <SfButton CssClass="e-outline" OnClick="ResetFiltersAsync">Reset</SfButton>
+        </div>
+
+        <SfGrid DataSource="_events"
+                AllowPaging="true"
+                AllowSorting="true"
+                AllowExcelExport="true"
+                Toolbar="@_gridToolbar"
+                Height="480px">
+            <GridPageSettings PageSize="20"></GridPageSettings>
+            <GridColumns>
+                <GridColumn Field="@nameof(SecurityEventLogDto.EventTypeCode)"
+                            HeaderText="Event Type" Width="150">
+                </GridColumn>
+                <GridColumn Field="@nameof(SecurityEventLogDto.EventDescription)"
+                            HeaderText="Description" Width="230">
+                </GridColumn>
+                <GridColumn Field="@nameof(SecurityEventLogDto.IsSuccess)"
+                            HeaderText="Success" Width="90"
+                            Type="ColumnType.Boolean">
+                </GridColumn>
+                <GridColumn Field="@nameof(SecurityEventLogDto.RiskScore)"
+                            HeaderText="Risk" Width="70">
+                    <Template>
+                        @{
+                            var ev = (context as SecurityEventLogDto)!;
+                        }
+                        @if (ev.RiskScore is not null)
+                        {
+                            <span class="sed-risk-chip sed-risk-chip--@RiskLevel(ev.RiskScore)">
+                                @ev.RiskScore
+                            </span>
+                        }
+                        else
+                        {
+                            <span class="sed-risk-none">—</span>
+                        }
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(SecurityEventLogDto.UserFullName)"
+                            HeaderText="User" Width="160">
+                </GridColumn>
+                <GridColumn Field="@nameof(SecurityEventLogDto.UserEmail)"
+                            HeaderText="Email" Width="200">
+                </GridColumn>
+                <GridColumn Field="@nameof(SecurityEventLogDto.IpAddress)"
+                            HeaderText="IP Address" Width="130">
+                </GridColumn>
+                <GridColumn Field="@nameof(SecurityEventLogDto.CreatedDateUtc)"
+                            HeaderText="Date (UTC)"
+                            Type="ColumnType.DateTime"
+                            Format="yyyy-MM-dd HH:mm:ss"
+                            Width="180">
+                </GridColumn>
+                <GridColumn HeaderText="" Width="80" AllowSorting="false">
+                    <Template>
+                        @{
+                            var ev = (context as SecurityEventLogDto)!;
+                        }
+                        <SfButton CssClass="e-outline e-small"
+                                  OnClick="() => OpenEvent(ev)">
+                            Open
+                        </SfButton>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+
+    </div>
+}
+
+<!-- ── Event detail dialog ───────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showDetail"
+          Width="560px"
+          Header="Security Event Detail"
+          IsModal="true"
+          ShowCloseIcon="true">
+    <DialogTemplates>
+        <Content>
+            @if (_selectedEvent is not null)
+            {
+                <div class="sed-detail-grid">
+                    <div class="sed-detail-row">
+                        <span class="sed-detail-label">Event Type</span>
+                        <span class="sed-detail-value">
+                            <strong>@_selectedEvent.EventTypeCode</strong>
+                        </span>
+                    </div>
+                    <div class="sed-detail-row">
+                        <span class="sed-detail-label">Description</span>
+                        <span class="sed-detail-value">@_selectedEvent.EventDescription</span>
+                    </div>
+                    <div class="sed-detail-row">
+                        <span class="sed-detail-label">Outcome</span>
+                        <span class="sed-detail-value">
+                            @if (_selectedEvent.IsSuccess)
+                            {
+                                <span class="sed-badge sed-badge--success">
+                                    <i class="bi bi-check-circle-fill" aria-hidden="true"></i> Success
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="sed-badge sed-badge--failure">
+                                    <i class="bi bi-x-circle-fill" aria-hidden="true"></i> Failure
+                                </span>
+                            }
+                        </span>
+                    </div>
+                    <div class="sed-detail-row">
+                        <span class="sed-detail-label">Risk Score</span>
+                        <span class="sed-detail-value">
+                            @if (_selectedEvent.RiskScore is not null)
+                            {
+                                <span class="sed-risk-chip sed-risk-chip--@RiskLevel(_selectedEvent.RiskScore)">
+                                    @_selectedEvent.RiskScore
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="sed-detail-empty">—</span>
+                            }
+                        </span>
+                    </div>
+                    <div class="sed-detail-row">
+                        <span class="sed-detail-label">User</span>
+                        <span class="sed-detail-value">@(_selectedEvent.UserFullName ?? "—")</span>
+                    </div>
+                    <div class="sed-detail-row">
+                        <span class="sed-detail-label">Email</span>
+                        <span class="sed-detail-value">@(_selectedEvent.UserEmail ?? "—")</span>
+                    </div>
+                    <div class="sed-detail-row">
+                        <span class="sed-detail-label">IP Address</span>
+                        <span class="sed-detail-value sed-detail-mono">@(_selectedEvent.IpAddress ?? "—")</span>
+                    </div>
+                    <div class="sed-detail-row">
+                        <span class="sed-detail-label">Session ID</span>
+                        <span class="sed-detail-value sed-detail-mono">@(_selectedEvent.SessionId ?? "—")</span>
+                    </div>
+                    <div class="sed-detail-row">
+                        <span class="sed-detail-label">User Agent</span>
+                        <span class="sed-detail-value sed-detail-ua">@(_selectedEvent.UserAgent ?? "—")</span>
+                    </div>
+                    <div class="sed-detail-row">
+                        <span class="sed-detail-label">Date (UTC)</span>
+                        <span class="sed-detail-value">
+                            @_selectedEvent.CreatedDateUtc.ToString("dd MMM yyyy HH:mm:ss")
+                        </span>
+                    </div>
+                </div>
+            }
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Close" OnClick="() => _showDetail = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    // ── Constants ─────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ──────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    private readonly List<string> _gridToolbar = ["ExcelExport", "CsvExport"];
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    private bool _loading = true;
+
+    // ── Data ──────────────────────────────────────────────────────────────────
+    private SecurityEventSummaryDto?           _summary          = null;
+    private IReadOnlyList<SecurityEventTrendDto> _trends         = [];
+    private IEnumerable<SecurityEventLogDto>   _events           = [];
+    private List<SecurityEventLogDto>          _recentHighSeverity = [];
+
+    // ── Filters ───────────────────────────────────────────────────────────────
+    private string? _searchTerm;
+    private string  _eventTypeFilter = string.Empty;
+    private string  _riskScoreFilter = string.Empty;
+    private string  _successFilter   = string.Empty;
+
+    // ── Detail dialog ─────────────────────────────────────────────────────────
+    private bool                _showDetail    = false;
+    private SecurityEventLogDto? _selectedEvent = null;
+
+    // ── Filter option lists ───────────────────────────────────────────────────
+    private readonly List<LabelValue> _eventTypeOptions =
+    [
+        new("All Types",            string.Empty),
+        new("Failed Login",         "LOGIN_FAILED"),
+        new("Successful Login",     "LOGIN_SUCCESS"),
+        new("MFA Reset",            "MFA_RESET"),
+        new("Role Assigned",        "ROLE_ASSIGNED"),
+        new("Role Removed",         "ROLE_REMOVED"),
+        new("Impersonation",        "IMPERSONATION_STARTED"),
+        new("Export",               "EXPORT"),
+        new("Password Changed",     "PASSWORD_CHANGED"),
+        new("Account Locked",       "ACCOUNT_LOCKED"),
+    ];
+
+    private readonly List<LabelValue> _severityOptions =
+    [
+        new("All Severities", string.Empty),
+        new("High (\u2265 70)", "High"),
+        new("Medium (\u2265 40)", "Medium"),
+        new("Low (< 40)",     "Low"),
+    ];
+
+    private readonly List<LabelValue> _successOptions =
+    [
+        new("All Outcomes", string.Empty),
+        new("Success",      "true"),
+        new("Failure",      "false"),
+    ];
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",            "/"),
+            new("Monitoring",      "/monitoring/security-events"),
+            new("Security Events", null));
+
+        await LoadAsync();
+    }
+
+    // ── Load (initial full load) ──────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var summaryTask = Api.GetSecurityEventSummaryAsync(_tenantId);
+            var trendsTask  = Api.GetSecurityEventTrendsAsync(_tenantId, days: 14);
+            var eventsTask  = Api.SearchSecurityEventsAsync(_tenantId, pageSize: 100);
+
+            await Task.WhenAll(summaryTask, trendsTask, eventsTask);
+
+            _summary = await summaryTask;
+            _trends  = await trendsTask ?? [];
+            _events  = (await eventsTask)?.Items ?? [];
+
+            _recentHighSeverity = _events
+                .Where(e => e.RiskScore >= 70)
+                .OrderByDescending(e => e.CreatedDateUtc)
+                .Take(8)
+                .ToList();
+        }
+        catch
+        {
+            await ShowErrorAsync("Failed to load the security event dashboard.");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    // ── Grid search ───────────────────────────────────────────────────────────
+    private async Task SearchAsync()
+    {
+        try
+        {
+            int? riskMin = _riskScoreFilter switch
+            {
+                "High"   => 70,
+                "Medium" => 40,
+                _        => null,
+            };
+
+            bool? success = _successFilter switch
+            {
+                "true"  => true,
+                "false" => false,
+                _       => null,
+            };
+
+            var eventType = string.IsNullOrEmpty(_eventTypeFilter) ? null : _eventTypeFilter;
+
+            var result = await Api.SearchSecurityEventsAsync(
+                _tenantId,
+                searchTerm:    _searchTerm,
+                isSuccess:     success,
+                eventTypeCode: eventType,
+                riskScoreMin:  riskMin,
+                pageSize:      200);
+
+            _events = result?.Items ?? [];
+
+            if (_riskScoreFilter == "Low")
+                _events = _events.Where(e => (e.RiskScore ?? 0) < 40);
+        }
+        catch
+        {
+            await ShowErrorAsync("Failed to search security events.");
+        }
+    }
+
+    private async Task ResetFiltersAsync()
+    {
+        _searchTerm      = null;
+        _eventTypeFilter = string.Empty;
+        _riskScoreFilter = string.Empty;
+        _successFilter   = string.Empty;
+        await LoadAsync();
+    }
+
+    // ── KPI quick-filter ──────────────────────────────────────────────────────
+    private async Task QuickFilterAsync(string eventType, string severity)
+    {
+        _eventTypeFilter = eventType;
+        _riskScoreFilter = severity;
+        _successFilter   = string.Empty;
+        _searchTerm      = null;
+        await SearchAsync();
+    }
+
+    // ── Event detail ──────────────────────────────────────────────────────────
+    private void OpenEvent(SecurityEventLogDto e)
+    {
+        _selectedEvent = e;
+        _showDetail    = true;
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    private static string RiskLevel(int? score) => score switch
+    {
+        >= 70 => "high",
+        >= 40 => "medium",
+        _     => "low",
+    };
+
+    private static string RelativeTime(DateTime utc)
+    {
+        var diff = DateTime.UtcNow - utc;
+        if (diff.TotalMinutes < 2)  return "just now";
+        if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalHours   < 24) return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays    < 7)  return $"{(int)diff.TotalDays}d ago";
+        return utc.ToLocalTime().ToString("dd MMM yyyy");
+    }
+
+    private async Task ShowErrorAsync(string message) =>
+        await (_toast?.ShowAsync(new ToastModel
+        {
+            Content         = message,
+            CssClass        = "e-toast-danger",
+            ShowCloseButton = true,
+        }) ?? Task.CompletedTask);
+
+    private sealed record LabelValue(string Label, string Value);
+}

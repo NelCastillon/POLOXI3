@@ -1,0 +1,780 @@
+@page "/iam/users"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Users — IAM</PageTitle>
+
+<AppPageHeader Title="Users"
+               Subtitle="Master user registry — manage accounts, access and security"
+               Icon="bi-people">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-person-plus" aria-hidden="true"></i> New User
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="ul-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0" aria-label="Filter: Total Users">
+        <span class="ul-kpi-icon ul-kpi-icon--total"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="ul-kpi-value">@_totalCount</div>
+            <div class="ul-kpi-label">Total Users</div>
+        </div>
+        @if (_kpiActive == 1)
+        {
+            <span class="ul-kpi-active-dot" aria-hidden="true"></span>
+        }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0" aria-label="Filter: Active">
+        <span class="ul-kpi-icon ul-kpi-icon--active"><i class="bi bi-person-check-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="ul-kpi-value">@_activeCount</div>
+            <div class="ul-kpi-label">Active</div>
+        </div>
+        @if (_kpiActive == 2)
+        {
+            <span class="ul-kpi-active-dot" aria-hidden="true"></span>
+        }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0" aria-label="Filter: Locked Out">
+        <span class="ul-kpi-icon ul-kpi-icon--locked"><i class="bi bi-lock-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="ul-kpi-value">@_lockedCount</div>
+            <div class="ul-kpi-label">Locked Out</div>
+        </div>
+        @if (_kpiActive == 3)
+        {
+            <span class="ul-kpi-active-dot" aria-hidden="true"></span>
+        }
+    </div>
+    <div class="@KpiClass4" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0" aria-label="Filter: MFA Enabled">
+        <span class="ul-kpi-icon ul-kpi-icon--mfa"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
+        <div>
+            <div class="ul-kpi-value">@_mfaCount</div>
+            <div class="ul-kpi-label">MFA Enabled</div>
+        </div>
+        @if (_kpiActive == 4)
+        {
+            <span class="ul-kpi-active-dot" aria-hidden="true"></span>
+        }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search name, email or username…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_statusOptions"
+                        Placeholder="All Statuses"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterStatus"
+                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="RoleDto"
+                        DataSource="_roles"
+                        Placeholder="All Roles"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterRoleCode"
+                        ValueChanged="@((string v) => { _filterRoleCode = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="RoleCode" Text="RoleName" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_deptOptions"
+                        Placeholder="All Departments"
+                        ShowClearButton="true"
+                        Width="180px"
+                        Value="_filterDept"
+                        ValueChanged="@((string v) => { _filterDept = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="BranchDto"
+                        DataSource="_branches"
+                        Placeholder="All Branches"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterBranchCode"
+                        ValueChanged="@((string v) => { _filterBranchCode = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="BranchCode" Text="BranchName" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_mfaOptions"
+                        Placeholder="All MFA"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterMfa"
+                        ValueChanged="@((string v) => { _filterMfa = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <label class="ul-toggle-label">
+            <input type="checkbox" @bind="_filterLocked" @bind:after="ApplyFilters" />
+            Locked only
+        </label>
+
+        <label class="ul-toggle-label">
+            <input type="checkbox" @bind="_filterInactive" @bind:after="ApplyFilters" />
+            Inactive only
+        </label>
+    </Filters>
+    <Actions>
+        @if (_selected.Count > 0)
+        {
+            <span class="ul-sel-count"><i class="bi bi-check2-square" aria-hidden="true"></i> @_selected.Count selected</span>
+
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="() => OpenEdit(_selected[0])"
+                    disabled="@(_selected.Count != 1)"
+                    title="Edit user">
+                <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+            </button>
+
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="ViewSelectedUser"
+                    disabled="@(_selected.Count != 1)"
+                    title="View user detail">
+                <i class="bi bi-eye" aria-hidden="true"></i> View
+            </button>
+
+            <button class="um-btn um-btn-sm um-btn-warning"
+                    @onclick="() => OpenDisable(_selected[0])"
+                    disabled="@(_selected.Count != 1 || _selected[0].StatusCode != "Active")"
+                    title="Disable user">
+                <i class="bi bi-person-dash" aria-hidden="true"></i> Disable
+            </button>
+
+            <button class="um-btn um-btn-sm um-btn-primary"
+                    @onclick="() => OpenEnable(_selected[0])"
+                    disabled="@(_selected.Count != 1 || _selected[0].StatusCode == "Active")"
+                    title="Enable user">
+                <i class="bi bi-person-check" aria-hidden="true"></i> Enable
+            </button>
+
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="() => OpenUnlock(_selected[0])"
+                    disabled="@(_selected.Count != 1 || !_selected[0].IsLockedOut)"
+                    title="Unlock account">
+                <i class="bi bi-unlock" aria-hidden="true"></i> Unlock
+            </button>
+
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="ResetMfaAsync"
+                    disabled="@(_selected.Count != 1)"
+                    title="Reset MFA">
+                <i class="bi bi-shield-x" aria-hidden="true"></i> Reset MFA
+            </button>
+
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="RevokeSessionsAsync"
+                    disabled="@(_selected.Count != 1)"
+                    title="Revoke active sessions">
+                <i class="bi bi-box-arrow-right" aria-hidden="true"></i> Revoke Sessions
+            </button>
+
+            <button class="um-btn um-btn-sm um-btn-secondary"
+                    @onclick="OpenBulk"
+                    disabled="@(_selected.Count < 2)"
+                    title="Bulk update selected users">
+                <i class="bi bi-collection" aria-hidden="true"></i> Bulk Update
+            </button>
+        }
+    </Actions>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading users…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading users…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="UserDto"
+            DataSource="@_users"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row" Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
+        <GridEvents TValue="UserDto"
+                    RowSelected="OnRowSelected"
+                    RowDeselected="OnRowDeselected" />
+        <GridColumns>
+            <GridColumn Type="ColumnType.CheckBox" Width="48" />
+
+            <GridColumn Field="@nameof(UserDto.UserName)"
+                        HeaderText="Username"
+                        Width="150" />
+
+            <GridColumn Field="@nameof(UserDto.FullName)"
+                        HeaderText="User"
+                        Width="220">
+                <Template>
+                    @{
+                        var u = (UserDto)context;
+                    }
+                    <div class="ul-user-cell">
+                        <span class="ul-avatar" style="@AvatarStyle(u)" aria-hidden="true">
+                            @Initials(u)
+                        </span>
+                        <div class="ul-user-info">
+                            <div class="ul-user-name">@u.FullName</div>
+                            <div class="ul-user-email">@u.Email</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserDto.StatusCode)"
+                        HeaderText="Status"
+                        Width="140">
+                <Template>
+                    @{
+                        var u = (UserDto)context;
+                    }
+                    <div class="ul-status-cell">
+                        <AppStatusBadge Status="@u.StatusCode" />
+                        @if (u.IsLockedOut)
+                        {
+                            <span class="badge badge-amber" title="Account is locked out">
+                                <i class="bi bi-lock-fill" aria-hidden="true"></i> Locked
+                            </span>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserDto.MfaEnabled)"
+                        HeaderText="MFA"
+                        Width="80"
+                        TextAlign="TextAlign.Center">
+                <Template>
+                    @{
+                        var u = (UserDto)context;
+                    }
+                    @if (u.MfaEnabled)
+                    {
+                        <span class="ul-mfa-on" title="MFA enabled">
+                            <i class="bi bi-shield-check-fill" aria-hidden="true"></i>
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="ul-mfa-off" title="MFA disabled">
+                            <i class="bi bi-shield" aria-hidden="true"></i>
+                        </span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserDto.Department)"
+                        HeaderText="Department"
+                        Width="150" />
+
+            <GridColumn Field="@nameof(UserDto.BranchId)"
+                        HeaderText="Branch"
+                        Width="130">
+                <Template>
+                    @{
+                        var u = (UserDto)context;
+                        var branch = _branches.FirstOrDefault(b => b.BranchId == u.BranchId);
+                    }
+                    <span>@(branch?.BranchName ?? "—")</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserDto.LastLoginDateUtc)"
+                        HeaderText="Last Login"
+                        Width="130">
+                <Template>
+                    @{
+                        var u = (UserDto)context;
+                    }
+                    <span title="@(u.LastLoginDateUtc?.ToString("g") ?? "Never")">
+                        @FormatRelative(u.LastLoginDateUtc)
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserDto.AssignedRoleCount)"
+                        HeaderText="Roles"
+                        Width="80"
+                        TextAlign="TextAlign.Center">
+                <Template>
+                    @{
+                        var u = (UserDto)context;
+                    }
+                    <span class="um-count-pill">@u.AssignedRoleCount</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserDto.CreatedDateUtc)"
+                        HeaderText="Created"
+                        Type="ColumnType.Date"
+                        Format="d"
+                        Width="120" />
+
+            <GridColumn HeaderText=""
+                        Width="110"
+                        AllowSorting="false"
+                        AllowFiltering="false">
+                <Template>
+                    @{
+                        var u = (UserDto)context;
+                    }
+                    <div class="um-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenEdit(u)"
+                                title="Edit">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => ViewUser(u)"
+                                        title="View">
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                        @if (u.StatusCode == "Active")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost"
+                                    @onclick="() => OpenDisable(u)"
+                                    title="Disable">
+                                <i class="bi bi-person-dash" aria-hidden="true"></i>
+                            </button>
+                        }
+                        else
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost"
+                                    @onclick="() => OpenEnable(u)"
+                                    title="Enable">
+                                <i class="bi bi-person-check" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (u.IsLockedOut)
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost"
+                                    @onclick="() => OpenUnlock(u)"
+                                    title="Unlock">
+                                <i class="bi bi-unlock" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Create / Edit drawer -->
+<UserEditDrawer @bind-Visible="_showDrawer"
+                UserId="_editUserId"
+                OnSaved="HandleUserSavedAsync" />
+
+<!-- Disable confirmation -->
+<AppConfirmActionDialog @bind-Visible="_showDisable"
+                        Title="Disable User"
+                        Message="@($"Disable {_actionTarget?.FullName}?")"
+                        Detail="The user will no longer be able to sign in. You can re-enable them at any time."
+                        Variant="warning"
+                        ConfirmText="Disable"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteDisableAsync" />
+
+<!-- Enable confirmation -->
+<AppConfirmActionDialog @bind-Visible="_showEnable"
+                        Title="Enable User"
+                        Message="@($"Enable {_actionTarget?.FullName}?")"
+                        Detail="The user will regain sign-in access immediately."
+                        Variant="primary"
+                        ConfirmText="Enable"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteEnableAsync" />
+
+<!-- Unlock confirmation -->
+<AppConfirmActionDialog @bind-Visible="_showUnlock"
+                        Title="Unlock Account"
+                        Message="@($"Unlock account for {_actionTarget?.FullName}?")"
+                        Detail="The lockout will be removed and the user can sign in again."
+                        Variant="warning"
+                        ConfirmText="Unlock"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteUnlockAsync" />
+
+<!-- Bulk action dialog -->
+<AppConfirmActionDialog @bind-Visible="_showBulk"
+                        Title="Bulk Action"
+                        Message="@($"Apply '{_bulkAction}' to {_selected.Count} selected users?")"
+                        Detail="This will be applied to all selected users immediately."
+                        Variant="warning"
+                        ConfirmText="Apply"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteBulkAsync">
+    <Body>
+        <div class="form-row ul-bulk-action-row">
+            <label class="form-label">Action</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_bulkActionOptions"
+                            @bind-Value="_bulkAction">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+    </Body>
+</AppConfirmActionDialog>
+
+<!-- Toast -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ─────────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ──────────────────────────────────────────────────────────────────────
+    private SfGrid<UserDto>? _grid;
+    private SfToast?         _toast;
+
+    // ── Data ──────────────────────────────────────────────────────────────────────
+    private List<UserDto>   _allUsers = [];
+    private List<UserDto>   _users    = [];
+    private List<UserDto>   _selected = [];
+    private List<RoleDto>   _roles    = [];
+    private List<BranchDto> _branches = [];
+
+    // ── Loading / saving flags ────────────────────────────────────────────────────
+    private bool _loading    = false;
+    private bool _confirming = false;
+
+    // ── Dialog visibility ────────────────────────────────────────────────────────
+    private bool _showDrawer  = false;
+    private bool _showDisable = false;
+    private bool _showEnable  = false;
+    private bool _showUnlock  = false;
+    private bool _showBulk    = false;
+
+    // ── Active targets ────────────────────────────────────────────────────────────
+    private Guid?    _editUserId;
+    private UserDto? _actionTarget = null;
+    private string   _bulkAction   = "Disable";
+
+    // ── Filters ───────────────────────────────────────────────────────────────────
+    private string _search          = string.Empty;
+    private string _filterStatus    = string.Empty;
+    private string _filterRoleCode  = string.Empty;
+    private string _filterDept      = string.Empty;
+    private string _filterBranchCode = string.Empty;
+    private string _filterMfa       = string.Empty;
+    private bool   _filterLocked    = false;
+    private bool   _filterInactive  = false;
+
+    // ── KPI filter state ─────────────────────────────────────────────────────────
+    private int _kpiActive = 0; // 0=none 1=total 2=active 3=locked 4=mfa
+
+    private string KpiClass1 => "ul-kpi-card ul-kpi-card--total"        + (_kpiActive == 1 ? " ul-kpi-card--active" : "");
+    private string KpiClass2 => "ul-kpi-card ul-kpi-card--active-users" + (_kpiActive == 2 ? " ul-kpi-card--active" : "");
+    private string KpiClass3 => "ul-kpi-card ul-kpi-card--locked"       + (_kpiActive == 3 ? " ul-kpi-card--active" : "");
+    private string KpiClass4 => "ul-kpi-card ul-kpi-card--mfa"          + (_kpiActive == 4 ? " ul-kpi-card--active" : "");
+
+    // ── KPI counters ──────────────────────────────────────────────────────────────
+    private int _totalCount;
+    private int _activeCount;
+    private int _lockedCount;
+    private int _mfaCount;
+
+    // ── Static options ────────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Active",   "Active"),
+        new("Inactive", "Inactive"),
+        new("Pending",  "Pending"),
+    ];
+
+    private static readonly List<LabelValue> _mfaOptions =
+    [
+        new("Enabled",  "Enabled"),
+        new("Disabled", "Disabled"),
+    ];
+
+    private static readonly List<LabelValue> _userTypeOptions =
+    [
+        new("Internal", "Internal"),
+        new("External", "External"),
+        new("Service",  "Service"),
+    ];
+
+    private static readonly List<LabelValue> _bulkActionOptions =
+    [
+        new("Disable", "Disable"),
+        new("Enable",  "Enable"),
+        new("Unlock",  "Unlock"),
+    ];
+
+    private List<LabelValue> _deptOptions = [];
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",  "/"),
+            new("IAM",   "/iam"),
+            new("Users", "/iam/users"));
+
+        await Task.WhenAll(LoadRolesAsync(), LoadBranchesAsync());
+        await LoadAsync();
+    }
+
+    // ── Data loading ──────────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchUsersAsync(_tenantId, _search);
+            _allUsers = result?.Items.ToList() ?? [];
+            _selected.Clear();
+
+            _deptOptions = _allUsers
+                .Where(u => !string.IsNullOrWhiteSpace(u.Department))
+                .Select(u => u.Department!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(d => d)
+                .Select(d => new LabelValue(d, d))
+                .ToList();
+
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private async Task LoadRolesAsync()
+    {
+        var result = await Api.SearchRolesAsync(_tenantId);
+        _roles = result?.Items.ToList() ?? [];
+    }
+
+    private async Task LoadBranchesAsync()
+    {
+        var result = await Api.SearchBranchesAsync(_tenantId);
+        _branches = result?.Items.ToList() ?? [];
+    }
+
+    private void ApplyFilters()
+    {
+        _users = _allUsers.Where(u =>
+            (string.IsNullOrEmpty(_filterStatus)     || u.StatusCode == _filterStatus) &&
+            (string.IsNullOrEmpty(_filterDept)       || string.Equals(u.Department, _filterDept, StringComparison.OrdinalIgnoreCase)) &&
+            (string.IsNullOrEmpty(_filterBranchCode) || _branches.FirstOrDefault(b => b.BranchId == u.BranchId)?.BranchCode == _filterBranchCode) &&
+            (string.IsNullOrEmpty(_filterMfa)        || (u.MfaEnabled ? "Enabled" : "Disabled") == _filterMfa) &&
+            (!_filterLocked   || u.IsLockedOut) &&
+            (!_filterInactive || u.StatusCode != "Active")
+            // Role filter requires server-side support (UserDto has no role assignment list)
+        ).ToList();
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive       = _kpiActive == n ? 0 : n;
+        _filterStatus    = string.Empty;
+        _filterLocked    = false;
+        _filterMfa       = string.Empty;
+        switch (_kpiActive)
+        {
+            case 2: _filterStatus = "Active";  break;
+            case 3: _filterLocked = true;       break;
+            case 4: _filterMfa    = "Enabled"; break;
+        }
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount  = _allUsers.Count;
+        _activeCount = _allUsers.Count(u => u.StatusCode == "Active");
+        _lockedCount = _allUsers.Count(u => u.IsLockedOut);
+        _mfaCount    = _allUsers.Count(u => u.MfaEnabled);
+    }
+
+    // ── Row selection ─────────────────────────────────────────────────────────────
+    private void OnRowSelected(RowSelectEventArgs<UserDto> args)
+    {
+        if (!_selected.Contains(args.Data))
+            _selected.Add(args.Data);
+    }
+
+    private void OnRowDeselected(RowDeselectEventArgs<UserDto> args)
+    {
+        _selected.Remove(args.Data);
+    }
+
+    // ── CRUD ──────────────────────────────────────────────────────────────────────
+    private void OpenCreate()
+    {
+        _editUserId = null;
+        _showDrawer = true;
+    }
+
+    private void OpenEdit(UserDto user)
+    {
+        _editUserId = user.UserId;
+        _showDrawer = true;
+    }
+
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task HandleUserSavedAsync() => await LoadAsync();
+
+    // ── Status actions ────────────────────────────────────────────────────────────
+    private void OpenDisable(UserDto user) { _actionTarget = user; _showDisable = true; }
+    private void OpenEnable (UserDto user) { _actionTarget = user; _showEnable  = true; }
+    private void OpenUnlock (UserDto user) { _actionTarget = user; _showUnlock  = true; }
+
+    private async Task ExecuteDisableAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.SetUserActiveAsync(_actionTarget.UserId, isActive: false);
+            await ShowToastAsync($"{_actionTarget.FullName} has been disabled.", "e-toast-warning");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger"); }
+        finally { _confirming = false; _actionTarget = null; }
+    }
+
+    private async Task ExecuteEnableAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.SetUserActiveAsync(_actionTarget.UserId, isActive: true);
+            await ShowToastAsync($"{_actionTarget.FullName} has been enabled.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger"); }
+        finally { _confirming = false; _actionTarget = null; }
+    }
+
+    private async Task ExecuteUnlockAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.UnlockUserAsync(_actionTarget.UserId);
+            await ShowToastAsync($"{_actionTarget.FullName}'s account has been unlocked.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger"); }
+        finally { _confirming = false; _actionTarget = null; }
+    }
+
+    // ── Bulk actions ──────────────────────────────────────────────────────────────
+    private void OpenBulk() { _bulkAction = "Disable"; _showBulk = true; }
+
+    private async Task ExecuteBulkAsync()
+    {
+        _confirming = true;
+        try
+        {
+            IEnumerable<Task> tasks = _bulkAction switch
+            {
+                "Disable" => _selected.Select(u => Api.SetUserActiveAsync(u.UserId, false)),
+                "Enable"  => _selected.Select(u => Api.SetUserActiveAsync(u.UserId, true)),
+                "Unlock"  => _selected.Select(u => Api.UnlockUserAsync(u.UserId)),
+                _         => [],
+            };
+            await Task.WhenAll(tasks);
+            await ShowToastAsync($"'{_bulkAction}' applied to {_selected.Count} users.", "e-toast-success");
+            _selected.Clear();
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Bulk action failed: {ex.Message}", "e-toast-danger"); }
+        finally { _confirming = false; }
+    }
+
+    // ── Stub actions ──────────────────────────────────────────────────────────────
+    private async Task StubActionAsync(string action) =>
+        await ShowToastAsync($"{action}: not yet implemented.", "e-toast-info");
+
+    private Task ResetMfaAsync()      => StubActionAsync("Reset MFA");
+    private Task RevokeSessionsAsync() => StubActionAsync("Revoke Sessions");
+
+    private void ViewSelectedUser()
+    {
+        if (_selected.Count > 0)
+            Nav.NavigateTo("/iam/users/" + _selected[0].UserId);
+    }
+
+    private void ViewUser(UserDto u) => Nav.NavigateTo("/iam/users/" + u.UserId);
+
+    private async Task ExportAsync() =>
+        await ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+
+    // ── Toast helper ──────────────────────────────────────────────────────────────
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────────
+    private static string Initials(UserDto u)
+    {
+        var parts = u.FullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}"
+            : u.FullName.Length >= 1 ? u.FullName[..1] : "?";
+    }
+
+    private static string AvatarStyle(UserDto u)
+    {
+        var hue = Math.Abs(u.UserId.GetHashCode()) % 360;
+        return $"background:hsl({hue},55%,42%);color:#fff;";
+    }
+
+    private static string FormatRelative(DateTime? dt)
+    {
+        if (dt is null) return "Never";
+        var diff = DateTime.UtcNow - dt.Value;
+        return diff.TotalDays switch
+        {
+            < 1   => diff.TotalHours < 1 ? "Just now" : $"{(int)diff.TotalHours}h ago",
+            < 7   => $"{(int)diff.TotalDays}d ago",
+            < 30  => $"{(int)(diff.TotalDays / 7)}w ago",
+            < 365 => $"{(int)(diff.TotalDays / 30)}mo ago",
+            _     => dt.Value.ToString("d"),
+        };
+    }
+
+    // ── Inner models ──────────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Value, string Label);
+}

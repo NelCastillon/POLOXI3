@@ -1,0 +1,1099 @@
+@page "/iam/roles/matrix"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>Permission Matrix – AMS Enterprise</PageTitle>
+
+<div class="mx-page">
+
+    @* ── Page Header ──────────────────────────────────────── *@
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">
+                <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> Permission Matrix
+            </h1>
+            <p class="page-subtitle">Cross-reference all roles and permissions in one view</p>
+        </div>
+        <div class="page-actions">
+            <button class="um-btn um-btn-ghost" @onclick="RefreshAsync" title="Refresh" aria-label="Refresh">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenCloneDialog">
+                <i class="bi bi-copy" aria-hidden="true"></i> Clone Permissions
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="ExportCsvAsync" disabled="@_exporting">
+                @if (_exporting)
+                {
+                    <span class="um-spin" aria-hidden="true"></span>
+                }
+                else
+                {
+                    <i class="bi bi-download" aria-hidden="true"></i>
+                }
+                Export CSV
+            </button>
+        </div>
+    </div>
+
+    @* ── KPI Strip ────────────────────────────────────────── *@
+    <div class="mx-kpi-strip">
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-blue"><i class="bi bi-shield-lock"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Roles</div>
+                <div class="kpi-value">@_roles.Count</div>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-purple"><i class="bi bi-key"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Permissions</div>
+                <div class="kpi-value">@_catalog.Count</div>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-green"><i class="bi bi-check2-all"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Assignments</div>
+                <div class="kpi-value">@TotalAssignments</div>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-amber"><i class="bi bi-percent"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Coverage</div>
+                <div class="kpi-value">
+                    @CoveragePercent<span style="font-size:1rem;font-weight:500">%</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @* ── Mode Tabs ────────────────────────────────────────── *@
+    @{
+        var tabMatrixCls  = "mx-tab" + (_activeTab == "matrix"  ? " active" : "");
+        var tabCompareCls = "mx-tab" + (_activeTab == "compare" ? " active" : "");
+        var tabMatrixSel  = _activeTab == "matrix"  ? "true" : "false";
+        var tabCompareSel = _activeTab == "compare" ? "true" : "false";
+    }
+    <div class="mx-mode-tabs" role="tablist">
+        <button class="@tabMatrixCls"
+                role="tab" aria-selected="@tabMatrixSel"
+                @onclick='() => _activeTab = "matrix"'>
+            <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> Matrix View
+        </button>
+        <button class="@tabCompareCls"
+                role="tab" aria-selected="@tabCompareSel"
+                @onclick='() => _activeTab = "compare"'>
+            <i class="bi bi-bar-chart-steps" aria-hidden="true"></i> Compare Roles
+        </button>
+    </div>
+
+    @* ═══════════════════════════════════════════════════════ *@
+    @* ── MATRIX VIEW ──────────────────────────────────────── *@
+    @* ═══════════════════════════════════════════════════════ *@
+    @if (_activeTab == "matrix")
+    {
+        @* Toolbar *@
+        <div class="mx-toolbar">
+            <div class="um-search-box mx-search-perm">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input class="um-search-input" type="search" placeholder="Search permissions…"
+                       aria-label="Search permissions"
+                       value="@_permSearch"
+                       @oninput='e => _permSearch = e.Value?.ToString() ?? ""' />
+            </div>
+            <div class="um-search-box mx-search-role">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input class="um-search-input" type="search" placeholder="Search roles…"
+                       aria-label="Search roles"
+                       value="@_roleSearch"
+                       @oninput='e => _roleSearch = e.Value?.ToString() ?? ""' />
+            </div>
+            <select class="mx-filter-select" value="@_moduleFilter"
+                    @onchange='e => { _moduleFilter = e.Value?.ToString() ?? ""; }'
+                    aria-label="Filter by module">
+                <option value="">All Modules</option>
+                @foreach (var mod in AllModules)
+                {
+                    <option value="@mod">@mod</option>
+                }
+            </select>
+            <select class="mx-filter-select" value="@_roleTypeFilter"
+                    @onchange='e => { _roleTypeFilter = e.Value?.ToString() ?? ""; }'
+                    aria-label="Filter by role type">
+                <option value="">All Types</option>
+                @foreach (var t in _roleTypes)
+                {
+                    <option value="@t">@t</option>
+                }
+            </select>
+            @if (_selectedPerms.Count > 0 || _selectedRoles.Count > 0)
+            {
+                <button class="um-btn um-btn-ghost" @onclick="ClearSelections">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i> Clear selection
+                </button>
+            }
+        </div>
+
+        @* Bulk Action Bar *@
+        @if (_selectedPerms.Count > 0 || _selectedRoles.Count > 0)
+        {
+            <div class="mx-bulk-bar">
+                <div class="mx-bulk-info">
+                    <i class="bi bi-check2-square" aria-hidden="true"></i>
+                    <span>
+                        <strong>@_selectedPerms.Count</strong> permission(s) ×
+                        <strong>@_selectedRoles.Count</strong> role(s) selected
+                    </span>
+                </div>
+                <div class="mx-bulk-actions">
+                    <button class="um-btn um-btn-success"
+                            @onclick="BulkAssignAsync"
+                            disabled="@(_bulkProcessing || _selectedPerms.Count == 0 || _selectedRoles.Count == 0)">
+                        @if (_bulkProcessing)
+                        {
+                            <span class="um-spin" aria-hidden="true"></span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-plus-circle" aria-hidden="true"></i>
+                        }
+                        Bulk Assign
+                    </button>
+                    <button class="um-btn um-btn-warning"
+                            @onclick="BulkRevokeAsync"
+                            disabled="@(_bulkProcessing || _selectedPerms.Count == 0 || _selectedRoles.Count == 0)">
+                        @if (_bulkProcessing)
+                        {
+                            <span class="um-spin um-spin-dark" aria-hidden="true"></span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-dash-circle" aria-hidden="true"></i>
+                        }
+                        Bulk Revoke
+                    </button>
+                </div>
+            </div>
+        }
+
+        @* Matrix Card *@
+        <div class="mx-card">
+            @if (_loading)
+            {
+                <div class="um-loading-overlay" aria-live="polite" aria-label="Loading">
+                    <div class="um-spinner" aria-hidden="true"></div>
+                    <span>Loading matrix…</span>
+                </div>
+            }
+            @{
+                var filteredRoles  = FilteredRoles;
+                var groupedCatalog = GroupedCatalog;
+            }
+            <div class="mx-table-wrap">
+                <table class="mx-table" aria-label="Role permission matrix">
+                    <thead>
+                        <tr>
+                            <th class="mx-th-corner" scope="col">
+                                <div class="mx-corner-inner">
+                                    <label class="mx-check-lbl" title="Select all permissions">
+                                        <input type="checkbox"
+                                               checked="@(_selectedPerms.Count > 0 && _selectedPerms.Count == FilteredCatalog.Count)"
+                                               @onchange="ToggleSelectAllPerms" />
+                                    </label>
+                                    <span class="mx-corner-label">Permission ↓ / Role →</span>
+                                </div>
+                            </th>
+                            @foreach (var role in filteredRoles)
+                            {
+                                var isRoleLoading = _loadingRoles.Contains(role.RoleId);
+                                var isRoleSel     = _selectedRoles.Contains(role.RoleId);
+                                var roleSelCls    = isRoleSel ? "mx-col-selected" : "";
+                                <th class="mx-th-role @roleSelCls" scope="col">
+                                    <div class="mx-role-hdr">
+                                        <div class="mx-role-top">
+                                            <label class="mx-check-lbl" title="Select this role column">
+                                                <input type="checkbox"
+                                                       checked="@isRoleSel"
+                                                       @onchange="() => ToggleRoleSelect(role.RoleId)" />
+                                            </label>
+                                            @if (isRoleLoading)
+                                            {
+                                                <span class="mx-cell-spinner" title="Loading…" aria-hidden="true"></span>
+                                            }
+                                            <a href="/roles/@role.RoleId" class="mx-role-link" title="Open @role.RoleName">
+                                                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                            </a>
+                                        </div>
+                                        <div class="mx-role-code" title="@role.RoleCode">@role.RoleCode</div>
+                                        <div class="mx-role-name-sub" title="@role.RoleName">@role.RoleName</div>
+                                        <div class="mx-role-perm-count">
+                                            @if (_rolePermIds.TryGetValue(role.RoleId, out var rset))
+                                            {
+                                                <span class="um-count-pill" title="@rset.Count permissions assigned">@rset.Count</span>
+                                            }
+                                        </div>
+                                    </div>
+                                </th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var grp in groupedCatalog)
+                        {
+                            var moduleKey   = grp.Key;
+                            var isCollapsed = _collapsedModules.Contains(moduleKey);
+                            var modulePerms = grp.ToList();
+                            var chevronCls  = isCollapsed ? "bi-chevron-right" : "bi-chevron-down";
+                            var ariaExp     = isCollapsed ? "false" : "true";
+
+                            @* Module header row *@
+                            <tr class="mx-module-row">
+                                <td colspan="@(filteredRoles.Count + 1)">
+                                    <button class="mx-module-hdr"
+                                            @onclick="() => ToggleModule(moduleKey)"
+                                            aria-expanded="@ariaExp">
+                                        <i class="bi @chevronCls mx-chevron"
+                                           aria-hidden="true"></i>
+                                        <span class="mx-module-name">@moduleKey</span>
+                                        <span class="mx-module-count">
+                                            @modulePerms.Count perm@(modulePerms.Count != 1 ? "s" : "")
+                                        </span>
+                                        @if (filteredRoles.Count > 0)
+                                        {
+                                            var moduleAssigned = filteredRoles.Sum(r =>
+                                                _rolePermIds.TryGetValue(r.RoleId, out var rs)
+                                                    ? modulePerms.Count(p => rs.Contains(p.PermissionId))
+                                                    : 0);
+                                            var moduleTotal = filteredRoles.Count * modulePerms.Count;
+                                            var modPct = moduleTotal > 0
+                                                ? (int)(moduleAssigned * 100.0 / moduleTotal)
+                                                : 0;
+                                            <div class="mx-module-cov-wrap">
+                                                <div class="mx-module-cov-bar">
+                                                    <div class="mx-module-cov-fill" style="width:@modPct%"></div>
+                                                </div>
+                                                <span class="mx-module-cov-pct">@modPct%</span>
+                                            </div>
+                                        }
+                                    </button>
+                                </td>
+                            </tr>
+
+                            @if (!isCollapsed)
+                            {
+                                @foreach (var perm in modulePerms)
+                                {
+                                    var permId    = perm.PermissionId;
+                                    var isPermSel  = _selectedPerms.Contains(permId);
+                                    var permSelCls = isPermSel ? "mx-row-selected" : "";
+                                    <tr class="mx-perm-row @permSelCls">
+                                        <td class="mx-td-perm">
+                                            <div class="mx-perm-cell">
+                                                <label class="mx-check-lbl" title="Select this permission row">
+                                                    <input type="checkbox"
+                                                           checked="@isPermSel"
+                                                           @onchange="() => TogglePermSelect(permId)" />
+                                                </label>
+                                                <div class="mx-perm-info">
+                                                    <span class="mx-action-badge @ActionBadgeClass(perm.ActionCode)">
+                                                        @perm.ActionCode
+                                                    </span>
+                                                    <span class="mx-perm-name" title="@perm.PermissionName">
+                                                        @perm.PermissionName
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        @foreach (var role in filteredRoles)
+                                        {
+                                            var rId        = role.RoleId;
+                                            var assigned   = IsAssigned(rId, permId);
+                                            var toggling   = IsToggling(rId, permId);
+                                            var isRoleSel2 = _selectedRoles.Contains(rId);
+                                            var cellOnOff  = assigned   ? "mx-cell-on"       : "mx-cell-off";
+                                            var cellColSel = isRoleSel2 ? "mx-col-selected"  : "";
+                                            var cellRowSel = isPermSel  ? "mx-row-selected"  : "";
+                                            var cellVerb   = assigned   ? "Revoke"           : "Assign";
+                                            <td class="mx-td-cell @cellOnOff @cellColSel @cellRowSel"
+                                                @onclick="() => ToggleCellAsync(role, perm, assigned)"
+                                                title="@cellVerb: @perm.PermissionName – @role.RoleName"
+                                                role="button"
+                                                tabindex="0">
+                                                @if (toggling)
+                                                {
+                                                    <span class="mx-cell-spinner" aria-hidden="true"></span>
+                                                }
+                                                else if (assigned)
+                                                {
+                                                    <i class="bi bi-check-circle-fill mx-cell-check" aria-label="Assigned"></i>
+                                                }
+                                                else
+                                                {
+                                                    <i class="bi bi-circle mx-cell-empty" aria-label="Not assigned"></i>
+                                                }
+                                            </td>
+                                        }
+                                    </tr>
+                                }
+                            }
+                        }
+                        @if (groupedCatalog.Count == 0 && !_loading)
+                        {
+                            <tr>
+                                <td colspan="@(filteredRoles.Count + 1)" class="mx-empty-row">
+                                    <div class="mx-empty-state">
+                                        <i class="bi bi-search" aria-hidden="true"></i>
+                                        <span>No permissions match your filters.</span>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @* Legend *@
+            <div class="mx-legend">
+                <span class="mx-legend-item">
+                    <span class="mx-legend-dot mx-dot-on"></span> Assigned
+                </span>
+                <span class="mx-legend-item">
+                    <span class="mx-legend-dot mx-dot-off"></span> Not assigned
+                </span>
+                <span class="mx-legend-sep"></span>
+                <span class="mx-legend-item">
+                    <i class="bi bi-cursor" aria-hidden="true"></i> Click cell to toggle
+                </span>
+                <span class="mx-legend-item">
+                    <i class="bi bi-check2-square" aria-hidden="true"></i>
+                    Check rows / columns for bulk operations
+                </span>
+            </div>
+        </div>
+    }
+
+    @* ═══════════════════════════════════════════════════════ *@
+    @* ── COMPARE VIEW ─────────────────────────────────────── *@
+    @* ═══════════════════════════════════════════════════════ *@
+    @if (_activeTab == "compare")
+    {
+        <div class="mx-card mx-compare-card">
+            <div class="mx-compare-setup">
+                <div class="form-group">
+                    <label>Role A</label>
+                    <SfDropDownList TItem="SelectItem" TValue="string"
+                                    DataSource="@RoleSelectItems.ToList()"
+                                    @bind-Value="_compareRoleAId"
+                                    Placeholder="Select Role A…">
+                        <DropDownListFieldSettings Text="Text" Value="Value" />
+                    </SfDropDownList>
+                </div>
+                <div class="mx-compare-vs">
+                    <i class="bi bi-arrow-left-right" aria-hidden="true"></i>
+                </div>
+                <div class="form-group">
+                    <label>Role B</label>
+                    <SfDropDownList TItem="SelectItem" TValue="string"
+                                    DataSource="@RoleSelectItems.ToList()"
+                                    @bind-Value="_compareRoleBId"
+                                    Placeholder="Select Role B…">
+                        <DropDownListFieldSettings Text="Text" Value="Value" />
+                    </SfDropDownList>
+                </div>
+                <button class="um-btn um-btn-primary"
+                        @onclick="RunCompareAsync"
+                        disabled="@(string.IsNullOrEmpty(_compareRoleAId) || string.IsNullOrEmpty(_compareRoleBId) || _loadingCompare)">
+                    @if (_loadingCompare)
+                    {
+                        <span class="um-spin" aria-hidden="true"></span>
+                    }
+                    else
+                    {
+                        <i class="bi bi-bar-chart-steps" aria-hidden="true"></i>
+                    }
+                    Compare
+                </button>
+            </div>
+
+            @if (_loadingCompare)
+            {
+                <div class="mx-compare-loading">
+                    <div class="um-spinner" aria-hidden="true"></div>
+                    <span>Comparing roles…</span>
+                </div>
+            }
+            else if (_compareResult is { } cr)
+            {
+                <div class="mx-compare-summary">
+                    <span class="mx-diff-stat mx-stat-a">
+                        <strong>@cr.AOnly.Count</strong> only in @RoleNameFor(_compareRoleAId)
+                    </span>
+                    <span class="mx-diff-stat mx-stat-shared">
+                        <strong>@cr.Shared.Count</strong> shared
+                    </span>
+                    <span class="mx-diff-stat mx-stat-b">
+                        <strong>@cr.BOnly.Count</strong> only in @RoleNameFor(_compareRoleBId)
+                    </span>
+                </div>
+                <div class="mx-compare-grid">
+                    @* Column A *@
+                    <div class="mx-compare-col">
+                        <div class="mx-compare-hdr mx-hdr-a">
+                            <i class="bi bi-shield" aria-hidden="true"></i>
+                            @RoleNameFor(_compareRoleAId)
+                            <span class="um-count-pill">@cr.AOnly.Count</span>
+                        </div>
+                        <div class="mx-compare-body">
+                            @if (cr.AOnly.Count == 0)
+                            {
+                                <div class="mx-diff-empty">
+                                    <i class="bi bi-dash-circle" aria-hidden="true"></i>
+                                    <span>No unique permissions</span>
+                                </div>
+                            }
+                            @foreach (var p in cr.AOnly.OrderBy(p => p.ResourceCode).ThenBy(p => p.PermissionName))
+                            {
+                                <div class="mx-diff-pill mx-diff-a">
+                                    <span class="mx-action-badge @ActionBadgeClass(p.ActionCode)">@p.ActionCode</span>
+                                    <span class="mx-diff-perm-name" title="@p.PermissionName">@p.PermissionName</span>
+                                    <span class="mx-diff-module">@p.ResourceCode</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                    @* Shared *@
+                    <div class="mx-compare-col">
+                        <div class="mx-compare-hdr mx-hdr-shared">
+                            <i class="bi bi-intersect" aria-hidden="true"></i>
+                            Shared
+                            <span class="um-count-pill">@cr.Shared.Count</span>
+                        </div>
+                        <div class="mx-compare-body">
+                            @if (cr.Shared.Count == 0)
+                            {
+                                <div class="mx-diff-empty">
+                                    <i class="bi bi-dash-circle" aria-hidden="true"></i>
+                                    <span>No shared permissions</span>
+                                </div>
+                            }
+                            @foreach (var p in cr.Shared.OrderBy(p => p.ResourceCode).ThenBy(p => p.PermissionName))
+                            {
+                                <div class="mx-diff-pill mx-diff-shared">
+                                    <span class="mx-action-badge @ActionBadgeClass(p.ActionCode)">@p.ActionCode</span>
+                                    <span class="mx-diff-perm-name" title="@p.PermissionName">@p.PermissionName</span>
+                                    <span class="mx-diff-module">@p.ResourceCode</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                    @* Column B *@
+                    <div class="mx-compare-col">
+                        <div class="mx-compare-hdr mx-hdr-b">
+                            <i class="bi bi-shield" aria-hidden="true"></i>
+                            @RoleNameFor(_compareRoleBId)
+                            <span class="um-count-pill">@cr.BOnly.Count</span>
+                        </div>
+                        <div class="mx-compare-body">
+                            @if (cr.BOnly.Count == 0)
+                            {
+                                <div class="mx-diff-empty">
+                                    <i class="bi bi-dash-circle" aria-hidden="true"></i>
+                                    <span>No unique permissions</span>
+                                </div>
+                            }
+                            @foreach (var p in cr.BOnly.OrderBy(p => p.ResourceCode).ThenBy(p => p.PermissionName))
+                            {
+                                <div class="mx-diff-pill mx-diff-b">
+                                    <span class="mx-action-badge @ActionBadgeClass(p.ActionCode)">@p.ActionCode</span>
+                                    <span class="mx-diff-perm-name" title="@p.PermissionName">@p.PermissionName</span>
+                                    <span class="mx-diff-module">@p.ResourceCode</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="mx-compare-empty">
+                    <i class="bi bi-bar-chart-steps" aria-hidden="true"></i>
+                    <span>Select two roles above and click Compare to see the permission diff.</span>
+                </div>
+            }
+        </div>
+    }
+
+</div>
+
+@* ── Clone Dialog ────────────────────────────────────────── *@
+<SfDialog @bind-Visible="_showCloneDlg"
+          Width="500px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogTemplates>
+        <Header>
+            <span class="dlg-hd-icon"><i class="bi bi-copy" aria-hidden="true"></i></span>
+            Clone Permission Set
+        </Header>
+        <Content>
+            <div class="dlg-form">
+                <p class="mx-clone-info">
+                    Copy all permissions from a source role to a destination role.
+                    Permissions already on the destination are skipped.
+                </p>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Source Role <span class="req" aria-hidden="true">*</span></label>
+                        <SfDropDownList TItem="SelectItem" TValue="string"
+                                        DataSource="@RoleSelectItems.ToList()"
+                                        @bind-Value="_cloneSrcId"
+                                        Placeholder="Select source role…">
+                            <DropDownListFieldSettings Text="Text" Value="Value" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="form-group">
+                        <label>Destination Role <span class="req" aria-hidden="true">*</span></label>
+                        <SfDropDownList TItem="SelectItem" TValue="string"
+                                        DataSource="@RoleSelectItems.ToList()"
+                                        @bind-Value="_cloneDstId"
+                                        Placeholder="Select destination role…">
+                            <DropDownListFieldSettings Text="Text" Value="Value" />
+                        </SfDropDownList>
+                    </div>
+                </div>
+                @if (!string.IsNullOrEmpty(_cloneError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_cloneError
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick='() => _showCloneDlg = false'>
+                    Cancel
+                </button>
+                <button class="um-btn um-btn-primary" @onclick="ExecuteCloneAsync" disabled="@_cloning">
+                    @if (_cloning)
+                    {
+                        <span class="um-spin" aria-hidden="true"></span>
+                    }
+                    Clone Permissions
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@* ── Toast ───────────────────────────────────────────────── *@
+<SfToast @ref="_toast" ID="mx-toast" ShowCloseButton="true" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+
+    // ── Inner types ───────────────────────────────────────────
+    private sealed record CompareResult(
+        List<PermissionDto> AOnly,
+        List<PermissionDto> BOnly,
+        List<PermissionDto> Shared);
+
+    private sealed record SelectItem(string Value, string Text);
+
+    // ── Constants ─────────────────────────────────────────────
+    private static readonly Guid     _tenantId  = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private static readonly string[] _roleTypes = ["Internal", "External", "Service", "System"];
+
+    // ── Data ──────────────────────────────────────────────────
+    private List<RoleDto>       _roles   = [];
+    private List<PermissionDto> _catalog = [];
+
+    /// <summary>roleId → set of assigned permissionIds — fast "is assigned" lookup.</summary>
+    private Dictionary<Guid, HashSet<Guid>> _rolePermIds = [];
+
+    /// <summary>(roleId, permId) → RolePermissionId — needed for revoke calls.</summary>
+    private Dictionary<(Guid RoleId, Guid PermId), Guid> _rolePermRevMap = [];
+
+    // ── Loading / toggle state ────────────────────────────────
+    private bool         _loading       = true;
+    private bool         _bulkProcessing;
+    private bool         _exporting;
+    private HashSet<Guid>                         _loadingRoles  = [];
+    private HashSet<(Guid RoleId, Guid PermId)>   _togglingCells = [];
+
+    // ── Filters ───────────────────────────────────────────────
+    private string _permSearch     = "";
+    private string _roleSearch     = "";
+    private string _moduleFilter   = "";
+    private string _roleTypeFilter = "";
+
+    // ── Selection ─────────────────────────────────────────────
+    private HashSet<Guid>   _selectedPerms    = [];
+    private HashSet<Guid>   _selectedRoles    = [];
+    private HashSet<string> _collapsedModules = [];
+
+    // ── Tabs ──────────────────────────────────────────────────
+    private string _activeTab = "matrix";
+
+    // ── Compare ───────────────────────────────────────────────
+    private string         _compareRoleAId = "";
+    private string         _compareRoleBId = "";
+    private bool           _loadingCompare;
+    private CompareResult? _compareResult;
+
+    // ── Clone dialog ──────────────────────────────────────────
+    private bool   _showCloneDlg;
+    private string _cloneSrcId  = "";
+    private string _cloneDstId  = "";
+    private bool   _cloning;
+    private string _cloneError  = "";
+
+    // ── Toast ─────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Computed properties ───────────────────────────────────
+    private List<PermissionDto> FilteredCatalog => _catalog
+        .Where(p =>
+            (string.IsNullOrEmpty(_permSearch) ||
+             (p.PermissionName?.Contains(_permSearch, StringComparison.OrdinalIgnoreCase) ?? false) ||
+             (p.PermissionCode?.Contains(_permSearch, StringComparison.OrdinalIgnoreCase) ?? false)) &&
+            (string.IsNullOrEmpty(_moduleFilter) || p.ResourceCode == _moduleFilter))
+        .ToList();
+
+    private List<RoleDto> FilteredRoles => _roles
+        .Where(r =>
+            (string.IsNullOrEmpty(_roleSearch) ||
+             (r.RoleName?.Contains(_roleSearch, StringComparison.OrdinalIgnoreCase) ?? false) ||
+             (r.RoleCode?.Contains(_roleSearch, StringComparison.OrdinalIgnoreCase) ?? false)) &&
+            (string.IsNullOrEmpty(_roleTypeFilter) || r.RoleTypeCode == _roleTypeFilter))
+        .ToList();
+
+    private IEnumerable<string> AllModules => _catalog
+        .Select(p => p.ResourceCode ?? "Other")
+        .Distinct()
+        .OrderBy(x => x);
+
+    private List<IGrouping<string, PermissionDto>> GroupedCatalog => FilteredCatalog
+        .GroupBy(p => p.ResourceCode ?? "Other")
+        .OrderBy(g => g.Key)
+        .ToList();
+
+    private int TotalAssignments => _rolePermIds.Values.Sum(s => s.Count);
+
+    private int CoveragePercent
+    {
+        get
+        {
+            var total = _roles.Count * _catalog.Count;
+            return total > 0 ? (int)(TotalAssignments * 100.0 / total) : 0;
+        }
+    }
+
+    private bool IsAssigned(Guid roleId, Guid permId) =>
+        _rolePermIds.TryGetValue(roleId, out var set) && set.Contains(permId);
+
+    private bool IsToggling(Guid roleId, Guid permId) =>
+        _togglingCells.Contains((roleId, permId));
+
+    private string RoleNameFor(string idStr) =>
+        Guid.TryParse(idStr, out var id)
+            ? (_roles.FirstOrDefault(r => r.RoleId == id)?.RoleName ?? idStr)
+            : idStr;
+
+    private IEnumerable<SelectItem> RoleSelectItems =>
+        _roles.Select(r => new SelectItem(r.RoleId.ToString(), $"{r.RoleName} ({r.RoleCode})"));
+
+    // ── Lifecycle ─────────────────────────────────────────────
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _rolePermIds.Clear();
+        _rolePermRevMap.Clear();
+        StateHasChanged();
+        try
+        {
+            var t1 = Api.SearchRolesAsync(_tenantId);
+            var t2 = Api.SearchPermissionsAsync(_tenantId);
+            await Task.WhenAll(t1, t2);
+            _roles   = t1.Result?.Items.ToList() ?? [];
+            _catalog = t2.Result?.Items.ToList() ?? [];
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+        _ = LoadAllRolePermsAsync();
+    }
+
+    private async Task LoadAllRolePermsAsync()
+    {
+        var sem   = new SemaphoreSlim(4);
+        var tasks = _roles.Select(async role =>
+        {
+            await sem.WaitAsync();
+            try
+            {
+                await InvokeAsync(() =>
+                {
+                    _loadingRoles.Add(role.RoleId);
+                    StateHasChanged();
+                });
+                await LoadRolePermsAsync(role.RoleId);
+            }
+            finally
+            {
+                sem.Release();
+                await InvokeAsync(() =>
+                {
+                    _loadingRoles.Remove(role.RoleId);
+                    StateHasChanged();
+                });
+            }
+        });
+        await Task.WhenAll(tasks);
+    }
+
+    private async Task LoadRolePermsAsync(Guid roleId)
+    {
+        try
+        {
+            var perms = await Api.GetRolePermissionsAsync(roleId);
+            var list  = perms?.ToList() ?? [];
+            _rolePermIds[roleId] = list.Select(p => p.PermissionId).ToHashSet();
+            foreach (var rp in list)
+                _rolePermRevMap[(roleId, rp.PermissionId)] = rp.RolePermissionId;
+        }
+        catch { /* swallow individual role load failures */ }
+    }
+
+    private async Task RefreshAsync()
+    {
+        _compareResult = null;
+        await LoadAsync();
+    }
+
+    // ── Cell toggle ───────────────────────────────────────────
+    private async Task ToggleCellAsync(RoleDto role, PermissionDto perm, bool isAssigned)
+    {
+        var key = (role.RoleId, perm.PermissionId);
+        if (_togglingCells.Contains(key)) return;
+        _togglingCells.Add(key);
+        StateHasChanged();
+        try
+        {
+            if (isAssigned)
+            {
+                if (!_rolePermRevMap.TryGetValue(key, out var rpId)) return;
+                await Api.RevokePermissionFromRoleAsync(
+                    new RevokeRolePermissionRequest { RolePermissionId = rpId });
+                if (_rolePermIds.TryGetValue(role.RoleId, out var s)) s.Remove(perm.PermissionId);
+                _rolePermRevMap.Remove(key);
+            }
+            else
+            {
+                var rpId = await Api.AssignPermissionToRoleAsync(
+                    new AssignRolePermissionRequest
+                    {
+                        TenantId     = _tenantId,
+                        RoleId       = role.RoleId,
+                        PermissionId = perm.PermissionId,
+                    });
+                if (!_rolePermIds.TryGetValue(role.RoleId, out var s2))
+                {
+                    s2 = [];
+                    _rolePermIds[role.RoleId] = s2;
+                }
+                s2.Add(perm.PermissionId);
+                _rolePermRevMap[key] = rpId;
+            }
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally
+        {
+            _togglingCells.Remove(key);
+            StateHasChanged();
+        }
+    }
+
+    // ── Bulk operations ───────────────────────────────────────
+    private async Task BulkAssignAsync()
+    {
+        if (_selectedPerms.Count == 0 || _selectedRoles.Count == 0) return;
+        _bulkProcessing = true;
+        var assigned = 0;
+        var skipped  = 0;
+        try
+        {
+            foreach (var roleId in _selectedRoles.ToList())
+            {
+                foreach (var permId in _selectedPerms.ToList())
+                {
+                    if (IsAssigned(roleId, permId)) { skipped++; continue; }
+                    try
+                    {
+                        var rpId = await Api.AssignPermissionToRoleAsync(
+                            new AssignRolePermissionRequest
+                            {
+                                TenantId     = _tenantId,
+                                RoleId       = roleId,
+                                PermissionId = permId,
+                            });
+                        if (!_rolePermIds.TryGetValue(roleId, out var s))
+                        {
+                            s = [];
+                            _rolePermIds[roleId] = s;
+                        }
+                        s.Add(permId);
+                        _rolePermRevMap[(roleId, permId)] = rpId;
+                        assigned++;
+                    }
+                    catch { skipped++; }
+                }
+            }
+            await ShowToastAsync($"Bulk assigned {assigned} permission(s). {skipped} skipped.");
+        }
+        finally { _bulkProcessing = false; StateHasChanged(); }
+    }
+
+    private async Task BulkRevokeAsync()
+    {
+        if (_selectedPerms.Count == 0 || _selectedRoles.Count == 0) return;
+        _bulkProcessing = true;
+        var revoked = 0;
+        var skipped = 0;
+        try
+        {
+            foreach (var roleId in _selectedRoles.ToList())
+            {
+                foreach (var permId in _selectedPerms.ToList())
+                {
+                    var key = (roleId, permId);
+                    if (!IsAssigned(roleId, permId) ||
+                        !_rolePermRevMap.TryGetValue(key, out var rpId))
+                    {
+                        skipped++;
+                        continue;
+                    }
+                    try
+                    {
+                        await Api.RevokePermissionFromRoleAsync(
+                            new RevokeRolePermissionRequest { RolePermissionId = rpId });
+                        if (_rolePermIds.TryGetValue(roleId, out var s)) s.Remove(permId);
+                        _rolePermRevMap.Remove(key);
+                        revoked++;
+                    }
+                    catch { skipped++; }
+                }
+            }
+            await ShowToastAsync($"Bulk revoked {revoked} permission(s). {skipped} skipped.");
+        }
+        finally { _bulkProcessing = false; StateHasChanged(); }
+    }
+
+    // ── Compare ───────────────────────────────────────────────
+    private async Task RunCompareAsync()
+    {
+        if (!Guid.TryParse(_compareRoleAId, out var aId) ||
+            !Guid.TryParse(_compareRoleBId, out var bId))
+            return;
+        if (aId == bId)
+        {
+            await ShowToastAsync("Select two different roles to compare.", isError: true);
+            return;
+        }
+        _loadingCompare = true;
+        _compareResult  = null;
+        StateHasChanged();
+        try
+        {
+            var loadTasks = new List<Task>();
+            if (!_rolePermIds.ContainsKey(aId)) loadTasks.Add(LoadRolePermsAsync(aId));
+            if (!_rolePermIds.ContainsKey(bId)) loadTasks.Add(LoadRolePermsAsync(bId));
+            await Task.WhenAll(loadTasks);
+
+            var aSet = _rolePermIds.TryGetValue(aId, out var a) ? a : [];
+            var bSet = _rolePermIds.TryGetValue(bId, out var b) ? b : [];
+
+            _compareResult = new CompareResult(
+                AOnly:  _catalog.Where(p =>  aSet.Contains(p.PermissionId) && !bSet.Contains(p.PermissionId)).ToList(),
+                BOnly:  _catalog.Where(p =>  bSet.Contains(p.PermissionId) && !aSet.Contains(p.PermissionId)).ToList(),
+                Shared: _catalog.Where(p =>  aSet.Contains(p.PermissionId) &&  bSet.Contains(p.PermissionId)).ToList());
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loadingCompare = false; StateHasChanged(); }
+    }
+
+    // ── Clone ─────────────────────────────────────────────────
+    private void OpenCloneDialog()
+    {
+        _cloneSrcId = _cloneDstId = _cloneError = "";
+        _showCloneDlg = true;
+    }
+
+    private async Task ExecuteCloneAsync()
+    {
+        if (!Guid.TryParse(_cloneSrcId, out var srcId))
+        {
+            _cloneError = "Select a source role.";
+            return;
+        }
+        if (!Guid.TryParse(_cloneDstId, out var dstId))
+        {
+            _cloneError = "Select a destination role.";
+            return;
+        }
+        if (srcId == dstId)
+        {
+            _cloneError = "Source and destination must be different roles.";
+            return;
+        }
+        _cloning = true;
+        _cloneError = "";
+        try
+        {
+            if (!_rolePermIds.ContainsKey(srcId)) await LoadRolePermsAsync(srcId);
+            if (!_rolePermIds.ContainsKey(dstId)) await LoadRolePermsAsync(dstId);
+
+            var srcPerms = _rolePermIds.TryGetValue(srcId, out var ss) ? ss : (HashSet<Guid>)[];
+            var dstPerms = _rolePermIds.TryGetValue(dstId, out var ds) ? ds : (HashSet<Guid>)[];
+            var toAssign = srcPerms.Except(dstPerms).ToList();
+
+            var cloned = 0;
+            foreach (var permId in toAssign)
+            {
+                var rpId = await Api.AssignPermissionToRoleAsync(
+                    new AssignRolePermissionRequest
+                    {
+                        TenantId     = _tenantId,
+                        RoleId       = dstId,
+                        PermissionId = permId,
+                    });
+                if (!_rolePermIds.TryGetValue(dstId, out var ds2))
+                {
+                    ds2 = [];
+                    _rolePermIds[dstId] = ds2;
+                }
+                ds2.Add(permId);
+                _rolePermRevMap[(dstId, permId)] = rpId;
+                cloned++;
+            }
+            _showCloneDlg = false;
+            await ShowToastAsync($"Cloned {cloned} permission(s) to {RoleNameFor(_cloneDstId)}.");
+        }
+        catch (Exception ex) { _cloneError = $"Error: {ex.Message}"; }
+        finally { _cloning = false; StateHasChanged(); }
+    }
+
+    // ── Export ────────────────────────────────────────────────
+    private async Task ExportCsvAsync()
+    {
+        _exporting = true;
+        StateHasChanged();
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            CsvCell(sb, "Permission"); sb.Append(',');
+            CsvCell(sb, "Resource");   sb.Append(',');
+            CsvCell(sb, "Action");
+            foreach (var role in _roles)
+            {
+                sb.Append(',');
+                CsvCell(sb, role.RoleCode);
+            }
+            sb.AppendLine();
+
+            foreach (var perm in _catalog)
+            {
+                CsvCell(sb, perm.PermissionName); sb.Append(',');
+                CsvCell(sb, perm.ResourceCode);   sb.Append(',');
+                CsvCell(sb, perm.ActionCode);
+                foreach (var role in _roles)
+                    sb.Append(IsAssigned(role.RoleId, perm.PermissionId) ? ",1" : ",0");
+                sb.AppendLine();
+            }
+
+            var bytes    = System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+            var b64      = Convert.ToBase64String(bytes);
+            var datePart = DateTime.UtcNow.ToString("yyyyMMdd-HHmm");
+            var fileName = string.Concat("permission-matrix-", datePart, ".csv");
+            await JS.InvokeVoidAsync("amsDownloadFile", b64, fileName, "text/csv");
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _exporting = false; StateHasChanged(); }
+    }
+
+    private static void CsvCell(System.Text.StringBuilder sb, string? value)
+    {
+        const char dq = '"';
+        sb.Append(dq);
+        if (value != null)
+            foreach (var ch in value)
+            {
+                if (ch == dq) sb.Append(dq);
+                sb.Append(ch);
+            }
+        sb.Append(dq);
+    }
+
+    // ── Selection helpers ─────────────────────────────────────
+    private void TogglePermSelect(Guid permId)
+    {
+        if (!_selectedPerms.Remove(permId)) _selectedPerms.Add(permId);
+    }
+
+    private void ToggleRoleSelect(Guid roleId)
+    {
+        if (!_selectedRoles.Remove(roleId)) _selectedRoles.Add(roleId);
+    }
+
+    private void ToggleModule(string module)
+    {
+        if (!_collapsedModules.Remove(module)) _collapsedModules.Add(module);
+    }
+
+    private void ClearSelections()
+    {
+        _selectedPerms.Clear();
+        _selectedRoles.Clear();
+    }
+
+    private void ToggleSelectAllPerms(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        var all = (bool)(e.Value ?? false);
+        _selectedPerms = all
+            ? FilteredCatalog.Select(p => p.PermissionId).ToHashSet()
+            : [];
+    }
+
+    // ── Display helpers ───────────────────────────────────────
+    private static string ActionBadgeClass(string? action) =>
+        (action?.ToLowerInvariant() ?? "other") switch
+        {
+            "read"   => "mx-action-read",
+            "write"  => "mx-action-write",
+            "delete" => "mx-action-delete",
+            "manage" => "mx-action-manage",
+            "admin"  => "mx-action-admin",
+            _        => "mx-action-other",
+        };
+
+    private async Task ShowToastAsync(string msg, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content  = msg,
+            CssClass = isError ? "e-toast-danger" : "e-toast-success",
+            Timeout  = isError ? 6000 : 3500,
+        });
+    }
+}

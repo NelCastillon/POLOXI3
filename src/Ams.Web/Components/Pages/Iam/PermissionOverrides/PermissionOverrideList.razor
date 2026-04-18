@@ -1,0 +1,504 @@
+@page "/iam/permission-overrides"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Permission Overrides — IAM</PageTitle>
+
+<AppPageHeader Title="Permission Overrides"
+               Subtitle="Direct user grants and denials that override role-inherited access"
+               Icon="bi-shield-lock">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Override
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="po-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0" aria-label="Filter: Total Overrides">
+        <span class="po-kpi-icon po-kpi-icon--total"><i class="bi bi-shield-lock-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="po-kpi-value">@_totalCount</div>
+            <div class="po-kpi-label">Total Overrides</div>
+        </div>
+        @if (_kpiActive == 1) { <span class="po-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0" aria-label="Filter: Allow">
+        <span class="po-kpi-icon po-kpi-icon--allow"><i class="bi bi-shield-check-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="po-kpi-value">@_allowCount</div>
+            <div class="po-kpi-label">Allow</div>
+        </div>
+        @if (_kpiActive == 2) { <span class="po-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0" aria-label="Filter: Deny">
+        <span class="po-kpi-icon po-kpi-icon--deny"><i class="bi bi-shield-x-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="po-kpi-value">@_denyCount</div>
+            <div class="po-kpi-label">Deny</div>
+        </div>
+        @if (_kpiActive == 3) { <span class="po-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass4" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0" aria-label="Filter: Expiring Soon">
+        <span class="po-kpi-icon po-kpi-icon--expiring"><i class="bi bi-clock-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="po-kpi-value">@_expiringCount</div>
+            <div class="po-kpi-label">Expiring Soon</div>
+        </div>
+        @if (_kpiActive == 4) { <span class="po-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search user or permission…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_grantOptions"
+                        Placeholder="Allow &amp; Deny"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterGrant"
+                        ValueChanged="@((string v) => { _filterGrant = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </Filters>
+    <Actions>
+        @if (_selected.Count > 0)
+        {
+            <span class="po-sel-count">
+                <i class="bi bi-check2-square" aria-hidden="true"></i> @_selected.Count selected
+            </span>
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="() => OpenEdit(_selected[0])"
+                    disabled="@(_selected.Count != 1)"
+                    title="Edit override">
+                <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+            </button>
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="() => OpenScope(_selected[0])"
+                    disabled="@(_selected.Count != 1)"
+                    title="Manage scopes">
+                <i class="bi bi-layers" aria-hidden="true"></i> Scope
+            </button>
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="() => OpenConflicts(_selected[0])"
+                    disabled="@(_selected.Count != 1)"
+                    title="Validate conflicts">
+                <i class="bi bi-exclamation-diamond" aria-hidden="true"></i> Conflicts
+            </button>
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="() => OpenEffectiveScope(_selected[0])"
+                    disabled="@(_selected.Count != 1)"
+                    title="Preview effective scope">
+                <i class="bi bi-eye" aria-hidden="true"></i> Preview
+            </button>
+            <button class="um-btn um-btn-sm um-btn-warning"
+                    @onclick="() => OpenRevoke(_selected[0])"
+                    disabled="@(_selected.Count != 1)"
+                    title="Revoke override">
+                <i class="bi bi-shield-slash" aria-hidden="true"></i> Revoke
+            </button>
+        }
+    </Actions>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading overrides…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading permission overrides…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="UserPermissionDto"
+            DataSource="@_overrides"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row"
+                               Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
+        <GridEvents TValue="UserPermissionDto"
+                    RowSelected="OnRowSelected"
+                    RowDeselected="OnRowDeselected" />
+        <GridColumns>
+
+            <GridColumn Type="ColumnType.CheckBox" Width="48" />
+
+            <GridColumn Field="@nameof(UserPermissionDto.UserFullName)"
+                        HeaderText="User"
+                        Width="200">
+                <Template>
+                    @{ var o = (UserPermissionDto)context; }
+                    <div class="po-user-cell">
+                        <span class="po-avatar" aria-hidden="true">@UserInitials(o.UserFullName)</span>
+                        <span class="po-user-name">@(o.UserFullName ?? "—")</span>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserPermissionDto.PermissionName)"
+                        HeaderText="Permission"
+                        Width="220">
+                <Template>
+                    @{ var o = (UserPermissionDto)context; }
+                    <div class="po-perm-cell">
+                        <div class="po-perm-name">@(o.PermissionName ?? "—")</div>
+                        <div class="po-perm-code">@o.PermissionCode</div>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserPermissionDto.IsGranted)"
+                        HeaderText="Allow / Deny"
+                        Width="120"
+                        TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var o = (UserPermissionDto)context; }
+                    @if (o.IsGranted)
+                    {
+                        <span class="po-badge po-badge--allow">
+                            <i class="bi bi-check-circle-fill" aria-hidden="true"></i> Allow
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="po-badge po-badge--deny">
+                            <i class="bi bi-slash-circle-fill" aria-hidden="true"></i> Deny
+                        </span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText="Effective Start" Width="140">
+                <Template>
+                    @{ var o = (UserPermissionDto)context;
+                       var start = o.EffectiveStartDateUtc ?? o.GrantedDateUtc; }
+                    <span title="@start.ToString("g")">@start.ToString("d")</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText="Effective End" Width="140">
+                <Template>
+                    @{ var o = (UserPermissionDto)context; }
+                    @if (o.ExpiresDateUtc.HasValue)
+                    {
+                        var expired      = o.ExpiresDateUtc.Value < DateTime.UtcNow;
+                        var expiringSoon = !expired && o.ExpiresDateUtc.Value < DateTime.UtcNow.AddDays(30);
+                        <span class="@(expired ? "po-expired" : expiringSoon ? "po-expiring" : string.Empty)"
+                              title="@o.ExpiresDateUtc.Value.ToString("g")">
+                            @o.ExpiresDateUtc.Value.ToString("d")
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="po-no-expiry">No expiry</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserPermissionDto.GrantedByFullName)"
+                        HeaderText="Assigned By"
+                        Width="160">
+                <Template>
+                    @{ var o = (UserPermissionDto)context; }
+                    <span>@(o.GrantedByFullName ?? "—")</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(UserPermissionDto.ApprovedByFullName)"
+                        HeaderText="Approved By"
+                        Width="160">
+                <Template>
+                    @{ var o = (UserPermissionDto)context; }
+                    <span>@(o.ApprovedByFullName ?? "—")</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText=""
+                        Width="180"
+                        AllowSorting="false"
+                        AllowFiltering="false">
+                <Template>
+                    @{ var o = (UserPermissionDto)context; }
+                    <div class="um-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenEdit(o)"
+                                title="Edit override">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenScope(o)"
+                                title="Manage scopes">
+                            <i class="bi bi-layers" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenConflicts(o)"
+                                title="Validate conflicts">
+                            <i class="bi bi-exclamation-diamond" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenEffectiveScope(o)"
+                                title="Preview effective scope">
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenRevoke(o)"
+                                title="Revoke override">
+                            <i class="bi bi-shield-slash" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add / Edit drawer -->
+<PermissionOverrideDrawer @bind-Visible="_showDrawer"
+                          Override="_editOverride"
+                          OnSaved="HandleSavedAsync" />
+
+<!-- Scope drawer -->
+<PermissionScopeDrawer @bind-Visible="_showScope"
+                       Override="_scopeTarget"
+                       OnChanged="HandleSavedAsync" />
+
+<!-- Conflicts drawer -->
+<PermissionConflictsDrawer @bind-Visible="_showConflicts"
+                            UserId="_conflictsUserId"
+                            UserFullName="_conflictsUserName" />
+
+<!-- Effective scope drawer -->
+<EffectiveScopeDrawer @bind-Visible="_showEffective"
+                      UserId="_effectiveUserId"
+                      UserFullName="_effectiveUserName" />
+
+<!-- Revoke confirmation -->
+<AppConfirmActionDialog @bind-Visible="_showRevoke"
+                        Title="Revoke Override"
+                        Message="@RevokeMessage"
+                        Detail="The direct permission override will be removed. Role-based access rules will apply."
+                        Variant="warning"
+                        ConfirmText="Revoke"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteRevokeAsync" />
+
+<!-- Toast -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ─────────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ──────────────────────────────────────────────────────────────────────
+    private SfGrid<UserPermissionDto>? _grid;
+    private SfToast?                   _toast;
+
+    // ── Data ──────────────────────────────────────────────────────────────────────
+    private List<UserPermissionDto> _allOverrides = [];
+    private List<UserPermissionDto> _overrides    = [];
+    private List<UserPermissionDto> _selected     = [];
+
+    // ── Loading / action flags ────────────────────────────────────────────────────
+    private bool _loading    = false;
+    private bool _confirming = false;
+
+    // ── Dialog visibility ─────────────────────────────────────────────────────────
+    private bool                _showDrawer    = false;
+    private bool                _showRevoke    = false;
+    private bool                _showScope     = false;
+    private bool                _showConflicts = false;
+    private bool                _showEffective = false;
+
+    // ── Active targets ────────────────────────────────────────────────────────────
+    private UserPermissionDto? _editOverride;
+    private UserPermissionDto? _actionTarget;
+    private UserPermissionDto? _scopeTarget;
+    private Guid               _conflictsUserId;
+    private string?            _conflictsUserName;
+    private Guid               _effectiveUserId;
+    private string?            _effectiveUserName;
+
+    // ── Filters ───────────────────────────────────────────────────────────────────
+    private string _search      = string.Empty;
+    private string _filterGrant = string.Empty;
+    private int    _kpiActive   = 0;
+
+    // ── KPI ───────────────────────────────────────────────────────────────────────
+    private string KpiClass1 => "po-kpi-card po-kpi-card--total"    + (_kpiActive == 1 ? " po-kpi-card--active" : "");
+    private string KpiClass2 => "po-kpi-card po-kpi-card--allow"    + (_kpiActive == 2 ? " po-kpi-card--active" : "");
+    private string KpiClass3 => "po-kpi-card po-kpi-card--deny"     + (_kpiActive == 3 ? " po-kpi-card--active" : "");
+    private string KpiClass4 => "po-kpi-card po-kpi-card--expiring" + (_kpiActive == 4 ? " po-kpi-card--active" : "");
+
+    private int _totalCount;
+    private int _allowCount;
+    private int _denyCount;
+    private int _expiringCount;
+
+    // ── Static options ────────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _grantOptions =
+    [
+        new("true",  "Allow"),
+        new("false", "Deny"),
+    ];
+
+    // ── Computed ──────────────────────────────────────────────────────────────────
+    private string RevokeMessage => _actionTarget is null
+        ? "Revoke this permission override?"
+        : $"Revoke the {(_actionTarget.IsGranted ? "Allow" : "Deny")} override on \"{_actionTarget.PermissionName}\" for {_actionTarget.UserFullName}?";
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home", "/"),
+            new("IAM",  "/iam"),
+            new("Permission Overrides", "/iam/permission-overrides"));
+
+        await LoadAsync();
+    }
+
+    // ── Data loading ──────────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchPermissionOverridesAsync(_tenantId, searchTerm: _search);
+            _allOverrides = result?.Items.ToList() ?? [];
+            _selected.Clear();
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private Task OnSearchAsync(string _) => LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _overrides = _allOverrides.Where(o =>
+            string.IsNullOrEmpty(_filterGrant) ||
+            (_filterGrant == "true"  &&  o.IsGranted) ||
+            (_filterGrant == "false" && !o.IsGranted)
+        ).ToList();
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive   = _kpiActive == n ? 0 : n;
+        _filterGrant = string.Empty;
+        if (_kpiActive == 2) _filterGrant = "true";
+        if (_kpiActive == 3) _filterGrant = "false";
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        var now = DateTime.UtcNow;
+        _totalCount    = _allOverrides.Count;
+        _allowCount    = _allOverrides.Count(o =>  o.IsGranted);
+        _denyCount     = _allOverrides.Count(o => !o.IsGranted);
+        _expiringCount = _allOverrides.Count(o =>
+            o.ExpiresDateUtc.HasValue &&
+            o.ExpiresDateUtc.Value > now &&
+            o.ExpiresDateUtc.Value < now.AddDays(30));
+    }
+
+    // ── Row selection ─────────────────────────────────────────────────────────────
+    private void OnRowSelected(RowSelectEventArgs<UserPermissionDto> args)
+    {
+        if (!_selected.Contains(args.Data)) _selected.Add(args.Data);
+    }
+
+    private void OnRowDeselected(RowDeselectEventArgs<UserPermissionDto> args)
+    {
+        _selected.Remove(args.Data);
+    }
+
+    // ── CRUD ──────────────────────────────────────────────────────────────────────
+    private void OpenCreate() { _editOverride = null; _showDrawer = true; }
+    private void OpenEdit(UserPermissionDto o) { _editOverride = o; _showDrawer = true; }
+    private async Task HandleSavedAsync() => await LoadAsync();
+
+    // ── Scope ─────────────────────────────────────────────────────────────────────
+    private void OpenScope(UserPermissionDto o) { _scopeTarget = o; _showScope = true; }
+
+    // ── Conflicts ─────────────────────────────────────────────────────────────────
+    private void OpenConflicts(UserPermissionDto o)
+    {
+        _conflictsUserId   = o.UserId;
+        _conflictsUserName = o.UserFullName;
+        _showConflicts     = true;
+    }
+
+    // ── Effective scope ───────────────────────────────────────────────────────────
+    private void OpenEffectiveScope(UserPermissionDto o)
+    {
+        _effectiveUserId   = o.UserId;
+        _effectiveUserName = o.UserFullName;
+        _showEffective     = true;
+    }
+
+    // ── Revoke ────────────────────────────────────────────────────────────────────
+    private void OpenRevoke(UserPermissionDto o) { _actionTarget = o; _showRevoke = true; }
+
+    private async Task ExecuteRevokeAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.RevokePermissionOverrideAsync(_actionTarget.UserPermissionId);
+            await ShowToastAsync($"Override revoked for {_actionTarget.UserFullName}.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger"); }
+        finally { _confirming = false; _actionTarget = null; }
+    }
+
+    // ── Export ────────────────────────────────────────────────────────────────────
+    private Task ExportAsync() => ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+
+    // ── Toast ─────────────────────────────────────────────────────────────────────
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────────
+    private static string UserInitials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "?";
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant()
+            : name[..Math.Min(2, name.Length)].ToUpperInvariant();
+    }
+
+    // ── Inner types ───────────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Value, string Label);
+}

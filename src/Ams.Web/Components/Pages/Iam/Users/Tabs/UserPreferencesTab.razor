@@ -1,0 +1,249 @@
+@inject ApiClient Api
+
+<div class="tab-section">
+    <div class="ts-header">
+        <h3 class="ts-title">Preferences</h3>
+        @if (!_editing && User is not null)
+        {
+            <button class="ts-edit-btn" @onclick="OpenEdit">
+                <i class="bi bi-pencil" aria-hidden="true"></i> Edit Preferences
+            </button>
+        }
+    </div>
+
+    @if (User is null)
+    {
+        <div class="ts-empty">
+            <i class="bi bi-gear-x" aria-hidden="true"></i>
+            <span>No preference data available.</span>
+        </div>
+    }
+    else if (!_editing)
+    {
+        <div class="ts-info-grid">
+            <div class="ts-info-section">
+                <div class="ts-section-label">Localization</div>
+                <dl class="ts-dl">
+                    <div class="ts-dl-row">
+                        <dt>Time Zone</dt>
+                        <dd>@(TimeZoneLabel(User.TimeZoneCode) ?? User.TimeZoneCode ?? "UTC")</dd>
+                    </div>
+                    <div class="ts-dl-row">
+                        <dt>Locale</dt>
+                        <dd>@(LocaleLabel(User.LocaleCode) ?? User.LocaleCode ?? "en-US")</dd>
+                    </div>
+                </dl>
+            </div>
+
+            <div class="ts-info-section">
+                <div class="ts-section-label">Activity</div>
+                <dl class="ts-dl">
+                    <div class="ts-dl-row">
+                        <dt>Last Login</dt>
+                        <dd>
+                            @(User.LastLoginDateUtc.HasValue
+                                ? User.LastLoginDateUtc.Value.ToString("f")
+                                : "Never")
+                        </dd>
+                    </div>
+                    <div class="ts-dl-row">
+                        <dt>Password Changed</dt>
+                        <dd>
+                            @(User.PasswordChangedDateUtc.HasValue
+                                ? User.PasswordChangedDateUtc.Value.ToString("f")
+                                : "Never")
+                        </dd>
+                    </div>
+                    <div class="ts-dl-row">
+                        <dt>Failed Logins</dt>
+                        <dd>@User.FailedLoginAttempts</dd>
+                    </div>
+                </dl>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="ts-edit-form">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Time Zone</label>
+                    <SfDropDownList TItem="TzItem" TValue="string"
+                                    DataSource="@_timeZones"
+                                    @bind-Value="_form.TimeZoneCode"
+                                    Placeholder="Select time zone…"
+                                    AllowFiltering="true">
+                        <DropDownListFieldSettings Text="Label" Value="Code" />
+                    </SfDropDownList>
+                </div>
+                <div class="form-group">
+                    <label>Locale</label>
+                    <SfDropDownList TItem="LocaleItem" TValue="string"
+                                    DataSource="@_locales"
+                                    @bind-Value="_form.LocaleCode"
+                                    Placeholder="Select locale…"
+                                    AllowFiltering="true">
+                        <DropDownListFieldSettings Text="Label" Value="Code" />
+                    </SfDropDownList>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <div class="form-alert" role="alert">
+                    <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_error
+                </div>
+            }
+
+            <div class="ts-edit-actions">
+                <button class="ts-btn-ghost" @onclick="CancelEdit">Cancel</button>
+                <button class="ts-btn-primary" @onclick="SaveAsync" disabled="@_saving">
+                    @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                    Save Preferences
+                </button>
+            </div>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(_msg))
+    {
+        <div class="ts-feedback @(_isError ? "ts-feedback-err" : "ts-feedback-ok")" role="alert">
+            <i class="bi @(_isError ? "bi-x-circle" : "bi-check-circle")" aria-hidden="true"></i>
+            @_msg
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public UserDto?      User          { get; set; }
+    [Parameter] public Guid          TenantId      { get; set; }
+    [Parameter] public EventCallback OnUserUpdated { get; set; }
+
+    private bool     _editing;
+    private bool     _saving;
+    private bool     _isError;
+    private string   _error = string.Empty;
+    private string   _msg   = string.Empty;
+    private PrefForm _form  = new();
+
+    private void OpenEdit()
+    {
+        if (User is null) return;
+        _form    = new PrefForm { TimeZoneCode = User.TimeZoneCode ?? "UTC", LocaleCode = User.LocaleCode ?? "en-US" };
+        _error   = string.Empty;
+        _editing = true;
+    }
+
+    private void CancelEdit() { _editing = false; _error = string.Empty; }
+
+    private async Task SaveAsync()
+    {
+        if (User is null || _saving) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateUserAsync(User.UserId, new UpdateUserRequest
+            {
+                UserId       = User.UserId,
+                FullName     = User.FullName,
+                DisplayName  = User.DisplayName,
+                PhoneNumber  = User.PhoneNumber,
+                JobTitle     = User.JobTitle,
+                Department   = User.Department,
+                TimeZoneCode = _form.TimeZoneCode,
+                LocaleCode   = _form.LocaleCode,
+            });
+            _editing = false;
+            ShowMsg("Preferences saved.", false);
+            await OnUserUpdated.InvokeAsync();
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+        finally { _saving = false; }
+    }
+
+    private void ShowMsg(string msg, bool err)
+    {
+        _msg     = msg;
+        _isError = err;
+        _ = Task.Delay(4000).ContinueWith(_ => InvokeAsync(() => { _msg = string.Empty; StateHasChanged(); }));
+    }
+
+    private static string? TimeZoneLabel(string? code) =>
+        _timeZones.FirstOrDefault(t => t.Code == code)?.Label;
+
+    private static string? LocaleLabel(string? code) =>
+        _locales.FirstOrDefault(l => l.Code == code)?.Label;
+
+    private sealed class PrefForm
+    {
+        public string TimeZoneCode { get; set; } = "UTC";
+        public string LocaleCode   { get; set; } = "en-US";
+    }
+
+    private sealed record TzItem(string Code, string Label);
+    private sealed record LocaleItem(string Code, string Label);
+
+    private static readonly List<TzItem> _timeZones =
+    [
+        new("UTC",                  "UTC — Coordinated Universal Time"),
+        new("America/New_York",     "Eastern Time (US & Canada)"),
+        new("America/Chicago",      "Central Time (US & Canada)"),
+        new("America/Denver",       "Mountain Time (US & Canada)"),
+        new("America/Los_Angeles",  "Pacific Time (US & Canada)"),
+        new("America/Anchorage",    "Alaska"),
+        new("Pacific/Honolulu",     "Hawaii"),
+        new("America/Phoenix",      "Arizona"),
+        new("America/Toronto",      "Eastern Time — Toronto"),
+        new("America/Vancouver",    "Pacific Time — Vancouver"),
+        new("America/Sao_Paulo",    "Brasilia"),
+        new("America/Buenos_Aires", "Buenos Aires"),
+        new("Europe/London",        "London (GMT/BST)"),
+        new("Europe/Paris",         "Paris (CET/CEST)"),
+        new("Europe/Berlin",        "Berlin (CET/CEST)"),
+        new("Europe/Amsterdam",     "Amsterdam"),
+        new("Europe/Madrid",        "Madrid"),
+        new("Europe/Rome",          "Rome"),
+        new("Europe/Warsaw",        "Warsaw"),
+        new("Europe/Athens",        "Athens"),
+        new("Europe/Istanbul",      "Istanbul"),
+        new("Europe/Moscow",        "Moscow"),
+        new("Asia/Dubai",           "Dubai (GST)"),
+        new("Asia/Kolkata",         "India Standard Time"),
+        new("Asia/Bangkok",         "Bangkok, Hanoi, Jakarta"),
+        new("Asia/Singapore",       "Singapore"),
+        new("Asia/Shanghai",        "China Standard Time"),
+        new("Asia/Tokyo",           "Tokyo"),
+        new("Asia/Seoul",           "Seoul"),
+        new("Australia/Sydney",     "Sydney (AEST/AEDT)"),
+        new("Pacific/Auckland",     "Auckland"),
+    ];
+
+    private static readonly List<LocaleItem> _locales =
+    [
+        new("en-US", "English (United States)"),
+        new("en-GB", "English (United Kingdom)"),
+        new("en-AU", "English (Australia)"),
+        new("en-CA", "English (Canada)"),
+        new("fr-FR", "French (France)"),
+        new("fr-CA", "French (Canada)"),
+        new("de-DE", "German (Germany)"),
+        new("de-AT", "German (Austria)"),
+        new("es-ES", "Spanish (Spain)"),
+        new("es-MX", "Spanish (Mexico)"),
+        new("pt-BR", "Portuguese (Brazil)"),
+        new("pt-PT", "Portuguese (Portugal)"),
+        new("it-IT", "Italian (Italy)"),
+        new("nl-NL", "Dutch (Netherlands)"),
+        new("pl-PL", "Polish (Poland)"),
+        new("ru-RU", "Russian (Russia)"),
+        new("tr-TR", "Turkish (Turkey)"),
+        new("ar-SA", "Arabic (Saudi Arabia)"),
+        new("zh-CN", "Chinese Simplified (China)"),
+        new("zh-TW", "Chinese Traditional (Taiwan)"),
+        new("ja-JP", "Japanese (Japan)"),
+        new("ko-KR", "Korean (South Korea)"),
+        new("hi-IN", "Hindi (India)"),
+        new("th-TH", "Thai (Thailand)"),
+        new("vi-VN", "Vietnamese (Vietnam)"),
+    ];
+}

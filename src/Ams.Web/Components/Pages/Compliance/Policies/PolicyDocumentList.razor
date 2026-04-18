@@ -1,0 +1,900 @@
+@page "/compliance/policies"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Policy Documents — Compliance</PageTitle>
+
+<AppPageHeader Title="Policy Documents"
+               Subtitle="Create, version, publish and retire compliance policy documents"
+               Icon="bi-file-earmark-text">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Policy
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="pol-kpi-strip">
+    <div class="@KpiClassTotal" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0" aria-label="Filter: Total Policies">
+        <span class="pol-kpi-icon pol-kpi-icon--total"><i class="bi bi-file-earmark-text-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="pol-kpi-value">@_totalCount</div>
+            <div class="pol-kpi-label">Total</div>
+        </div>
+        @if (_kpiActive == 1) { <span class="pol-kpi-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClassDraft" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0" aria-label="Filter: Draft">
+        <span class="pol-kpi-icon pol-kpi-icon--draft"><i class="bi bi-pencil-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="pol-kpi-value">@_draftCount</div>
+            <div class="pol-kpi-label">Draft</div>
+        </div>
+        @if (_kpiActive == 2) { <span class="pol-kpi-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClassPublished" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0" aria-label="Filter: Published">
+        <span class="pol-kpi-icon pol-kpi-icon--published"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="pol-kpi-value">@_publishedCount</div>
+            <div class="pol-kpi-label">Published</div>
+        </div>
+        @if (_kpiActive == 3) { <span class="pol-kpi-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClassRetired" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0" aria-label="Filter: Retired">
+        <span class="pol-kpi-icon pol-kpi-icon--retired"><i class="bi bi-archive-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="pol-kpi-value">@_retiredCount</div>
+            <div class="pol-kpi-label">Retired</div>
+        </div>
+        @if (_kpiActive == 4) { <span class="pol-kpi-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search policy code or title…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_typeOptions"
+                        Placeholder="All Types"
+                        ShowClearButton="true"
+                        Width="170px"
+                        Value="_filterType"
+                        ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_statusOptions"
+                        Placeholder="All Statuses"
+                        ShowClearButton="true"
+                        Width="150px"
+                        Value="_filterStatus"
+                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </Filters>
+    <Actions>
+        @if (_selected.Count > 0)
+        {
+            <span class="rbl-sel-count">
+                <i class="bi bi-check2-square" aria-hidden="true"></i> @_selected.Count selected
+            </span>
+            @if (_selected.Count == 1)
+            {
+                var sel = _selected[0];
+                @if (sel.StatusCode == "Draft")
+                {
+                    <button class="um-btn um-btn-sm um-btn-success" @onclick="() => OpenPublish(sel)">
+                        <i class="bi bi-send" aria-hidden="true"></i> Publish
+                    </button>
+                }
+                @if (sel.StatusCode == "Published")
+                {
+                    <button class="um-btn um-btn-sm um-btn-warning" @onclick="() => OpenRetire(sel)">
+                        <i class="bi bi-archive" aria-hidden="true"></i> Retire
+                    </button>
+                }
+            }
+        }
+    </Actions>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading policies…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading policies…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="PolicyDocumentDto"
+            DataSource="@_policies"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="56">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row"
+                               Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
+        <GridEvents TValue="PolicyDocumentDto"
+                    RowSelected="OnRowSelected"
+                    RowDeselected="OnRowDeselected" />
+        <GridColumns>
+
+            <GridColumn Type="ColumnType.CheckBox" Width="48" />
+
+            <GridColumn Field="@nameof(PolicyDocumentDto.PolicyCode)"
+                        HeaderText="Policy Code"
+                        Width="140">
+                <Template>
+                    @{ var r = (PolicyDocumentDto)context; }
+                    <span class="pol-code">@r.PolicyCode</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(PolicyDocumentDto.PolicyTitle)"
+                        HeaderText="Title"
+                        Width="280">
+                <Template>
+                    @{ var r = (PolicyDocumentDto)context; }
+                    <div class="pol-title-cell">
+                        <div class="pol-title-text">@r.PolicyTitle</div>
+                        @if (!string.IsNullOrEmpty(r.OwnedByFullName))
+                        {
+                            <div class="pol-title-owner">
+                                <i class="bi bi-person" aria-hidden="true"></i> @r.OwnedByFullName
+                            </div>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(PolicyDocumentDto.PolicyTypeCode)"
+                        HeaderText="Type"
+                        Width="150">
+                <Template>
+                    @{ var r = (PolicyDocumentDto)context; }
+                    <span class="pol-type-badge pol-type-badge--@r.PolicyTypeCode.ToLower().Replace(" ", "-")">
+                        @r.PolicyTypeCode
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(PolicyDocumentDto.Version)"
+                        HeaderText="Version"
+                        Width="90">
+                <Template>
+                    @{ var r = (PolicyDocumentDto)context; }
+                    <span class="pol-version">v@r.Version</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(PolicyDocumentDto.EffectiveDateUtc)"
+                        HeaderText="Effective Date"
+                        Width="140">
+                <Template>
+                    @{ var r = (PolicyDocumentDto)context; }
+                    @if (r.EffectiveDateUtc.HasValue)
+                    {
+                        <span title="@r.EffectiveDateUtc.Value.ToString("g")">
+                            @r.EffectiveDateUtc.Value.ToString("MMM d, yyyy")
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="pol-no-date">—</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(PolicyDocumentDto.StatusCode)"
+                        HeaderText="Status"
+                        Width="120">
+                <Template>
+                    @{ var r = (PolicyDocumentDto)context; }
+                    <AppStatusBadge Status="@r.StatusCode" />
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(PolicyDocumentDto.IsActive)"
+                        HeaderText="Active"
+                        Width="90">
+                <Template>
+                    @{ var r = (PolicyDocumentDto)context; }
+                    <AppStatusBadge Status="@(r.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText=""
+                        Width="120"
+                        AllowSorting="false"
+                        AllowFiltering="false">
+                <Template>
+                    @{ var r = (PolicyDocumentDto)context; }
+                    <div class="um-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenEdit(r)"
+                                title="Edit"
+                                disabled="@(r.StatusCode == "Retired")">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenVersion(r)"
+                                title="New version"
+                                disabled="@(r.StatusCode == "Retired")">
+                            <i class="bi bi-layers" aria-hidden="true"></i>
+                        </button>
+                        @if (r.StatusCode == "Draft")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost pol-btn-publish"
+                                    @onclick="() => OpenPublish(r)"
+                                    title="Publish">
+                                <i class="bi bi-send" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (r.StatusCode == "Published")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost pol-btn-retire"
+                                    @onclick="() => OpenRetire(r)"
+                                    title="Retire">
+                                <i class="bi bi-archive" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenAcknowledgements(r)"
+                                title="View acknowledgements (@r.AcknowledgementCount)">
+                            <i class="bi bi-people" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- ── Create / Edit dialog ─────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showForm"
+          Width="560px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogTemplates>
+        <Header>
+            <i class="bi @(_editTarget is null ? "bi-plus-lg" : "bi-pencil")" aria-hidden="true"></i>
+            @(_editTarget is null ? "New Policy Document" : "Edit Policy Document")
+        </Header>
+        <Content>
+            <div class="pol-form">
+                @if (!string.IsNullOrEmpty(_formError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError
+                    </div>
+                }
+                <div class="pol-form-grid">
+                    <div class="form-group">
+                        <label>Policy Code <span class="req" aria-hidden="true">*</span></label>
+                        <SfTextBox @bind-Value="_form.PolicyCode" Placeholder="e.g. POL-001" />
+                        @if (_validate && string.IsNullOrWhiteSpace(_form.PolicyCode))
+                        {
+                            <span class="pol-validation">Policy code is required.</span>
+                        }
+                    </div>
+                    <div class="form-group">
+                        <label>Version <span class="req" aria-hidden="true">*</span></label>
+                        <SfTextBox @bind-Value="_form.Version" Placeholder="e.g. 1.0" />
+                        @if (_validate && string.IsNullOrWhiteSpace(_form.Version))
+                        {
+                            <span class="pol-validation">Version is required.</span>
+                        }
+                    </div>
+                    <div class="form-group pol-form-full">
+                        <label>Title <span class="req" aria-hidden="true">*</span></label>
+                        <SfTextBox @bind-Value="_form.PolicyTitle" Placeholder="Full policy title…" />
+                        @if (_validate && string.IsNullOrWhiteSpace(_form.PolicyTitle))
+                        {
+                            <span class="pol-validation">Title is required.</span>
+                        }
+                    </div>
+                    <div class="form-group">
+                        <label>Type <span class="req" aria-hidden="true">*</span></label>
+                        <SfDropDownList TValue="string" TItem="LabelValue"
+                                        DataSource="_typeOptions"
+                                        @bind-Value="_form.PolicyTypeCode"
+                                        Placeholder="Select type…">
+                            <DropDownListFieldSettings Value="Value" Text="Label" />
+                        </SfDropDownList>
+                        @if (_validate && string.IsNullOrEmpty(_form.PolicyTypeCode))
+                        {
+                            <span class="pol-validation">Type is required.</span>
+                        }
+                    </div>
+                    <div class="form-group">
+                        <label>Effective Date</label>
+                        <SfDatePicker TValue="DateTime?" @bind-Value="_form.EffectiveDateUtc"
+                                      Placeholder="Select date…" Format="MMM d, yyyy" />
+                    </div>
+                    <div class="form-group pol-form-full">
+                        <label>Description</label>
+                        <SfTextBox @bind-Value="_form.Description"
+                                   Multiline="true"
+                                   Placeholder="Brief description of this policy…" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseFormDialog" disabled="@_saving">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">
+                    @if (_saving) { <span class="um-spinner-xs" aria-hidden="true"></span> }
+                    @(_editTarget is null ? "Create Policy" : "Save Changes")
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── New Version dialog ────────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showVersion"
+          Width="440px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogTemplates>
+        <Header><i class="bi bi-layers" aria-hidden="true"></i> New Version — @_versionTarget?.PolicyCode</Header>
+        <Content>
+            <div class="pol-form">
+                @if (!string.IsNullOrEmpty(_versionError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_versionError
+                    </div>
+                }
+                <div class="pol-form-grid">
+                    <div class="form-group">
+                        <label>New Version <span class="req" aria-hidden="true">*</span></label>
+                        <SfTextBox @bind-Value="_versionForm.NewVersion" Placeholder="e.g. 2.0" />
+                        @if (_validate && string.IsNullOrWhiteSpace(_versionForm.NewVersion))
+                        {
+                            <span class="pol-validation">Version is required.</span>
+                        }
+                    </div>
+                    <div class="form-group">
+                        <label>Effective Date</label>
+                        <SfDatePicker TValue="DateTime?" @bind-Value="_versionForm.EffectiveDateUtc"
+                                      Placeholder="Select date…" Format="MMM d, yyyy" />
+                    </div>
+                    <div class="form-group pol-form-full">
+                        <label>Description Override</label>
+                        <SfTextBox @bind-Value="_versionForm.Description"
+                                   Multiline="true"
+                                   Placeholder="Leave blank to inherit from current version…" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showVersion = false" disabled="@_saving">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ExecuteVersionAsync" disabled="@_saving">
+                    @if (_saving) { <span class="um-spinner-xs" aria-hidden="true"></span> }
+                    Create Version
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Acknowledgements panel ────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showAck"
+          Width="640px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogTemplates>
+        <Header>
+            <i class="bi bi-people" aria-hidden="true"></i>
+            Acknowledgements — @_ackTarget?.PolicyCode v@_ackTarget?.Version
+        </Header>
+        <Content>
+            <div class="pol-ack-panel">
+                @if (_ackLoading)
+                {
+                    <div class="pol-ack-loading">
+                        <span class="um-spinner-xs" aria-hidden="true"></span> Loading…
+                    </div>
+                }
+                else if (_acknowledgements.Count == 0)
+                {
+                    <div class="pol-ack-empty">
+                        <i class="bi bi-people pol-ack-empty-icon" aria-hidden="true"></i>
+                        <p>No acknowledgements recorded for this policy.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="pol-ack-count">
+                        <strong>@_acknowledgements.Count</strong> acknowledgement@(_acknowledgements.Count == 1 ? "" : "s")
+                    </div>
+                    <div class="pol-ack-table-wrap">
+                        <table class="pol-ack-table">
+                            <thead>
+                                <tr>
+                                    <th>User</th>
+                                    <th>Acknowledged</th>
+                                    <th>Channel</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var a in _acknowledgements)
+                                {
+                                    <tr>
+                                        <td>
+                                            <div class="pol-ack-user">
+                                                <span class="pol-ack-avatar" aria-hidden="true">
+                                                    <i class="bi bi-person-fill"></i>
+                                                </span>
+                                                <div>
+                                                    <div class="pol-ack-name">@a.UserFullName</div>
+                                                    <div class="pol-ack-email">@a.UserEmail</div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span title="@a.AcknowledgedDateUtc.ToString("g")">
+                                                @FormatRelative(a.AcknowledgedDateUtc)
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="pol-ack-channel">@(a.Channel ?? "—")</span>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showAck = false">Close</button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- Publish confirmation -->
+<AppConfirmActionDialog @bind-Visible="_showPublish"
+                        Title="Publish Policy"
+                        Message="@($"Publish '{_actionTarget?.PolicyTitle}' (v{_actionTarget?.Version})?")"
+                        Detail="The policy will become active and visible to all users. This action cannot be undone without retiring the policy."
+                        Variant="success"
+                        ConfirmText="Publish"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecutePublishAsync" />
+
+<!-- Retire confirmation -->
+<AppConfirmActionDialog @bind-Visible="_showRetire"
+                        Title="Retire Policy"
+                        Message="@($"Retire '{_actionTarget?.PolicyTitle}' (v{_actionTarget?.Version})?")"
+                        Detail="The policy will be marked inactive and no longer available for new acknowledgements."
+                        Variant="warning"
+                        ConfirmText="Retire"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteRetireAsync" />
+
+<!-- Toast -->
+<SfToast @ref="_toast"
+         ShowCloseButton="true"
+         Timeout="4000"
+         NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ──────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    private SfGrid<PolicyDocumentDto>? _grid;
+    private SfToast?                   _toast;
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private List<PolicyDocumentDto>          _all              = [];
+    private List<PolicyDocumentDto>          _policies         = [];
+    private List<PolicyDocumentDto>          _selected         = [];
+    private List<PolicyAcknowledgementDto>   _acknowledgements = [];
+
+    // ── Flags ──────────────────────────────────────────────────────────────────
+    private bool _loading    = false;
+    private bool _saving     = false;
+    private bool _confirming = false;
+    private bool _ackLoading = false;
+    private bool _validate   = false;
+
+    // ── Dialog visibility ──────────────────────────────────────────────────────
+    private bool _showForm    = false;
+    private bool _showVersion = false;
+    private bool _showAck     = false;
+    private bool _showPublish = false;
+    private bool _showRetire  = false;
+
+    // ── Targets ────────────────────────────────────────────────────────────────
+    private PolicyDocumentDto? _editTarget;
+    private PolicyDocumentDto? _versionTarget;
+    private PolicyDocumentDto? _ackTarget;
+    private PolicyDocumentDto? _actionTarget;
+
+    // ── Form state ─────────────────────────────────────────────────────────────
+    private FormModel          _form        = new();
+    private VersionFormModel   _versionForm = new();
+    private string             _formError   = string.Empty;
+    private string             _versionError = string.Empty;
+
+    // ── Filters ────────────────────────────────────────────────────────────────
+    private string _search       = string.Empty;
+    private string _filterType   = string.Empty;
+    private string _filterStatus = string.Empty;
+
+    // ── KPI state ──────────────────────────────────────────────────────────────
+    private int _kpiActive = 0; // 0=none 1=total 2=draft 3=published 4=retired
+
+    private string KpiClassTotal     => "pol-kpi-card pol-kpi-card--total"     + (_kpiActive == 1 ? " pol-kpi-card--sel" : "");
+    private string KpiClassDraft     => "pol-kpi-card pol-kpi-card--draft"     + (_kpiActive == 2 ? " pol-kpi-card--sel" : "");
+    private string KpiClassPublished => "pol-kpi-card pol-kpi-card--published" + (_kpiActive == 3 ? " pol-kpi-card--sel" : "");
+    private string KpiClassRetired   => "pol-kpi-card pol-kpi-card--retired"   + (_kpiActive == 4 ? " pol-kpi-card--sel" : "");
+
+    // ── KPI counters ───────────────────────────────────────────────────────────
+    private int _totalCount;
+    private int _draftCount;
+    private int _publishedCount;
+    private int _retiredCount;
+
+    // ── Static options ─────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _typeOptions =
+    [
+        new("Information Security",  "Information Security"),
+        new("Privacy",               "Privacy"),
+        new("Human Resources",       "Human Resources"),
+        new("Finance",               "Finance"),
+        new("Operations",            "Operations"),
+        new("Compliance",            "Compliance"),
+        new("IT Governance",         "IT Governance"),
+    ];
+
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Draft",     "Draft"),
+        new("Published", "Published"),
+        new("Retired",   "Retired"),
+    ];
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",              "/"),
+            new("Compliance",        "/compliance"),
+            new("Policy Documents",  "/compliance/policies"));
+
+        await LoadAsync();
+    }
+
+    // ── Data loading ───────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchPolicyDocumentsAsync(_tenantId);
+            _all = result?.Items.ToList() ?? [];
+            _selected.Clear();
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        var term = _search.Trim();
+        _policies = _all.Where(p =>
+            (string.IsNullOrEmpty(_filterType)   || p.PolicyTypeCode == _filterType) &&
+            (string.IsNullOrEmpty(_filterStatus) || p.StatusCode     == _filterStatus) &&
+            (string.IsNullOrEmpty(term) ||
+                (p.PolicyCode?.Contains(term,  StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (p.PolicyTitle?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false))
+        ).ToList();
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive    = _kpiActive == n ? 0 : n;
+        _filterStatus = string.Empty;
+        _filterType   = string.Empty;
+        _filterStatus = _kpiActive switch
+        {
+            2 => "Draft",
+            3 => "Published",
+            4 => "Retired",
+            _ => string.Empty,
+        };
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount     = _all.Count;
+        _draftCount     = _all.Count(p => p.StatusCode == "Draft");
+        _publishedCount = _all.Count(p => p.StatusCode == "Published");
+        _retiredCount   = _all.Count(p => p.StatusCode == "Retired");
+    }
+
+    // ── Row selection ──────────────────────────────────────────────────────────
+    private void OnRowSelected(RowSelectEventArgs<PolicyDocumentDto> args)
+    {
+        if (!_selected.Contains(args.Data))
+            _selected.Add(args.Data);
+    }
+
+    private void OnRowDeselected(RowDeselectEventArgs<PolicyDocumentDto> args)
+    {
+        _selected.Remove(args.Data);
+    }
+
+    // ── Create / Edit ──────────────────────────────────────────────────────────
+    private void OpenCreate()
+    {
+        _editTarget  = null;
+        _form        = new();
+        _formError   = string.Empty;
+        _validate    = false;
+        _showForm    = true;
+    }
+
+    private void OpenEdit(PolicyDocumentDto p)
+    {
+        _editTarget = p;
+        _form = new FormModel
+        {
+            PolicyCode      = p.PolicyCode,
+            PolicyTitle     = p.PolicyTitle,
+            PolicyTypeCode  = p.PolicyTypeCode,
+            Version         = p.Version,
+            EffectiveDateUtc = p.EffectiveDateUtc,
+            Description     = p.Description,
+        };
+        _formError = string.Empty;
+        _validate  = false;
+        _showForm  = true;
+    }
+
+    private void CloseFormDialog()
+    {
+        _showForm = false;
+        _validate = false;
+    }
+
+    private async Task SaveAsync()
+    {
+        _validate = true;
+        if (string.IsNullOrWhiteSpace(_form.PolicyCode) ||
+            string.IsNullOrWhiteSpace(_form.PolicyTitle) ||
+            string.IsNullOrWhiteSpace(_form.Version) ||
+            string.IsNullOrEmpty(_form.PolicyTypeCode))
+            return;
+
+        _saving = true;
+        try
+        {
+            if (_editTarget is null)
+            {
+                await Api.CreatePolicyDocumentAsync(new CreatePolicyDocumentRequest
+                {
+                    TenantId         = _tenantId,
+                    PolicyCode       = _form.PolicyCode,
+                    PolicyTitle      = _form.PolicyTitle,
+                    PolicyTypeCode   = _form.PolicyTypeCode,
+                    Version          = _form.Version,
+                    EffectiveDateUtc = _form.EffectiveDateUtc,
+                    Description      = _form.Description,
+                });
+                await ShowToastAsync("Policy document created.", "e-toast-success");
+            }
+            else
+            {
+                await Api.UpdatePolicyDocumentAsync(_editTarget.PolicyDocumentId, new UpdatePolicyDocumentRequest
+                {
+                    PolicyCode       = _form.PolicyCode,
+                    PolicyTitle      = _form.PolicyTitle,
+                    PolicyTypeCode   = _form.PolicyTypeCode,
+                    Version          = _form.Version,
+                    EffectiveDateUtc = _form.EffectiveDateUtc,
+                    Description      = _form.Description,
+                });
+                await ShowToastAsync("Policy document updated.", "e-toast-success");
+            }
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = ex.Message;
+        }
+        finally
+        {
+            _saving   = false;
+            _validate = false;
+        }
+    }
+
+    // ── New Version ────────────────────────────────────────────────────────────
+    private void OpenVersion(PolicyDocumentDto p)
+    {
+        _versionTarget = p;
+        _versionForm   = new();
+        _versionError  = string.Empty;
+        _validate      = false;
+        _showVersion   = true;
+    }
+
+    private async Task ExecuteVersionAsync()
+    {
+        _validate = true;
+        if (string.IsNullOrWhiteSpace(_versionForm.NewVersion)) return;
+
+        _saving = true;
+        try
+        {
+            var newId = await Api.CreatePolicyDocumentVersionAsync(_versionTarget!.PolicyDocumentId, new VersionPolicyDocumentRequest
+            {
+                NewVersion        = _versionForm.NewVersion,
+                EffectiveDateUtc  = _versionForm.EffectiveDateUtc,
+                Description       = _versionForm.Description,
+            });
+            _showVersion = false;
+            await ShowToastAsync($"Version {_versionForm.NewVersion} created as Draft.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _versionError = ex.Message;
+        }
+        finally
+        {
+            _saving   = false;
+            _validate = false;
+        }
+    }
+
+    // ── Publish ────────────────────────────────────────────────────────────────
+    private void OpenPublish(PolicyDocumentDto p)  { _actionTarget = p; _showPublish = true; }
+
+    private async Task ExecutePublishAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.PublishPolicyDocumentAsync(_actionTarget.PolicyDocumentId);
+            await ShowToastAsync($"'{_actionTarget.PolicyTitle}' published.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _confirming  = false;
+            _actionTarget = null;
+        }
+    }
+
+    // ── Retire ─────────────────────────────────────────────────────────────────
+    private void OpenRetire(PolicyDocumentDto p)  { _actionTarget = p; _showRetire = true; }
+
+    private async Task ExecuteRetireAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.RetirePolicyDocumentAsync(_actionTarget.PolicyDocumentId);
+            await ShowToastAsync($"'{_actionTarget.PolicyTitle}' retired.", "e-toast-warning");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _confirming  = false;
+            _actionTarget = null;
+        }
+    }
+
+    // ── Acknowledgements ───────────────────────────────────────────────────────
+    private async Task OpenAcknowledgements(PolicyDocumentDto p)
+    {
+        _ackTarget       = p;
+        _acknowledgements = [];
+        _showAck         = true;
+        _ackLoading      = true;
+        StateHasChanged();
+        try
+        {
+            var items = await Api.GetPolicyAcknowledgementsAsync(p.PolicyDocumentId);
+            _acknowledgements = items?.ToList() ?? [];
+        }
+        finally
+        {
+            _ackLoading = false;
+        }
+    }
+
+    // ── Export stub ────────────────────────────────────────────────────────────
+    private Task ExportAsync() => ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+
+    // ── Toast helper ───────────────────────────────────────────────────────────
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    private static string FormatRelative(DateTime dt)
+    {
+        var diff = DateTime.UtcNow - dt;
+        return diff.TotalDays switch
+        {
+            < 1   => diff.TotalHours < 1 ? "Just now" : $"{(int)diff.TotalHours}h ago",
+            < 7   => $"{(int)diff.TotalDays}d ago",
+            < 30  => $"{(int)(diff.TotalDays / 7)}w ago",
+            < 365 => $"{(int)(diff.TotalDays / 30)}mo ago",
+            _     => dt.ToString("d"),
+        };
+    }
+
+    // ── Inner models ───────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class FormModel
+    {
+        public string    PolicyCode       { get; set; } = string.Empty;
+        public string    PolicyTitle      { get; set; } = string.Empty;
+        public string    PolicyTypeCode   { get; set; } = string.Empty;
+        public string    Version          { get; set; } = "1.0";
+        public DateTime? EffectiveDateUtc { get; set; }
+        public string?   Description      { get; set; }
+    }
+
+    private sealed class VersionFormModel
+    {
+        public string    NewVersion        { get; set; } = string.Empty;
+        public DateTime? EffectiveDateUtc  { get; set; }
+        public string?   Description       { get; set; }
+    }
+}

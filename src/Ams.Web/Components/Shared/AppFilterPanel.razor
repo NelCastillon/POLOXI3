@@ -1,0 +1,77 @@
+@implements IDisposable
+
+@*
+    AppFilterPanel — standard AMS toolbar with built-in debounced search input.
+    Exposes optional slots for additional filter controls and right-aligned actions.
+
+    Usage:
+        <AppFilterPanel @bind-SearchValue="_search" OnSearch="LoadAsync" SearchPlaceholder="Search users…">
+            <Filters>
+                <SfDropDownList ... />
+            </Filters>
+            <Actions>
+                <button class="um-btn um-btn-primary">Export</button>
+            </Actions>
+        </AppFilterPanel>
+*@
+
+<div class="toolbar">
+    <div class="um-search-box">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input class="um-search-input"
+               type="search"
+               placeholder="@(SearchPlaceholder ?? "Search…")"
+               aria-label="@(SearchPlaceholder ?? "Search")"
+               value="@SearchValue"
+               @oninput="OnInput" />
+    </div>
+    @if (Filters is not null)
+    {
+        @Filters
+    }
+    @if (Actions is not null)
+    {
+        <div class="toolbar-end">@Actions</div>
+    }
+</div>
+
+@code {
+    [Parameter] public string  SearchValue  { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> SearchValueChanged { get; set; }
+
+    /// <summary>Fires after the debounce delay with the current search term.</summary>
+    [Parameter] public EventCallback<string> OnSearch { get; set; }
+
+    [Parameter] public string? SearchPlaceholder { get; set; }
+
+    /// <summary>Additional filter controls rendered between the search box and the action slot.</summary>
+    [Parameter] public RenderFragment? Filters { get; set; }
+
+    /// <summary>Right-aligned action buttons rendered at the end of the toolbar.</summary>
+    [Parameter] public RenderFragment? Actions { get; set; }
+
+    /// <summary>Debounce delay in milliseconds. Default: 380.</summary>
+    [Parameter] public int DebounceMs { get; set; } = 380;
+
+    private System.Timers.Timer? _debounce;
+
+    private async Task OnInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString() ?? string.Empty;
+        SearchValue = value;
+        await SearchValueChanged.InvokeAsync(value);
+
+        _debounce?.Dispose();
+        _debounce = new System.Timers.Timer(DebounceMs);
+        _debounce.Elapsed += async (_, _) =>
+        {
+            _debounce?.Dispose();
+            _debounce = null;
+            await InvokeAsync(() => OnSearch.InvokeAsync(value));
+        };
+        _debounce.AutoReset = false;
+        _debounce.Start();
+    }
+
+    public void Dispose() => _debounce?.Dispose();
+}

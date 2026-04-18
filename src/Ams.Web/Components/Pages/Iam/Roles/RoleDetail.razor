@@ -1,0 +1,1487 @@
+@page "/iam/roles/{RoleId:guid}"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>@(_role?.RoleName ?? "Role") – AMS Enterprise</PageTitle>
+
+@if (_loading)
+{
+    <div class="rd-loading" aria-live="polite" aria-label="Loading role">
+        <div class="rd-spinner" aria-hidden="true"></div>
+        <span>Loading role…</span>
+    </div>
+}
+else if (_role is null)
+{
+    <div class="rd-not-found">
+        <i class="bi bi-shield-x" aria-hidden="true"></i>
+        <h2>Role not found</h2>
+        <p>The requested role could not be loaded.</p>
+        <button class="um-btn um-btn-ghost" @onclick="GoBack">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Roles
+        </button>
+    </div>
+}
+else
+{
+    <div class="rd-page">
+
+        <!-- ── Breadcrumb ──────────────────────────────── -->
+        <nav class="rd-breadcrumb" aria-label="Breadcrumb">
+            <button class="um-btn um-btn-ghost rd-back-btn" @onclick="GoBack">
+                <i class="bi bi-arrow-left" aria-hidden="true"></i> Roles
+            </button>
+            <span class="rd-breadcrumb-sep" aria-hidden="true"><i class="bi bi-chevron-right"></i></span>
+            <span class="rd-breadcrumb-cur">@_role.RoleName</span>
+        </nav>
+
+        <!-- ── Header Card ────────────────────────────── -->
+        <div class="rd-header-card">
+            <div class="rd-header-left">
+                <div class="rd-avatar" style="@RoleIconStyle(_role.RoleTypeCode)" aria-hidden="true">
+                    <i class="bi @RoleTypeIcon(_role.RoleTypeCode)"></i>
+                </div>
+                <div class="rd-header-info">
+                    <div class="rd-header-name-row">
+                        <h1 class="rd-full-name">@_role.RoleName</h1>
+                    </div>
+                    <div class="rd-sub-row">
+                        <span class="rd-code">
+                            <i class="bi bi-tag" aria-hidden="true"></i> @_role.RoleCode
+                        </span>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_role.Description))
+                    {
+                        <div class="rd-desc-row">@_role.Description</div>
+                    }
+                    <div class="rd-badge-row">
+                        <span class="badge @(_role.IsActive ? "badge-green" : "badge-neutral")">
+                            <i class="bi @(_role.IsActive ? "bi-check-circle-fill" : "bi-dash-circle")" aria-hidden="true"></i>
+                            @(_role.IsActive ? "Active" : "Inactive")
+                        </span>
+                        <span class="badge @TypeBadgeClass(_role.RoleTypeCode)">@_role.RoleTypeCode</span>
+                        @if (_role.IsSystemRole)
+                        {
+                            <span class="badge badge-purple">
+                                <i class="bi bi-building-lock" aria-hidden="true"></i> System
+                            </span>
+                        }
+                        else if (_role.IsBuiltIn)
+                        {
+                            <span class="badge badge-blue">
+                                <i class="bi bi-box" aria-hidden="true"></i> Built-in
+                            </span>
+                        }
+                        <span class="badge badge-neutral">
+                            <i class="bi bi-key" aria-hidden="true"></i>
+                            @_role.PermissionCount perm@(_role.PermissionCount == 1 ? "" : "s")
+                        </span>
+                        <span class="badge badge-neutral">
+                            <i class="bi bi-people" aria-hidden="true"></i>
+                            @_role.UserCount user@(_role.UserCount == 1 ? "" : "s")
+                        </span>
+                    </div>
+                </div>
+            </div>
+            <div class="rd-header-actions">
+                <button class="um-btn um-btn-primary" @onclick="OpenEdit" disabled="@_role.IsBuiltIn">
+                    <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+                </button>
+                <button class="um-btn um-btn-ghost" @onclick="OpenClone">
+                    <i class="bi bi-copy" aria-hidden="true"></i> Clone
+                </button>
+                <button class="um-btn @(_role.IsActive ? "um-btn-warning" : "um-btn-success")"
+                        @onclick="ToggleActiveAsync"
+                        disabled="@_role.IsSystemRole">
+                    <i class="bi @(_role.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i>
+                    @(_role.IsActive ? "Deactivate" : "Activate")
+                </button>
+            </div>
+        </div>
+
+        <!-- ── Tabs ───────────────────────────────────── -->
+        <div class="rd-tabs">
+            <div class="rd-tab-list" role="tablist">
+                <button role="tab"
+                        class="rd-tab @(_activeTab == "overview" ? "rd-tab-active" : "")"
+                        @onclick='() => _activeTab = "overview"'>
+                    <i class="bi bi-info-circle" aria-hidden="true"></i> Overview
+                </button>
+                <button role="tab"
+                        class="rd-tab @(_activeTab == "permissions" ? "rd-tab-active" : "")"
+                        @onclick='() => SetTab("permissions")'>
+                    <i class="bi bi-key" aria-hidden="true"></i> Permissions
+                    <span class="rd-tab-badge">@_role.PermissionCount</span>
+                </button>
+                <button role="tab"
+                        class="rd-tab @(_activeTab == "users" ? "rd-tab-active" : "")"
+                        @onclick='() => SetTab("users")'>
+                    <i class="bi bi-people" aria-hidden="true"></i> Users
+                    <span class="rd-tab-badge">@_role.UserCount</span>
+                </button>
+                <button role="tab"
+                        class="rd-tab @(_activeTab == "scopes" ? "rd-tab-active" : "")"
+                        @onclick='() => SetTab("scopes")'>
+                    <i class="bi bi-diagram-3" aria-hidden="true"></i> Scope Defaults
+                </button>
+                <button role="tab"
+                        class="rd-tab @(_activeTab == "sod" ? "rd-tab-active" : "")"
+                        @onclick='() => SetTab("sod")'>
+                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> SoD Conflicts
+                    @if (_sodLoaded && _sodConflicts.Count > 0)
+                    {
+                        <span class="rd-tab-badge rd-tab-badge-warn">@_sodConflicts.Count</span>
+                    }
+                </button>
+                <button role="tab"
+                        class="rd-tab @(_activeTab == "audit" ? "rd-tab-active" : "")"
+                        @onclick='() => SetTab("audit")'>
+                    <i class="bi bi-clock-history" aria-hidden="true"></i> Audit History
+                </button>
+            </div>
+
+            <!-- Overview Tab -->
+            @if (_activeTab == "overview")
+            {
+                <div class="rd-tab-panel" role="tabpanel">
+                    <div class="rd-info-grid">
+                        <div class="rd-info-section">
+                            <h3 class="rd-section-title">Role Details</h3>
+                            <div class="rd-info-list">
+                                <div class="rd-info-row">
+                                    <span class="rd-info-label">Role Code</span>
+                                    <span class="rd-info-value"><code>@_role.RoleCode</code></span>
+                                </div>
+                                <div class="rd-info-row">
+                                    <span class="rd-info-label">Role Name</span>
+                                    <span class="rd-info-value">@_role.RoleName</span>
+                                </div>
+                                <div class="rd-info-row">
+                                    <span class="rd-info-label">Type</span>
+                                    <span class="rd-info-value">
+                                        <span class="badge @TypeBadgeClass(_role.RoleTypeCode)">@_role.RoleTypeCode</span>
+                                    </span>
+                                </div>
+                                <div class="rd-info-row">
+                                    <span class="rd-info-label">Description</span>
+                                    <span class="rd-info-value">@(_role.Description ?? "—")</span>
+                                </div>
+                                <div class="rd-info-row">
+                                    <span class="rd-info-label">Sort Order</span>
+                                    <span class="rd-info-value">@_role.SortOrder</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="rd-info-section">
+                            <h3 class="rd-section-title">Flags</h3>
+                            <div class="rd-info-list">
+                                <div class="rd-info-row">
+                                    <span class="rd-info-label">Active</span>
+                                    <span class="rd-info-value">
+                                        <i class="bi @(_role.IsActive ? "bi-check-circle-fill rd-flag-on" : "bi-dash-circle rd-flag-off")" aria-hidden="true"></i>
+                                        @(_role.IsActive ? "Yes" : "No")
+                                    </span>
+                                </div>
+                                <div class="rd-info-row">
+                                    <span class="rd-info-label">Built-in</span>
+                                    <span class="rd-info-value">
+                                        <i class="bi @(_role.IsBuiltIn ? "bi-check-circle-fill rd-flag-on" : "bi-dash-circle rd-flag-off")" aria-hidden="true"></i>
+                                        @(_role.IsBuiltIn ? "Yes" : "No")
+                                    </span>
+                                </div>
+                                <div class="rd-info-row">
+                                    <span class="rd-info-label">System Role</span>
+                                    <span class="rd-info-value">
+                                        <i class="bi @(_role.IsSystemRole ? "bi-check-circle-fill rd-flag-on" : "bi-dash-circle rd-flag-off")" aria-hidden="true"></i>
+                                        @(_role.IsSystemRole ? "Yes" : "No")
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="rd-info-section">
+                            <h3 class="rd-section-title">Audit</h3>
+                            <div class="rd-info-list">
+                                <div class="rd-info-row">
+                                    <span class="rd-info-label">Created</span>
+                                    <span class="rd-info-value">@_role.CreatedDateUtc.ToString("MMM d, yyyy HH:mm") UTC</span>
+                                </div>
+                                <div class="rd-info-row">
+                                    <span class="rd-info-label">Last Modified</span>
+                                    <span class="rd-info-value">@(_role.ModifiedDateUtc?.ToString("MMM d, yyyy HH:mm") + " UTC" ?? "—")</span>
+                                </div>
+                                <div class="rd-info-row">
+                                    <span class="rd-info-label">Permissions</span>
+                                    <span class="rd-info-value">@_role.PermissionCount</span>
+                                </div>
+                                <div class="rd-info-row">
+                                    <span class="rd-info-label">Users Assigned</span>
+                                    <span class="rd-info-value">@_role.UserCount</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <!-- Permissions Tab -->
+            @if (_activeTab == "permissions")
+            {
+                <div class="rd-tab-panel" role="tabpanel">
+
+                    <!-- ── Toolbar ───────────────────────────── -->
+                    <div class="rd-perm-toolbar">
+                        <div class="um-search-box">
+                            <i class="bi bi-search" aria-hidden="true"></i>
+                            <input class="um-search-input"
+                                   type="search"
+                                   placeholder="Search permissions…"
+                                   value="@_permSearch"
+                                   @oninput="e => _permSearch = e.Value?.ToString() ?? string.Empty" />
+                        </div>
+                        <select class="rd-filter-select" @bind="_permFilterResource">
+                            <option value="">All resources</option>
+                            @foreach (var r in CatalogResources)
+                            {
+                                <option value="@r">@r</option>
+                            }
+                        </select>
+                        <select class="rd-filter-select" @bind="_permFilterAction">
+                            <option value="">All actions</option>
+                            @foreach (var a in CatalogActions)
+                            {
+                                <option value="@a">@a</option>
+                            }
+                        </select>
+                        <div class="rd-assign-chips">
+                            <button class="rd-assign-chip @(_permFilterAssigned == "all"        ? "rd-assign-chip-active" : "")" @onclick='() => _permFilterAssigned = "all"'>All</button>
+                            <button class="rd-assign-chip @(_permFilterAssigned == "assigned"   ? "rd-assign-chip-active" : "")" @onclick='() => _permFilterAssigned = "assigned"'>Assigned</button>
+                            <button class="rd-assign-chip @(_permFilterAssigned == "unassigned" ? "rd-assign-chip-active" : "")" @onclick='() => _permFilterAssigned = "unassigned"'>Unassigned</button>
+                        </div>
+                        <div class="rd-view-toggle">
+                            <button class="rd-view-btn @(_permView == "list"   ? "rd-view-btn-active" : "")" @onclick='() => _permView = "list"'   title="List view">
+                                <i class="bi bi-list-ul" aria-hidden="true"></i>
+                            </button>
+                            <button class="rd-view-btn @(_permView == "matrix" ? "rd-view-btn-active" : "")" @onclick='() => _permView = "matrix"' title="Matrix view">
+                                <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    @if (_loadingPerms)
+                    {
+                        <div class="rd-tab-loading" aria-live="polite">
+                            <div class="rd-spinner" aria-hidden="true"></div>
+                            <span>Loading permissions…</span>
+                        </div>
+                    }
+                    else if (_catalog.Count == 0)
+                    {
+                        <div class="rd-empty">
+                            <i class="bi bi-key" aria-hidden="true"></i>
+                            <p>No permissions found for this tenant.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        @if (_permView == "list")
+                        {
+                            <!-- ── List View ──────────────────── -->
+                            var filtered  = ApplyPermFilter();
+                            var assignIds = AssignedIds;
+                            var groups    = filtered.GroupBy(p => p.ResourceCode).OrderBy(g => g.Key).ToList();
+
+                            @if (filtered.Count == 0)
+                            {
+                                <div class="rd-empty">
+                                    <i class="bi bi-funnel" aria-hidden="true"></i>
+                                    <p>No permissions match the current filters.</p>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="rd-perm-groups">
+                                    @foreach (var grp in groups)
+                                    {
+                                        var grpList     = grp.ToList();
+                                        var assignedCnt = grpList.Count(p => assignIds.Contains(p.PermissionId));
+                                        var totalCnt    = grpList.Count;
+                                        var pct         = totalCnt == 0 ? 0 : assignedCnt * 100 / totalCnt;
+                                        var collapsed   = _collapsedGroups.Contains(grp.Key);
+
+                                        <div class="rd-perm-group" @key="grp.Key">
+                                            <div class="rd-perm-group-hdr" @onclick="() => ToggleResourceGroup(grp.Key)">
+                                                <i class="bi @(collapsed ? "bi-chevron-right" : "bi-chevron-down") rd-perm-group-chevron" aria-hidden="true"></i>
+                                                <span class="rd-perm-group-name">@grp.Key</span>
+                                                <span class="rd-perm-group-count">@assignedCnt / @totalCnt assigned</span>
+                                                <div class="rd-perm-group-bar" title="@pct% assigned">
+                                                    <div class="rd-perm-group-fill" style="width:@pct%"></div>
+                                                </div>
+                                            </div>
+
+                                            @if (!collapsed)
+                                            {
+                                                <div class="rd-perm-rows">
+                                                    @foreach (var perm in grpList.OrderBy(p => ActionOrder(p.ActionCode)).ThenBy(p => p.PermissionCode))
+                                                    {
+                                                        var isAssigned    = assignIds.Contains(perm.PermissionId);
+                                                        var assignment    = _permissions.FirstOrDefault(p => p.PermissionId == perm.PermissionId);
+                                                        var isToggling    = _toggling.Contains(perm.PermissionId);
+                                                        var isExpanded    = _permDetailId == perm.PermissionId;
+                                                        var canEdit       = !_role!.IsBuiltIn;
+
+                                                        <div class="rd-perm-row @(isAssigned ? "rd-perm-row-assigned" : "")" @key="perm.PermissionId">
+                                                            <div class="rd-perm-row-main">
+                                                                <div class="rd-perm-col-code">
+                                                                    <code class="rd-perm-code">@perm.PermissionCode</code>
+                                                                    @if (perm.IsBuiltIn)
+                                                                    {
+                                                                        <span class="rd-perm-privileged" title="Built-in / Privileged permission">
+                                                                            <i class="bi bi-star-fill" aria-label="Privileged"></i>
+                                                                        </span>
+                                                                    }
+                                                                </div>
+                                                                <div class="rd-perm-col-name">@perm.PermissionName</div>
+                                                                <div class="rd-perm-col-action">
+                                                                    <span class="rd-action-badge @ActionBadgeClass(perm.ActionCode)">@perm.ActionCode</span>
+                                                                </div>
+                                                                <div class="rd-perm-col-status">
+                                                                    @if (isAssigned)
+                                                                    {
+                                                                        <span class="rd-assigned-on">
+                                                                            <i class="bi bi-check-circle-fill" aria-hidden="true"></i> Assigned
+                                                                        </span>
+                                                                    }
+                                                                    else
+                                                                    {
+                                                                        <span class="rd-assigned-off">
+                                                                            <i class="bi bi-circle" aria-hidden="true"></i> Not assigned
+                                                                        </span>
+                                                                    }
+                                                                </div>
+                                                                <div class="rd-perm-col-actions">
+                                                                    @if (canEdit)
+                                                                    {
+                                                                        <button class="rd-perm-toggle-btn @(isAssigned ? "rd-toggle-revoke" : "rd-toggle-assign")"
+                                                                                disabled="@isToggling"
+                                                                                @onclick="() => TogglePermissionAsync(perm, isAssigned, assignment?.RolePermissionId)"
+                                                                                aria-label="@(isAssigned ? "Revoke" : "Assign") @perm.PermissionCode">
+                                                                            @if (isToggling)
+                                                                            {
+                                                                                <span class="um-spin" aria-hidden="true"></span>
+                                                                            }
+                                                                            else
+                                                                            {
+                                                                                @(isAssigned ? "Revoke" : "Assign")
+                                                                            }
+                                                                        </button>
+                                                                    }
+                                                                    <button class="rd-perm-expand-btn"
+                                                                            @onclick="() => _permDetailId = isExpanded ? (Guid?)null : perm.PermissionId"
+                                                                            aria-expanded="@isExpanded"
+                                                                            aria-label="@(isExpanded ? "Collapse" : "Expand") details">
+                                                                        <i class="bi @(isExpanded ? "bi-chevron-up" : "bi-chevron-down")" aria-hidden="true"></i>
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+
+                                                            @if (isExpanded)
+                                                            {
+                                                                <div class="rd-perm-detail">
+                                                                    <div class="rd-perm-detail-grid">
+                                                                        @if (!string.IsNullOrEmpty(perm.Description))
+                                                                        {
+                                                                            <div class="rd-perm-detail-item rd-perm-detail-full">
+                                                                                <span class="rd-perm-detail-label">Description</span>
+                                                                                <span class="rd-perm-detail-value">@perm.Description</span>
+                                                                            </div>
+                                                                        }
+                                                                        <div class="rd-perm-detail-item">
+                                                                            <span class="rd-perm-detail-label">Resource</span>
+                                                                            <span class="rd-perm-detail-value">@perm.ResourceCode</span>
+                                                                        </div>
+                                                                        <div class="rd-perm-detail-item">
+                                                                            <span class="rd-perm-detail-label">Action</span>
+                                                                            <span class="rd-perm-detail-value">
+                                                                                <span class="rd-action-badge @ActionBadgeClass(perm.ActionCode)">@perm.ActionCode</span>
+                                                                            </span>
+                                                                        </div>
+                                                                        <div class="rd-perm-detail-item">
+                                                                            <span class="rd-perm-detail-label">Type</span>
+                                                                            <span class="rd-perm-detail-value">
+                                                                                @if (perm.IsBuiltIn)
+                                                                                {
+                                                                                    <span class="badge badge-amber">
+                                                                                        <i class="bi bi-star-fill" aria-hidden="true"></i> Built-in / Privileged
+                                                                                    </span>
+                                                                                }
+                                                                                else
+                                                                                {
+                                                                                    <span class="badge badge-neutral">Custom</span>
+                                                                                }
+                                                                            </span>
+                                                                        </div>
+                                                                        <div class="rd-perm-detail-item">
+                                                                            <span class="rd-perm-detail-label">Used in roles</span>
+                                                                            <span class="rd-perm-detail-value">@perm.RoleCount role@(perm.RoleCount == 1 ? "" : "s")</span>
+                                                                        </div>
+                                                                        <div class="rd-perm-detail-item">
+                                                                            <span class="rd-perm-detail-label">Created</span>
+                                                                            <span class="rd-perm-detail-value">@perm.CreatedDateUtc.ToString("MMM d, yyyy")</span>
+                                                                        </div>
+                                                                        @if (assignment is not null)
+                                                                        {
+                                                                            <div class="rd-perm-detail-item">
+                                                                                <span class="rd-perm-detail-label">Granted by</span>
+                                                                                <span class="rd-perm-detail-value">@(assignment.GrantedByFullName ?? "—")</span>
+                                                                            </div>
+                                                                            <div class="rd-perm-detail-item">
+                                                                                <span class="rd-perm-detail-label">Granted on</span>
+                                                                                <span class="rd-perm-detail-value">@assignment.GrantedDateUtc.ToString("MMM d, yyyy HH:mm") UTC</span>
+                                                                            </div>
+                                                                        }
+                                                                        <div class="rd-perm-detail-item rd-perm-detail-id">
+                                                                            <span class="rd-perm-detail-label">Permission ID</span>
+                                                                            <code class="rd-perm-detail-value rd-perm-id-code">@perm.PermissionId</code>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            }
+                                                        </div>
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <!-- ── Matrix View ────────────────── -->
+                            var matrixPerms     = ApplyPermFilterNoAssigned();
+                            var matrixResources = matrixPerms.GroupBy(p => p.ResourceCode).OrderBy(g => g.Key).ToList();
+                            var matrixActions   = matrixPerms.Select(p => p.ActionCode).Distinct().OrderBy(a => ActionOrder(a)).ThenBy(a => a).ToList();
+                            var matrixIds       = AssignedIds;
+
+                            @if (matrixPerms.Count == 0)
+                            {
+                                <div class="rd-empty">
+                                    <i class="bi bi-funnel" aria-hidden="true"></i>
+                                    <p>No permissions match the current filters.</p>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="rd-matrix-legend">
+                                    <span class="rd-matrix-legend-item"><i class="bi bi-check-circle-fill rd-mc-full" aria-hidden="true"></i> All assigned</span>
+                                    <span class="rd-matrix-legend-item"><i class="bi bi-dash-circle-fill rd-mc-partial" aria-hidden="true"></i> Partial</span>
+                                    <span class="rd-matrix-legend-item"><i class="bi bi-circle rd-mc-none" aria-hidden="true"></i> Not assigned</span>
+                                    <span class="rd-matrix-legend-item"><span class="rd-mc-na">—</span> N/A</span>
+                                    <span class="rd-matrix-legend-item rd-matrix-legend-sep" aria-hidden="true"></span>
+                                    <span class="rd-matrix-legend-item">
+                                        <i class="bi bi-star-fill rd-perm-privileged-inline" aria-hidden="true"></i> Privileged / Built-in
+                                    </span>
+                                </div>
+                                <div class="rd-matrix-wrap">
+                                    <table class="rd-matrix" role="grid" aria-label="Permission matrix">
+                                        <thead>
+                                            <tr>
+                                                <th class="rd-matrix-th-resource" scope="col">Resource</th>
+                                                @foreach (var action in matrixActions)
+                                                {
+                                                    <th class="rd-matrix-th-action" scope="col">
+                                                        <span class="rd-action-badge @ActionBadgeClass(action)">@action</span>
+                                                    </th>
+                                                }
+                                                <th class="rd-matrix-th-coverage" scope="col">Coverage</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var resGrp in matrixResources)
+                                            {
+                                                var rowPerms    = resGrp.ToList();
+                                                var rowAssigned = rowPerms.Count(p => matrixIds.Contains(p.PermissionId));
+                                                var rowTotal    = rowPerms.Count;
+                                                var rowPct      = rowTotal == 0 ? 0 : rowAssigned * 100 / rowTotal;
+                                                var hasPriv     = rowPerms.Any(p => p.IsBuiltIn);
+
+                                                <tr class="rd-matrix-row" @key="resGrp.Key">
+                                                    <td class="rd-matrix-td-resource">
+                                                        <span class="rd-matrix-res-name">@resGrp.Key</span>
+                                                        @if (hasPriv)
+                                                        {
+                                                            <i class="bi bi-star-fill rd-perm-privileged-inline" title="Contains privileged permissions" aria-label="Contains privileged permissions"></i>
+                                                        }
+                                                        <span class="rd-matrix-res-count">@rowAssigned/@rowTotal</span>
+                                                    </td>
+                                                    @foreach (var action in matrixActions)
+                                                    {
+                                                        var cellPerms    = rowPerms.Where(p => p.ActionCode == action).ToList();
+                                                        var cellPriv     = cellPerms.Any(p => p.IsBuiltIn);
+                                                        @if (cellPerms.Count == 0)
+                                                        {
+                                                            <td class="rd-matrix-td rd-matrix-td-na"><span class="rd-mc-na" aria-label="Not applicable">—</span></td>
+                                                        }
+                                                        else
+                                                        {
+                                                            var allAssigned = cellPerms.All(p => matrixIds.Contains(p.PermissionId));
+                                                            var anyAssigned = cellPerms.Any(p => matrixIds.Contains(p.PermissionId));
+                                                            var cellCss = allAssigned ? "rd-matrix-td-full" : anyAssigned ? "rd-matrix-td-partial" : "rd-matrix-td-none";
+                                                            var cellTitle = string.Join(", ", cellPerms.Select(p => p.PermissionCode));
+                                                            <td class="rd-matrix-td @cellCss @(cellPriv ? "rd-matrix-td-priv" : "")" title="@cellTitle">
+                                                                @if (allAssigned)
+                                                                {
+                                                                    <i class="bi bi-check-circle-fill rd-mc-full" aria-label="Assigned"></i>
+                                                                }
+                                                                else if (anyAssigned)
+                                                                {
+                                                                    <i class="bi bi-dash-circle-fill rd-mc-partial" aria-label="Partially assigned"></i>
+                                                                }
+                                                                else
+                                                                {
+                                                                    <i class="bi bi-circle rd-mc-none" aria-label="Not assigned"></i>
+                                                                }
+                                                                @if (cellPerms.Count > 1)
+                                                                {
+                                                                    <sup class="rd-mc-count">@cellPerms.Count</sup>
+                                                                }
+                                                                @if (cellPriv)
+                                                                {
+                                                                    <i class="bi bi-star-fill rd-mc-priv-star" aria-label="Privileged" title="Privileged"></i>
+                                                                }
+                                                            </td>
+                                                        }
+                                                    }
+                                                    <td class="rd-matrix-td-coverage">
+                                                        <div class="rd-matrix-bar">
+                                                            <div class="rd-matrix-bar-fill" style="width:@rowPct%"></div>
+                                                        </div>
+                                                        <span class="rd-matrix-pct">@rowPct%</span>
+                                                    </td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        }
+                    }
+                </div>
+            }
+
+            <!-- Users Tab -->
+            @if (_activeTab == "users")
+            {
+                <div class="rd-tab-panel" role="tabpanel">
+                    <div class="rd-panel-toolbar">
+                        <div class="um-search-box">
+                            <i class="bi bi-search" aria-hidden="true"></i>
+                            <input class="um-search-input"
+                                   type="search"
+                                   placeholder="Filter users…"
+                                   value="@_userSearch"
+                                   @oninput="e => _userSearch = e.Value?.ToString() ?? string.Empty" />
+                        </div>
+                    </div>
+                    @if (_loadingUsers)
+                    {
+                        <div class="rd-tab-loading" aria-live="polite">
+                            <div class="rd-spinner" aria-hidden="true"></div>
+                            <span>Loading users…</span>
+                        </div>
+                    }
+                    else if (_userRoles.Count == 0)
+                    {
+                        <div class="rd-empty">
+                            <i class="bi bi-people" aria-hidden="true"></i>
+                            <p>No users assigned to this role.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        var filtered = string.IsNullOrWhiteSpace(_userSearch)
+                            ? _userRoles
+                            : _userRoles.Where(ur =>
+                                (ur.UserFullName ?? "").Contains(_userSearch, StringComparison.OrdinalIgnoreCase) ||
+                                (ur.UserName ?? "").Contains(_userSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                        <SfGrid TValue="UserRoleDto"
+                                DataSource="@filtered"
+                                AllowPaging="true"
+                                AllowSorting="true"
+                                RowHeight="52">
+                            <GridPageSettings PageSize="20" />
+                            <GridColumns>
+                                <GridColumn Field="UserFullName" HeaderText="User" Width="220">
+                                    <Template Context="ur">
+                                        @{ var userRole = (UserRoleDto)ur; }
+                                        <div class="um-user-cell">
+                                                            <div class="um-avatar" style="@AvatarStyle(userRole.UserFullName)" aria-hidden="true">
+                                                                @Initials(userRole.UserFullName)
+                                                            </div>
+                                                            <div class="um-user-meta">
+                                                                <div class="um-user-name">@userRole.UserFullName</div>
+                                                                <div class="um-user-email">@userRole.UserName</div>
+                                                            </div>
+                                                        </div>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="IsActive" HeaderText="Status" Width="110">
+                                    <Template Context="ur">
+                                        @{ var userRole = (UserRoleDto)ur; }
+                                        <span class="badge @(userRole.IsActive ? "badge-green" : "badge-neutral")">
+                                            @(userRole.IsActive ? "Active" : "Inactive")
+                                        </span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="AssignedDateUtc" HeaderText="Assigned" Width="160">
+                                    <Template Context="ur">
+                                        @{ var userRole = (UserRoleDto)ur; }
+                                        <span class="um-date">@userRole.AssignedDateUtc.ToString("MMM d, yyyy")</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="EffectiveEndDateUtc" HeaderText="Expires" Width="160">
+                                    <Template Context="ur">
+                                        @{ var userRole = (UserRoleDto)ur; }
+                                        <span class="um-date">@(userRole.EffectiveEndDateUtc?.ToString("MMM d, yyyy") ?? "Never")</span>
+                                    </Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    }
+                </div>
+            }
+
+            <!-- Scope Defaults Tab -->
+            @if (_activeTab == "scopes")
+            {
+                <div class="rd-tab-panel" role="tabpanel">
+                    <div class="rd-scope-info">
+                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                        Scope defaults show the resource access scopes currently held by users assigned to this role.
+                    </div>
+                    @if (_loadingScopes)
+                    {
+                        <div class="rd-tab-loading" aria-live="polite">
+                            <div class="rd-spinner" aria-hidden="true"></div>
+                            <span>Loading scopes…</span>
+                        </div>
+                    }
+                    else if (_scopes.Count == 0)
+                    {
+                        <div class="rd-empty">
+                            <i class="bi bi-diagram-3" aria-hidden="true"></i>
+                            <p>No scope assignments found for users in this role.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        var filteredScopes = string.IsNullOrWhiteSpace(_scopeSearch)
+                            ? _scopes
+                            : _scopes.Where(s =>
+                                s.ScopeTypeCode.Contains(_scopeSearch, StringComparison.OrdinalIgnoreCase) ||
+                                s.ScopeValue.Contains(_scopeSearch, StringComparison.OrdinalIgnoreCase) ||
+                                (s.UserFullName ?? "").Contains(_scopeSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+                        <div class="rd-scope-summary">
+                            @foreach (var grp in _scopes.GroupBy(s => s.ScopeTypeCode).OrderBy(g => g.Key))
+                            {
+                                <div class="rd-scope-card">
+                                    <div class="rd-scope-icon" aria-hidden="true"><i class="bi bi-diagram-3"></i></div>
+                                    <div class="rd-scope-body">
+                                        <div class="rd-scope-type">@grp.Key</div>
+                                        <div class="rd-scope-count">@grp.Count() user@(grp.Count() == 1 ? "" : "s")</div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                        <div class="rd-panel-toolbar" style="margin-top:var(--sp-4)">
+                            <div class="um-search-box">
+                                <i class="bi bi-search" aria-hidden="true"></i>
+                                <input class="um-search-input" type="search" placeholder="Filter scopes…"
+                                       value="@_scopeSearch"
+                                       @oninput="e => _scopeSearch = e.Value?.ToString() ?? string.Empty" />
+                            </div>
+                        </div>
+                        <SfGrid TValue="UserScopeDto"
+                                AllowPaging="true" AllowSorting="true" RowHeight="48">
+                            <GridPageSettings PageSize="20" />
+                            <GridColumns>
+                                <GridColumn Field="UserFullName"  HeaderText="User"       Width="200" />
+                                <GridColumn Field="ScopeTypeCode" HeaderText="Scope Type" Width="160" />
+                                <GridColumn Field="ScopeValue"    HeaderText="Value"      Width="220" />
+                                <GridColumn Field="IsActive" HeaderText="Status" Width="100">
+                                    <Template Context="s">
+                                        @{ var sc = (UserScopeDto)s; }
+                                        <span class="badge @(sc.IsActive ? "badge-green" : "badge-neutral")">@(sc.IsActive ? "Active" : "Inactive")</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="GrantedDateUtc" HeaderText="Granted" Width="140">
+                                    <Template Context="s">
+                                        @{ var sc = (UserScopeDto)s; }
+                                        <span class="um-date">@sc.GrantedDateUtc.ToString("MMM d, yyyy")</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="ExpiresDateUtc" HeaderText="Expires" Width="140">
+                                    <Template Context="s">
+                                        @{ var sc = (UserScopeDto)s; }
+                                        <span class="um-date">@(sc.ExpiresDateUtc?.ToString("MMM d, yyyy") ?? "Never")</span>
+                                    </Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    }
+                </div>
+            }
+
+            <!-- SoD Conflicts Tab -->
+            @if (_activeTab == "sod")
+            {
+                <div class="rd-tab-panel" role="tabpanel">
+                    @if (_loadingSod)
+                    {
+                        <div class="rd-tab-loading" aria-live="polite">
+                            <div class="rd-spinner" aria-hidden="true"></div>
+                            <span>Checking SoD conflicts…</span>
+                        </div>
+                    }
+                    else if (_sodConflicts.Count == 0)
+                    {
+                        <div class="rd-sod-clear">
+                            <div class="rd-sod-clear-icon" aria-hidden="true"><i class="bi bi-shield-check"></i></div>
+                            <div class="rd-sod-clear-text">
+                                <h3>No SoD Conflicts</h3>
+                                <p>This role has no active Segregation of Duty conflicts with other roles.</p>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="rd-sod-warn" role="alert">
+                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                            <span>
+                                <strong>@_sodConflicts.Count SoD conflict@(_sodConflicts.Count == 1 ? "" : "s")</strong> detected.
+                                Users assigned to <strong>@_role!.RoleName</strong> must not also hold the conflicting roles listed below.
+                            </span>
+                        </div>
+                        <div class="rd-sod-grid">
+                            @foreach (var rule in _sodConflicts.OrderByDescending(r => SodSeverityOrder(r.SeverityCode)))
+                            {
+                                var conflictName = rule.RoleAId == _role!.RoleId
+                                    ? rule.RoleBName : rule.RoleAName;
+                                <div class="rd-sod-card">
+                                    <div class="rd-sod-card-header">
+                                        <div class="rd-sod-severity @SodSeverityClass(rule.SeverityCode)">
+                                            <i class="bi @SodSeverityIcon(rule.SeverityCode)" aria-hidden="true"></i>
+                                            @rule.SeverityCode
+                                        </div>
+                                        @if (rule.IsSystemDefined)
+                                        {
+                                            <span class="badge badge-neutral" style="font-size:.65rem">System-defined</span>
+                                        }
+                                    </div>
+                                    <div class="rd-sod-card-body">
+                                        <div class="rd-sod-rule-name">@rule.RuleName</div>
+                                        @if (!string.IsNullOrEmpty(rule.Description))
+                                        {
+                                            <div class="rd-sod-rule-desc">@rule.Description</div>
+                                        }
+                                        <div class="rd-sod-roles">
+                                            <span class="rd-sod-role-pill rd-sod-role-this">
+                                                <i class="bi bi-shield-fill" aria-hidden="true"></i> @_role!.RoleCode
+                                            </span>
+                                            <span class="rd-sod-role-sep" aria-hidden="true">⟷</span>
+                                            <span class="rd-sod-role-pill rd-sod-role-conflict">
+                                                <i class="bi bi-shield" aria-hidden="true"></i> @conflictName
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div class="rd-sod-card-footer">
+                                        <span class="rd-sod-code"><i class="bi bi-tag" aria-hidden="true"></i> @rule.RuleCode</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+
+            <!-- Audit History Tab -->
+            @if (_activeTab == "audit")
+            {
+                <div class="rd-tab-panel" role="tabpanel">
+                    <div class="rd-audit-subtabs">
+                        <button class="rd-audit-subtab @(_auditSubTab == "timeline" ? "rd-audit-subtab-active" : "")"
+                                @onclick='() => _auditSubTab = "timeline"'>
+                            <i class="bi bi-activity" aria-hidden="true"></i> Timeline
+                            @if (_timeline.Count > 0) { <span class="rd-tab-badge">@_timeline.Count</span> }
+                        </button>
+                        <button class="rd-audit-subtab @(_auditSubTab == "fieldchanges" ? "rd-audit-subtab-active" : "")"
+                                @onclick='() => _auditSubTab = "fieldchanges"'>
+                            <i class="bi bi-pencil-square" aria-hidden="true"></i> Field Changes
+                            @if (_fieldChanges.Count > 0) { <span class="rd-tab-badge">@_fieldChanges.Count</span> }
+                        </button>
+                    </div>
+                    @if (_loadingAudit)
+                    {
+                        <div class="rd-tab-loading" aria-live="polite">
+                            <div class="rd-spinner" aria-hidden="true"></div>
+                            <span>Loading audit history…</span>
+                        </div>
+                    }
+                    else if (_auditSubTab == "timeline")
+                    {
+                        @if (_timeline.Count == 0)
+                        {
+                            <div class="rd-empty">
+                                <i class="bi bi-clock-history" aria-hidden="true"></i>
+                                <p>No audit events recorded for this role.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="rd-timeline">
+                                @foreach (var entry in _timeline.OrderByDescending(e => e.OccurredDateUtc))
+                                {
+                                    <div class="rd-tl-item">
+                                        <div class="rd-tl-dot @TimelineSourceClass(entry.SourceType)" aria-hidden="true">
+                                            <i class="bi @TimelineSourceIcon(entry.SourceType)"></i>
+                                        </div>
+                                        <div class="rd-tl-content">
+                                            <div class="rd-tl-summary">@entry.Summary</div>
+                                            @if (!string.IsNullOrEmpty(entry.Detail))
+                                            {
+                                                <div class="rd-tl-detail">@entry.Detail</div>
+                                            }
+                                            <div class="rd-tl-meta">
+                                                <span class="rd-tl-source">@entry.SourceType</span>
+                                                <span class="rd-tl-time">@FormatRelative(entry.OccurredDateUtc)</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        @if (_fieldChanges.Count == 0)
+                        {
+                            <div class="rd-empty">
+                                <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                <p>No field changes recorded for this role.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            var filteredChanges = string.IsNullOrWhiteSpace(_auditSearch)
+                                ? _fieldChanges
+                                : _fieldChanges.Where(c =>
+                                    c.FieldName.Contains(_auditSearch, StringComparison.OrdinalIgnoreCase) ||
+                                    (c.OldValue ?? "").Contains(_auditSearch, StringComparison.OrdinalIgnoreCase) ||
+                                    (c.NewValue ?? "").Contains(_auditSearch, StringComparison.OrdinalIgnoreCase)).ToList();
+                            <div class="rd-panel-toolbar">
+                                <div class="um-search-box">
+                                    <i class="bi bi-search" aria-hidden="true"></i>
+                                    <input class="um-search-input" type="search" placeholder="Filter field changes…"
+                                           value="@_auditSearch"
+                                           @oninput="e => _auditSearch = e.Value?.ToString() ?? string.Empty" />
+                                </div>
+                            </div>
+                            <SfGrid TValue="FieldChangeLogDto"
+                                    AllowPaging="true" AllowSorting="true" RowHeight="48">
+                                <GridPageSettings PageSize="20" />
+                                <GridColumns>
+                                    <GridColumn Field="FieldName"     HeaderText="Field"          Width="160" />
+                                    <GridColumn Field="OldValue" HeaderText="Previous Value" Width="200">
+                                        <Template Context="c">
+                                            @{ var chg = (FieldChangeLogDto)c; }
+                                            <span class="rd-fc-old">@(chg.OldValue ?? "—")</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="NewValue" HeaderText="New Value" Width="200">
+                                        <Template Context="c">
+                                            @{ var chg = (FieldChangeLogDto)c; }
+                                            <span class="rd-fc-new">@(chg.NewValue ?? "—")</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="ChangeSource"  HeaderText="Source"         Width="130" />
+                                    <GridColumn Field="IpAddress"     HeaderText="IP"             Width="130" />
+                                    <GridColumn Field="ChangedDateUtc" HeaderText="When" Width="150">
+                                        <Template Context="c">
+                                            @{ var chg = (FieldChangeLogDto)c; }
+                                            <span class="um-date" title="@chg.ChangedDateUtc.ToString("f")">@FormatRelative(chg.ChangedDateUtc)</span>
+                                        </Template>
+                                    </GridColumn>
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    }
+                </div>
+            }
+        </div>
+    </div>
+}
+
+<!-- ── Edit Dialog ────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showForm"
+          Width="560px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogTemplates>
+        <Header>
+            <span class="dlg-hd-icon">
+                <i class="bi @(_isClone ? "bi-copy" : "bi-pencil-square")" aria-hidden="true"></i>
+            </span>
+            @(_isClone ? "Clone Role" : $"Edit: {_role?.RoleName}")
+        </Header>
+        <Content>
+            <div class="dlg-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="fd-rolecode">Role Code <span class="req" aria-hidden="true">*</span></label>
+                        <SfTextBox ID="fd-rolecode" @bind-Value="_form.RoleCode"
+                                   Placeholder="e.g. ADMIN"
+                                   Enabled="@_isClone" />
+                    </div>
+                    <div class="form-group">
+                        <label for="fd-sortorder">Sort Order</label>
+                        <SfNumericTextBox ID="fd-sortorder" TValue="int" @bind-Value="_form.SortOrder"
+                                          Min="0" Max="9999" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="fd-rolename">Role Name <span class="req" aria-hidden="true">*</span></label>
+                        <SfTextBox ID="fd-rolename" @bind-Value="_form.RoleName"
+                                   Placeholder="e.g. System Administrator" />
+                    </div>
+                    <div class="form-group">
+                        <label>Role Type</label>
+                        <SfDropDownList TItem="string" TValue="string"
+                                        DataSource="@_roleTypes"
+                                        @bind-Value="_form.RoleTypeCode"
+                                        Enabled="@_isClone"
+                                        Placeholder="Select type…" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group form-group-full">
+                        <label for="fd-desc">Description</label>
+                        <SfTextBox ID="fd-desc" @bind-Value="_form.Description"
+                                   Multiline="true" Rows="3"
+                                   Placeholder="Describe the role's purpose…" />
+                    </div>
+                </div>
+                @if (!string.IsNullOrEmpty(_formError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">
+                    @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
+                    @(_isClone ? "Clone Role" : "Save Changes")
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Toast ─────────────────────────────────────────── -->
+<SfToast @ref="_toast" ID="rd-toast" ShowCloseButton="true" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    [Parameter] public Guid RoleId { get; set; }
+
+    private static readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private static readonly string[] _roleTypes = ["Internal", "External", "Service", "System"];
+
+    // ── Page state ────────────────────────────────────────────
+    private RoleDto? _role;
+    private bool     _loading = true;
+    private string   _activeTab = "overview";
+
+    // ── Permissions tab ───────────────────────────────────────
+    private List<RolePermissionDto> _permissions        = [];
+    private List<PermissionDto>     _catalog            = [];
+    private bool                    _loadingPerms;
+    private string                  _permSearch         = string.Empty;
+    private string                  _permView           = "list";
+    private string                  _permFilterResource = string.Empty;
+    private string                  _permFilterAction   = string.Empty;
+    private string                  _permFilterAssigned = "all";
+    private Guid?                   _permDetailId;
+    private readonly HashSet<Guid>  _toggling           = [];
+    private readonly HashSet<string> _collapsedGroups   = [];
+
+    // ── Users tab ─────────────────────────────────────────────
+    private List<UserRoleDto> _userRoles    = [];
+    private bool              _loadingUsers;
+    private string            _userSearch   = string.Empty;
+
+    // ── Scope defaults tab ────────────────────────────────────
+    private List<UserScopeDto> _scopes        = [];
+    private bool               _loadingScopes;
+    private bool               _scopesLoaded;
+    private string             _scopeSearch   = string.Empty;
+
+    // ── SoD conflicts tab ─────────────────────────────────────
+    private List<SegregationOfDutyRuleDto> _sodConflicts = [];
+    private bool                           _loadingSod;
+    private bool                           _sodLoaded;
+
+    // ── Audit history tab ─────────────────────────────────────
+    private List<RecordTimelineEntryDto> _timeline     = [];
+    private List<FieldChangeLogDto>      _fieldChanges = [];
+    private bool                         _loadingAudit;
+    private bool                         _auditLoaded;
+    private string                       _auditSubTab  = "timeline";
+    private string                       _auditSearch  = string.Empty;
+
+    // ── Form state ────────────────────────────────────────────
+    private bool    _showForm;
+    private bool    _saving;
+    private bool    _isClone;
+    private string  _formError = string.Empty;
+    private RForm   _form = new();
+
+    // ── Toast ─────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Lifecycle ─────────────────────────────────────────────
+    protected override async Task OnInitializedAsync() => await LoadRoleAsync();
+
+    private async Task LoadRoleAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _role = await Api.GetRoleByIdAsync(RoleId);
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private async Task SetTab(string tab)
+    {
+        _activeTab = tab;
+        if (tab == "permissions" && _catalog.Count == 0 && !_loadingPerms)
+            await LoadPermissionsAsync();
+        if (tab == "users" && _userRoles.Count == 0 && !_loadingUsers)
+            await LoadUserRolesAsync();
+        if (tab == "scopes" && !_scopesLoaded && !_loadingScopes)
+            await LoadScopesAsync();
+        if (tab == "sod" && !_sodLoaded && !_loadingSod)
+            await LoadSodConflictsAsync();
+        if (tab == "audit" && !_auditLoaded && !_loadingAudit)
+            await LoadAuditHistoryAsync();
+    }
+
+    private async Task LoadPermissionsAsync()
+    {
+        _loadingPerms = true;
+        StateHasChanged();
+        try
+        {
+            var permsTask   = Api.GetRolePermissionsAsync(RoleId);
+            var catalogTask = Api.SearchPermissionsAsync(_tenantId);
+            await Task.WhenAll(permsTask, catalogTask);
+            _permissions = permsTask.Result?.ToList() ?? [];
+            _catalog     = catalogTask.Result?.Items.ToList() ?? [];
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loadingPerms = false; StateHasChanged(); }
+    }
+
+    private async Task LoadUserRolesAsync()
+    {
+        _loadingUsers = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchUserRolesAsync(_tenantId, roleId: RoleId, isActive: true);
+            _userRoles = result?.Items.ToList() ?? [];
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loadingUsers = false; StateHasChanged(); }
+    }
+
+    private async Task LoadScopesAsync()
+    {
+        _loadingScopes = true;
+        StateHasChanged();
+        try
+        {
+            if (_userRoles.Count == 0 && !_loadingUsers)
+                await LoadUserRolesAsync();
+            var userIds = _userRoles.Select(ur => ur.UserId).ToHashSet();
+            var result = await Api.SearchUserScopesAsync(_tenantId);
+            _scopes = result?.Items.Where(s => userIds.Contains(s.UserId)).ToList() ?? [];
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loadingScopes = false; _scopesLoaded = true; StateHasChanged(); }
+    }
+
+    private async Task LoadSodConflictsAsync()
+    {
+        if (_role is null) return;
+        _loadingSod = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchSodRulesAsync(_tenantId, pageSize: 500);
+            _sodConflicts = result?.Items
+                .Where(r => r.IsActive &&
+                    (r.RoleAId == _role!.RoleId || r.RoleBId == _role!.RoleId))
+                .ToList() ?? [];
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loadingSod = false; _sodLoaded = true; StateHasChanged(); }
+    }
+
+    private async Task LoadAuditHistoryAsync()
+    {
+        _loadingAudit = true;
+        StateHasChanged();
+        try
+        {
+            var timelineResult    = await Api.GetRecordTimelineAsync(_tenantId, "Role", RoleId, top: 100);
+            var fieldChangeResult = await Api.SearchFieldChangesAsync(_tenantId, "Role", RoleId);
+            _timeline     = timelineResult?.ToList() ?? [];
+            _fieldChanges = fieldChangeResult?.Items.ToList() ?? [];
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loadingAudit = false; _auditLoaded = true; StateHasChanged(); }
+    }
+
+    private void GoBack() => Nav.NavigateTo("/iam/roles");
+
+    // ── Permissions helpers ───────────────────────────────────
+    private HashSet<Guid> AssignedIds => [.. _permissions.Select(p => p.PermissionId)];
+
+    private IReadOnlyList<string> CatalogResources =>
+        _catalog.Select(p => p.ResourceCode).Distinct().Order().ToList();
+
+    private IReadOnlyList<string> CatalogActions =>
+        _catalog.Select(p => p.ActionCode).Distinct().Order().ToList();
+
+    private List<PermissionDto> ApplyPermFilter()
+    {
+        var q = ApplyPermFilterNoAssigned();
+        var ids = AssignedIds;
+        return _permFilterAssigned switch
+        {
+            "assigned"   => q.Where(p => ids.Contains(p.PermissionId)).ToList(),
+            "unassigned" => q.Where(p => !ids.Contains(p.PermissionId)).ToList(),
+            _            => q,
+        };
+    }
+
+    private List<PermissionDto> ApplyPermFilterNoAssigned()
+    {
+        var q = _catalog.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_permSearch))
+            q = q.Where(p =>
+                p.PermissionCode.Contains(_permSearch, StringComparison.OrdinalIgnoreCase) ||
+                p.PermissionName.Contains(_permSearch, StringComparison.OrdinalIgnoreCase) ||
+                p.ResourceCode.Contains(_permSearch, StringComparison.OrdinalIgnoreCase)   ||
+                p.ActionCode.Contains(_permSearch, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrEmpty(_permFilterResource))
+            q = q.Where(p => p.ResourceCode == _permFilterResource);
+        if (!string.IsNullOrEmpty(_permFilterAction))
+            q = q.Where(p => p.ActionCode == _permFilterAction);
+        return q.ToList();
+    }
+
+    private void ToggleResourceGroup(string resource)
+    {
+        if (!_collapsedGroups.Add(resource))
+            _collapsedGroups.Remove(resource);
+    }
+
+    private async Task TogglePermissionAsync(PermissionDto perm, bool isAssigned, Guid? rolePermissionId)
+    {
+        if (_role is null) return;
+        _toggling.Add(perm.PermissionId);
+        StateHasChanged();
+        try
+        {
+            if (isAssigned && rolePermissionId.HasValue)
+            {
+                await Api.RevokePermissionFromRoleAsync(new RevokeRolePermissionRequest
+                {
+                    RolePermissionId = rolePermissionId.Value,
+                });
+                _permissions.RemoveAll(p => p.RolePermissionId == rolePermissionId.Value);
+                _role.PermissionCount = _permissions.Count;
+                await ShowToastAsync($"Permission '{perm.PermissionCode}' revoked.");
+            }
+            else
+            {
+                var newId = await Api.AssignPermissionToRoleAsync(new AssignRolePermissionRequest
+                {
+                    TenantId     = _tenantId,
+                    RoleId       = RoleId,
+                    PermissionId = perm.PermissionId,
+                });
+                _permissions.Add(new RolePermissionDto
+                {
+                    RolePermissionId = newId,
+                    RoleId           = RoleId,
+                    PermissionId     = perm.PermissionId,
+                    PermissionCode   = perm.PermissionCode,
+                    PermissionName   = perm.PermissionName,
+                    ResourceCode     = perm.ResourceCode,
+                    ActionCode       = perm.ActionCode,
+                    GrantedDateUtc   = DateTime.UtcNow,
+                    CreatedDateUtc   = DateTime.UtcNow,
+                });
+                _role.PermissionCount = _permissions.Count;
+                await ShowToastAsync($"Permission '{perm.PermissionCode}' assigned.");
+            }
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _toggling.Remove(perm.PermissionId); StateHasChanged(); }
+    }
+
+    private static int ActionOrder(string action) => action.ToUpperInvariant() switch
+    {
+        "VIEW"   => 0,
+        "READ"   => 1,
+        "CREATE" => 2,
+        "WRITE"  => 3,
+        "UPDATE" => 4,
+        "DELETE" => 5,
+        "MANAGE" => 6,
+        "ADMIN"  => 7,
+        _        => 99,
+    };
+
+    private static string ActionBadgeClass(string action) => action.ToUpperInvariant() switch
+    {
+        "VIEW" or "READ"              => "rd-action-read",
+        "CREATE" or "WRITE" or "UPDATE" => "rd-action-write",
+        "DELETE"                      => "rd-action-delete",
+        "MANAGE"                      => "rd-action-manage",
+        "ADMIN"                       => "rd-action-admin",
+        _                             => "rd-action-other",
+    };
+
+    // ── Edit / Clone ──────────────────────────────────────────
+    private void OpenEdit()
+    {
+        if (_role is null) return;
+        _isClone = false;
+        _form = new RForm
+        {
+            RoleCode     = _role.RoleCode,
+            RoleName     = _role.RoleName,
+            RoleTypeCode = _role.RoleTypeCode,
+            Description  = _role.Description,
+            SortOrder    = _role.SortOrder,
+        };
+        _formError = string.Empty;
+        _showForm  = true;
+    }
+
+    private void OpenClone()
+    {
+        if (_role is null) return;
+        _isClone = true;
+        _form = new RForm
+        {
+            RoleCode     = $"{_role.RoleCode}_COPY",
+            RoleName     = $"{_role.RoleName} (Copy)",
+            RoleTypeCode = _role.RoleTypeCode,
+            Description  = _role.Description,
+            SortOrder    = _role.SortOrder,
+        };
+        _formError = string.Empty;
+        _showForm  = true;
+    }
+
+    private void CloseForm() { _showForm = false; _formError = string.Empty; }
+
+    private async Task SaveAsync()
+    {
+        if (_saving || _role is null) return;
+        _formError = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(_form.RoleCode)) { _formError = "Role Code is required."; return; }
+        if (string.IsNullOrWhiteSpace(_form.RoleName)) { _formError = "Role Name is required."; return; }
+
+        _saving = true;
+        try
+        {
+            if (_isClone)
+            {
+                var req = new CreateRoleRequest
+                {
+                    TenantId     = _tenantId,
+                    RoleCode     = _form.RoleCode.Trim().ToUpperInvariant(),
+                    RoleName     = _form.RoleName.Trim(),
+                    RoleTypeCode = _form.RoleTypeCode,
+                    Description  = _form.Description?.Trim(),
+                    SortOrder    = _form.SortOrder,
+                };
+                var newId = await Api.CreateRoleAsync(req);
+                CloseForm();
+                await ShowToastAsync($"Role '{req.RoleName}' cloned successfully.");
+                Nav.NavigateTo($"/iam/roles/{newId}");
+                return;
+            }
+
+            var updateReq = new UpdateRoleRequest
+            {
+                RoleId      = _role.RoleId,
+                RoleName    = _form.RoleName.Trim(),
+                Description = _form.Description?.Trim(),
+                SortOrder   = _form.SortOrder,
+            };
+            await Api.UpdateRoleAsync(_role.RoleId, updateReq);
+            CloseForm();
+            await ShowToastAsync($"Role '{updateReq.RoleName}' updated.");
+            await LoadRoleAsync();
+        }
+        catch (Exception ex) { _formError = $"Error: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    // ── Activate / Deactivate ─────────────────────────────────
+    private async Task ToggleActiveAsync()
+    {
+        if (_role is null) return;
+        try
+        {
+            await Api.SetRoleActiveAsync(_role.RoleId, !_role.IsActive);
+            await ShowToastAsync($"Role '{_role.RoleName}' {(!_role.IsActive ? "activated" : "deactivated")}.");
+            await LoadRoleAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+    }
+
+    // ── Display helpers ───────────────────────────────────────
+    private static string TypeBadgeClass(string type) => type.ToLowerInvariant() switch
+    {
+        "internal" => "badge-blue",
+        "external" => "badge-neutral",
+        "service"  => "badge-amber",
+        "system"   => "badge-red",
+        _          => "badge-neutral",
+    };
+
+    private static string RoleTypeIcon(string type) => type.ToLowerInvariant() switch
+    {
+        "internal" => "bi-person-badge",
+        "external" => "bi-globe",
+        "service"  => "bi-gear",
+        "system"   => "bi-cpu",
+        _          => "bi-shield",
+    };
+
+    private static string RoleIconStyle(string type) => type.ToLowerInvariant() switch
+    {
+        "internal" => "background:#3b82f6",
+        "external" => "background:#6b7280",
+        "service"  => "background:#f59e0b",
+        "system"   => "background:#ef4444",
+        _          => "background:#8b5cf6",
+    };
+
+    private static string Initials(string? name) =>
+        string.IsNullOrWhiteSpace(name) ? "?" :
+        string.Concat(name.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                          .Take(2).Select(w => char.ToUpperInvariant(w[0])));
+
+    private static readonly string[] _avatarColors =
+        ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4", "#6366f1", "#ec4899"];
+
+    private static string AvatarStyle(string? name)
+    {
+        var idx = Math.Abs((name ?? string.Empty).GetHashCode()) % _avatarColors.Length;
+        return $"background:{_avatarColors[idx]}";
+    }
+
+    private static string FormatRelative(DateTime dt) =>
+        (DateTime.UtcNow - dt) switch
+        {
+            var d when d.TotalMinutes < 1  => "Just now",
+            var d when d.TotalHours   < 1  => $"{(int)d.TotalMinutes}m ago",
+            var d when d.TotalDays    < 1  => $"{(int)d.TotalHours}h ago",
+            var d when d.TotalDays    < 7  => $"{(int)d.TotalDays}d ago",
+            var d when d.TotalDays    < 30 => $"{(int)(d.TotalDays / 7)}w ago",
+            _                              => dt.ToString("MMM d, yyyy"),
+        };
+
+    private static string TimelineSourceClass(string src) => src.ToLowerInvariant() switch
+    {
+        "audit"    => "rd-tl-dot-blue",
+        "security" => "rd-tl-dot-red",
+        "workflow" => "rd-tl-dot-purple",
+        "system"   => "rd-tl-dot-amber",
+        _          => "rd-tl-dot-neutral",
+    };
+
+    private static string TimelineSourceIcon(string src) => src.ToLowerInvariant() switch
+    {
+        "audit"    => "bi-journal-check",
+        "security" => "bi-shield-exclamation",
+        "workflow" => "bi-diagram-2",
+        "system"   => "bi-cpu",
+        _          => "bi-circle",
+    };
+
+    private static int SodSeverityOrder(string sev) => sev.ToUpperInvariant() switch
+    {
+        "CRITICAL" => 3, "HIGH" => 2, "MEDIUM" => 1, _ => 0,
+    };
+
+    private static string SodSeverityClass(string sev) => sev.ToUpperInvariant() switch
+    {
+        "CRITICAL" => "rd-sev-critical",
+        "HIGH"     => "rd-sev-high",
+        "MEDIUM"   => "rd-sev-medium",
+        _          => "rd-sev-low",
+    };
+
+    private static string SodSeverityIcon(string sev) => sev.ToUpperInvariant() switch
+    {
+        "CRITICAL" => "bi-x-octagon-fill",
+        "HIGH"     => "bi-exclamation-octagon-fill",
+        "MEDIUM"   => "bi-exclamation-triangle-fill",
+        _          => "bi-info-circle-fill",
+    };
+
+    private async Task ShowToastAsync(string message, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content  = message,
+            CssClass = isError ? "e-toast-danger" : "e-toast-success",
+            Timeout  = 4000,
+        });
+    }
+
+    // ── Form model ────────────────────────────────────────────
+    private sealed class RForm
+    {
+        public string  RoleCode     { get; set; } = string.Empty;
+        public string  RoleName     { get; set; } = string.Empty;
+        public string  RoleTypeCode { get; set; } = "Internal";
+        public string? Description  { get; set; }
+        public int     SortOrder    { get; set; }
+    }
+}

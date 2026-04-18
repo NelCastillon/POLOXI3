@@ -1,0 +1,804 @@
+@page "/sod/conflicts/{ConflictId:guid}"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Sod
+@using Ams.Application.Features.Iam
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>@(_conflict?.RuleName ?? "Conflict Detail")</PageTitle>
+
+<div class="srd-shell">
+
+    @if (_loading)
+    {
+        <div class="srd-loading">
+            <span class="um-spin" aria-hidden="true"></span>
+            Loading conflict…
+        </div>
+    }
+    else if (_conflict is null)
+    {
+        <div class="srd-not-found">
+            <i class="bi bi-shield-x srd-not-found-icon" aria-hidden="true"></i>
+            <p>Conflict not found.</p>
+            <a href="/sod/conflicts" class="um-btn um-btn-ghost">Back to Dashboard</a>
+        </div>
+    }
+    else
+    {
+        <!-- ── Header ──────────────────────────────────────────────────────── -->
+        <div class="srd-header">
+            <nav class="srd-breadcrumb" aria-label="breadcrumb">
+                <a href="/" class="srd-bc-link">Home</a>
+                <span class="srd-bc-sep" aria-hidden="true">›</span>
+                <a href="/sod/rules" class="srd-bc-link">SoD Rules</a>
+                <span class="srd-bc-sep" aria-hidden="true">›</span>
+                <a href="/sod/conflicts" class="srd-bc-link">Conflict Dashboard</a>
+                <span class="srd-bc-sep" aria-hidden="true">›</span>
+                <span class="srd-bc-current">@_conflict.RuleCode</span>
+            </nav>
+            <div class="srd-title-row">
+                <i class="bi bi-exclamation-triangle-fill srd-title-icon" aria-hidden="true"></i>
+                <div>
+                    <h1 class="srd-title">@_conflict.RuleName</h1>
+                    <p class="srd-subtitle">@_conflict.UserFullName · @_conflict.RuleCode</p>
+                </div>
+                <span class="srd-status-badge srd-status-badge--@_conflict.StatusCode.ToLower()">
+                    @StatusLabel(_conflict.StatusCode)
+                </span>
+                <span class="srd-severity-badge srd-severity-badge--@_conflict.SeverityCode.ToLower()">
+                    @_conflict.SeverityCode
+                </span>
+            </div>
+        </div>
+
+        <!-- ── Content ─────────────────────────────────────────────────────── -->
+        <div class="srd-content">
+
+            <!-- Left column -->
+            <div class="srd-main">
+
+                <!-- Summary card -->
+                <div class="srd-card">
+                    <div class="srd-card-header">
+                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                        Conflict Summary
+                    </div>
+                    <div class="srd-info-grid">
+                        <div class="srd-info-row">
+                            <span class="srd-info-label">User</span>
+                            <span class="srd-info-value">
+                                <div class="srd-user-name">@_conflict.UserFullName</div>
+                                <div class="srd-user-email">@_conflict.UserEmail</div>
+                            </span>
+                        </div>
+                        <div class="srd-info-row">
+                            <span class="srd-info-label">Rule</span>
+                            <span class="srd-info-value">
+                                <div class="srd-rule-name">@_conflict.RuleName</div>
+                                <div class="srd-rule-code">@_conflict.RuleCode</div>
+                            </span>
+                        </div>
+                        <div class="srd-info-row">
+                            <span class="srd-info-label">Detected</span>
+                            <span class="srd-info-value">@_conflict.DetectedDateUtc.ToString("dd MMM yyyy")</span>
+                        </div>
+                        @if (_conflict.ReviewerFullName is not null)
+                        {
+                            <div class="srd-info-row">
+                                <span class="srd-info-label">Reviewer</span>
+                                <span class="srd-info-value">@_conflict.ReviewerFullName</span>
+                            </div>
+                        }
+                        @if (!string.IsNullOrEmpty(_conflict.RemediationNote))
+                        {
+                            <div class="srd-info-row">
+                                <span class="srd-info-label">Remediation Note</span>
+                                <span class="srd-info-value srd-note">@_conflict.RemediationNote</span>
+                            </div>
+                        }
+                        @if (_conflict.ResolvedByFullName is not null)
+                        {
+                            <div class="srd-info-row">
+                                <span class="srd-info-label">Resolved By</span>
+                                <span class="srd-info-value">
+                                    @_conflict.ResolvedByFullName
+                                    @if (_conflict.ResolvedDateUtc.HasValue)
+                                    {
+                                        <div class="srd-resolved-date">@_conflict.ResolvedDateUtc.Value.ToString("dd MMM yyyy")</div>
+                                    }
+                                </span>
+                            </div>
+                        }
+                        @if (!string.IsNullOrEmpty(_conflict.ResolutionNote))
+                        {
+                            <div class="srd-info-row">
+                                <span class="srd-info-label">Resolution Note</span>
+                                <span class="srd-info-value srd-note">@_conflict.ResolutionNote</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <!-- User Roles card -->
+                <div class="srd-card">
+                    <div class="srd-card-header">
+                        <i class="bi bi-person-badge" aria-hidden="true"></i>
+                        User Roles
+                        <span class="srd-count-badge">@_userRoles.Count</span>
+                    </div>
+                    @if (_userRoles.Count == 0)
+                    {
+                        <p class="srd-card-empty">No active roles assigned.</p>
+                    }
+                    else
+                    {
+                        <div class="srd-table-wrap">
+                            <table class="srd-table">
+                                <thead>
+                                    <tr>
+                                        <th>Role</th>
+                                        <th>Code</th>
+                                        <th>Assigned</th>
+                                        <th class="srd-th-active">Active</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var r in _userRoles)
+                                    {
+                                        <tr>
+                                            <td class="srd-role-name">@r.RoleName</td>
+                                            <td class="srd-role-code">@r.RoleCode</td>
+                                            <td class="srd-td-date">@r.AssignedDateUtc.ToString("dd MMM yyyy")</td>
+                                            <td>
+                                                @if (r.IsActive)
+                                                {
+                                                    <span class="srd-active-dot" title="Active"></span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="srd-inactive-dot" title="Inactive"></span>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+
+                <!-- Direct Permissions card -->
+                <div class="srd-card">
+                    <div class="srd-card-header">
+                        <i class="bi bi-key" aria-hidden="true"></i>
+                        Direct Permissions
+                        <span class="srd-count-badge">@_userPermissions.Count</span>
+                    </div>
+                    @if (_userPermissions.Count == 0)
+                    {
+                        <p class="srd-card-empty">No direct permissions assigned.</p>
+                    }
+                    else
+                    {
+                        <div class="srd-table-wrap">
+                            <table class="srd-table">
+                                <thead>
+                                    <tr>
+                                        <th>Permission</th>
+                                        <th>Resource</th>
+                                        <th>Action</th>
+                                        <th>Granted</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var p in _userPermissions)
+                                    {
+                                        <tr>
+                                            <td>
+                                                <div class="srd-perm-name">@p.PermissionName</div>
+                                                <div class="srd-perm-code">@p.PermissionCode</div>
+                                            </td>
+                                            <td>@p.ResourceCode</td>
+                                            <td>@p.ActionCode</td>
+                                            <td class="srd-td-date">@p.GrantedDateUtc.ToString("dd MMM yyyy")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+
+            </div>
+
+            <!-- Right column: actions sidebar -->
+            <div class="srd-sidebar">
+                <div class="srd-card">
+                    <div class="srd-card-header">
+                        <i class="bi bi-lightning" aria-hidden="true"></i>
+                        Resolution Actions
+                    </div>
+                    <ul class="srd-actions-list">
+                        <li>
+                            <button class="srd-action-item srd-action-item--danger"
+                                    @onclick='() => OpenRemove("Role")'
+                                    disabled="@_conflict.IsResolved">
+                                <span class="srd-action-icon"><i class="bi bi-person-dash" aria-hidden="true"></i></span>
+                                <span class="srd-action-text">
+                                    <span class="srd-action-label">Remove Role</span>
+                                    <span class="srd-action-desc">Revoke a conflicting role assignment</span>
+                                </span>
+                                <span class="srd-action-arrow">›</span>
+                            </button>
+                        </li>
+                        <li>
+                            <button class="srd-action-item srd-action-item--danger"
+                                    @onclick='() => OpenRemove("Permission")'
+                                    disabled="@_conflict.IsResolved">
+                                <span class="srd-action-icon"><i class="bi bi-key" aria-hidden="true"></i></span>
+                                <span class="srd-action-text">
+                                    <span class="srd-action-label">Remove Permission</span>
+                                    <span class="srd-action-desc">Revoke a direct permission grant</span>
+                                </span>
+                                <span class="srd-action-arrow">›</span>
+                            </button>
+                        </li>
+                        <li>
+                            <button class="srd-action-item srd-action-item--warning"
+                                    @onclick="OpenException"
+                                    disabled="@_conflict.IsResolved">
+                                <span class="srd-action-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span>
+                                <span class="srd-action-text">
+                                    <span class="srd-action-label">Create Exception</span>
+                                    <span class="srd-action-desc">Formally document a business exception</span>
+                                </span>
+                                <span class="srd-action-arrow">›</span>
+                            </button>
+                        </li>
+                        <li>
+                            <button class="srd-action-item srd-action-item--info"
+                                    @onclick='() => OpenAction("Document")'
+                                    disabled="@_conflict.IsResolved">
+                                <span class="srd-action-icon"><i class="bi bi-tools" aria-hidden="true"></i></span>
+                                <span class="srd-action-text">
+                                    <span class="srd-action-label">Document Resolution</span>
+                                    <span class="srd-action-desc">Record remediation steps taken</span>
+                                </span>
+                                <span class="srd-action-arrow">›</span>
+                            </button>
+                        </li>
+                        <li>
+                            <button class="srd-action-item srd-action-item--success"
+                                    @onclick='() => OpenAction("Close")'
+                                    disabled="@_conflict.IsResolved">
+                                <span class="srd-action-icon"><i class="bi bi-check-circle" aria-hidden="true"></i></span>
+                                <span class="srd-action-text">
+                                    <span class="srd-action-label">Close Conflict</span>
+                                    <span class="srd-action-desc">Mark this conflict as fully resolved</span>
+                                </span>
+                                <span class="srd-action-arrow">›</span>
+                            </button>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+        </div>
+    }
+
+</div>
+
+<!-- ── Remove Role / Permission dialog ─────────────────────────────────── -->
+<SfDialog Width="480px"
+          Visible="_removeVisible"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogEvents Closed="OnRemoveClosed" />
+    <DialogTemplates>
+        <Header>
+            <span class="srd-dlg-icon srd-dlg-icon--danger" aria-hidden="true">
+                <i class="bi @RemoveIcon"></i>
+            </span>
+            @RemoveTitle
+        </Header>
+        <Content>
+            <div class="srd-dlg-body">
+                @if (!string.IsNullOrEmpty(_actionError))
+                {
+                    <div class="srd-dlg-error">
+                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                        @_actionError
+                    </div>
+                }
+                @if (_conflict is not null)
+                {
+                    <p class="srd-dlg-hint">
+                        User: <strong>@_conflict.UserFullName</strong>
+                    </p>
+                }
+                @if (_removeMode == "Role")
+                {
+                    <div class="srd-field">
+                        <label class="srd-label">Role to Remove <span class="srd-req">*</span></label>
+                        <SfDropDownList TValue="Guid" TItem="UserRoleDto"
+                                        DataSource="@_userRoles"
+                                        @bind-Value="_selectedRoleId"
+                                        AllowFiltering="true"
+                                        Placeholder="Select a role…">
+                            <DropDownListFieldSettings Value="UserRoleId" Text="RoleName" />
+                        </SfDropDownList>
+                        @if (_validateAction && _selectedRoleId == Guid.Empty)
+                        {
+                            <span class="srd-validation">Please select a role.</span>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="srd-field">
+                        <label class="srd-label">Permission to Remove <span class="srd-req">*</span></label>
+                        <SfDropDownList TValue="Guid" TItem="UserPermissionDto"
+                                        DataSource="@_userPermissions"
+                                        @bind-Value="_selectedPermissionId"
+                                        AllowFiltering="true"
+                                        Placeholder="Select a permission…">
+                            <DropDownListFieldSettings Value="PermissionId" Text="PermissionName" />
+                        </SfDropDownList>
+                        @if (_validateAction && _selectedPermissionId == Guid.Empty)
+                        {
+                            <span class="srd-validation">Please select a permission.</span>
+                        }
+                    </div>
+                }
+                <div class="srd-field">
+                    <label class="srd-label">Reason <span class="srd-optional">(optional)</span></label>
+                    <SfTextBox @bind-Value="_removeReason"
+                               Multiline="true"
+                               Placeholder="Describe why this access is being removed…" />
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="srd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseRemoveDialog" disabled="@_processing">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteRemoveAsync" disabled="@_processing">
+                    @if (_processing) { <span class="um-spin" aria-hidden="true"></span> <span>Removing…</span> }
+                    else { <i class="bi @RemoveIcon" aria-hidden="true"></i> <span>@RemoveTitle</span> }
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Exception dialog ─────────────────────────────────────────────────── -->
+<SfDialog Width="500px"
+          Visible="_exceptionVisible"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogEvents Closed="OnExceptionClosed" />
+    <DialogTemplates>
+        <Header>
+            <span class="srd-dlg-icon srd-dlg-icon--warning" aria-hidden="true">
+                <i class="bi bi-shield-exclamation"></i>
+            </span>
+            Create Exception
+        </Header>
+        <Content>
+            <div class="srd-dlg-body">
+                @if (!string.IsNullOrEmpty(_actionError))
+                {
+                    <div class="srd-dlg-error">
+                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                        @_actionError
+                    </div>
+                }
+                @if (_conflict is not null)
+                {
+                    <p class="srd-dlg-hint">
+                        Creating a formal exception for <strong>@_conflict.UserFullName</strong>
+                        on rule <strong>@_conflict.RuleCode</strong>.
+                    </p>
+                }
+                <div class="srd-field">
+                    <label class="srd-label">Business Justification <span class="srd-req">*</span></label>
+                    <SfTextBox @bind-Value="_justification"
+                               Multiline="true"
+                               Placeholder="Explain the business reason for this exception…" />
+                    @if (_validateAction && string.IsNullOrWhiteSpace(_justification))
+                    {
+                        <span class="srd-validation">Justification is required.</span>
+                    }
+                </div>
+                <div class="srd-field">
+                    <label class="srd-label">Expiry Date <span class="srd-optional">(optional)</span></label>
+                    <SfDatePicker TValue="DateTime?" @bind-Value="_expiresDate"
+                                  Placeholder="Select expiry date…"
+                                  Min="DateTime.Today.AddDays(1)" />
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="srd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseExceptionDialog" disabled="@_processing">Cancel</button>
+                <button class="um-btn srd-btn-exception" @onclick="ExecuteExceptionAsync" disabled="@_processing">
+                    @if (_processing) { <span class="um-spin" aria-hidden="true"></span> <span>Submitting…</span> }
+                    else { <i class="bi bi-shield-exclamation" aria-hidden="true"></i> <span>Create Exception</span> }
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Document / Close dialog ─────────────────────────────────────────── -->
+<SfDialog Width="480px"
+          Visible="_actionVisible"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogEvents Closed="OnActionClosed" />
+    <DialogTemplates>
+        <Header>
+            <span class="srd-dlg-icon @ActionIconClass" aria-hidden="true">
+                <i class="bi @ActionIcon"></i>
+            </span>
+            @ActionTitle
+        </Header>
+        <Content>
+            <div class="srd-dlg-body">
+                @if (!string.IsNullOrEmpty(_actionError))
+                {
+                    <div class="srd-dlg-error">
+                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                        @_actionError
+                    </div>
+                }
+                @if (_conflict is not null)
+                {
+                    <p class="srd-dlg-hint">
+                        Conflict: <strong>@_conflict.RuleName</strong>
+                        for <strong>@_conflict.UserFullName</strong>
+                    </p>
+                }
+                <div class="srd-field">
+                    <label class="srd-label">
+                        @ActionNoteLabel
+                        <span class="srd-optional">(optional)</span>
+                    </label>
+                    <SfTextBox @bind-Value="_actionNote"
+                               Multiline="true"
+                               Placeholder="@ActionNotePlaceholder" />
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="srd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseActionDialog" disabled="@_processing">Cancel</button>
+                <button class="@ActionButtonClass" @onclick="ExecuteActionAsync" disabled="@_processing">
+                    @if (_processing) { <span class="um-spin" aria-hidden="true"></span> <span>Processing…</span> }
+                    else { <i class="bi @ActionIcon" aria-hidden="true"></i> <span>@ActionTitle</span> }
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Toast ─────────────────────────────────────────────────────────────── -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    [Parameter] public Guid ConflictId { get; set; }
+
+    private readonly Guid _tenantId      = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private readonly Guid _currentUserId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    private SfToast? _toast;
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private bool                    _loading         = true;
+    private SodConflictDto?         _conflict        = null;
+    private List<UserRoleDto>       _userRoles       = [];
+    private List<UserPermissionDto> _userPermissions = [];
+
+    // ── Shared dialog state ────────────────────────────────────────────────────
+    private bool   _processing     = false;
+    private string _actionError    = string.Empty;
+    private bool   _validateAction = false;
+
+    // ── Remove dialog ──────────────────────────────────────────────────────────
+    private bool   _removeVisible        = false;
+    private string _removeMode           = string.Empty;
+    private Guid   _selectedRoleId       = Guid.Empty;
+    private Guid   _selectedPermissionId = Guid.Empty;
+    private string _removeReason         = string.Empty;
+
+    // ── Exception dialog ───────────────────────────────────────────────────────
+    private bool      _exceptionVisible = false;
+    private string    _justification    = string.Empty;
+    private DateTime? _expiresDate      = null;
+
+    // ── Document / Close dialog ────────────────────────────────────────────────
+    private bool   _actionVisible = false;
+    private string _actionMode    = string.Empty;
+    private string _actionNote    = string.Empty;
+
+    // ── Computed properties ────────────────────────────────────────────────────
+    private string RemoveTitle => _removeMode == "Role" ? "Remove Role" : "Remove Permission";
+
+    private string RemoveIcon => _removeMode == "Role" ? "bi-person-dash" : "bi-key";
+
+    private string ActionTitle => _actionMode == "Document" ? "Document Resolution" : "Close Conflict";
+
+    private string ActionIcon => _actionMode == "Document" ? "bi-tools" : "bi-check-circle";
+
+    private string ActionIconClass => _actionMode == "Document"
+        ? "srd-dlg-icon--info"
+        : "srd-dlg-icon--success";
+
+    private string ActionButtonClass => _actionMode == "Document"
+        ? "um-btn srd-btn-document"
+        : "um-btn um-btn-success";
+
+    private string ActionNoteLabel => _actionMode == "Document" ? "Remediation Note" : "Resolution Note";
+
+    private string ActionNotePlaceholder => _actionMode == "Document"
+        ? "Describe the remediation steps taken…"
+        : "Describe how the conflict was resolved…";
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _conflict = await Api.GetSodConflictByIdAsync(ConflictId);
+            if (_conflict is not null)
+            {
+                await Task.WhenAll(LoadRolesAsync(), LoadPermissionsAsync());
+            }
+        }
+        catch
+        {
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = "Failed to load conflict details.",
+                CssClass = "e-toast-danger",
+                Icon     = "bi bi-exclamation-triangle",
+            });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LoadRolesAsync()
+    {
+        try
+        {
+            var result = await Api.SearchUserRolesAsync(_tenantId, userId: _conflict!.UserId, isActive: true);
+            _userRoles = result?.Items?.ToList() ?? [];
+        }
+        catch { _userRoles = []; }
+    }
+
+    private async Task LoadPermissionsAsync()
+    {
+        try
+        {
+            var result = await Api.GetUserDirectPermissionsAsync(_conflict!.UserId);
+            _userPermissions = result?.ToList() ?? [];
+        }
+        catch { _userPermissions = []; }
+    }
+
+    // ── Remove dialog ──────────────────────────────────────────────────────────
+    private void OpenRemove(string mode)
+    {
+        _removeMode           = mode;
+        _selectedRoleId       = Guid.Empty;
+        _selectedPermissionId = Guid.Empty;
+        _removeReason         = string.Empty;
+        _actionError          = string.Empty;
+        _validateAction       = false;
+        _removeVisible        = true;
+    }
+
+    private void CloseRemoveDialog() => _removeVisible = false;
+
+    private void OnRemoveClosed()
+    {
+        _removeVisible  = false;
+        _validateAction = false;
+        _actionError    = string.Empty;
+    }
+
+    private async Task ExecuteRemoveAsync()
+    {
+        _validateAction = true;
+        if (_removeMode == "Role"       && _selectedRoleId       == Guid.Empty) return;
+        if (_removeMode == "Permission" && _selectedPermissionId == Guid.Empty) return;
+
+        _processing  = true;
+        _actionError = string.Empty;
+        try
+        {
+            if (_removeMode == "Role")
+            {
+                await Api.RevokeUserRoleAsync(new RevokeUserRoleRequest
+                {
+                    UserRoleId      = _selectedRoleId,
+                    RevokedByUserId = _currentUserId,
+                    Reason          = _removeReason,
+                });
+                await _toast!.ShowAsync(new ToastModel
+                {
+                    Content  = "Role removed successfully.",
+                    CssClass = "e-toast-success",
+                    Icon     = "bi bi-check-circle",
+                });
+            }
+            else
+            {
+                await Api.RevokeUserPermissionAsync(_conflict!.UserId, _selectedPermissionId, _currentUserId);
+                await _toast!.ShowAsync(new ToastModel
+                {
+                    Content  = "Permission removed successfully.",
+                    CssClass = "e-toast-success",
+                    Icon     = "bi bi-check-circle",
+                });
+            }
+            _removeVisible = false;
+            await LoadAsync();
+        }
+        catch
+        {
+            _actionError = "Failed to remove access. Please try again.";
+        }
+        finally
+        {
+            _processing = false;
+        }
+    }
+
+    // ── Exception dialog ───────────────────────────────────────────────────────
+    private void OpenException()
+    {
+        _justification    = string.Empty;
+        _expiresDate      = null;
+        _actionError      = string.Empty;
+        _validateAction   = false;
+        _exceptionVisible = true;
+    }
+
+    private void CloseExceptionDialog() => _exceptionVisible = false;
+
+    private void OnExceptionClosed()
+    {
+        _exceptionVisible = false;
+        _validateAction   = false;
+        _actionError      = string.Empty;
+    }
+
+    private async Task ExecuteExceptionAsync()
+    {
+        _validateAction = true;
+        if (string.IsNullOrWhiteSpace(_justification)) return;
+
+        _processing  = true;
+        _actionError = string.Empty;
+        try
+        {
+            await Api.CreateSodExceptionAsync(ConflictId, new CreateSodExceptionRequest
+            {
+                Justification     = _justification,
+                RequestedByUserId = _currentUserId,
+                ExpiresDateUtc    = _expiresDate,
+            });
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = "Exception created successfully.",
+                CssClass = "e-toast-success",
+                Icon     = "bi bi-check-circle",
+            });
+            _exceptionVisible = false;
+            await LoadAsync();
+        }
+        catch
+        {
+            _actionError = "Failed to create exception. Please try again.";
+        }
+        finally
+        {
+            _processing = false;
+        }
+    }
+
+    // ── Document / Close dialog ────────────────────────────────────────────────
+    private void OpenAction(string mode)
+    {
+        _actionMode     = mode;
+        _actionNote     = string.Empty;
+        _actionError    = string.Empty;
+        _validateAction = false;
+        _actionVisible  = true;
+    }
+
+    private void CloseActionDialog() => _actionVisible = false;
+
+    private void OnActionClosed()
+    {
+        _actionVisible  = false;
+        _validateAction = false;
+        _actionError    = string.Empty;
+        _actionNote     = string.Empty;
+    }
+
+    private async Task ExecuteActionAsync()
+    {
+        _processing  = true;
+        _actionError = string.Empty;
+        try
+        {
+            if (_actionMode == "Document")
+            {
+                await Api.RemediateSodConflictAsync(ConflictId, new RemediateSodConflictRequest
+                {
+                    RemediatedByUserId = _currentUserId,
+                    RemediationNote    = _actionNote,
+                });
+                await _toast!.ShowAsync(new ToastModel
+                {
+                    Content  = "Resolution documented successfully.",
+                    CssClass = "e-toast-success",
+                    Icon     = "bi bi-check-circle",
+                });
+            }
+            else
+            {
+                await Api.ResolveSodConflictAsync(ConflictId, new ResolveSodConflictRequest
+                {
+                    ResolvedByUserId = _currentUserId,
+                    ResolutionNote   = _actionNote,
+                });
+                await _toast!.ShowAsync(new ToastModel
+                {
+                    Content  = "Conflict closed successfully.",
+                    CssClass = "e-toast-success",
+                    Icon     = "bi bi-check-circle",
+                });
+            }
+            _actionVisible = false;
+            await LoadAsync();
+        }
+        catch
+        {
+            _actionError = "An error occurred. Please try again.";
+        }
+        finally
+        {
+            _processing = false;
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    private static string StatusLabel(string code) => code switch
+    {
+        "Open"       => "Open",
+        "InReview"   => "In Review",
+        "Remediated" => "Remediated",
+        "Resolved"   => "Resolved",
+        "Exception"  => "Exception",
+        _            => code,
+    };
+}

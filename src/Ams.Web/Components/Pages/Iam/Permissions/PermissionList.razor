@@ -1,0 +1,445 @@
+@page "/iam/permissions"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Permissions — IAM</PageTitle>
+
+<AppPageHeader Title="Permission Catalog"
+               Subtitle="System-wide permission registry — view and audit access capabilities"
+               Icon="bi-key">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI strip ────────────────────────────────────────────────────────── -->
+<div class="pc-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0" aria-label="All permissions">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-key-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="pc-kpi-value">@_totalCount</div>
+            <div class="pc-kpi-label">Total</div>
+        </div>
+        @if (_kpiActive == 1) { <span class="pc-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0" aria-label="Active permissions">
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="pc-kpi-value">@_activeCount</div>
+            <div class="pc-kpi-label">Active</div>
+        </div>
+        @if (_kpiActive == 2) { <span class="pc-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0" aria-label="Inactive permissions">
+        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-dash-circle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="pc-kpi-value">@_inactiveCount</div>
+            <div class="pc-kpi-label">Inactive</div>
+        </div>
+        @if (_kpiActive == 3) { <span class="pc-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass4" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0" aria-label="Privileged permissions">
+        <span class="pc-kpi-icon pc-kpi-icon--privileged"><i class="bi bi-star-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="pc-kpi-value">@_privilegedCount</div>
+            <div class="pc-kpi-label">Privileged</div>
+        </div>
+        @if (_kpiActive == 4) { <span class="pc-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- ── Filter toolbar ───────────────────────────────────────────────────── -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search permission code or name…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="string"
+                        DataSource="_moduleOptions"
+                        Placeholder="All Modules"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterModule"
+                        ValueChanged="OnModuleFilterChanged" />
+
+        <SfDropDownList TValue="string" TItem="string"
+                        DataSource="_entityOptions"
+                        Placeholder="All Entities"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterEntity"
+                        ValueChanged="@((string v) => { _filterEntity = v; ApplyFilters(); })" />
+
+        <SfDropDownList TValue="string" TItem="string"
+                        DataSource="_actionOptions"
+                        Placeholder="All Actions"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterAction"
+                        ValueChanged="@((string v) => { _filterAction = v; ApplyFilters(); })" />
+
+        <SfDropDownList TValue="string" TItem="string"
+                        DataSource="_scopeOptions"
+                        Placeholder="All Scopes"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterScope"
+                        ValueChanged="@((string v) => { _filterScope = v; ApplyFilters(); })" />
+
+        <label class="pc-priv-toggle">
+            <input type="checkbox" @bind="_filterPrivilegedOnly" @bind:after="ApplyFilters" />
+            <i class="bi bi-star-fill" aria-hidden="true"></i> Privileged only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- ── Grid ─────────────────────────────────────────────────────────────── -->
+<div class="um-grid-card">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading permissions…</span>
+        </div>
+    }
+    <SfGrid TValue="PermissionDto"
+            DataSource="@_permissions"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="50" PageSizes="@(new[] { 25, 50, 100 })" />
+        <GridColumns>
+
+            <!-- Permission Key -->
+            <GridColumn Field="PermissionCode" HeaderText="Permission Key" Width="260" AllowSorting="true">
+                <Template>
+                    @{ var p = (PermissionDto)context; }
+                    <div class="pc-key-cell">
+                        <code class="pc-perm-code">@p.PermissionCode</code>
+                        @if (!string.IsNullOrEmpty(p.PermissionName))
+                        {
+                            <div class="pc-perm-name">@p.PermissionName</div>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <!-- Module -->
+            <GridColumn Field="ResourceCode" HeaderText="Module" Width="130" AllowSorting="true">
+                <Template>
+                    @{ var p = (PermissionDto)context; }
+                    <span class="pc-module-pill">@GetModule(p.ResourceCode)</span>
+                </Template>
+            </GridColumn>
+
+            <!-- Entity -->
+            <GridColumn HeaderText="Entity" Width="150" AllowSorting="false">
+                <Template>
+                    @{ var p = (PermissionDto)context; }
+                    @{ var entity = GetEntity(p.ResourceCode); }
+                    @if (!string.IsNullOrEmpty(entity))
+                    {
+                        <span class="pc-entity-label">@entity</span>
+                    }
+                    else
+                    {
+                        <span class="pc-na">—</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <!-- Action -->
+            <GridColumn Field="ActionCode" HeaderText="Action" Width="110" TextAlign="TextAlign.Center" AllowSorting="true">
+                <Template>
+                    @{ var p = (PermissionDto)context; }
+                    <span class="pc-action-badge @ActionBadgeClass(p.ActionCode)">@p.ActionCode</span>
+                </Template>
+            </GridColumn>
+
+            <!-- Scope -->
+            <GridColumn HeaderText="Scope" Width="110" TextAlign="TextAlign.Center" AllowSorting="false">
+                <Template>
+                    @{ var p = (PermissionDto)context; }
+                    <span class="badge badge-neutral pc-scope-badge">@GetScope(p)</span>
+                </Template>
+            </GridColumn>
+
+            <!-- Privileged -->
+            <GridColumn Field="IsBuiltIn" HeaderText="Privileged" Width="100" TextAlign="TextAlign.Center" AllowSorting="true">
+                <Template>
+                    @{ var p = (PermissionDto)context; }
+                    @if (p.IsBuiltIn)
+                    {
+                        <span class="pc-priv-on" title="Privileged / Built-in">
+                            <i class="bi bi-star-fill" aria-hidden="true"></i>
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="pc-priv-off" title="Standard">
+                            <i class="bi bi-star" aria-hidden="true"></i>
+                        </span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <!-- Active -->
+            <GridColumn Field="IsActive" HeaderText="Active" Width="100" TextAlign="TextAlign.Center" AllowSorting="true">
+                <Template>
+                    @{ var p = (PermissionDto)context; }
+                    <AppStatusBadge Status="@(p.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+
+            <!-- Roles -->
+            <GridColumn Field="RoleCount" HeaderText="Roles" Width="80" TextAlign="TextAlign.Center" AllowSorting="true">
+                <Template>
+                    @{ var p = (PermissionDto)context; }
+                    <span class="um-count-pill" title="@p.RoleCount role(s)">@p.RoleCount</span>
+                </Template>
+            </GridColumn>
+
+            <!-- Row actions -->
+            <GridColumn HeaderText="" Width="80" AllowSorting="false" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var p = (PermissionDto)context; }
+                    <div class="um-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => ViewDetail(p)"
+                                title="View detail">
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- ── Toast ─────────────────────────────────────────────────────────────── -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    private SfToast? _toast;
+
+    // ── Data ──────────────────────────────────────────────────────────────────────
+    private List<PermissionDto> _allPermissions = [];
+    private List<PermissionDto> _permissions    = [];
+
+    // ── Loading ───────────────────────────────────────────────────────────────────
+    private bool _loading = false;
+
+    // ── Filter values ─────────────────────────────────────────────────────────────
+    private string _search               = string.Empty;
+    private string _filterModule         = string.Empty;
+    private string _filterEntity         = string.Empty;
+    private string _filterAction         = string.Empty;
+    private string _filterScope          = string.Empty;
+    private bool   _filterPrivilegedOnly = false;
+
+    // ── KPI ───────────────────────────────────────────────────────────────────────
+    private int _kpiActive       = 0;
+    private int _totalCount      = 0;
+    private int _activeCount     = 0;
+    private int _inactiveCount   = 0;
+    private int _privilegedCount = 0;
+
+    private string KpiClass1 => "pc-kpi-card pc-kpi-card--total"      + (_kpiActive == 1 ? " pc-kpi-card--sel" : "");
+    private string KpiClass2 => "pc-kpi-card pc-kpi-card--active"     + (_kpiActive == 2 ? " pc-kpi-card--sel" : "");
+    private string KpiClass3 => "pc-kpi-card pc-kpi-card--inactive"   + (_kpiActive == 3 ? " pc-kpi-card--sel" : "");
+    private string KpiClass4 => "pc-kpi-card pc-kpi-card--privileged" + (_kpiActive == 4 ? " pc-kpi-card--sel" : "");
+
+    // ── Filter options ────────────────────────────────────────────────────────────
+    private List<string> _moduleOptions = [];
+    private List<string> _entityOptions = [];
+    private List<string> _actionOptions = [];
+    private List<string> _scopeOptions  = ["Global", "Tenant", "Own"];
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        SetCrumbs();
+        await LoadAsync();
+    }
+
+    private void SetCrumbs() =>
+        Breadcrumbs.SetCrumbs(
+            new("Home",  "/"),
+            new("IAM",   "/iam"),
+            new("Permissions", null));
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchPermissionsAsync(_tenantId, _search, pageSize: 2000);
+            _allPermissions = result?.Items.ToList() ?? [];
+            ComputeKpi();
+            BuildFilterOptions();
+            ApplyFilters();
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private Task OnSearchAsync(string _) => LoadAsync();
+
+    // ── KPI ───────────────────────────────────────────────────────────────────────
+    private void ComputeKpi()
+    {
+        _totalCount      = _allPermissions.Count;
+        _activeCount     = _allPermissions.Count(p => p.IsActive);
+        _inactiveCount   = _allPermissions.Count(p => !p.IsActive);
+        _privilegedCount = _allPermissions.Count(p => p.IsBuiltIn);
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive = _kpiActive == n ? 0 : n;
+        ApplyFilters();
+    }
+
+    // ── Filters ───────────────────────────────────────────────────────────────────
+    private void BuildFilterOptions()
+    {
+        _moduleOptions = _allPermissions
+            .Select(p => GetModule(p.ResourceCode))
+            .Where(m => !string.IsNullOrEmpty(m))
+            .Distinct()
+            .Order()
+            .ToList();
+
+        RebuildEntityOptions();
+
+        _actionOptions = _allPermissions
+            .Select(p => p.ActionCode)
+            .Where(a => !string.IsNullOrEmpty(a))
+            .Distinct()
+            .OrderBy(ActionOrder)
+            .ThenBy(a => a)
+            .ToList();
+    }
+
+    private void RebuildEntityOptions()
+    {
+        var source = string.IsNullOrEmpty(_filterModule)
+            ? _allPermissions
+            : _allPermissions.Where(p => GetModule(p.ResourceCode) == _filterModule);
+
+        _entityOptions = source
+            .Select(p => GetEntity(p.ResourceCode))
+            .Where(e => !string.IsNullOrEmpty(e))
+            .Distinct()
+            .Order()
+            .ToList();
+    }
+
+    private void OnModuleFilterChanged(string v)
+    {
+        _filterModule = v;
+        _filterEntity = string.Empty;
+        RebuildEntityOptions();
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        var q = _allPermissions.AsEnumerable();
+
+        if (!string.IsNullOrEmpty(_filterModule))
+            q = q.Where(p => GetModule(p.ResourceCode) == _filterModule);
+
+        if (!string.IsNullOrEmpty(_filterEntity))
+            q = q.Where(p => GetEntity(p.ResourceCode) == _filterEntity);
+
+        if (!string.IsNullOrEmpty(_filterAction))
+            q = q.Where(p => p.ActionCode == _filterAction);
+
+        if (!string.IsNullOrEmpty(_filterScope) && _filterScope != "Global")
+            q = q.Where(_ => false); // non-Global scopes have no data yet
+
+        if (_filterPrivilegedOnly)
+            q = q.Where(p => p.IsBuiltIn);
+
+        switch (_kpiActive)
+        {
+            case 2: q = q.Where(p => p.IsActive);   break;
+            case 3: q = q.Where(p => !p.IsActive);  break;
+            case 4: q = q.Where(p => p.IsBuiltIn);  break;
+        }
+
+        _permissions = q.ToList();
+        StateHasChanged();
+    }
+
+    // ── Navigation ────────────────────────────────────────────────────────────────
+    private void ViewDetail(PermissionDto p) =>
+        Nav.NavigateTo($"/iam/permissions/{p.PermissionId}");
+
+    // ── Export (stub) ─────────────────────────────────────────────────────────────
+    private Task ExportAsync() =>
+        ShowToastAsync("Export is not yet available in this release.");
+
+    // ── Display helpers ───────────────────────────────────────────────────────────
+    private static string GetModule(string resourceCode)
+    {
+        if (string.IsNullOrEmpty(resourceCode)) return string.Empty;
+        var dot = resourceCode.IndexOf('.');
+        return dot > 0 ? resourceCode[..dot] : resourceCode;
+    }
+
+    private static string GetEntity(string resourceCode)
+    {
+        if (string.IsNullOrEmpty(resourceCode)) return string.Empty;
+        var dot = resourceCode.IndexOf('.');
+        return dot > 0 && dot < resourceCode.Length - 1 ? resourceCode[(dot + 1)..] : string.Empty;
+    }
+
+    private static string GetScope(PermissionDto p) => "Global";
+
+    private static string ActionBadgeClass(string action) => action.ToUpperInvariant() switch
+    {
+        "VIEW"   or "READ"              => "pc-action-read",
+        "CREATE" or "WRITE" or "UPDATE" => "pc-action-write",
+        "DELETE"                        => "pc-action-delete",
+        "MANAGE"                        => "pc-action-manage",
+        "ADMIN"                         => "pc-action-admin",
+        _                               => "pc-action-other",
+    };
+
+    private static int ActionOrder(string action) => action.ToUpperInvariant() switch
+    {
+        "VIEW"   => 0,
+        "READ"   => 1,
+        "CREATE" => 2,
+        "WRITE"  => 3,
+        "UPDATE" => 4,
+        "DELETE" => 5,
+        "MANAGE" => 6,
+        "ADMIN"  => 7,
+        _        => 99,
+    };
+
+    private async Task ShowToastAsync(string message, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content  = message,
+            CssClass = isError ? "e-toast-danger" : "e-toast-success",
+        });
+    }
+}

@@ -1,0 +1,290 @@
+@*
+    RoleEditDrawer — reusable right-side drawer for creating or editing an IAM role.
+    Create mode:  <RoleEditDrawer @bind-Visible="_show" OnSaved="ReloadAsync" />
+    Edit mode:    <RoleEditDrawer @bind-Visible="_show" RoleId="_roleId" OnSaved="ReloadAsync" />
+*@
+@inject ApiClient Api
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppCrudDrawer @bind-Visible="_open"
+               Title="@DrawerTitle"
+               Icon="@DrawerIcon"
+               Width="520px"
+               IsBusy="_busy"
+               OnClose="HandleCloseAsync">
+    <Footer>
+        <button class="um-btn um-btn-ghost" @onclick="HandleCloseAsync" disabled="@_busy">Cancel</button>
+        @if (IsCreate)
+        {
+            <button class="um-btn um-btn-ghost" @onclick="() => SaveAsync(addAnother: true)" disabled="@_busy">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> Save &amp; Add Another
+            </button>
+        }
+        <button class="um-btn um-btn-primary" @onclick="() => SaveAsync(addAnother: false)" disabled="@_busy">
+            @if (_busy) { <span class="um-spin" aria-hidden="true"></span> }
+            @DrawerConfirmText
+        </button>
+    </Footer>
+    <Content>
+        @if (_formLoading)
+        {
+            <div class="red-loading">
+                <span class="um-spin" aria-hidden="true"></span>
+                <span>Loading role…</span>
+            </div>
+        }
+        else
+        {
+            @if (!string.IsNullOrEmpty(_errorMsg))
+            {
+                <div class="red-error">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    @_errorMsg
+                </div>
+            }
+
+            <!-- Identity -->
+            <div class="red-section">
+                <h4 class="red-section-title">Identity</h4>
+                <div class="red-grid">
+                    <div class="red-field">
+                        <label class="red-label">Role Code <span class="req">*</span></label>
+                        @if (IsCreate)
+                        {
+                            <SfTextBox @bind-Value="_form.RoleCode" Placeholder="e.g. ADMIN" />
+                        }
+                        else
+                        {
+                            <span class="red-readonly">@_form.RoleCode</span>
+                        }
+                    </div>
+                    <div class="red-field">
+                        <label class="red-label">Role Type <span class="req">*</span></label>
+                        <SfDropDownList TValue="string" TItem="LabelValue"
+                                        DataSource="_typeOptions"
+                                        @bind-Value="_form.RoleTypeCode"
+                                        Placeholder="Select type">
+                            <DropDownListFieldSettings Value="Value" Text="Label" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="red-field red-field--full">
+                        <label class="red-label">Role Name <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.RoleName" Placeholder="Full descriptive name" />
+                    </div>
+                    <div class="red-field red-field--full">
+                        <label class="red-label">Description</label>
+                        <SfTextBox @bind-Value="_form.Description"
+                                   Placeholder="Purpose and scope of this role"
+                                   Multiline="true" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Privilege & Order -->
+            <div class="red-section">
+                <h4 class="red-section-title">Privilege &amp; Order</h4>
+                <div class="red-grid">
+                    <div class="red-field">
+                        <label class="red-label">Privilege Level</label>
+                        <SfTextBox @bind-Value="_form.PrivilegeLevelText" Placeholder="e.g. 50" />
+                    </div>
+                    <div class="red-field">
+                        <label class="red-label">Sort Order</label>
+                        <SfTextBox @bind-Value="_form.SortOrderText" Placeholder="e.g. 10" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Flags -->
+            <div class="red-section">
+                <h4 class="red-section-title">Flags</h4>
+                <div class="red-flags">
+                    <label class="red-toggle">
+                        <SfCheckBox @bind-Checked="_form.IsSystemRole" />
+                        <span class="red-toggle-text">System Role — built-in, treated as privileged</span>
+                    </label>
+                </div>
+            </div>
+        }
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    [Parameter] public bool                  Visible      { get; set; }
+    [Parameter] public EventCallback<bool>   VisibleChanged { get; set; }
+    [Parameter] public Guid?                 RoleId       { get; set; }
+    [Parameter] public EventCallback         OnSaved      { get; set; }
+
+    private SfToast? _toast;
+
+    private bool     _open        = false;
+    private bool     _formLoading = false;
+    private bool     _busy        = false;
+    private string   _errorMsg    = string.Empty;
+    private bool     _prevVisible = false;
+    private Guid?    _prevRoleId;
+    private FormModel _form = new();
+
+    private bool   IsCreate        => RoleId is null;
+    private string DrawerTitle     => IsCreate ? "New Role"      : "Edit Role";
+    private string DrawerIcon      => IsCreate ? "bi-shield-plus" : "bi-pencil";
+    private string DrawerConfirmText => IsCreate ? "Create Role"  : "Save Changes";
+
+    private static readonly List<LabelValue> _typeOptions =
+    [
+        new("Internal", "Internal"),
+        new("External", "External"),
+        new("System",   "System"),
+    ];
+
+    protected override void OnParametersSet() => _open = Visible;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var justOpened  = Visible && !_prevVisible;
+        var roleChanged = Visible && RoleId != _prevRoleId;
+        _prevVisible = Visible;
+        _prevRoleId  = RoleId;
+
+        if (justOpened || roleChanged)
+            await RefreshFormAsync();
+    }
+
+    private async Task RefreshFormAsync()
+    {
+        _errorMsg = string.Empty;
+        if (IsCreate) { _form = new(); return; }
+
+        _formLoading = true;
+        StateHasChanged();
+        try
+        {
+            var role = await Api.GetRoleByIdAsync(RoleId!.Value);
+            if (role is not null) PopulateForm(role);
+        }
+        finally
+        {
+            _formLoading = false;
+        }
+    }
+
+    private void PopulateForm(RoleDto role)
+    {
+        _form = new()
+        {
+            RoleCode           = role.RoleCode,
+            RoleName           = role.RoleName,
+            RoleTypeCode       = role.RoleTypeCode,
+            Description        = role.Description,
+            PrivilegeLevelText = role.PrivilegeLevel.ToString(),
+            SortOrderText      = role.SortOrder.ToString(),
+            IsSystemRole       = role.IsSystemRole,
+        };
+    }
+
+    private async Task SaveAsync(bool addAnother)
+    {
+        _errorMsg = Validate();
+        if (!string.IsNullOrEmpty(_errorMsg)) return;
+
+        _busy = true;
+        try
+        {
+            if (IsCreate)
+            {
+                var req = new CreateRoleRequest
+                {
+                    TenantId       = Guid.Parse("00000000-0000-0000-0000-000000000001"),
+                    RoleCode       = _form.RoleCode.Trim().ToUpperInvariant(),
+                    RoleName       = _form.RoleName.Trim(),
+                    RoleTypeCode   = _form.RoleTypeCode,
+                    Description    = _form.Description,
+                    IsSystemRole   = _form.IsSystemRole,
+                    PrivilegeLevel = int.TryParse(_form.PrivilegeLevelText, out var pl) ? pl : 0,
+                    SortOrder      = int.TryParse(_form.SortOrderText,      out var so) ? so : 0,
+                };
+                await Api.CreateRoleAsync(req);
+                await ToastAsync("Role created successfully.");
+            }
+            else
+            {
+                var req = new UpdateRoleRequest
+                {
+                    RoleId         = RoleId!.Value,
+                    RoleName       = _form.RoleName.Trim(),
+                    Description    = _form.Description,
+                    PrivilegeLevel = int.TryParse(_form.PrivilegeLevelText, out var pl) ? pl : 0,
+                    SortOrder      = int.TryParse(_form.SortOrderText,      out var so) ? so : 0,
+                };
+                await Api.UpdateRoleAsync(RoleId!.Value, req);
+                await ToastAsync("Role updated successfully.");
+            }
+
+            await OnSaved.InvokeAsync();
+
+            if (addAnother && IsCreate)
+                _form = new();
+            else
+                await HandleCloseAsync();
+        }
+        catch
+        {
+            _errorMsg = "An error occurred. Please try again.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private string Validate()
+    {
+        if (string.IsNullOrWhiteSpace(_form.RoleName))
+            return "Role Name is required.";
+        if (IsCreate && string.IsNullOrWhiteSpace(_form.RoleCode))
+            return "Role Code is required.";
+        if (!string.IsNullOrWhiteSpace(_form.PrivilegeLevelText) &&
+            !int.TryParse(_form.PrivilegeLevelText, out _))
+            return "Privilege Level must be a whole number.";
+        if (!string.IsNullOrWhiteSpace(_form.SortOrderText) &&
+            !int.TryParse(_form.SortOrderText, out _))
+            return "Sort Order must be a whole number.";
+        return string.Empty;
+    }
+
+    private async Task HandleCloseAsync()
+    {
+        _open = false;
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    private async Task ToastAsync(string msg, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content         = msg,
+            CssClass        = isError ? "e-toast-danger" : "e-toast-success",
+            Icon            = isError ? "e-error toast-icons" : "e-success toast-icons",
+            ShowCloseButton = true,
+            Timeout         = 4000,
+        });
+    }
+
+    // ── Inner types ──────────────────────────────────────────────────────────────
+    private sealed class FormModel
+    {
+        public string  RoleCode           { get; set; } = string.Empty;
+        public string  RoleName           { get; set; } = string.Empty;
+        public string  RoleTypeCode       { get; set; } = "Internal";
+        public string? Description        { get; set; }
+        public string  PrivilegeLevelText { get; set; } = "0";
+        public string  SortOrderText      { get; set; } = "0";
+        public bool    IsSystemRole       { get; set; }
+    }
+
+    private sealed record LabelValue(string Value, string Label);
+}

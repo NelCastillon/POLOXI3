@@ -1,0 +1,1 @@
+namespace Ams.Domain.Enums; public enum InvoiceStatus { Draft = 1, Finalized = 2, Sent = 3, PartiallyPaid = 4, Paid = 5, Overdue = 6, WrittenOff = 7 }

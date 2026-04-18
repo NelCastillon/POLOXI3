@@ -1,0 +1,201 @@
+@inject ApiClient Api
+
+<div class="tab-section">
+    <div class="ts-header">
+        <h3 class="ts-title">Data Scopes</h3>
+        <button class="ts-btn-primary" @onclick="OpenAssign">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Assign Scope
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="ts-loading" aria-live="polite">
+            <div class="ts-spinner" aria-hidden="true"></div> Loading scopes…
+        </div>
+    }
+    else if (_scopes.Count == 0)
+    {
+        <div class="ts-empty">
+            <i class="bi bi-diagram-2" aria-hidden="true"></i>
+            <span>No scopes assigned to this user.</span>
+        </div>
+    }
+    else
+    {
+        <SfGrid TValue="UserScopeDto" DataSource="@_scopes" AllowPaging="true"
+                AllowSorting="true" EnableHover="true" RowHeight="48">
+            <GridPageSettings PageSize="15" />
+            <GridColumns>
+                <GridColumn Field="ScopeTypeCode" HeaderText="Scope Type" Width="160" />
+                <GridColumn Field="ScopeValue" HeaderText="Scope Value" Width="200" />
+                <GridColumn Field="IsActive" HeaderText="Status" Width="100">
+                    <Template Context="s">
+                        @{ var scope = (UserScopeDto)s; }
+                        <span class="badge @(scope.IsActive ? "badge-green" : "badge-neutral")">
+                            @(scope.IsActive ? "Active" : "Inactive")
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="GrantedDateUtc" HeaderText="Granted" Width="140">
+                    <Template Context="s">
+                        @{ var scope = (UserScopeDto)s; }
+                        <span>@scope.GrantedDateUtc.ToString("MMM d, yyyy")</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="ExpiresDateUtc" HeaderText="Expires" Width="130">
+                    <Template Context="s">
+                        @{ var scope = (UserScopeDto)s; }
+                        <span>@(scope.ExpiresDateUtc?.ToString("MMM d, yyyy") ?? "Never")</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="GrantedByFullName" HeaderText="Granted By" Width="160" />
+                <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right" AllowSorting="false">
+                    <Template Context="s">
+                        @{ var scope = (UserScopeDto)s; }
+                        <button class="ra-btn ra-btn-danger" title="Revoke scope"
+                                @onclick="() => RevokeAsync(scope)">
+                            <i class="bi bi-x-lg" aria-hidden="true"></i>
+                        </button>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    }
+
+    @if (!string.IsNullOrEmpty(_msg))
+    {
+        <div class="ts-feedback @(_isError ? "ts-feedback-err" : "ts-feedback-ok")" role="alert">
+            <i class="bi @(_isError ? "bi-x-circle" : "bi-check-circle")" aria-hidden="true"></i>
+            @_msg
+        </div>
+    }
+</div>
+
+<!-- ── Assign Scope Dialog ───────────────────────────── -->
+<SfDialog @bind-Visible="_showAssign" Width="480px" IsModal="true"
+          ShowCloseIcon="true" CloseOnEscape="true">
+    <DialogTemplates>
+        <Header><i class="bi bi-diagram-2" aria-hidden="true"></i> Assign Scope</Header>
+        <Content>
+            <div class="ts-assign-form">
+                <div class="form-group">
+                    <label>Scope Type <span class="req" aria-hidden="true">*</span></label>
+                    <SfDropDownList TItem="string" TValue="string"
+                                    DataSource="@_scopeTypes"
+                                    @bind-Value="_form.ScopeTypeCode"
+                                    Placeholder="Select scope type…" />
+                </div>
+                <div class="form-group">
+                    <label>Scope Value <span class="req" aria-hidden="true">*</span></label>
+                    <SfTextBox @bind-Value="_form.ScopeValue" Placeholder="e.g. branch-id or tenant-id" />
+                </div>
+                <div class="form-group">
+                    <label>Expires (optional)</label>
+                    <SfDatePicker TValue="DateTime?" @bind-Value="_form.ExpiresDateUtc"
+                                  Min="DateTime.UtcNow" Placeholder="No expiry" />
+                </div>
+                @if (!string.IsNullOrEmpty(_formError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="ts-btn-ghost" @onclick="() => _showAssign = false">Cancel</button>
+                <button class="ts-btn-primary" @onclick="AssignAsync" disabled="@_saving">
+                    @if (_saving) { <span class="ts-spin" aria-hidden="true"></span> }
+                    Assign Scope
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid UserId   { get; set; }
+    [Parameter] public Guid TenantId { get; set; }
+
+    private bool             _loading = true;
+    private bool             _saving;
+    private List<UserScopeDto> _scopes = [];
+    private bool             _showAssign;
+    private string           _formError = string.Empty;
+    private string           _msg       = string.Empty;
+    private bool             _isError;
+    private ScopeForm        _form      = new();
+
+    private static readonly string[] _scopeTypes =
+        ["Branch", "Tenant", "Account", "Department", "Region", "Custom"];
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.GetUserScopesAsync(UserId);
+            _scopes = result?.ToList() ?? [];
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+        finally { _loading = false; }
+    }
+
+    private void OpenAssign()
+    {
+        _form      = new ScopeForm();
+        _formError = string.Empty;
+        _showAssign = true;
+    }
+
+    private async Task AssignAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_form.ScopeTypeCode) || string.IsNullOrWhiteSpace(_form.ScopeValue))
+        {
+            _formError = "Scope Type and Value are required.";
+            return;
+        }
+        _saving = true;
+        try
+        {
+            var req = new AssignUserScopeRequest
+            {
+                TenantId       = TenantId,
+                UserId         = UserId,
+                ScopeTypeCode  = _form.ScopeTypeCode,
+                ScopeValue     = _form.ScopeValue.Trim(),
+                ExpiresDateUtc = _form.ExpiresDateUtc,
+            };
+            await Api.AssignUserScopeAsync(req);
+            _showAssign = false;
+            ShowMsg("Scope assigned.", false);
+            await LoadAsync();
+        }
+        catch (Exception ex) { _formError = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    private async Task RevokeAsync(UserScopeDto scope)
+    {
+        try
+        {
+            await Api.RevokeUserScopeAsync(scope.UserScopeId);
+            ShowMsg($"Scope '{scope.ScopeTypeCode}:{scope.ScopeValue}' revoked.", false);
+            await LoadAsync();
+        }
+        catch (Exception ex) { ShowMsg(ex.Message, true); }
+    }
+
+    private void ShowMsg(string msg, bool isError) { _msg = msg; _isError = isError; }
+
+    private sealed class ScopeForm
+    {
+        public string     ScopeTypeCode  { get; set; } = string.Empty;
+        public string     ScopeValue     { get; set; } = string.Empty;
+        public DateTime?  ExpiresDateUtc { get; set; }
+    }
+}

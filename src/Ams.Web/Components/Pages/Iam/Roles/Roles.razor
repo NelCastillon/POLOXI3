@@ -1,0 +1,477 @@
+@page "/roles"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>Roles – AMS Enterprise</PageTitle>
+
+<div class="rm-page">
+
+    <!-- ── Page Header ──────────────────────────────────── -->
+    <div class="page-header">
+        <div>
+            <h1 class="page-title"><i class="bi bi-shield-lock" aria-hidden="true"></i> Roles</h1>
+            <p class="page-subtitle">Manage roles, permissions, and access assignments</p>
+        </div>
+        <div class="page-actions">
+            <button class="um-btn um-btn-ghost" @onclick="RefreshAsync" title="Refresh list" aria-label="Refresh">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+            </button>
+            <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i> Create Role
+            </button>
+        </div>
+    </div>
+
+    <!-- ── KPI strip ────────────────────────────────────── -->
+    <div class="rm-kpi-strip">
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-blue"><i class="bi bi-shield-lock"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Total Roles</div>
+                <div class="kpi-value">@_roles.Count</div>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-green"><i class="bi bi-check-circle"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Active</div>
+                <div class="kpi-value">@_roles.Count(r => r.IsActive)</div>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-amber"><i class="bi bi-slash-circle"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">Inactive</div>
+                <div class="kpi-value">@_roles.Count(r => !r.IsActive)</div>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon kpi-icon-purple"><i class="bi bi-building-lock"></i></div>
+            <div class="kpi-body">
+                <div class="kpi-label">System Roles</div>
+                <div class="kpi-value">@_roles.Count(r => r.IsSystemRole)</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Toolbar ───────────────────────────────────────── -->
+    <div class="toolbar">
+        <div class="um-search-box">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="um-search-input"
+                   type="search"
+                   placeholder="Search by code or name…"
+                   aria-label="Search roles"
+                   value="@_searchTerm"
+                   @oninput="OnSearchInput" />
+        </div>
+    </div>
+
+    <!-- ── Grid ─────────────────────────────────────────── -->
+    <div class="um-grid-card">
+        @if (_loading)
+        {
+            <div class="um-loading-overlay" aria-live="polite" aria-label="Loading roles">
+                <div class="um-spinner" aria-hidden="true"></div>
+                <span>Loading roles…</span>
+            </div>
+        }
+        <SfGrid TValue="RoleDto"
+                DataSource="@_roles"
+                AllowPaging="true"
+                AllowSorting="true"
+                AllowFiltering="true"
+                EnableHover="true"
+                RowHeight="52">
+            <GridPageSettings PageSize="25" PageSizes="@(new[] { 10, 25, 50, 100 })" />
+            <GridFilterSettings Type="@(Syncfusion.Blazor.Grids.FilterType.Menu)" />
+            <GridColumns>
+                <GridColumn Field="RoleCode" HeaderText="Code" Width="150" AllowSorting="true" />
+
+                <GridColumn Field="RoleName" HeaderText="Role Name" Width="220" AllowSorting="true">
+                    <Template Context="r">
+                        @{ var role = (RoleDto)r; }
+                        <div class="rm-name-cell">
+                            <div class="rm-role-icon" style="@RoleIconStyle(role.RoleTypeCode)" aria-hidden="true">
+                                <i class="bi @RoleTypeIcon(role.RoleTypeCode)"></i>
+                            </div>
+                            <div>
+                                <div class="rm-role-name">@role.RoleName</div>
+                                @if (!string.IsNullOrEmpty(role.Description))
+                                {
+                                    <div class="rm-role-desc">@role.Description</div>
+                                }
+                            </div>
+                        </div>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="RoleTypeCode" HeaderText="Type" Width="110">
+                    <Template Context="r">
+                        @{ var role = (RoleDto)r; }
+                        <span class="badge @TypeBadgeClass(role.RoleTypeCode)">@role.RoleTypeCode</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="IsActive" HeaderText="Status" Width="110">
+                    <Template Context="r">
+                        @{ var role = (RoleDto)r; }
+                        <span class="badge @(role.IsActive ? "badge-green" : "badge-neutral")">
+                            <i class="bi @(role.IsActive ? "bi-check-circle-fill" : "bi-dash-circle")" aria-hidden="true"></i>
+                            @(role.IsActive ? "Active" : "Inactive")
+                        </span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="IsSystemRole" HeaderText="System" Width="90" TextAlign="TextAlign.Center">
+                    <Template Context="r">
+                        @{ var role = (RoleDto)r; }
+                        @if (role.IsSystemRole)
+                        {
+                            <span class="badge badge-purple" title="System Role"><i class="bi bi-building-lock" aria-hidden="true"></i></span>
+                        }
+                        else if (role.IsBuiltIn)
+                        {
+                            <span class="badge badge-blue" title="Built-in Role"><i class="bi bi-box" aria-hidden="true"></i></span>
+                        }
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="PermissionCount" HeaderText="Perms" Width="80" TextAlign="TextAlign.Center">
+                    <Template Context="r">
+                        @{ var role = (RoleDto)r; }
+                        <span class="um-count-pill">@role.PermissionCount</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="UserCount" HeaderText="Users" Width="80" TextAlign="TextAlign.Center">
+                    <Template Context="r">
+                        @{ var role = (RoleDto)r; }
+                        <span class="um-count-pill">@role.UserCount</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="SortOrder" HeaderText="Order" Width="80" TextAlign="TextAlign.Center" />
+
+                <GridColumn HeaderText="" Width="148" AllowSorting="false" TextAlign="TextAlign.Right">
+                    <Template Context="r">
+                        @{ var role = (RoleDto)r; }
+                        <div class="um-row-actions">
+                            <button class="ra-btn" title="View details" @onclick="() => ViewRole(role)">
+                                <i class="bi bi-eye" aria-hidden="true"></i>
+                            </button>
+                            <button class="ra-btn" title="Edit role" @onclick="() => OpenEdit(role)" disabled="@role.IsBuiltIn">
+                                <i class="bi bi-pencil" aria-hidden="true"></i>
+                            </button>
+                            <button class="ra-btn" title="Clone role" @onclick="() => OpenClone(role)">
+                                <i class="bi bi-copy" aria-hidden="true"></i>
+                            </button>
+                            <button class="ra-btn @(role.IsActive ? "" : "ra-btn-success")"
+                                    title="@(role.IsActive ? "Deactivate" : "Activate")"
+                                    @onclick="() => ToggleActiveAsync(role)"
+                                    disabled="@role.IsSystemRole">
+                                <i class="bi @(role.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+</div>
+
+<!-- ── Create / Edit / Clone Dialog ─────────────────── -->
+<SfDialog @bind-Visible="_showForm"
+          Width="580px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CloseOnEscape="true">
+    <DialogTemplates>
+        <Header>
+            <span class="dlg-hd-icon">
+                <i class="bi @DialogIcon" aria-hidden="true"></i>
+            </span>
+            @DialogTitle
+        </Header>
+        <Content>
+            <div class="dlg-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="f-rolecode">Role Code <span class="req" aria-hidden="true">*</span></label>
+                        <SfTextBox ID="f-rolecode" @bind-Value="_form.RoleCode"
+                                   Placeholder="e.g. ADMIN, VIEWER"
+                                   Enabled="@(_editRole is null)" />
+                    </div>
+                    <div class="form-group">
+                        <label for="f-sortorder">Sort Order</label>
+                        <SfNumericTextBox ID="f-sortorder" TValue="int" @bind-Value="_form.SortOrder"
+                                          Min="0" Max="9999" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="f-rolename">Role Name <span class="req" aria-hidden="true">*</span></label>
+                        <SfTextBox ID="f-rolename" @bind-Value="_form.RoleName"
+                                   Placeholder="e.g. System Administrator" />
+                    </div>
+                    <div class="form-group">
+                        <label>Role Type</label>
+                        <SfDropDownList TItem="string" TValue="string"
+                                        DataSource="@_roleTypes"
+                                        @bind-Value="_form.RoleTypeCode"
+                                        Enabled="@(_editRole is null)"
+                                        Placeholder="Select type…" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group form-group-full">
+                        <label for="f-desc">Description</label>
+                        <SfTextBox ID="f-desc" @bind-Value="_form.Description"
+                                   Multiline="true" Rows="3"
+                                   Placeholder="Describe the role's purpose…" />
+                    </div>
+                </div>
+                @if (!string.IsNullOrEmpty(_formError))
+                {
+                    <div class="form-alert" role="alert">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveRoleAsync" disabled="@_saving">
+                    @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
+                    @DialogSave
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Toast ─────────────────────────────────────────── -->
+<SfToast @ref="_toast" ID="rm-toast" ShowCloseButton="true" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private static readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private static readonly string[] _roleTypes = ["Internal", "External", "Service", "System"];
+
+    // ── Grid state ────────────────────────────────────────────
+    private List<RoleDto> _roles       = [];
+    private bool          _loading     = true;
+    private string        _searchTerm  = string.Empty;
+    private CancellationTokenSource _cts = new();
+
+    // ── Form state ────────────────────────────────────────────
+    private bool     _showForm;
+    private bool     _saving;
+    private string   _formError = string.Empty;
+    private RoleDto? _editRole;
+    private bool     _isClone;
+    private RForm    _form = new();
+
+    // ── Toast ─────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    private string DialogTitle => _isClone ? "Clone Role" : (_editRole is null ? "Create Role" : $"Edit: {_editRole.RoleName}");
+    private string DialogIcon  => _isClone ? "bi-copy" : (_editRole is null ? "bi-plus-circle" : "bi-pencil-square");
+    private string DialogSave  => _isClone ? "Clone Role" : (_editRole is null ? "Create Role" : "Save Changes");
+
+    // ── Lifecycle ─────────────────────────────────────────────
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            await _cts.CancelAsync();
+            _cts = new CancellationTokenSource();
+            var result = await Api.SearchRolesAsync(_tenantId, _searchTerm.Trim(), _cts.Token);
+            _roles = result?.Items.ToList() ?? [];
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private Task RefreshAsync() => LoadAsync();
+
+    private System.Timers.Timer? _debounce;
+    private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _searchTerm = e.Value?.ToString() ?? string.Empty;
+        _debounce?.Dispose();
+        _debounce = new System.Timers.Timer(380);
+        _debounce.Elapsed += async (_, _) =>
+        {
+            _debounce?.Dispose();
+            _debounce = null;
+            await InvokeAsync(LoadAsync);
+        };
+        _debounce.AutoReset = false;
+        _debounce.Start();
+        await Task.CompletedTask;
+    }
+
+    // ── Navigation ────────────────────────────────────────────
+    private void ViewRole(RoleDto r) => Nav.NavigateTo($"/roles/{r.RoleId}");
+
+    // ── Create / Edit / Clone ──────────────────────────────────
+    private void OpenCreate()
+    {
+        _editRole  = null;
+        _isClone   = false;
+        _form      = new RForm();
+        _formError = string.Empty;
+        _showForm  = true;
+    }
+
+    private void OpenEdit(RoleDto r)
+    {
+        _editRole  = r;
+        _isClone   = false;
+        _form = new RForm
+        {
+            RoleCode     = r.RoleCode,
+            RoleName     = r.RoleName,
+            RoleTypeCode = r.RoleTypeCode,
+            Description  = r.Description,
+            SortOrder    = r.SortOrder,
+        };
+        _formError = string.Empty;
+        _showForm  = true;
+    }
+
+    private void OpenClone(RoleDto r)
+    {
+        _editRole  = null;
+        _isClone   = true;
+        _form = new RForm
+        {
+            RoleCode     = $"{r.RoleCode}_COPY",
+            RoleName     = $"{r.RoleName} (Copy)",
+            RoleTypeCode = r.RoleTypeCode,
+            Description  = r.Description,
+            SortOrder    = r.SortOrder,
+        };
+        _formError = string.Empty;
+        _showForm  = true;
+    }
+
+    private void CloseForm() { _showForm = false; _formError = string.Empty; }
+
+    private async Task SaveRoleAsync()
+    {
+        if (_saving) return;
+        _formError = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(_form.RoleCode))  { _formError = "Role Code is required."; return; }
+        if (string.IsNullOrWhiteSpace(_form.RoleName))  { _formError = "Role Name is required."; return; }
+
+        _saving = true;
+        try
+        {
+            if (_editRole is not null)
+            {
+                var req = new UpdateRoleRequest
+                {
+                    RoleId      = _editRole.RoleId,
+                    RoleName    = _form.RoleName.Trim(),
+                    Description = _form.Description?.Trim(),
+                    SortOrder   = _form.SortOrder,
+                };
+                await Api.UpdateRoleAsync(_editRole.RoleId, req);
+                CloseForm();
+                await ShowToastAsync($"Role '{req.RoleName}' updated.");
+            }
+            else
+            {
+                var req = new CreateRoleRequest
+                {
+                    TenantId     = _tenantId,
+                    RoleCode     = _form.RoleCode.Trim().ToUpperInvariant(),
+                    RoleName     = _form.RoleName.Trim(),
+                    RoleTypeCode = _form.RoleTypeCode,
+                    Description  = _form.Description?.Trim(),
+                    SortOrder    = _form.SortOrder,
+                };
+                var id = await Api.CreateRoleAsync(req);
+                CloseForm();
+                await ShowToastAsync($"Role '{req.RoleName}' {(_isClone ? "cloned" : "created")}.");
+            }
+            await LoadAsync();
+        }
+        catch (Exception ex) { _formError = $"Error: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    // ── Activate / Deactivate ─────────────────────────────────
+    private async Task ToggleActiveAsync(RoleDto r)
+    {
+        try
+        {
+            await Api.SetRoleActiveAsync(r.RoleId, !r.IsActive);
+            await ShowToastAsync($"Role '{r.RoleName}' {(!r.IsActive ? "activated" : "deactivated")}.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
+    }
+
+    // ── Display helpers ───────────────────────────────────────
+    private static string TypeBadgeClass(string type) => type.ToLowerInvariant() switch
+    {
+        "internal" => "badge-blue",
+        "external" => "badge-neutral",
+        "service"  => "badge-amber",
+        "system"   => "badge-red",
+        _          => "badge-neutral",
+    };
+
+    private static string RoleTypeIcon(string type) => type.ToLowerInvariant() switch
+    {
+        "internal" => "bi-person-badge",
+        "external" => "bi-globe",
+        "service"  => "bi-gear",
+        "system"   => "bi-cpu",
+        _          => "bi-shield",
+    };
+
+    private static readonly string[] _iconColors = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4"];
+
+    private static string RoleIconStyle(string type) => type.ToLowerInvariant() switch
+    {
+        "internal" => "background:#3b82f6",
+        "external" => "background:#6b7280",
+        "service"  => "background:#f59e0b",
+        "system"   => "background:#ef4444",
+        _          => "background:#8b5cf6",
+    };
+
+    private async Task ShowToastAsync(string message, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content  = message,
+            CssClass = isError ? "e-toast-danger" : "e-toast-success",
+            Timeout  = 4000,
+        });
+    }
+
+    // ── Form model ────────────────────────────────────────────
+    private sealed class RForm
+    {
+        public string  RoleCode     { get; set; } = string.Empty;
+        public string  RoleName     { get; set; } = string.Empty;
+        public string  RoleTypeCode { get; set; } = "Internal";
+        public string? Description  { get; set; }
+        public int     SortOrder    { get; set; }
+    }
+}

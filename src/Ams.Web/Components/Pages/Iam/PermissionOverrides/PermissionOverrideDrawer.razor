@@ -1,0 +1,316 @@
+@*
+    PermissionOverrideDrawer — reusable right-side drawer for adding or editing a user permission override.
+    Add mode:  <PermissionOverrideDrawer @bind-Visible="_show" OnSaved="ReloadAsync" />
+    Edit mode: <PermissionOverrideDrawer @bind-Visible="_show" Override="_selected" OnSaved="ReloadAsync" />
+*@
+@inject ApiClient Api
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppCrudDrawer @bind-Visible="_open"
+               Title="@DrawerTitle"
+               Icon="@DrawerIcon"
+               Width="540px"
+               IsBusy="_busy"
+               OnClose="HandleCloseAsync">
+    <Footer>
+        <button class="um-btn um-btn-ghost" @onclick="HandleCloseAsync" disabled="@_busy">Cancel</button>
+        @if (IsCreate)
+        {
+            <button class="um-btn um-btn-ghost" @onclick="() => SaveAsync(addAnother: true)" disabled="@_busy">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> Save &amp; Add Another
+            </button>
+        }
+        <button class="um-btn um-btn-primary" @onclick="() => SaveAsync(addAnother: false)" disabled="@_busy">
+            @if (_busy) { <span class="um-spin" aria-hidden="true"></span> }
+            @DrawerConfirmText
+        </button>
+    </Footer>
+    <Content>
+        @if (_formLoading)
+        {
+            <div class="pod-loading">
+                <span class="um-spin" aria-hidden="true"></span>
+                <span>Loading…</span>
+            </div>
+        }
+        else
+        {
+            @if (!string.IsNullOrEmpty(_errorMsg))
+            {
+                <div class="pod-error">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    @_errorMsg
+                </div>
+            }
+
+            <!-- Subject -->
+            <div class="pod-section">
+                <h4 class="pod-section-title">Subject</h4>
+                <div class="pod-grid">
+                    <div class="pod-field pod-field--full">
+                        <label class="pod-label">User <span class="req">*</span></label>
+                        @if (IsCreate)
+                        {
+                            <SfDropDownList TValue="Guid" TItem="UserDto"
+                                            DataSource="_users"
+                                            @bind-Value="_form.UserId"
+                                            Placeholder="Select user"
+                                            AllowFiltering="true">
+                                <DropDownListFieldSettings Value="UserId" Text="FullName" />
+                            </SfDropDownList>
+                        }
+                        else
+                        {
+                            <span class="pod-readonly">@(Override?.UserFullName ?? "—")</span>
+                        }
+                    </div>
+                    <div class="pod-field pod-field--full">
+                        <label class="pod-label">Permission <span class="req">*</span></label>
+                        @if (IsCreate)
+                        {
+                            <SfDropDownList TValue="Guid" TItem="PermissionItem"
+                                            DataSource="_permissions"
+                                            @bind-Value="_form.PermissionId"
+                                            Placeholder="Select permission"
+                                            AllowFiltering="true">
+                                <DropDownListFieldSettings Value="PermissionId" Text="DisplayText" />
+                            </SfDropDownList>
+                        }
+                        else
+                        {
+                            <span class="pod-readonly">@(Override?.PermissionName ?? "—") <span class="pod-perm-code">@Override?.PermissionCode</span></span>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <!-- Override -->
+            <div class="pod-section">
+                <h4 class="pod-section-title">Override</h4>
+                <div class="pod-grid">
+                    <div class="pod-field pod-field--full">
+                        <label class="pod-label">Type <span class="req">*</span></label>
+                        <div class="pod-toggle-group">
+                            <label class="pod-toggle-btn @(_form.IsGranted ? "pod-toggle-btn--active pod-toggle-btn--allow" : "")">
+                                <input type="radio" name="grantType" @onchange="() => _form.IsGranted = true" checked="@_form.IsGranted" />
+                                <i class="bi bi-check-circle-fill" aria-hidden="true"></i> Allow
+                            </label>
+                            <label class="pod-toggle-btn @(!_form.IsGranted ? "pod-toggle-btn--active pod-toggle-btn--deny" : "")">
+                                <input type="radio" name="grantType" @onchange="() => _form.IsGranted = false" checked="@(!_form.IsGranted)" />
+                                <i class="bi bi-slash-circle-fill" aria-hidden="true"></i> Deny
+                            </label>
+                        </div>
+                    </div>
+                    <div class="pod-field">
+                        <label class="pod-label">Effective Start</label>
+                        <SfDatePicker TValue="DateTime?" @bind-Value="_form.EffectiveStartDateUtc" Placeholder="From date (optional)" />
+                    </div>
+                    <div class="pod-field">
+                        <label class="pod-label">Effective End</label>
+                        <SfDatePicker TValue="DateTime?" @bind-Value="_form.EffectiveEndDateUtc" Placeholder="Expiry date (optional)" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audit -->
+            <div class="pod-section">
+                <h4 class="pod-section-title">Audit</h4>
+                <div class="pod-grid">
+                    <div class="pod-field pod-field--full">
+                        <label class="pod-label">Reason</label>
+                        <SfTextBox @bind-Value="_form.Reason"
+                                   Placeholder="Justification for this override"
+                                   Multiline="true" />
+                    </div>
+                    <div class="pod-field pod-field--full">
+                        <label class="pod-label">Approver</label>
+                        <SfDropDownList TValue="Guid?" TItem="UserDto"
+                                        DataSource="_users"
+                                        @bind-Value="_form.ApprovedByUserId"
+                                        Placeholder="Select approver (optional)"
+                                        ShowClearButton="true"
+                                        AllowFiltering="true">
+                            <DropDownListFieldSettings Value="UserId" Text="FullName" />
+                        </SfDropDownList>
+                    </div>
+                </div>
+            </div>
+        }
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    [Parameter] public bool                  Visible        { get; set; }
+    [Parameter] public EventCallback<bool>   VisibleChanged { get; set; }
+    [Parameter] public UserPermissionDto?    Override       { get; set; }
+    [Parameter] public EventCallback         OnSaved        { get; set; }
+
+    private SfToast? _toast;
+
+    private bool   _open        = false;
+    private bool   _formLoading = false;
+    private bool   _busy        = false;
+    private string _errorMsg    = string.Empty;
+    private bool   _prevVisible = false;
+
+    private FormModel          _form        = new();
+    private List<UserDto>      _users       = [];
+    private List<PermissionItem> _permissions = [];
+
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    private bool   IsCreate          => Override is null;
+    private string DrawerTitle       => IsCreate ? "Add Override"  : "Edit Override";
+    private string DrawerIcon        => IsCreate ? "bi-shield-plus" : "bi-pencil";
+    private string DrawerConfirmText => IsCreate ? "Add Override"  : "Save Changes";
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        await Task.WhenAll(LoadUsersAsync(), LoadPermissionsAsync());
+    }
+
+    protected override void OnParametersSet() => _open = Visible;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var justOpened = Visible && !_prevVisible;
+        _prevVisible   = Visible;
+
+        if (justOpened)
+            await RefreshFormAsync();
+    }
+
+    // ── Reference data ────────────────────────────────────────────────────────────
+    private async Task LoadUsersAsync()
+    {
+        if (_users.Count > 0) return;
+        var result = await Api.SearchUsersAsync(_tenantId);
+        _users = result?.Items.ToList() ?? [];
+    }
+
+    private async Task LoadPermissionsAsync()
+    {
+        if (_permissions.Count > 0) return;
+        var result = await Api.SearchPermissionsAsync(_tenantId, pageSize: 200);
+        _permissions = result?.Items
+            .Select(p => new PermissionItem(p.PermissionId, $"{p.PermissionName} ({p.PermissionCode})"))
+            .ToList() ?? [];
+    }
+
+    // ── Form ──────────────────────────────────────────────────────────────────────
+    private Task RefreshFormAsync()
+    {
+        _errorMsg = string.Empty;
+        _form = Override is null ? new() : new FormModel
+        {
+            IsGranted             = Override.IsGranted,
+            EffectiveStartDateUtc = Override.EffectiveStartDateUtc,
+            EffectiveEndDateUtc   = Override.ExpiresDateUtc,
+            Reason                = Override.Reason,
+        };
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveAsync(bool addAnother)
+    {
+        _errorMsg = Validate();
+        if (!string.IsNullOrEmpty(_errorMsg)) return;
+
+        _busy = true;
+        try
+        {
+            if (IsCreate)
+            {
+                await Api.GrantPermissionOverrideAsync(new GrantUserPermissionRequest
+                {
+                    TenantId              = _tenantId,
+                    UserId                = _form.UserId,
+                    PermissionId          = _form.PermissionId,
+                    IsGranted             = _form.IsGranted,
+                    EffectiveStartDateUtc = _form.EffectiveStartDateUtc,
+                    ExpiresDateUtc        = _form.EffectiveEndDateUtc,
+                    Reason                = _form.Reason,
+                    ApprovedByUserId      = _form.ApprovedByUserId,
+                });
+                await ToastAsync("Override added successfully.");
+            }
+            else
+            {
+                await Api.UpdatePermissionOverrideAsync(Override!.UserPermissionId, new UpdateUserPermissionRequest
+                {
+                    UserPermissionId      = Override.UserPermissionId,
+                    IsGranted             = _form.IsGranted,
+                    EffectiveStartDateUtc = _form.EffectiveStartDateUtc,
+                    EffectiveEndDateUtc   = _form.EffectiveEndDateUtc,
+                    Reason                = _form.Reason,
+                    ApprovedByUserId      = _form.ApprovedByUserId,
+                });
+                await ToastAsync("Override updated successfully.");
+            }
+
+            await OnSaved.InvokeAsync();
+
+            if (addAnother && IsCreate)
+                _form = new();
+            else
+                await HandleCloseAsync();
+        }
+        catch
+        {
+            _errorMsg = "An error occurred. Please try again.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private string Validate()
+    {
+        if (IsCreate && _form.UserId == Guid.Empty)
+            return "User is required.";
+        if (IsCreate && _form.PermissionId == Guid.Empty)
+            return "Permission is required.";
+        if (_form.EffectiveStartDateUtc.HasValue && _form.EffectiveEndDateUtc.HasValue &&
+            _form.EffectiveEndDateUtc <= _form.EffectiveStartDateUtc)
+            return "Effective End must be after Effective Start.";
+        return string.Empty;
+    }
+
+    private async Task HandleCloseAsync()
+    {
+        _open = false;
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    private async Task ToastAsync(string msg, bool isError = false)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content         = msg,
+            CssClass        = isError ? "e-toast-danger" : "e-toast-success",
+            Icon            = isError ? "e-error toast-icons" : "e-success toast-icons",
+            ShowCloseButton = true,
+            Timeout         = 4000,
+        });
+    }
+
+    // ── Inner types ───────────────────────────────────────────────────────────────
+    private sealed record PermissionItem(Guid PermissionId, string DisplayText);
+
+    private sealed class FormModel
+    {
+        public Guid      UserId                { get; set; }
+        public Guid      PermissionId          { get; set; }
+        public bool      IsGranted             { get; set; } = true;
+        public DateTime? EffectiveStartDateUtc { get; set; }
+        public DateTime? EffectiveEndDateUtc   { get; set; }
+        public string?   Reason                { get; set; }
+        public Guid?     ApprovedByUserId      { get; set; }
+    }
+}

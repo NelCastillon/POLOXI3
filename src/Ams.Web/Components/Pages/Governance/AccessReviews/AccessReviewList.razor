@@ -1,0 +1,447 @@
+@page "/governance/access-reviews"
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>Access Review Campaigns</PageTitle>
+
+<div class="arc-shell">
+
+    <!-- ── Header ──────────────────────────────────────────────────────────── -->
+    <div class="arc-header">
+        <div class="arc-header-left">
+            <nav class="arc-breadcrumb" aria-label="breadcrumb">
+                <a href="/governance" class="arc-bc-link">Governance</a>
+                <span class="arc-bc-sep" aria-hidden="true">›</span>
+                <span class="arc-bc-current">Access Reviews</span>
+            </nav>
+            <h1 class="arc-title">
+                <i class="bi bi-clipboard2-check" aria-hidden="true"></i>
+                Access Review Campaigns
+            </h1>
+        </div>
+        <div class="arc-header-right">
+            <a href="/governance/access-reviews/new" class="um-btn um-btn-primary">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i>
+                New Campaign
+            </a>
+        </div>
+    </div>
+
+    <!-- ── KPI strip ───────────────────────────────────────────────────────── -->
+    <div class="arc-kpi-strip">
+        <div class="arc-kpi">
+            <span class="arc-kpi-value">@_all.Count</span>
+            <span class="arc-kpi-label">Total</span>
+        </div>
+        <div class="arc-kpi arc-kpi--active">
+            <span class="arc-kpi-value">@_all.Count(c => c.StatusCode == "Active")</span>
+            <span class="arc-kpi-label">Active</span>
+        </div>
+        <div class="arc-kpi arc-kpi--draft">
+            <span class="arc-kpi-value">@_all.Count(c => c.StatusCode == "Draft")</span>
+            <span class="arc-kpi-label">Draft</span>
+        </div>
+        <div class="arc-kpi arc-kpi--completed">
+            <span class="arc-kpi-value">@_all.Count(c => c.StatusCode == "Completed")</span>
+            <span class="arc-kpi-label">Completed</span>
+        </div>
+        <div class="arc-kpi arc-kpi--overdue">
+            <span class="arc-kpi-value">@_all.Count(c => c.StatusCode == "Active" && c.EndDateUtc < DateTime.UtcNow)</span>
+            <span class="arc-kpi-label">Overdue</span>
+        </div>
+    </div>
+
+    <!-- ── Filters ─────────────────────────────────────────────────────────── -->
+    <div class="arc-filters">
+        <div class="arc-search-wrap">
+            <i class="bi bi-search arc-search-icon" aria-hidden="true"></i>
+            <input class="arc-search-input"
+                   type="text"
+                   placeholder="Search campaigns or reviewer…"
+                   value="@_searchTerm"
+                   @oninput="OnSearchInput" />
+        </div>
+        <select class="arc-select" @bind="_filterStatus" @bind:after="ApplyFilter">
+            <option value="">All Statuses</option>
+            @foreach (var opt in _statusOptions)
+            {
+                <option value="@opt.Value">@opt.Label</option>
+            }
+        </select>
+    </div>
+
+    <!-- ── Table ───────────────────────────────────────────────────────────── -->
+    @if (_loading)
+    {
+        <div class="arc-loading">
+            <span class="um-spin" aria-hidden="true"></span>
+            Loading campaigns…
+        </div>
+    }
+    else if (_filtered.Count == 0)
+    {
+        <div class="arc-empty">
+            <i class="bi bi-clipboard2-x arc-empty-icon" aria-hidden="true"></i>
+            <p>No campaigns found.</p>
+            <a href="/governance/access-reviews/new" class="um-btn um-btn-primary um-btn-sm">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i>
+                New Campaign
+            </a>
+        </div>
+    }
+    else
+    {
+        <div class="arc-table-wrap">
+            <table class="arc-table">
+                <thead>
+                    <tr>
+                        <th>Campaign</th>
+                        <th>Scope</th>
+                        <th>Reviewer</th>
+                        <th>Start</th>
+                        <th>End</th>
+                        <th>Status</th>
+                        <th>Progress</th>
+                        <th class="arc-th-actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var c in _filtered)
+                    {
+                        <tr class="arc-row @(c.StatusCode == "Active" && c.EndDateUtc < DateTime.UtcNow ? "arc-row--overdue" : "")">
+                            <td>
+                                <a href="/governance/access-reviews/@c.CampaignId" class="arc-name-link">
+                                    @c.CampaignName
+                                </a>
+                                @if (!string.IsNullOrEmpty(c.Description))
+                                {
+                                    <div class="arc-name-desc">@c.Description</div>
+                                }
+                            </td>
+                            <td>
+                                @if (c.ScopeTypeCode == "ByRole")
+                                {
+                                    <span class="arc-scope-badge arc-scope-badge--role">
+                                        <i class="bi bi-person-badge" aria-hidden="true"></i>
+                                        @(c.ScopeReferenceName ?? "Role")
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span class="arc-scope-badge arc-scope-badge--all">
+                                        <i class="bi bi-people" aria-hidden="true"></i>
+                                        All Users
+                                    </span>
+                                }
+                            </td>
+                            <td class="arc-reviewer">@c.ReviewerFullName</td>
+                            <td class="arc-date">@c.StartDateUtc.ToString("dd MMM yyyy")</td>
+                            <td class="arc-date @(c.StatusCode == "Active" && c.EndDateUtc < DateTime.UtcNow ? "arc-date--overdue" : "")">
+                                @c.EndDateUtc.ToString("dd MMM yyyy")
+                                @if (c.StatusCode == "Active" && c.EndDateUtc < DateTime.UtcNow)
+                                {
+                                    <span class="arc-overdue-tag">Overdue</span>
+                                }
+                            </td>
+                            <td><span class="arc-status-badge arc-status-badge--@c.StatusCode.ToLower()">@c.StatusCode</span></td>
+                            <td class="arc-progress-cell">
+                                @if (c.TotalItemCount > 0)
+                                {
+                                    var pct = (int)Math.Round(100.0 * c.ReviewedItemCount / c.TotalItemCount);
+                                    <div class="arc-prog-bar">
+                                        <div class="arc-prog-fill" style="width:@pct%"></div>
+                                    </div>
+                                    <span class="arc-prog-label">@c.ReviewedItemCount / @c.TotalItemCount</span>
+                                }
+                                else
+                                {
+                                    <span class="arc-prog-label arc-prog-label--none">—</span>
+                                }
+                            </td>
+                            <td class="arc-actions">
+                                <a href="/governance/access-reviews/@c.CampaignId"
+                                   class="arc-action-btn arc-action-btn--view"
+                                   title="View detail">
+                                    <i class="bi bi-eye" aria-hidden="true"></i>
+                                </a>
+                                @if (c.StatusCode == "Draft")
+                                {
+                                    <a href="/governance/access-reviews/@c.CampaignId/edit"
+                                       class="arc-action-btn arc-action-btn--edit"
+                                       title="Edit">
+                                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                                    </a>
+                                    <button class="arc-action-btn arc-action-btn--activate"
+                                            title="Activate"
+                                            @onclick='() => OpenStatusChange(c, "Activate")'>
+                                        <i class="bi bi-play-circle" aria-hidden="true"></i>
+                                    </button>
+                                }
+                                @if (c.StatusCode == "Active")
+                                {
+                                    <a href="/governance/access-reviews/@c.CampaignId/review"
+                                       class="arc-action-btn arc-action-btn--workbench"
+                                       title="Open Workbench">
+                                        <i class="bi bi-clipboard2-check" aria-hidden="true"></i>
+                                    </a>
+                                    <button class="arc-action-btn arc-action-btn--complete"
+                                            title="Complete"
+                                            @onclick='() => OpenStatusChange(c, "Complete")'>
+                                        <i class="bi bi-check-circle" aria-hidden="true"></i>
+                                    </button>
+                                }
+                                @if (c.StatusCode is "Draft" or "Active")
+                                {
+                                    <button class="arc-action-btn arc-action-btn--cancel"
+                                            title="Cancel"
+                                            @onclick='() => OpenStatusChange(c, "Cancel")'>
+                                        <i class="bi bi-x-circle" aria-hidden="true"></i>
+                                    </button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+<!-- ── Status-change dialog ──────────────────────────────────────────────── -->
+<SfDialog Width="420px"
+          Visible="_dialogVisible"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CssClass="arc-dialog"
+          CloseOnEscape="true">
+    <DialogEvents Closed="OnDialogClosed" />
+    <DialogTemplates>
+        <Header>
+            <span class="arc-dlg-icon-wrap arc-dlg-icon-wrap--@_actionMode.ToLower()" aria-hidden="true">
+                <i class="bi @ActionIcon"></i>
+            </span>
+            @ActionTitle
+        </Header>
+        <Content>
+            <div class="arc-dlg-body">
+                @if (!string.IsNullOrEmpty(_dialogError))
+                {
+                    <div class="arc-dlg-error">
+                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                        @_dialogError
+                    </div>
+                }
+                @if (_selectedItem is not null)
+                {
+                    <p class="arc-dlg-confirm-msg">
+                        @ActionConfirmText
+                        <strong>@_selectedItem.CampaignName</strong>?
+                    </p>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="arc-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseDialog" disabled="@_processing">Cancel</button>
+                <button class="@ActionButtonClass" @onclick="ExecuteStatusChangeAsync" disabled="@_processing">
+                    @if (_processing)
+                    {
+                        <span class="um-spin" aria-hidden="true"></span>
+                        <span>Processing…</span>
+                    }
+                    else
+                    {
+                        <i class="bi @ActionIcon" aria-hidden="true"></i>
+                        <span>@ActionTitle</span>
+                    }
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Toast ─────────────────────────────────────────────────────────────── -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ──────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId      = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private readonly Guid _currentUserId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private List<AccessReviewCampaignDto> _all      = [];
+    private List<AccessReviewCampaignDto> _filtered = [];
+
+    // ── Filter state ───────────────────────────────────────────────────────────
+    private bool   _loading       = true;
+    private string _searchTerm    = string.Empty;
+    private string _filterStatus  = string.Empty;
+
+    // ── Dialog state ───────────────────────────────────────────────────────────
+    private bool                    _dialogVisible = false;
+    private bool                    _processing    = false;
+    private string                  _actionMode    = string.Empty;
+    private string                  _dialogError   = string.Empty;
+    private AccessReviewCampaignDto? _selectedItem  = null;
+
+    // ── Filter options ─────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Draft",     "Draft"),
+        new("Active",    "Active"),
+        new("Completed", "Completed"),
+        new("Cancelled", "Cancelled"),
+    ];
+
+    // ── Action computed ────────────────────────────────────────────────────────
+    private string ActionTitle => _actionMode switch
+    {
+        "Activate" => "Activate Campaign",
+        "Complete" => "Complete Campaign",
+        "Cancel"   => "Cancel Campaign",
+        _          => string.Empty,
+    };
+
+    private string ActionIcon => _actionMode switch
+    {
+        "Activate" => "bi-play-circle",
+        "Complete" => "bi-check-circle",
+        "Cancel"   => "bi-x-circle",
+        _          => "bi-question-circle",
+    };
+
+    private string ActionButtonClass => _actionMode switch
+    {
+        "Activate" => "um-btn um-btn-success",
+        "Complete" => "um-btn um-btn-primary",
+        "Cancel"   => "um-btn um-btn-danger",
+        _          => "um-btn um-btn-primary",
+    };
+
+    private string ActionConfirmText => _actionMode switch
+    {
+        "Activate" => "Are you sure you want to activate",
+        "Complete" => "Are you sure you want to complete",
+        "Cancel"   => "Are you sure you want to cancel",
+        _          => "Confirm action on",
+    };
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    // ── Data loading ───────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchAccessReviewCampaignsAsync(_tenantId, pageSize: 200);
+            _all = result?.Items?.ToList() ?? [];
+        }
+        catch
+        {
+            _all = [];
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = "Failed to load campaigns.",
+                CssClass = "e-toast-danger",
+                Icon     = "bi bi-exclamation-triangle",
+            });
+        }
+        finally
+        {
+            _loading = false;
+            ApplyFilter();
+        }
+    }
+
+    // ── Filtering ──────────────────────────────────────────────────────────────
+    private void OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _searchTerm = e.Value?.ToString() ?? string.Empty;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        var q = _searchTerm.Trim().ToLower();
+        _filtered = _all
+            .Where(c =>
+                (string.IsNullOrEmpty(q)
+                 || (c.CampaignName?.ToLower().Contains(q)     == true)
+                 || (c.ReviewerFullName?.ToLower().Contains(q) == true))
+                && (string.IsNullOrEmpty(_filterStatus) || c.StatusCode == _filterStatus))
+            .ToList();
+        StateHasChanged();
+    }
+
+    // ── Status-change dialog ───────────────────────────────────────────────────
+    private void OpenStatusChange(AccessReviewCampaignDto item, string actionMode)
+    {
+        _selectedItem  = item;
+        _actionMode    = actionMode;
+        _dialogError   = string.Empty;
+        _dialogVisible = true;
+    }
+
+    private void CloseDialog()
+    {
+        _dialogVisible = false;
+        _selectedItem  = null;
+        _actionMode    = string.Empty;
+        _dialogError   = string.Empty;
+    }
+
+    private void OnDialogClosed() => CloseDialog();
+
+    private async Task ExecuteStatusChangeAsync()
+    {
+        if (_selectedItem is null) return;
+        _processing  = true;
+        _dialogError = string.Empty;
+        try
+        {
+            switch (_actionMode)
+            {
+                case "Activate":
+                    await Api.ActivateAccessReviewCampaignAsync(_selectedItem.CampaignId, _currentUserId);
+                    break;
+                case "Complete":
+                    await Api.CompleteAccessReviewCampaignAsync(_selectedItem.CampaignId, _currentUserId);
+                    break;
+                case "Cancel":
+                    await Api.CancelAccessReviewCampaignAsync(_selectedItem.CampaignId, _currentUserId);
+                    break;
+            }
+            CloseDialog();
+            await _toast!.ShowAsync(new ToastModel
+            {
+                Content  = $"Campaign {_actionMode.ToLower()}d successfully.",
+                CssClass = "e-toast-success",
+                Icon     = "bi bi-check-circle",
+            });
+            await LoadAsync();
+        }
+        catch
+        {
+            _dialogError = $"Failed to {_actionMode.ToLower()} the campaign. Please try again.";
+        }
+        finally
+        {
+            _processing = false;
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Value, string Label);
+}

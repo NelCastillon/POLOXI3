@@ -1,0 +1,629 @@
+@page "/iam/roles"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Roles — IAM</PageTitle>
+
+<AppPageHeader Title="Roles"
+               Subtitle="Define and manage access roles, privilege tiers and system permissions"
+               Icon="bi-shield">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-shield-plus" aria-hidden="true"></i> New Role
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="rl-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0" aria-label="Filter: Total Roles">
+        <span class="rl-kpi-icon rl-kpi-icon--total"><i class="bi bi-shield-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="rl-kpi-value">@_totalCount</div>
+            <div class="rl-kpi-label">Total Roles</div>
+        </div>
+        @if (_kpiActive == 1) { <span class="rl-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0" aria-label="Filter: Active">
+        <span class="rl-kpi-icon rl-kpi-icon--active"><i class="bi bi-shield-check-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="rl-kpi-value">@_activeCount</div>
+            <div class="rl-kpi-label">Active</div>
+        </div>
+        @if (_kpiActive == 2) { <span class="rl-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0" aria-label="Filter: System Roles">
+        <span class="rl-kpi-icon rl-kpi-icon--system"><i class="bi bi-gear-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="rl-kpi-value">@_systemCount</div>
+            <div class="rl-kpi-label">System Roles</div>
+        </div>
+        @if (_kpiActive == 3) { <span class="rl-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass4" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0" aria-label="Filter: Inactive">
+        <span class="rl-kpi-icon rl-kpi-icon--inactive"><i class="bi bi-shield-x" aria-hidden="true"></i></span>
+        <div>
+            <div class="rl-kpi-value">@_inactiveCount</div>
+            <div class="rl-kpi-label">Inactive</div>
+        </div>
+        @if (_kpiActive == 4) { <span class="rl-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search role code or name…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_statusOptions"
+                        Placeholder="All Statuses"
+                        ShowClearButton="true"
+                        Width="150px"
+                        Value="_filterStatus"
+                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_typeOptions"
+                        Placeholder="All Types"
+                        ShowClearButton="true"
+                        Width="150px"
+                        Value="_filterType"
+                        ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_systemOptions"
+                        Placeholder="System?"
+                        ShowClearButton="true"
+                        Width="130px"
+                        Value="_filterSystem"
+                        ValueChanged="@((string v) => { _filterSystem = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </Filters>
+    <Actions>
+        @if (_selected.Count > 0)
+        {
+            <span class="rl-sel-count">
+                <i class="bi bi-check2-square" aria-hidden="true"></i> @_selected.Count selected
+            </span>
+
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="() => OpenEdit(_selected[0])"
+                    disabled="@(_selected.Count != 1)"
+                    title="Edit role">
+                <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+            </button>
+
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="() => ViewRole(_selected[0])"
+                    disabled="@(_selected.Count != 1)"
+                    title="View role detail">
+                <i class="bi bi-eye" aria-hidden="true"></i> View
+            </button>
+
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="() => OpenClone(_selected[0])"
+                    disabled="@(_selected.Count != 1)"
+                    title="Clone role">
+                <i class="bi bi-copy" aria-hidden="true"></i> Clone
+            </button>
+
+            @if (_selected.Count == 1 && _selected[0].IsActive)
+            {
+                <button class="um-btn um-btn-sm um-btn-warning"
+                        @onclick="() => OpenDeactivate(_selected[0])"
+                        title="Deactivate role">
+                    <i class="bi bi-shield-slash" aria-hidden="true"></i> Deactivate
+                </button>
+            }
+            else if (_selected.Count == 1 && !_selected[0].IsActive)
+            {
+                <button class="um-btn um-btn-sm um-btn-primary"
+                        @onclick="() => OpenActivate(_selected[0])"
+                        title="Activate role">
+                    <i class="bi bi-shield-check" aria-hidden="true"></i> Activate
+                </button>
+            }
+
+            <button class="um-btn um-btn-sm um-btn-ghost"
+                    @onclick="CompareRolesAsync"
+                    disabled="@(_selected.Count < 2)"
+                    title="Compare selected roles side-by-side">
+                <i class="bi bi-layout-split" aria-hidden="true"></i> Compare
+            </button>
+        }
+    </Actions>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading roles…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading roles…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="RoleDto"
+            DataSource="@_roles"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row"
+                               Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
+        <GridEvents TValue="RoleDto"
+                    RowSelected="OnRowSelected"
+                    RowDeselected="OnRowDeselected" />
+        <GridColumns>
+
+            <GridColumn Type="ColumnType.CheckBox" Width="48" />
+
+            <GridColumn Field="@nameof(RoleDto.RoleCode)"
+                        HeaderText="Role Code"
+                        Width="150" />
+
+            <GridColumn Field="@nameof(RoleDto.RoleName)"
+                        HeaderText="Role Name"
+                        Width="220">
+                <Template>
+                    @{
+                        var r = (RoleDto)context;
+                    }
+                    <div class="rl-role-cell">
+                        <span class="rl-role-badge" style="@RoleBadgeStyle(r)" aria-hidden="true">
+                            <i class="bi bi-shield-fill"></i>
+                        </span>
+                        <div class="rl-role-info">
+                            <div class="rl-role-name">@r.RoleName</div>
+                            <div class="rl-role-type">@r.RoleTypeCode</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RoleDto.PrivilegeLevel)"
+                        HeaderText="Privilege Level"
+                        Width="120"
+                        TextAlign="TextAlign.Center">
+                <Template>
+                    @{
+                        var r = (RoleDto)context;
+                    }
+                    <span class="@PrivilegePillClass(r)" title="Privilege level @r.PrivilegeLevel">
+                        @r.PrivilegeLevel
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RoleDto.IsSystemRole)"
+                        HeaderText="System"
+                        Width="90"
+                        TextAlign="TextAlign.Center">
+                <Template>
+                    @{
+                        var r = (RoleDto)context;
+                    }
+                    @if (r.IsSystemRole)
+                    {
+                        <span class="rl-sys-on" title="System role"><i class="bi bi-gear-fill" aria-hidden="true"></i></span>
+                    }
+                    else
+                    {
+                        <span class="rl-sys-off" title="Standard role"><i class="bi bi-dash" aria-hidden="true"></i></span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RoleDto.IsActive)"
+                        HeaderText="Status"
+                        Width="110">
+                <Template>
+                    @{
+                        var r = (RoleDto)context;
+                    }
+                    <AppStatusBadge Status="@(r.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RoleDto.UserCount)"
+                        HeaderText="Users"
+                        Width="90"
+                        TextAlign="TextAlign.Center">
+                <Template>
+                    @{
+                        var r = (RoleDto)context;
+                    }
+                    <span class="um-count-pill">@r.UserCount</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RoleDto.PermissionCount)"
+                        HeaderText="Permissions"
+                        Width="110"
+                        TextAlign="TextAlign.Center">
+                <Template>
+                    @{
+                        var r = (RoleDto)context;
+                    }
+                    <span class="um-count-pill">@r.PermissionCount</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RoleDto.ModifiedDateUtc)"
+                        HeaderText="Modified"
+                        Width="130">
+                <Template>
+                    @{
+                        var r = (RoleDto)context;
+                    }
+                    <span title="@(r.ModifiedDateUtc?.ToString("g") ?? "Never")">
+                        @FormatRelative(r.ModifiedDateUtc)
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText=""
+                        Width="100"
+                        AllowSorting="false"
+                        AllowFiltering="false">
+                <Template>
+                    @{
+                        var r = (RoleDto)context;
+                    }
+                    <div class="um-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenEdit(r)"
+                                title="Edit">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => OpenClone(r)"
+                                title="Clone">
+                            <i class="bi bi-copy" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost"
+                                @onclick="() => ViewRole(r)"
+                                title="View detail">
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Create / Edit drawer -->
+<RoleEditDrawer @bind-Visible="_showDrawer"
+                RoleId="_editRoleId"
+                OnSaved="HandleRoleSavedAsync" />
+
+<!-- Deactivate confirmation -->
+<AppConfirmActionDialog @bind-Visible="_showDeactivate"
+                        Title="Deactivate Role"
+                        Message="@($"Deactivate {_actionTarget?.RoleName}?")"
+                        Detail="Users assigned this role will lose access granted by it. You can reactivate at any time."
+                        Variant="warning"
+                        ConfirmText="Deactivate"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteDeactivateAsync" />
+
+<!-- Activate confirmation -->
+<AppConfirmActionDialog @bind-Visible="_showActivate"
+                        Title="Activate Role"
+                        Message="@($"Activate {_actionTarget?.RoleName}?")"
+                        Detail="The role will become available for assignment immediately."
+                        Variant="primary"
+                        ConfirmText="Activate"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteActivateAsync" />
+
+<!-- Clone confirmation -->
+<AppConfirmActionDialog @bind-Visible="_showClone"
+                        Title="Clone Role"
+                        Message="@($"Clone \"{_actionTarget?.RoleName}\"?")"
+                        Detail="A new inactive copy will be created. You can rename and configure it afterwards."
+                        Variant="primary"
+                        ConfirmText="Clone"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteCloneAsync" />
+
+<!-- Toast -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Constants ─────────────────────────────────────────────────────────────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    // ── Refs ──────────────────────────────────────────────────────────────────────
+    private SfGrid<RoleDto>? _grid;
+    private SfToast?         _toast;
+
+    // ── Data ──────────────────────────────────────────────────────────────────────
+    private List<RoleDto> _allRoles = [];
+    private List<RoleDto> _roles    = [];
+    private List<RoleDto> _selected = [];
+
+    // ── Loading / action flags ────────────────────────────────────────────────────
+    private bool _loading    = false;
+    private bool _confirming = false;
+
+    // ── Dialog visibility ─────────────────────────────────────────────────────────
+    private bool _showDrawer     = false;
+    private bool _showDeactivate = false;
+    private bool _showActivate   = false;
+    private bool _showClone      = false;
+
+    // ── Active targets ────────────────────────────────────────────────────────────
+    private Guid?    _editRoleId;
+    private RoleDto? _actionTarget;
+
+    // ── Filters ───────────────────────────────────────────────────────────────────
+    private string _search       = string.Empty;
+    private string _filterStatus = string.Empty;
+    private string _filterType   = string.Empty;
+    private string _filterSystem = string.Empty;
+
+    // ── KPI state ─────────────────────────────────────────────────────────────────
+    private int _kpiActive = 0; // 0=none 1=total 2=active 3=system 4=inactive
+
+    private string KpiClass1 => "rl-kpi-card rl-kpi-card--total"    + (_kpiActive == 1 ? " rl-kpi-card--active" : "");
+    private string KpiClass2 => "rl-kpi-card rl-kpi-card--active"   + (_kpiActive == 2 ? " rl-kpi-card--active" : "");
+    private string KpiClass3 => "rl-kpi-card rl-kpi-card--system"   + (_kpiActive == 3 ? " rl-kpi-card--active" : "");
+    private string KpiClass4 => "rl-kpi-card rl-kpi-card--inactive" + (_kpiActive == 4 ? " rl-kpi-card--active" : "");
+
+    // ── KPI counters ──────────────────────────────────────────────────────────────
+    private int _totalCount;
+    private int _activeCount;
+    private int _systemCount;
+    private int _inactiveCount;
+
+    // ── Static options ────────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Active",   "Active"),
+        new("Inactive", "Inactive"),
+    ];
+
+    private static readonly List<LabelValue> _typeOptions =
+    [
+        new("Internal", "Internal"),
+        new("External", "External"),
+        new("System",   "System"),
+    ];
+
+    private static readonly List<LabelValue> _systemOptions =
+    [
+        new("Yes", "System"),
+        new("No",  "Standard"),
+    ];
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",  "/"),
+            new("IAM",   "/iam"),
+            new("Roles", "/iam/roles"));
+
+        await LoadAsync();
+    }
+
+    // ── Data loading ──────────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchRolesAsync(_tenantId, _search);
+            _allRoles = result?.Items.ToList() ?? [];
+            _selected.Clear();
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _roles = _allRoles.Where(r =>
+            (string.IsNullOrEmpty(_filterStatus) ||
+                (r.IsActive ? "Active" : "Inactive") == _filterStatus) &&
+            (string.IsNullOrEmpty(_filterType)   ||
+                string.Equals(r.RoleTypeCode, _filterType, StringComparison.OrdinalIgnoreCase)) &&
+            (string.IsNullOrEmpty(_filterSystem) ||
+                (_filterSystem == "Yes" ? r.IsSystemRole : !r.IsSystemRole))
+        ).ToList();
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive    = _kpiActive == n ? 0 : n;
+        _filterStatus = string.Empty;
+        _filterSystem = string.Empty;
+        switch (_kpiActive)
+        {
+            case 2: _filterStatus = "Active";   break;
+            case 3: _filterSystem = "Yes";      break;
+            case 4: _filterStatus = "Inactive"; break;
+        }
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount    = _allRoles.Count;
+        _activeCount   = _allRoles.Count(r => r.IsActive);
+        _systemCount   = _allRoles.Count(r => r.IsSystemRole);
+        _inactiveCount = _allRoles.Count(r => !r.IsActive);
+    }
+
+    // ── Row selection ─────────────────────────────────────────────────────────────
+    private void OnRowSelected(RowSelectEventArgs<RoleDto> args)
+    {
+        if (!_selected.Contains(args.Data))
+            _selected.Add(args.Data);
+    }
+
+    private void OnRowDeselected(RowDeselectEventArgs<RoleDto> args)
+    {
+        _selected.Remove(args.Data);
+    }
+
+    // ── CRUD ──────────────────────────────────────────────────────────────────────
+    private void OpenCreate()
+    {
+        _editRoleId = null;
+        _showDrawer = true;
+    }
+
+    private void OpenEdit(RoleDto role)
+    {
+        _editRoleId = role.RoleId;
+        _showDrawer = true;
+    }
+
+    private async Task HandleRoleSavedAsync() => await LoadAsync();
+
+    // ── Activate / Deactivate ─────────────────────────────────────────────────────
+    private void OpenDeactivate(RoleDto role) { _actionTarget = role; _showDeactivate = true; }
+    private void OpenActivate  (RoleDto role) { _actionTarget = role; _showActivate   = true; }
+
+    private async Task ExecuteDeactivateAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.SetRoleActiveAsync(_actionTarget.RoleId, isActive: false);
+            await ShowToastAsync($"{_actionTarget.RoleName} has been deactivated.", "e-toast-warning");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger"); }
+        finally { _confirming = false; _actionTarget = null; }
+    }
+
+    private async Task ExecuteActivateAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.SetRoleActiveAsync(_actionTarget.RoleId, isActive: true);
+            await ShowToastAsync($"{_actionTarget.RoleName} has been activated.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger"); }
+        finally { _confirming = false; _actionTarget = null; }
+    }
+
+    // ── Clone ─────────────────────────────────────────────────────────────────────
+    private void OpenClone(RoleDto role) { _actionTarget = role; _showClone = true; }
+
+    private async Task ExecuteCloneAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            var src  = _actionTarget;
+            var code = (src.RoleCode.Length > 14
+                ? src.RoleCode[..14]
+                : src.RoleCode) + "_COPY";
+
+            var req = new CreateRoleRequest
+            {
+                TenantId       = _tenantId,
+                RoleCode       = code.ToUpperInvariant(),
+                RoleName       = src.RoleName + " (Copy)",
+                RoleTypeCode   = src.RoleTypeCode,
+                Description    = src.Description,
+                IsSystemRole   = false,
+                PrivilegeLevel = src.PrivilegeLevel,
+                SortOrder      = src.SortOrder,
+            };
+            await Api.CreateRoleAsync(req);
+            await ShowToastAsync($"Cloned as \"{req.RoleName}\".", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowToastAsync($"Clone failed: {ex.Message}", "e-toast-danger"); }
+        finally { _confirming = false; _actionTarget = null; }
+    }
+
+    // ── Stub actions ──────────────────────────────────────────────────────────────
+    private Task CompareRolesAsync() =>
+        ShowToastAsync("Compare Roles: not yet implemented.", "e-toast-info");
+
+    private Task ExportAsync() =>
+        ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+
+    private void ViewRole(RoleDto r) => Nav.NavigateTo("/iam/roles/" + r.RoleId);
+
+    // ── Toast helper ──────────────────────────────────────────────────────────────
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────────
+    private static string RoleBadgeStyle(RoleDto r)
+    {
+        var hue = r.RoleTypeCode switch
+        {
+            "System"   => 262,
+            "External" => 32,
+            _          => 213,
+        };
+        return $"background:hsl({hue},55%,42%);color:#fff;";
+    }
+
+    private static string PrivilegePillClass(RoleDto r) => r.PrivilegeLevel switch
+    {
+        >= 80 => "rl-priv-pill rl-priv-pill--high",
+        >= 40 => "rl-priv-pill rl-priv-pill--mid",
+        _     => "rl-priv-pill rl-priv-pill--low",
+    };
+
+    private static string FormatRelative(DateTime? dt)
+    {
+        if (dt is null) return "Never";
+        var diff = DateTime.UtcNow - dt.Value;
+        return diff.TotalDays switch
+        {
+            < 1   => diff.TotalHours < 1 ? "Just now" : $"{(int)diff.TotalHours}h ago",
+            < 7   => $"{(int)diff.TotalDays}d ago",
+            < 30  => $"{(int)(diff.TotalDays / 7)}w ago",
+            < 365 => $"{(int)(diff.TotalDays / 30)}mo ago",
+            _     => dt.Value.ToString("d"),
+        };
+    }
+
+    // ── Inner models ──────────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Value, string Label);
+}
