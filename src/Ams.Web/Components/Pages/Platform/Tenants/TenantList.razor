@@ -1,0 +1,607 @@
+@page "/platform/tenants"
+@using Ams.Application.Features.Tenants
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Tenant Registry</PageTitle>
+
+<AppPageHeader Title="Tenant Registry"
+               Subtitle="Master list of all tenants provisioned on the platform"
+               Icon="bi-buildings">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Tenant
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search by code or name…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_statusOptions"
+                        Placeholder="Status"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterStatus"
+                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_regionOptions"
+                        Placeholder="Region"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterRegion"
+                        ValueChanged="@((string v) => { _filterRegion = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_isolationOptions"
+                        Placeholder="Isolation"
+                        ShowClearButton="true"
+                        Width="150px"
+                        Value="_filterIsolation"
+                        ValueChanged="@((string v) => { _filterIsolation = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_planOptions"
+                        Placeholder="Plan"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterPlan"
+                        ValueChanged="@((string v) => { _filterPlan = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_billingStatusOptions"
+                        Placeholder="Billing Status"
+                        ShowClearButton="true"
+                        Width="150px"
+                        Value="_filterBillingStatus"
+                        ValueChanged="@((string v) => { _filterBillingStatus = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <SfDatePicker TValue="DateTime?" Placeholder="Created from" Width="150px"
+                      Value="_filterCreatedFrom"
+                      ValueChanged="@((DateTime? v) => { _filterCreatedFrom = v; ApplyFilters(); })"
+                      Format="dd MMM yyyy" ShowClearButton="true" />
+        <SfDatePicker TValue="DateTime?" Placeholder="Created to" Width="150px"
+                      Value="_filterCreatedTo"
+                      ValueChanged="@((DateTime? v) => { _filterCreatedTo = v; ApplyFilters(); })"
+                      Format="dd MMM yyyy" ShowClearButton="true" />
+        <SfCheckBox @bind-Checked="_filterSuspendedOnly"
+                    Label="Suspended only"
+                    @onclick="() => { _filterSuspendedOnly = !_filterSuspendedOnly; ApplyFilters(); }" />
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading tenants…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="TenantDto"
+            DataSource="@_filtered"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row" />
+        <GridEvents TValue="TenantDto" RowSelected="OnRowSelected" RowDeselected="OnRowDeselected" OnRecordDoubleClick="OnRowDoubleClick" />
+        <GridColumns>
+            <GridColumn Field="@nameof(TenantDto.TenantCode)"    HeaderText="Code"           Width="110" />
+            <GridColumn Field="@nameof(TenantDto.TenantName)"    HeaderText="Name"           Width="190" />
+            <GridColumn Field="@nameof(TenantDto.StatusCode)"    HeaderText="Status"         Width="110">
+                <Template>
+                    @{ var row = (TenantDto)context; }
+                    <span class="@StatusPillClass(row.StatusCode)">@row.StatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDto.RegionCode)"    HeaderText="Region"         Width="110" />
+            <GridColumn Field="@nameof(TenantDto.PlanCode)"      HeaderText="Plan"           Width="110" />
+            <GridColumn Field="@nameof(TenantDto.IsolationMode)" HeaderText="Isolation"      Width="110" />
+            <GridColumn Field="@nameof(TenantDto.PrimaryDomain)" HeaderText="Primary Domain" Width="170" />
+            <GridColumn Field="@nameof(TenantDto.ActiveUsers)"   HeaderText="Active Users"   Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+            <GridColumn HeaderText="Storage Used" Width="110" AllowSorting="false">
+                <Template>
+                    <span class="tl-muted">—</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDto.CreatedDateUtc)" HeaderText="Created"       Type="ColumnType.DateTime" Format="d" Width="110" />
+            <GridColumn HeaderText="" Width="210" AllowSorting="false">
+                <Template>
+                    @{ var row = (TenantDto)context; }
+                    <div class="tl-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Open detail"
+                                @onclick="() => OpenView(row)">
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Features"
+                                @onclick='() => Nav.NavigateTo($"/platform/features?tenantId={row.TenantId}")'>
+                            <i class="bi bi-toggles" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Usage"
+                                @onclick='() => Nav.NavigateTo($"/platform/usage?tenantId={row.TenantId}")'>
+                            <i class="bi bi-bar-chart-line" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Subscription"
+                                @onclick='() => Nav.NavigateTo($"/platform/subscriptions?tenantId={row.TenantId}")'>
+                            <i class="bi bi-card-checklist" aria-hidden="true"></i>
+                        </button>
+                        @if (row.StatusCode == "Active")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-warning" title="Suspend"
+                                    @onclick="() => OpenSuspend(row)">
+                                <i class="bi bi-pause-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        else if (row.StatusCode == "Suspended")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost" title="Activate"
+                                    @onclick="() => OpenActivate(row)">
+                                <i class="bi bi-play-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Toolbar actions requiring selection -->
+@if (_selected is not null)
+{
+    <div class="tl-selection-bar">
+        <span><i class="bi bi-check2-square" aria-hidden="true"></i> @_selected.TenantName selected</span>
+        <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => OpenView(_selected)">
+            <i class="bi bi-eye" aria-hidden="true"></i> View
+        </button>
+        <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => OpenEdit(_selected)">
+            <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+        </button>
+        @if (_selected.StatusCode != "Terminated")
+        {
+            <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => OpenUpgradePlan(_selected)">
+                <i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Upgrade Plan
+            </button>
+            <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => OpenMoveRegion(_selected)">
+                <i class="bi bi-geo-alt" aria-hidden="true"></i> Move Region
+            </button>
+        }
+        @if (_selected.StatusCode == "Active")
+        {
+            <button class="um-btn um-btn-sm um-btn-warning" @onclick="() => OpenSuspend(_selected)">
+                <i class="bi bi-pause-circle" aria-hidden="true"></i> Suspend
+            </button>
+        }
+        else if (_selected.StatusCode == "Suspended")
+        {
+            <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => OpenActivate(_selected)">
+                <i class="bi bi-play-circle" aria-hidden="true"></i> Activate
+            </button>
+        }
+        @if (_selected.StatusCode != "Terminated")
+        {
+            <button class="um-btn um-btn-sm um-btn-danger" @onclick="() => OpenTerminate(_selected)">
+                <i class="bi bi-x-octagon" aria-hidden="true"></i> Terminate
+            </button>
+        }
+        <button class="um-btn um-btn-sm um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+    </div>
+}
+
+<!-- Create / Edit drawer -->
+<TenantEditDrawer @bind-Visible="_showDrawer"
+                  Tenant="_editTarget"
+                  OnSaved="OnDrawerSavedAsync" />
+
+<!-- Suspend confirm -->
+<AppConfirmActionDialog @bind-Visible="_showSuspend"
+                        Title="Suspend Tenant"
+                        Message="@($"Suspend \"{_actionTarget?.TenantName}\"?")"
+                        Detail="The tenant and all its users will lose platform access until reactivated."
+                        Variant="warning"
+                        ConfirmText="Suspend"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteSuspendAsync" />
+
+<!-- Activate confirm -->
+<AppConfirmActionDialog @bind-Visible="_showActivate"
+                        Title="Activate Tenant"
+                        Message="@($"Activate \"{_actionTarget?.TenantName}\"?")"
+                        Detail="The tenant will regain full platform access."
+                        Variant="primary"
+                        ConfirmText="Activate"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteActivateAsync" />
+
+<!-- Terminate confirm -->
+<AppConfirmActionDialog @bind-Visible="_showTerminate"
+                        Title="Terminate Tenant"
+                        Message="@($"Permanently terminate \"{_actionTarget?.TenantName}\"?")"
+                        Detail="This action is irreversible. The tenant will be terminated and all access revoked."
+                        Variant="danger"
+                        ConfirmText="Terminate"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteTerminateAsync" />
+
+<!-- Upgrade Plan drawer -->
+<AppCrudDrawer @bind-Visible="_showUpgradePlan"
+               Title="Upgrade Plan"
+               Icon="bi-arrow-up-circle"
+               OnConfirm="ExecuteUpgradePlanAsync"
+               IsBusy="_confirming">
+    <Content>
+        <p class="tl-drawer-hint">Select the new plan for <strong>@_actionTarget?.TenantName</strong>.</p>
+        <div class="form-row">
+            <label class="form-label">New Plan <span class="form-required">*</span></label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_planOptions"
+                            @bind-Value="_upgradePlanCode"
+                            Placeholder="Select plan">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+<!-- Move Region drawer -->
+<AppCrudDrawer @bind-Visible="_showMoveRegion"
+               Title="Move Region"
+               Icon="bi-geo-alt"
+               OnConfirm="ExecuteMoveRegionAsync"
+               IsBusy="_confirming">
+    <Content>
+        <p class="tl-drawer-hint">Select the destination region for <strong>@_actionTarget?.TenantName</strong>.</p>
+        <div class="form-row">
+            <label class="form-label">New Region <span class="form-required">*</span></label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_regionOptions"
+                            @bind-Value="_moveRegionCode"
+                            Placeholder="Select region">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="form-row tl-warning-row">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <span>Moving a tenant's region may incur downtime and data migration. Ensure compliance requirements are met before proceeding.</span>
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+<!-- Toast -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    // ── Refs ───────────────────────────────────────────────────────────────────
+    private SfGrid<TenantDto>? _grid;
+    private SfToast?           _toast;
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private List<TenantDto> _all      = [];
+    private List<TenantDto> _filtered = [];
+    private TenantDto?      _selected;
+
+    // ── Loading / busy ─────────────────────────────────────────────────────────
+    private bool _loading    = false;
+    private bool _confirming = false;
+
+    // ── Dialog visibility ──────────────────────────────────────────────────────
+    private bool _showDrawer       = false;
+    private bool _showSuspend      = false;
+    private bool _showActivate     = false;
+    private bool _showTerminate    = false;
+    private bool _showUpgradePlan  = false;
+    private bool _showMoveRegion   = false;
+
+    // ── Active targets ─────────────────────────────────────────────────────────
+    private TenantDto? _editTarget;
+    private TenantDto? _actionTarget;
+    private string     _upgradePlanCode  = string.Empty;
+    private string     _moveRegionCode   = string.Empty;
+
+    // ── Filters ────────────────────────────────────────────────────────────────
+    private string    _search              = string.Empty;
+    private string    _filterStatus        = string.Empty;
+    private string    _filterRegion        = string.Empty;
+    private string    _filterIsolation     = string.Empty;
+    private string    _filterPlan          = string.Empty;
+    private string    _filterBillingStatus = string.Empty;
+    private DateTime? _filterCreatedFrom;
+    private DateTime? _filterCreatedTo;
+    private bool      _filterSuspendedOnly;
+
+    // ── Options ────────────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Active",     "Active"),
+        new("Suspended",  "Suspended"),
+        new("Terminated", "Terminated"),
+    ];
+    private static readonly List<LabelValue> _billingStatusOptions =
+    [
+        new("Current",     "Current"),
+        new("Overdue",     "Overdue"),
+        new("Delinquent",  "Delinquent"),
+        new("Grace Period","GracePeriod"),
+    ];
+    private static readonly List<LabelValue> _regionOptions =
+    [
+        new("US East",    "us-east-1"),
+        new("US West",    "us-west-2"),
+        new("EU West",    "eu-west-1"),
+        new("AP SE",      "ap-southeast-1"),
+    ];
+    private static readonly List<LabelValue> _isolationOptions =
+    [
+        new("Shared",     "Shared"),
+        new("Dedicated",  "Dedicated"),
+    ];
+    private static readonly List<LabelValue> _planOptions =
+    [
+        new("Starter",    "Starter"),
+        new("Growth",     "Growth"),
+        new("Enterprise", "Enterprise"),
+    ];
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Tenants",  "/platform/tenants"));
+        await LoadAsync();
+    }
+
+    // ── Data ───────────────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchTenantsAsync(pageSize: 1000);
+            _all = result?.Items.ToList() ?? [];
+            _selected = null;
+            ApplyFilters();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        var q = _all.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var s = _search.Trim().ToLower();
+            q = q.Where(x =>
+                x.TenantCode.ToLower().Contains(s) ||
+                x.TenantName.ToLower().Contains(s) ||
+                (x.PrimaryDomain?.ToLower().Contains(s) ?? false));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_filterStatus))
+            q = q.Where(x => x.StatusCode == _filterStatus);
+
+        if (!string.IsNullOrWhiteSpace(_filterRegion))
+            q = q.Where(x => x.RegionCode == _filterRegion);
+
+        if (!string.IsNullOrWhiteSpace(_filterIsolation))
+            q = q.Where(x => x.IsolationMode == _filterIsolation);
+
+        if (!string.IsNullOrWhiteSpace(_filterPlan))
+            q = q.Where(x => x.PlanCode == _filterPlan);
+
+        if (_filterSuspendedOnly)
+            q = q.Where(x => x.StatusCode == "Suspended");
+
+        if (_filterCreatedFrom.HasValue)
+            q = q.Where(x => x.CreatedDateUtc >= _filterCreatedFrom.Value);
+
+        if (_filterCreatedTo.HasValue)
+            q = q.Where(x => x.CreatedDateUtc <= _filterCreatedTo.Value.AddDays(1));
+
+        // Billing status is not on TenantDto; filter is a no-op until DTO is extended.
+
+        _filtered = q.ToList();
+    }
+
+    private async Task OnSearchAsync()
+    {
+        ApplyFilters();
+        await Task.CompletedTask;
+    }
+
+    // ── Row selection ──────────────────────────────────────────────────────────
+    private void OnRowSelected(RowSelectEventArgs<TenantDto> args) => _selected = args.Data;
+    private void OnRowDeselected(RowDeselectEventArgs<TenantDto> args) => _selected = null;
+    private void OnRowDoubleClick(RecordDoubleClickEventArgs<TenantDto> args) => OpenView(args.RowData);
+
+    // ── Create / Edit ──────────────────────────────────────────────────────────
+    private void OpenCreate()
+    {
+        _editTarget = null;
+        _showDrawer = true;
+    }
+
+    private void OpenView(TenantDto t) => Nav.NavigateTo($"/platform/tenants/{t.TenantId}");
+
+    private void OpenEdit(TenantDto t)
+    {
+        _editTarget = t;
+        _showDrawer = true;
+    }
+
+    private async Task OnDrawerSavedAsync(bool provisioned)
+    {
+        var msg = _editTarget is null
+            ? (provisioned ? "Tenant created and provisioning started." : "Tenant created.")
+            : "Tenant updated.";
+        await ShowToastAsync(msg, "Success");
+        await LoadAsync();
+    }
+
+    // ── Lifecycle actions ──────────────────────────────────────────────────────
+    private void OpenSuspend(TenantDto t)     { _actionTarget = t; _showSuspend     = true; }
+    private void OpenActivate(TenantDto t)    { _actionTarget = t; _showActivate    = true; }
+    private void OpenTerminate(TenantDto t)   { _actionTarget = t; _showTerminate   = true; }
+
+    private void OpenUpgradePlan(TenantDto t)
+    {
+        _actionTarget    = t;
+        _upgradePlanCode = t.PlanCode;
+        _showUpgradePlan = true;
+    }
+
+    private void OpenMoveRegion(TenantDto t)
+    {
+        _actionTarget  = t;
+        _moveRegionCode = t.RegionCode;
+        _showMoveRegion = true;
+    }
+
+    private async Task ExecuteUpgradePlanAsync()
+    {
+        if (_actionTarget is null || string.IsNullOrWhiteSpace(_upgradePlanCode)) return;
+        _confirming = true;
+        try
+        {
+            await Api.UpdateTenantAsync(_actionTarget.TenantId, new UpdateTenantRequest
+            {
+                TenantName    = _actionTarget.TenantName,
+                PlanCode      = _upgradePlanCode,
+                RegionCode    = _actionTarget.RegionCode,
+                IsolationMode = _actionTarget.IsolationMode,
+                PrimaryDomain = _actionTarget.PrimaryDomain,
+                Locale        = _actionTarget.Locale,
+                CurrencyCode  = _actionTarget.CurrencyCode,
+                TimeZoneId    = _actionTarget.TimeZoneId,
+                GoLiveDateUtc = _actionTarget.GoLiveDateUtc,
+            });
+            _showUpgradePlan = false;
+            await ShowToastAsync($"Plan updated to {_upgradePlanCode}.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToastAsync("Failed to update plan.", "Error"); }
+        finally { _confirming = false; }
+    }
+
+    private async Task ExecuteMoveRegionAsync()
+    {
+        if (_actionTarget is null || string.IsNullOrWhiteSpace(_moveRegionCode)) return;
+        _confirming = true;
+        try
+        {
+            await Api.UpdateTenantAsync(_actionTarget.TenantId, new UpdateTenantRequest
+            {
+                TenantName    = _actionTarget.TenantName,
+                PlanCode      = _actionTarget.PlanCode,
+                RegionCode    = _moveRegionCode,
+                IsolationMode = _actionTarget.IsolationMode,
+                PrimaryDomain = _actionTarget.PrimaryDomain,
+                Locale        = _actionTarget.Locale,
+                CurrencyCode  = _actionTarget.CurrencyCode,
+                TimeZoneId    = _actionTarget.TimeZoneId,
+                GoLiveDateUtc = _actionTarget.GoLiveDateUtc,
+            });
+            _showMoveRegion = false;
+            await ShowToastAsync($"Region moved to {_moveRegionCode}.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToastAsync("Failed to move region.", "Error"); }
+        finally { _confirming = false; }
+    }
+
+    private async Task ExportAsync()
+    {
+        await ShowToastAsync("Export initiated. You will be notified when the file is ready.", "Export");
+    }
+
+    private async Task ExecuteSuspendAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.SuspendTenantAsync(_actionTarget.TenantId);
+            _showSuspend = false;
+            await ShowToastAsync($"\"{_actionTarget.TenantName}\" suspended.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToastAsync("Failed to suspend tenant.", "Error"); }
+        finally { _confirming = false; }
+    }
+
+    private async Task ExecuteActivateAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.ActivateTenantAsync(_actionTarget.TenantId);
+            _showActivate = false;
+            await ShowToastAsync($"\"{_actionTarget.TenantName}\" activated.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToastAsync("Failed to activate tenant.", "Error"); }
+        finally { _confirming = false; }
+    }
+
+    private async Task ExecuteTerminateAsync()
+    {
+        if (_actionTarget is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.TerminateTenantAsync(_actionTarget.TenantId);
+            _showTerminate = false;
+            await ShowToastAsync($"\"{_actionTarget.TenantName}\" terminated.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToastAsync("Failed to terminate tenant.", "Error"); }
+        finally { _confirming = false; }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    private static string StatusPillClass(string status) => status switch
+    {
+        "Active"     => "tl-status-pill tl-status-pill--active",
+        "Suspended"  => "tl-status-pill tl-status-pill--suspended",
+        "Terminated" => "tl-status-pill tl-status-pill--terminated",
+        _            => "tl-status-pill",
+    };
+
+    private async Task ShowToastAsync(string message, string title)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel { Title = title, Content = message });
+    }
+
+    private sealed record LabelValue(string Label, string Value);
+}

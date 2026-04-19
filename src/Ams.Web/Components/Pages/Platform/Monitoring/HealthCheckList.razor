@@ -1,0 +1,413 @@
+@page "/platform/health/checks"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.HealthChecks
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Service Health — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Service Health"
+               Subtitle="Monitor service status, latency, and uptime across environments"
+               Icon="bi-heart-pulse">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Check
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by service, region…" @onkeyup="OnSearchKeyUp" />
+        <SfDropDownList TValue="string" TItem="StatusOption"
+                        @bind-Value="_statusFilter"
+                        DataSource="@_statusOptions"
+                        Placeholder="All Statuses"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading health checks…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="HealthCheckDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(HealthCheckDto.ServiceName)" HeaderText="Service" MinWidth="180" />
+            <GridColumn Field="@nameof(HealthCheckDto.StatusCode)" HeaderText="Status" Width="120">
+                <Template>
+                    @{ var row = (HealthCheckDto)context; }
+                    <span class="um-badge @HealthBadgeCss(row.StatusCode)">@row.StatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(HealthCheckDto.LatencyMs)" HeaderText="Latency (ms)" Width="120" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var row = (HealthCheckDto)context; }
+                    <span class="@LatencyCss(row.LatencyMs)">@row.LatencyMs ms</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(HealthCheckDto.UptimePercent)" HeaderText="Uptime %" Width="110" TextAlign="TextAlign.Right" Format="N2" />
+            <GridColumn Field="@nameof(HealthCheckDto.RegionCode)" HeaderText="Region" Width="110" />
+            <GridColumn Field="@nameof(HealthCheckDto.EnvironmentCode)" HeaderText="Environment" Width="120" />
+            <GridColumn Field="@nameof(HealthCheckDto.LastCheckDateUtc)" HeaderText="Last Check" Width="160" Format="g" />
+            <GridColumn Field="@nameof(HealthCheckDto.IsActive)" HeaderText="Active" Width="90">
+                <Template>
+                    @{ var row = (HealthCheckDto)context; }
+                    <span class="um-badge @(row.IsActive ? "um-badge--success" : "um-badge--neutral")">@(row.IsActive ? "Yes" : "No")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="120" AllowSorting="false">
+                <Template>
+                    @{ var row = (HealthCheckDto)context; }
+                    <div class="td-action-cell">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(row)" title="Edit">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs text-danger" @onclick="() => ConfirmDelete(row)" title="Delete">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+<!-- Create / Edit Dialog -->
+<SfDialog @bind-Visible="_dialogVisible"
+          Width="560px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="@(_editing ? "Edit Health Check" : "Add Health Check")">
+    <DialogTemplates>
+        <Content>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label class="um-label">Service Name <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.ServiceName" Placeholder="e.g. API Gateway" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Endpoint URL</label>
+                        <SfTextBox @bind-Value="_form.EndpointUrl" Placeholder="https://..." />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Status</label>
+                        <SfDropDownList TValue="string" TItem="StatusOption"
+                                        @bind-Value="_form.StatusCode"
+                                        DataSource="@_healthStatusOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Latency (ms)</label>
+                        <SfNumericTextBox TValue="int" @bind-Value="_form.LatencyMs" Min="0" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Uptime %</label>
+                        <SfNumericTextBox TValue="decimal" @bind-Value="_form.UptimePercent" Min="0" Max="100" Decimals="2" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Region</label>
+                        <SfTextBox @bind-Value="_form.RegionCode" Placeholder="US-EAST" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Environment</label>
+                        <SfDropDownList TValue="string" TItem="StatusOption"
+                                        @bind-Value="_form.EnvironmentCode"
+                                        DataSource="@_envOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+                    @if (_editing)
+                    {
+                        <div class="um-field">
+                            <label class="um-label">Active</label>
+                            <SfDropDownList TValue="string" TItem="StatusOption"
+                                            @bind-Value="_form.IsActiveStr"
+                                            DataSource="@_boolOptions">
+                                <DropDownListFieldSettings Value="Value" Text="Text" />
+                            </SfDropDownList>
+                        </div>
+                    }
+                    <div class="um-field um-field--full">
+                        <label class="um-label">Notes</label>
+                        <SfTextBox @bind-Value="_form.Notes" Multiline="true" />
+                    </div>
+                </div>
+                <div class="um-dialog-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving) { <span class="um-spinner-xs" aria-hidden="true"></span> }
+                        @(_editing ? "Save Changes" : "Create Check")
+                    </button>
+                </div>
+            </EditForm>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- Delete Confirm Dialog -->
+<SfDialog @bind-Visible="_deleteDialogVisible"
+          Width="420px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="Confirm Delete">
+    <DialogTemplates>
+        <Content>
+            <p>Delete health check <strong>@_deleteTarget?.ServiceName</strong>? This action cannot be undone.</p>
+            <div class="um-dialog-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _deleteDialogVisible = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    SfGrid<HealthCheckDto>? _grid;
+    SfToast? _toast;
+
+    List<HealthCheckDto> _items = [];
+    bool _loading;
+    bool _saving;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string _searchTerm   = string.Empty;
+    string _statusFilter = string.Empty;
+
+    bool _dialogVisible;
+    bool _deleteDialogVisible;
+    bool _editing;
+    HealthCheckDto? _deleteTarget;
+
+    readonly HealthCheckFormModel _form = new();
+
+    readonly List<StatusOption> _statusOptions =
+    [
+        new("", "All Statuses"),
+        new("Healthy",  "Healthy"),
+        new("Degraded", "Degraded"),
+        new("Unhealthy","Unhealthy"),
+        new("Unknown",  "Unknown")
+    ];
+
+    readonly List<StatusOption> _healthStatusOptions =
+    [
+        new("Healthy",  "Healthy"),
+        new("Degraded", "Degraded"),
+        new("Unhealthy","Unhealthy"),
+        new("Unknown",  "Unknown")
+    ];
+
+    readonly List<StatusOption> _envOptions =
+    [
+        new("Production",  "Production"),
+        new("Staging",     "Staging"),
+        new("Development", "Development"),
+        new("DR",          "DR")
+    ];
+
+    readonly List<StatusOption> _boolOptions =
+    [
+        new("true",  "Yes"),
+        new("false", "No")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Monitoring", null),
+            new BreadcrumbService.BreadcrumbItem("Service Health", "/platform/health"),
+            new BreadcrumbService.BreadcrumbItem("Health Checks", "/platform/health/checks"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchHealthChecksAsync(
+                searchTerm: _searchTerm,
+                statusCode: _statusFilter,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    void OnSearchKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") InvokeAsync(LoadAsync); }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    void OpenCreate()
+    {
+        _editing = false;
+        _form.Reset();
+        _dialogVisible = true;
+    }
+
+    void OpenEdit(HealthCheckDto row)
+    {
+        _editing = true;
+        _form.LoadFrom(row);
+        _dialogVisible = true;
+    }
+
+    void CloseDialog() => _dialogVisible = false;
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editing)
+            {
+                await Api.UpdateHealthCheckAsync(_form.HealthCheckId, _form.ToUpdateRequest());
+                await ShowToast("Health check updated.", "Success");
+            }
+            else
+            {
+                await Api.CreateHealthCheckAsync(_form.ToCreateRequest());
+                await ShowToast("Health check created.", "Success");
+            }
+            _dialogVisible = false;
+            await LoadAsync();
+        }
+        catch { await ShowToast("An error occurred. Please try again.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmDelete(HealthCheckDto row)
+    {
+        _deleteTarget = row;
+        _deleteDialogVisible = true;
+    }
+
+    async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteHealthCheckAsync(_deleteTarget.HealthCheckId);
+            _deleteDialogVisible = false;
+            await ShowToast("Health check deleted.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Delete failed.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    async Task ShowToast(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content      = message,
+            CssClass     = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            ShowCloseButton = true
+        });
+    }
+
+    static string HealthBadgeCss(string status) => status switch
+    {
+        "Healthy"   => "um-badge--success",
+        "Degraded"  => "um-badge--warning",
+        "Unhealthy" => "um-badge--danger",
+        _           => "um-badge--neutral"
+    };
+
+    static string LatencyCss(int ms) => ms switch
+    {
+        >= 500 => "load-critical",
+        >= 200 => "load-high",
+        >= 100 => "load-moderate",
+        _      => "load-low"
+    };
+
+    sealed record StatusOption(string Value, string Text);
+
+    sealed class HealthCheckFormModel
+    {
+        public Guid    HealthCheckId   { get; set; }
+        public string  ServiceName     { get; set; } = string.Empty;
+        public string? EndpointUrl     { get; set; }
+        public string  StatusCode      { get; set; } = "Unknown";
+        public int     LatencyMs       { get; set; }
+        public decimal UptimePercent   { get; set; } = 100.00m;
+        public string? RegionCode      { get; set; }
+        public string  EnvironmentCode { get; set; } = "Production";
+        public string  IsActiveStr     { get; set; } = "true";
+        public string? Notes           { get; set; }
+
+        public void Reset()
+        {
+            HealthCheckId = Guid.Empty; ServiceName = string.Empty; EndpointUrl = null;
+            StatusCode = "Unknown"; LatencyMs = 0; UptimePercent = 100.00m;
+            RegionCode = null; EnvironmentCode = "Production"; IsActiveStr = "true"; Notes = null;
+        }
+
+        public void LoadFrom(HealthCheckDto dto)
+        {
+            HealthCheckId = dto.HealthCheckId; ServiceName = dto.ServiceName; EndpointUrl = dto.EndpointUrl;
+            StatusCode = dto.StatusCode; LatencyMs = dto.LatencyMs; UptimePercent = dto.UptimePercent;
+            RegionCode = dto.RegionCode; EnvironmentCode = dto.EnvironmentCode;
+            IsActiveStr = dto.IsActive ? "true" : "false"; Notes = dto.Notes;
+        }
+
+        public CreateHealthCheckRequest ToCreateRequest() => new()
+        {
+            ServiceName = ServiceName, EndpointUrl = EndpointUrl, StatusCode = StatusCode,
+            LatencyMs = LatencyMs, UptimePercent = UptimePercent, RegionCode = RegionCode,
+            EnvironmentCode = EnvironmentCode, Notes = Notes
+        };
+
+        public UpdateHealthCheckRequest ToUpdateRequest() => new()
+        {
+            ServiceName = ServiceName, EndpointUrl = EndpointUrl, StatusCode = StatusCode,
+            LatencyMs = LatencyMs, UptimePercent = UptimePercent, RegionCode = RegionCode,
+            EnvironmentCode = EnvironmentCode, IsActive = IsActiveStr == "true", Notes = Notes
+        };
+    }
+}

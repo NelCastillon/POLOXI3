@@ -20,4 +20,10 @@ public sealed class TenantBrandingService : ITenantBrandingService
 
     public Task<PagedResult<TenantBrandingDto>> SearchAsync(string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(searchTerm, pageNumber, pageSize, cancellationToken);
+
+    public Task UpdateAsync(Guid tenantId, Features.Tenants.UpdateTenantBrandingRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateAsync(tenantId, request, cancellationToken);
+
+    public Task ResetToDefaultsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.ResetToDefaultsAsync(tenantId, cancellationToken);
 }

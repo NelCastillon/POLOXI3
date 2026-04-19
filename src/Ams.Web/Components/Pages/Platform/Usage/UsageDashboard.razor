@@ -1,0 +1,509 @@
+@page "/platform/usage"
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Usage Dashboard — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Usage Dashboard"
+               Subtitle="Platform-wide metrics and tenant activity"
+               Icon="bi-bar-chart-line">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ud-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="OpenRawEvents">
+            <i class="bi bi-broadcast" aria-hidden="true"></i> Raw Events
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/platform/quotas/violations")'>
+            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Quota Violations
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="ExportSummary">
+            <i class="bi bi-download" aria-hidden="true"></i> Export Summary
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="um-loading-overlay" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading usage data…</span>
+    </div>
+}
+else if (_data is null)
+{
+    <div class="tot-empty-hint">
+        <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+        <span>Could not load usage data.</span>
+    </div>
+}
+else
+{
+    <!-- ── KPI Strip ─────────────────────────────────────────────── -->
+    <div class="kpi-grid ud-kpi-grid">
+        <div class="kpi-card">
+            <div class="kpi-icon"><i class="bi bi-people" aria-hidden="true"></i></div>
+            <div class="kpi-body">
+                <span class="kpi-value">@_data.TotalActiveUsers.ToString("N0")</span>
+                <span class="kpi-label">Active Users</span>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon"><i class="bi bi-buildings" aria-hidden="true"></i></div>
+            <div class="kpi-body">
+                <span class="kpi-value">@_data.TotalTenants.ToString("N0")</span>
+                <span class="kpi-label">Total Tenants</span>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon"><i class="bi bi-hdd-stack" aria-hidden="true"></i></div>
+            <div class="kpi-body">
+                <span class="kpi-value">@(_data.TotalStorageUsedGb > 0 ? _data.TotalStorageUsedGb.ToString("N1") + " GB" : "—")</span>
+                <span class="kpi-label">Storage Used</span>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon"><i class="bi bi-activity" aria-hidden="true"></i></div>
+            <div class="kpi-body">
+                <span class="kpi-value">@(_data.TotalApiCallsToday > 0 ? _data.TotalApiCallsToday.ToString("N0") : "—")</span>
+                <span class="kpi-label">API Calls Today</span>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon"><i class="bi bi-cpu" aria-hidden="true"></i></div>
+            <div class="kpi-body">
+                <span class="kpi-value">@(_data.TotalJobsProcessed > 0 ? _data.TotalJobsProcessed.ToString("N0") : "—")</span>
+                <span class="kpi-label">Jobs Processed</span>
+            </div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-icon"><i class="bi bi-file-earmark-arrow-down" aria-hidden="true"></i></div>
+            <div class="kpi-body">
+                <span class="kpi-value">@(_data.TotalExportsGenerated > 0 ? _data.TotalExportsGenerated.ToString("N0") : "—")</span>
+                <span class="kpi-label">Exports Generated</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Tenant Status Breakdown ───────────────────────────────── -->
+    <div class="tot-grid tot-grid--3 ud-status-row">
+        <div class="tot-card ud-status-card ud-status-card--active">
+            <div class="tot-card-hdr">
+                <i class="bi bi-check-circle" aria-hidden="true"></i>
+                <span>Active Tenants</span>
+            </div>
+            <div class="tot-card-body ud-big-number">
+                <span class="ud-stat-value ud-stat-value--green">@_data.ActiveTenants</span>
+                <span class="ud-stat-sub">of @_data.TotalTenants total</span>
+            </div>
+        </div>
+        <div class="tot-card ud-status-card ud-status-card--suspended">
+            <div class="tot-card-hdr">
+                <i class="bi bi-pause-circle" aria-hidden="true"></i>
+                <span>Suspended Tenants</span>
+            </div>
+            <div class="tot-card-body ud-big-number">
+                <span class="ud-stat-value ud-stat-value--amber">@_data.SuspendedTenants</span>
+                <span class="ud-stat-sub">of @_data.TotalTenants total</span>
+            </div>
+        </div>
+        <div class="tot-card ud-status-card ud-status-card--terminated">
+            <div class="tot-card-hdr">
+                <i class="bi bi-x-octagon" aria-hidden="true"></i>
+                <span>Terminated Tenants</span>
+            </div>
+            <div class="tot-card-body ud-big-number">
+                <span class="ud-stat-value ud-stat-value--red">@_data.TerminatedTenants</span>
+                <span class="ud-stat-sub">of @_data.TotalTenants total</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Charts Row ──────────────────────────────────────────────── -->
+    <div class="ud-charts-grid">
+
+        <!-- Usage by Tenant (top 10 by active users) -->
+        <div class="tot-card ud-chart-card">
+            <div class="tot-card-hdr">
+                <i class="bi bi-buildings" aria-hidden="true"></i>
+                <span>Usage by Tenant</span>
+                <span class="tot-muted">top 10 · active users</span>
+            </div>
+            <div class="tot-card-body">
+                @{ var tenantMax = _tenantChartRows.Count > 0 ? _tenantChartRows.Max(r => r.Value) : 1m; }
+                @if (_tenantChartRows.Count == 0)
+                {
+                    <p class="ud-empty">No tenant data.</p>
+                }
+                else
+                {
+                    <div class="ud-hbar-list">
+                        @foreach (var row in _tenantChartRows)
+                        {
+                            var pct = tenantMax > 0 ? row.Value / tenantMax * 100m : 0;
+                            <div class="ud-hbar-row">
+                                <button class="ud-hbar-label um-link" @onclick="() => OpenTenantQuotas(row.TenantId)">@row.Label</button>
+                                <div class="ud-hbar-track">
+                                    <div class="ud-hbar-fill ud-hbar-fill--blue" style="width:@pct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                                </div>
+                                <span class="ud-hbar-val">@row.Value.ToString("N0")</span>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Usage by Metric -->
+        <div class="tot-card ud-chart-card">
+            <div class="tot-card-hdr">
+                <i class="bi bi-diagram-3" aria-hidden="true"></i>
+                <span>Usage by Metric</span>
+                <span class="tot-muted">platform totals</span>
+            </div>
+            <div class="tot-card-body">
+                @{ var metricMax = _metricChartRows.Count > 0 ? _metricChartRows.Max(r => r.Value) : 1m; }
+                <div class="ud-hbar-list">
+                    @foreach (var row in _metricChartRows)
+                    {
+                        var pct = metricMax > 0 ? row.Value / metricMax * 100m : 0;
+                        <div class="ud-hbar-row">
+                            <span class="ud-hbar-label">@row.Label</span>
+                            <div class="ud-hbar-track">
+                                <div class="ud-hbar-fill ud-hbar-fill--teal" style="width:@pct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                            </div>
+                            <span class="ud-hbar-val">@FormatMetricValue(row.Label, row.Value)</span>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Usage by Plan -->
+        <div class="tot-card ud-chart-card">
+            <div class="tot-card-hdr">
+                <i class="bi bi-receipt" aria-hidden="true"></i>
+                <span>Usage by Plan</span>
+                <span class="tot-muted">tenant count per plan</span>
+            </div>
+            <div class="tot-card-body">
+                @{ var planMax = _planChartRows.Count > 0 ? _planChartRows.Max(r => r.Value) : 1m; }
+                @if (_planChartRows.Count == 0)
+                {
+                    <p class="ud-empty">No plan data.</p>
+                }
+                else
+                {
+                    <div class="ud-hbar-list">
+                        @foreach (var row in _planChartRows)
+                        {
+                            var pct = planMax > 0 ? row.Value / planMax * 100m : 0;
+                            <div class="ud-hbar-row">
+                                <span class="ud-hbar-label">@row.Label</span>
+                                <div class="ud-hbar-track">
+                                    <div class="ud-hbar-fill ud-hbar-fill--purple" style="width:@pct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                                </div>
+                                <span class="ud-hbar-val">@((int)row.Value) tenants</span>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+            <div class="tot-card-footer">
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/platform/plans")'>
+                    Manage Plans <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Usage Trend by Day -->
+        <div class="tot-card ud-chart-card">
+            <div class="tot-card-hdr">
+                <i class="bi bi-graph-up" aria-hidden="true"></i>
+                <span>Job Activity — Last 7 Days</span>
+                <span class="tot-muted">completed jobs by day</span>
+            </div>
+            <div class="tot-card-body ud-trend-body">
+                @if (_trendDays.Count == 0)
+                {
+                    <p class="ud-empty">No job history.</p>
+                }
+                else
+                {
+                    var trendMax = _trendDays.Max(d => d.Count);
+                    if (trendMax == 0) trendMax = 1;
+                    <div class="ud-trend-chart">
+                        @foreach (var day in _trendDays)
+                        {
+                            var heightPct = (double)day.Count / trendMax * 100;
+                            <div class="ud-trend-col">
+                                <span class="ud-trend-count">@day.Count</span>
+                                <div class="ud-trend-bar-wrap">
+                                    <div class="ud-trend-bar" style="height:@heightPct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                                </div>
+                                <span class="ud-trend-label">@day.Label</span>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+            <div class="tot-card-footer">
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/platform/jobs")'>
+                    All Jobs <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ── Drilldown: Quota Violations ──────────────────────────── -->
+    @if (_topViolations.Count > 0)
+    {
+        <div class="tot-card ud-violations-card">
+            <div class="tot-card-hdr">
+                <i class="bi bi-exclamation-octagon" aria-hidden="true"></i>
+                <span>Active Quota Violations</span>
+                <span class="tot-muted">@_topViolations.Count unresolved</span>
+            </div>
+            <div class="tot-card-body">
+                <ul class="ud-viol-list">
+                    @foreach (var v in _topViolations)
+                    {
+                        <li class="ud-viol-row">
+                            <span class="ud-viol-badge @SeverityCss(v.SeverityCode)">@v.SeverityCode</span>
+                            <div class="ud-viol-body">
+                                <span class="ud-viol-tenant">@v.TenantName</span>
+                                <span class="ud-viol-detail">@v.MetricTypeCode — excess @v.ExcessValue.ToString("N0")</span>
+                            </div>
+                            <span class="ud-viol-date">@v.ViolationDateUtc.ToString("MMM d")</span>
+                            <button class="um-btn um-btn-xs um-btn-ghost" title="Open tenant quotas"
+                                    @onclick="() => OpenTenantQuotas(v.TenantId)">
+                                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                            </button>
+                        </li>
+                    }
+                </ul>
+            </div>
+            <div class="tot-card-footer">
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/platform/quotas/violations")'>
+                    All Violations <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                </button>
+            </div>
+        </div>
+    }
+
+    <!-- ── Per-Tenant List ───────────────────────────────────────── -->
+    <div class="tot-card ud-tenant-card">
+        <div class="tot-card-hdr">
+            <i class="bi bi-table" aria-hidden="true"></i>
+            <span>Tenant Usage</span>
+            <span class="tot-muted ud-row-count">@_data.Tenants.Count tenants</span>
+        </div>
+        <div class="tot-card-body ud-table-body">
+            @if (_data.Tenants.Count == 0)
+            {
+                <div class="tot-empty-hint">
+                    <i class="bi bi-inbox" aria-hidden="true"></i>
+                    <span>No tenant data available.</span>
+                </div>
+            }
+            else
+            {
+                <table class="ud-table">
+                    <thead>
+                        <tr>
+                            <th>Tenant</th>
+                            <th>Status</th>
+                            <th>Plan</th>
+                            <th class="ud-th-num">Users</th>
+                            <th class="ud-th-num">Storage (GB)</th>
+                            <th class="ud-th-num">API Calls</th>
+                            <th class="ud-th-num">Jobs</th>
+                            <th class="ud-th-num">Exports</th>
+                            <th>Last Activity</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var t in _data.Tenants)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="ud-tenant-cell">
+                                        <span class="tot-mono ud-tenant-code">@t.TenantCode</span>
+                                        <span class="ud-tenant-name">@t.TenantName</span>
+                                    </div>
+                                </td>
+                                <td><AppStatusBadge Status="@t.StatusCode" /></td>
+                                <td>
+                                    @if (!string.IsNullOrEmpty(t.PlanCode))
+                                    {
+                                        <span class="badge badge-blue">@t.PlanCode</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="tot-muted">—</span>
+                                    }
+                                </td>
+                                <td class="ud-td-num">@t.ActiveUsers.ToString("N0")</td>
+                                <td class="ud-td-num">@(t.StorageUsedGb > 0 ? t.StorageUsedGb.ToString("N1") : "—")</td>
+                                <td class="ud-td-num">@(t.ApiCallsToday > 0 ? t.ApiCallsToday.ToString("N0") : "—")</td>
+                                <td class="ud-td-num">@(t.JobsProcessed > 0 ? t.JobsProcessed.ToString("N0") : "—")</td>
+                                <td class="ud-td-num">@(t.ExportsGenerated > 0 ? t.ExportsGenerated.ToString("N0") : "—")</td>
+                                <td class="ud-td-date">@(t.LastActivityDateUtc.HasValue ? t.LastActivityDateUtc.Value.ToString("d") : "—")</td>
+                                <td class="ud-td-actions">
+                                    <button class="um-btn um-btn-xs um-btn-ghost"
+                                            title="Open tenant usage"
+                                            @onclick="() => OpenTenantQuotas(t.TenantId)">
+                                        <i class="bi bi-speedometer2" aria-hidden="true"></i>
+                                    </button>
+                                    <button class="um-btn um-btn-xs um-btn-ghost"
+                                            title="Open tenant"
+                                            @onclick="() => OpenTenant(t.TenantId)">
+                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+        <div class="tot-card-footer ud-snapshot-footer">
+            <i class="bi bi-clock" aria-hidden="true"></i>
+            <span>Snapshot: @_data.SnapshotDateUtc.ToString("g") UTC</span>
+        </div>
+    </div>
+}
+
+@code {
+    private SfToast _toast = null!;
+    private PlatformUsageDto? _data;
+    private bool _loading = true;
+
+    // Chart data
+    private sealed record ChartRow(Guid TenantId, string Label, decimal Value);
+    private sealed record TrendDay(string Label, int Count);
+
+    private List<ChartRow> _tenantChartRows = [];
+    private List<ChartRow> _metricChartRows  = [];
+    private List<ChartRow> _planChartRows    = [];
+    private List<TrendDay> _trendDays        = [];
+
+    // Drilldown
+    private List<QuotaViolationDto> _topViolations = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Usage", "/platform/usage"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var usageTask      = Api.GetPlatformUsageAsync();
+            var violationTask  = Api.SearchQuotaViolationsAsync(statusCode: "Open", pageSize: 8);
+            var jobTask        = Api.SearchBackgroundJobsAsync(pageSize: 200);
+
+            await Task.WhenAll(usageTask, violationTask, jobTask);
+
+            _data          = usageTask.Result;
+            _topViolations = violationTask.Result?.Items?.ToList() ?? [];
+            var jobs        = jobTask.Result?.Items?.ToList()       ?? [];
+
+            if (_data is not null)
+                BuildCharts(_data, jobs);
+        }
+        catch (Exception ex)
+        {
+            _data = null;
+            await _toast.ShowAsync(new ToastModel
+            {
+                Title    = "Load Error",
+                Content  = $"Failed to load usage data: {ex.Message}",
+                CssClass = "e-toast-danger"
+            });
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void BuildCharts(PlatformUsageDto data, List<BackgroundJobDto> jobs)
+    {
+        // By tenant — top 10 by active users
+        _tenantChartRows = data.Tenants
+            .OrderByDescending(t => t.ActiveUsers)
+            .Take(10)
+            .Select(t => new ChartRow(t.TenantId, t.TenantName, t.ActiveUsers))
+            .ToList();
+
+        // By metric — platform totals
+        _metricChartRows =
+        [
+            new ChartRow(Guid.Empty, "Active Users",    data.TotalActiveUsers),
+            new ChartRow(Guid.Empty, "Storage (GB)",    data.TotalStorageUsedGb),
+            new ChartRow(Guid.Empty, "API Calls Today", data.TotalApiCallsToday),
+            new ChartRow(Guid.Empty, "Jobs Processed",  data.TotalJobsProcessed),
+            new ChartRow(Guid.Empty, "Exports",         data.TotalExportsGenerated),
+        ];
+
+        // By plan — tenant count per plan
+        _planChartRows = data.Tenants
+            .GroupBy(t => string.IsNullOrEmpty(t.PlanCode) ? "Unknown" : t.PlanCode)
+            .Select(g => new ChartRow(Guid.Empty, g.Key, g.Count()))
+            .OrderByDescending(r => r.Value)
+            .ToList();
+
+        // Trend by day — completed jobs over last 7 days
+        var today = DateTime.UtcNow.Date;
+        _trendDays = Enumerable.Range(0, 7)
+            .Select(i =>
+            {
+                var day   = today.AddDays(-6 + i);
+                var count = jobs.Count(j => j.CompletedDateUtc.HasValue && j.CompletedDateUtc.Value.Date == day);
+                return new TrendDay(day.ToString("ddd"), count);
+            })
+            .ToList();
+    }
+
+    private void OpenTenant(Guid tenantId)
+        => Nav.NavigateTo($"/platform/tenants/{tenantId}");
+
+    private void OpenTenantQuotas(Guid tenantId)
+        => Nav.NavigateTo($"/platform/tenants/{tenantId}/quotas");
+
+    private void OpenRawEvents()
+        => Nav.NavigateTo("/platform/events");
+
+    private void ExportSummary()
+        => Nav.NavigateTo("api/usage/export", forceLoad: true);
+
+    // ── Helpers ───────────────────────────────────────────────
+    private static string FormatMetricValue(string label, decimal value) => label switch
+    {
+        "Storage (GB)" => $"{value:N1} GB",
+        _              => value.ToString("N0")
+    };
+
+    private static string SeverityCss(string severity) => severity switch
+    {
+        "Critical" => "ud-viol-badge--danger",
+        "High"     => "ud-viol-badge--warning",
+        _          => "ud-viol-badge--info"
+    };
+}

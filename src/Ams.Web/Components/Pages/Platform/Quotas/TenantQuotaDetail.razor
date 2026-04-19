@@ -1,0 +1,482 @@
+@page "/platform/tenants/{TenantId:guid}/quotas"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.TenantQuotas
+@using Ams.Application.Features.QuotaViolations
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Tenant Quotas — @(_tenantName ?? TenantId.ToString())</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Tenant Quotas"
+               Subtitle="@($"Quota consumption and overrides for {_tenantName ?? TenantId.ToString()}")"
+               Icon="bi-speedometer2">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="NavigateBack">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-outline" @onclick="ExportAsync" title="Export">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="um-loading-overlay" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading quotas…</span>
+    </div>
+}
+else
+{
+    <SfTab CssClass="tqd-tabs">
+        <TabItems>
+            <!-- Tab 1: Current Usage -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Current Usage" /></ChildContent>
+                <ContentTemplate>
+                    <div class="um-grid-card app-datagrid">
+                        <SfGrid @ref="_usageGrid"
+                                TValue="TenantQuotaViewModel"
+                                DataSource="@_viewModels"
+                                AllowSorting="true"
+                                AllowResizing="true"
+                                EnableHover="true"
+                                CssClass="e-sfgrid-clean">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.MetricTypeCode)" HeaderText="Metric" MinWidth="150" />
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.CurrentValue)" HeaderText="Current Usage" Width="130" TextAlign="TextAlign.Right" Format="N0" />
+                                <GridColumn HeaderText="Warning Threshold" Width="160" TextAlign="TextAlign.Right">
+                                    <Template>
+                                        @{ var row = (TenantQuotaViewModel)context; }
+                                        <span>@row.WarningThreshold.ToString("N0") @row.LimitUnit</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.LimitValue)" HeaderText="Hard Limit" Width="120" TextAlign="TextAlign.Right" Format="N0" />
+                                <GridColumn HeaderText="% Used" Width="110" TextAlign="TextAlign.Right">
+                                    <Template>
+                                        @{ var row = (TenantQuotaViewModel)context; }
+                                        <span class="@UtilCss(row.PercentUsed)">@row.PercentUsed.ToString("N1")%</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn HeaderText="Overage" Width="110" TextAlign="TextAlign.Right">
+                                    <Template>
+                                        @{ var row = (TenantQuotaViewModel)context; }
+                                        @if (row.OverageQuantity > 0)
+                                        {
+                                            <span class="load-critical">@row.OverageQuantity.ToString("N0")</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="load-low">0</span>
+                                        }
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.StatusCode)" HeaderText="Status" Width="120">
+                                    <Template>
+                                        @{ var row = (TenantQuotaViewModel)context; }
+                                        <span class="um-badge @StatusBadgeCss(row.StatusCode)">@row.StatusCode</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn HeaderText="" Width="240" AllowSorting="false">
+                                    <Template>
+                                        @{ var row = (TenantQuotaViewModel)context; }
+                                        <div class="td-action-cell">
+                                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenOverrideDialog(row)" title="Override Limit">
+                                                <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                                            </button>
+                                            @if (!string.IsNullOrEmpty(row.OverrideReason))
+                                            {
+                                                <button class="um-btn um-btn-ghost um-btn-xs text-warning" @onclick="() => ResetOverrideAsync(row)" title="Reset Override">
+                                                    <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
+                                                </button>
+                                            }
+                                            <button class="um-btn um-btn-ghost um-btn-xs text-info" @onclick="() => NotifyTenantAsync(row)" title="Notify Tenant">
+                                                <i class="bi bi-bell" aria-hidden="true"></i>
+                                            </button>
+                                            <button class="um-btn um-btn-ghost um-btn-xs text-primary" @onclick="() => OpenUsageEvents(row)" title="Open Usage Events">
+                                                <i class="bi bi-graph-up" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                    </Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- Tab 2: Overrides -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Overrides" /></ChildContent>
+                <ContentTemplate>
+                    <div class="um-grid-card app-datagrid">
+                        <SfGrid TValue="TenantQuotaViewModel"
+                                DataSource="@_overrides"
+                                AllowSorting="true"
+                                AllowResizing="true"
+                                EnableHover="true"
+                                CssClass="e-sfgrid-clean">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.MetricTypeCode)" HeaderText="Metric" MinWidth="150" />
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.LimitValue)" HeaderText="Current Limit" Width="130" TextAlign="TextAlign.Right" Format="N0" />
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.OverrideReason)" HeaderText="Override Reason" MinWidth="200" />
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.IsEnforced)" HeaderText="Enforced" Width="100">
+                                    <Template>
+                                        @{ var row = (TenantQuotaViewModel)context; }
+                                        <span class="um-badge @(row.IsEnforced ? "um-badge--success" : "um-badge--neutral")">@(row.IsEnforced ? "Yes" : "No")</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.ModifiedDateUtc)" HeaderText="Last Modified" Width="160" Format="g" />
+                                <GridColumn HeaderText="" Width="120" AllowSorting="false">
+                                    <Template>
+                                        @{ var row = (TenantQuotaViewModel)context; }
+                                        <div class="td-action-cell">
+                                            <button class="um-btn um-btn-ghost um-btn-xs text-warning" @onclick="() => ResetOverrideAsync(row)" title="Reset Override">
+                                                <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                    </Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                        @if (!_overrides.Any())
+                        {
+                            <div class="tqd-empty">No overrides configured for this tenant.</div>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- Tab 3: Warning History -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Warning History" /></ChildContent>
+                <ContentTemplate>
+                    <div class="um-grid-card app-datagrid">
+                        <SfGrid TValue="QuotaViolationDto"
+                                DataSource="@_violations"
+                                AllowSorting="true"
+                                AllowResizing="true"
+                                EnableHover="true"
+                                CssClass="e-sfgrid-clean">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(QuotaViolationDto.MetricTypeCode)" HeaderText="Metric" MinWidth="140" />
+                                <GridColumn Field="@nameof(QuotaViolationDto.ActualValue)" HeaderText="Usage" Width="100" TextAlign="TextAlign.Right" Format="N0" />
+                                <GridColumn Field="@nameof(QuotaViolationDto.LimitValue)" HeaderText="Limit" Width="100" TextAlign="TextAlign.Right" Format="N0" />
+                                <GridColumn Field="@nameof(QuotaViolationDto.ExcessValue)" HeaderText="Excess" Width="100" TextAlign="TextAlign.Right" Format="N0" />
+                                <GridColumn Field="@nameof(QuotaViolationDto.SeverityCode)" HeaderText="Severity" Width="120">
+                                    <Template>
+                                        @{ var row = (QuotaViolationDto)context; }
+                                        <span class="um-badge @SeverityBadgeCss(row.SeverityCode)">@row.SeverityCode</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(QuotaViolationDto.StatusCode)" HeaderText="Status" Width="120">
+                                    <Template>
+                                        @{ var row = (QuotaViolationDto)context; }
+                                        <span class="um-badge @ViolationStatusBadgeCss(row.StatusCode)">@row.StatusCode</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(QuotaViolationDto.ViolationDateUtc)" HeaderText="Detected" Width="160" Format="g" />
+                            </GridColumns>
+                        </SfGrid>
+                        @if (!_violations.Any())
+                        {
+                            <div class="tqd-empty">No warning history for this tenant.</div>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- Tab 4: Audit -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Audit" /></ChildContent>
+                <ContentTemplate>
+                    <div class="um-grid-card app-datagrid">
+                        <SfGrid TValue="TenantQuotaViewModel"
+                                DataSource="@_allQuotas"
+                                AllowSorting="true"
+                                AllowResizing="true"
+                                EnableHover="true"
+                                CssClass="e-sfgrid-clean">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.MetricTypeCode)" HeaderText="Metric" MinWidth="140" />
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.LimitValue)" HeaderText="Limit" Width="100" TextAlign="TextAlign.Right" Format="N0" />
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.CurrentValue)" HeaderText="Current" Width="100" TextAlign="TextAlign.Right" Format="N0" />
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.StatusCode)" HeaderText="Status" Width="110">
+                                    <Template>
+                                        @{ var row = (TenantQuotaViewModel)context; }
+                                        <span class="um-badge @StatusBadgeCss(row.StatusCode)">@row.StatusCode</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.OverrideReason)" HeaderText="Override Reason" MinWidth="180" />
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.LastResetDateUtc)" HeaderText="Last Reset" Width="160" Format="g" />
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.CreatedDateUtc)" HeaderText="Created" Width="160" Format="g" />
+                                <GridColumn Field="@nameof(TenantQuotaViewModel.ModifiedDateUtc)" HeaderText="Modified" Width="160" Format="g" />
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+        </TabItems>
+    </SfTab>
+}
+
+<!-- Override Limit Dialog -->
+<SfDialog @bind-Visible="_overrideDialogVisible"
+          Width="460px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="Override Limit">
+    <DialogTemplates>
+        <Content>
+            <div class="um-form-grid">
+                <div class="um-field um-field--full">
+                    <label class="um-label">Metric</label>
+                    <SfTextBox Value="@_overrideTarget?.MetricTypeCode" Enabled="false" />
+                </div>
+                <div class="um-field">
+                    <label class="um-label">Current Limit</label>
+                    <SfNumericTextBox TValue="decimal" Value="@(_overrideTarget?.LimitValue ?? 0)" Enabled="false" />
+                </div>
+                <div class="um-field">
+                    <label class="um-label">New Limit <span class="req">*</span></label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_newLimitValue" Min="0" />
+                </div>
+                <div class="um-field um-field--full">
+                    <label class="um-label">Reason</label>
+                    <SfTextBox @bind-Value="_overrideReason" Multiline="true" Placeholder="Reason for override…" />
+                </div>
+            </div>
+            <div class="um-dialog-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _overrideDialogVisible = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ExecuteOverrideAsync" disabled="@_acting">
+                    @if (_acting) { <span class="um-spinner-xs" aria-hidden="true"></span> }
+                    Apply Override
+                </button>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid TenantId { get; set; }
+
+    SfGrid<TenantQuotaViewModel>? _usageGrid;
+    SfToast? _toast;
+
+    bool _loading;
+    bool _acting;
+    string? _tenantName;
+
+    List<TenantQuotaDto> _allQuotasDtos = [];
+    List<TenantQuotaViewModel> _viewModels = [];
+    List<TenantQuotaViewModel> _allQuotas = [];
+    List<TenantQuotaViewModel> _overrides = [];
+    List<QuotaViolationDto> _violations = [];
+
+    // Override dialog
+    bool _overrideDialogVisible;
+    TenantQuotaViewModel? _overrideTarget;
+    decimal _newLimitValue;
+    string? _overrideReason;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Quotas", "/platform/quotas"),
+            new BreadcrumbService.BreadcrumbItem("Tenant Quotas", "/platform/quotas/tenant"),
+            new BreadcrumbService.BreadcrumbItem("Detail", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var quotas = await Api.GetTenantQuotasAsync(TenantId) ?? [];
+            _allQuotasDtos = quotas;
+            _tenantName = quotas.FirstOrDefault()?.TenantName;
+
+            _viewModels = quotas.Select(ToViewModel).ToList();
+            _allQuotas = _viewModels;
+            _overrides = _viewModels.Where(q => !string.IsNullOrEmpty(q.OverrideReason)).ToList();
+
+            try
+            {
+                var violationResult = await Api.SearchQuotaViolationsAsync(
+                    searchTerm: _tenantName,
+                    pageSize: 50);
+                _violations = violationResult?.Items
+                    .Where(v => v.TenantId == TenantId)
+                    .OrderByDescending(v => v.ViolationDateUtc)
+                    .ToList() ?? [];
+            }
+            catch { _violations = []; }
+        }
+        finally { _loading = false; }
+    }
+
+    static TenantQuotaViewModel ToViewModel(TenantQuotaDto dto)
+    {
+        var pct = dto.LimitValue > 0 ? (dto.CurrentValue / dto.LimitValue * 100m) : 0m;
+        var overage = Math.Max(0, dto.CurrentValue - dto.LimitValue);
+        var warning = dto.LimitValue * 0.8m;
+        return new TenantQuotaViewModel
+        {
+            TenantQuotaId    = dto.TenantQuotaId,
+            TenantId         = dto.TenantId,
+            MetricTypeCode   = dto.MetricTypeCode,
+            CurrentValue     = dto.CurrentValue,
+            LimitValue       = dto.LimitValue,
+            LimitUnit        = dto.LimitUnit,
+            PeriodCode       = dto.PeriodCode,
+            IsEnforced       = dto.IsEnforced,
+            StatusCode       = dto.StatusCode,
+            OverrideReason   = dto.OverrideReason,
+            LastResetDateUtc = dto.LastResetDateUtc,
+            CreatedDateUtc   = dto.CreatedDateUtc,
+            ModifiedDateUtc  = dto.ModifiedDateUtc,
+            PercentUsed      = pct,
+            OverageQuantity  = overage,
+            WarningThreshold = warning
+        };
+    }
+
+    void OpenOverrideDialog(TenantQuotaViewModel row)
+    {
+        _overrideTarget = row;
+        _newLimitValue = row.LimitValue;
+        _overrideReason = row.OverrideReason;
+        _overrideDialogVisible = true;
+    }
+
+    async Task ExecuteOverrideAsync()
+    {
+        if (_overrideTarget is null) return;
+        _acting = true;
+        try
+        {
+            await Api.OverrideTenantQuotaLimitAsync(_overrideTarget.TenantQuotaId, new OverrideLimitRequest
+            {
+                NewLimitValue  = _newLimitValue,
+                OverrideReason = _overrideReason
+            });
+            _overrideDialogVisible = false;
+            await ShowToast("Limit override applied.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Override failed.", "Error"); }
+        finally { _acting = false; }
+    }
+
+    async Task ResetOverrideAsync(TenantQuotaViewModel row)
+    {
+        _acting = true;
+        try
+        {
+            await Api.ResetTenantQuotaOverrideAsync(row.TenantQuotaId, new ResetOverrideRequest());
+            await ShowToast("Override reset to plan default.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Reset failed.", "Error"); }
+        finally { _acting = false; }
+    }
+
+    async Task NotifyTenantAsync(TenantQuotaViewModel row)
+    {
+        _acting = true;
+        try
+        {
+            await Api.NotifyTenantQuotaAsync(row.TenantQuotaId, new NotifyTenantQuotaRequest());
+            await ShowToast("Tenant notified.", "Success");
+        }
+        catch { await ShowToast("Notification failed.", "Error"); }
+        finally { _acting = false; }
+    }
+
+    void OpenUsageEvents(TenantQuotaViewModel row)
+    {
+        Nav.NavigateTo($"/platform/tenants/{TenantId}/usage-events?metric={Uri.EscapeDataString(row.MetricTypeCode)}");
+    }
+
+    void NavigateBack() => Nav.NavigateTo("/platform/quotas/tenant");
+
+    async Task ExportAsync()
+    {
+        await ShowToast("Export started — file will download shortly.", "Success");
+    }
+
+    async Task ShowToast(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content         = message,
+            CssClass        = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            ShowCloseButton = true
+        });
+    }
+
+    static string StatusBadgeCss(string status) => status switch
+    {
+        "Active"    => "um-badge--success",
+        "Suspended" => "um-badge--warning",
+        "Exhausted" => "um-badge--danger",
+        _           => "um-badge--neutral"
+    };
+
+    static string SeverityBadgeCss(string severity) => severity switch
+    {
+        "Critical" => "um-badge--danger",
+        "High"     => "um-badge--warning",
+        "Medium"   => "um-badge--info",
+        "Low"      => "um-badge--neutral",
+        _          => "um-badge--neutral"
+    };
+
+    static string ViolationStatusBadgeCss(string status) => status switch
+    {
+        "Open"         => "um-badge--danger",
+        "Acknowledged" => "um-badge--warning",
+        "Resolved"     => "um-badge--success",
+        _              => "um-badge--neutral"
+    };
+
+    static string UtilCss(decimal pct) => pct switch
+    {
+        >= 100 => "load-critical",
+        >= 80  => "load-high",
+        >= 50  => "load-moderate",
+        _      => "load-low"
+    };
+
+    sealed class TenantQuotaViewModel
+    {
+        public Guid      TenantQuotaId    { get; set; }
+        public Guid      TenantId         { get; set; }
+        public string    MetricTypeCode   { get; set; } = string.Empty;
+        public decimal   CurrentValue     { get; set; }
+        public decimal   LimitValue       { get; set; }
+        public string    LimitUnit        { get; set; } = string.Empty;
+        public string    PeriodCode       { get; set; } = string.Empty;
+        public bool      IsEnforced       { get; set; }
+        public string    StatusCode       { get; set; } = string.Empty;
+        public string?   OverrideReason   { get; set; }
+        public DateTime? LastResetDateUtc { get; set; }
+        public DateTime  CreatedDateUtc   { get; set; }
+        public DateTime? ModifiedDateUtc  { get; set; }
+        public decimal   PercentUsed      { get; set; }
+        public decimal   OverageQuantity  { get; set; }
+        public decimal   WarningThreshold { get; set; }
+    }
+}

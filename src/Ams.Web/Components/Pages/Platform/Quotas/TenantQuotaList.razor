@@ -1,0 +1,375 @@
+@page "/platform/quotas/tenant"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.TenantQuotas
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Tenant Quotas — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Tenant Quotas"
+               Subtitle="Per-tenant metric limits, usage tracking, and overrides"
+               Icon="bi-people">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Override
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by tenant, metric…" @onkeyup="OnSearchKeyUp" />
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading tenant quotas…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="TenantQuotaDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(TenantQuotaDto.TenantName)" HeaderText="Tenant" MinWidth="160" />
+            <GridColumn Field="@nameof(TenantQuotaDto.MetricTypeCode)" HeaderText="Metric" Width="140" />
+            <GridColumn Field="@nameof(TenantQuotaDto.LimitValue)" HeaderText="Limit" Width="100" TextAlign="TextAlign.Right" Format="N0" />
+            <GridColumn Field="@nameof(TenantQuotaDto.CurrentValue)" HeaderText="Current" Width="100" TextAlign="TextAlign.Right" Format="N0" />
+            <GridColumn HeaderText="Utilisation" Width="110" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var row = (TenantQuotaDto)context; var pct = row.LimitValue > 0 ? (row.CurrentValue / row.LimitValue * 100) : 0; }
+                    <span class="@UtilCss(pct)">@pct.ToString("N1")%</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantQuotaDto.PeriodCode)" HeaderText="Period" Width="100" />
+            <GridColumn Field="@nameof(TenantQuotaDto.StatusCode)" HeaderText="Status" Width="110">
+                <Template>
+                    @{ var row = (TenantQuotaDto)context; }
+                    <span class="um-badge @StatusBadgeCss(row.StatusCode)">@row.StatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantQuotaDto.IsEnforced)" HeaderText="Enforced" Width="100">
+                <Template>
+                    @{ var row = (TenantQuotaDto)context; }
+                    <span class="um-badge @(row.IsEnforced ? "um-badge--success" : "um-badge--neutral")">@(row.IsEnforced ? "Yes" : "No")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="120" AllowSorting="false">
+                <Template>
+                    @{ var row = (TenantQuotaDto)context; }
+                    <div class="td-action-cell">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(row)" title="Edit">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs text-danger" @onclick="() => ConfirmDelete(row)" title="Delete">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+<!-- Upsert Dialog -->
+<SfDialog @bind-Visible="_dialogVisible"
+          Width="520px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="@(_editing ? "Edit Tenant Quota" : "Add Tenant Quota Override")">
+    <DialogTemplates>
+        <Content>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="um-form-grid">
+                    <div class="um-field um-field--full">
+                        <label class="um-label">Tenant ID <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.TenantIdStr" Placeholder="GUID" Enabled="@(!_editing)" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Metric Type <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.MetricTypeCode" Placeholder="e.g. ApiCalls" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Limit Value <span class="req">*</span></label>
+                        <SfNumericTextBox TValue="decimal" @bind-Value="_form.LimitValue" Min="0" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Limit Unit</label>
+                        <SfTextBox @bind-Value="_form.LimitUnit" Placeholder="Count" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Period</label>
+                        <SfDropDownList TValue="string" TItem="StatusOption"
+                                        @bind-Value="_form.PeriodCode"
+                                        DataSource="@_periodOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Enforced</label>
+                        <SfDropDownList TValue="string" TItem="StatusOption"
+                                        @bind-Value="_form.IsEnforcedStr"
+                                        DataSource="@_boolOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Status</label>
+                        <SfDropDownList TValue="string" TItem="StatusOption"
+                                        @bind-Value="_form.StatusCode"
+                                        DataSource="@_statusOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="um-field um-field--full">
+                        <label class="um-label">Override Reason</label>
+                        <SfTextBox @bind-Value="_form.OverrideReason" Multiline="true" />
+                    </div>
+                </div>
+                <div class="um-dialog-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving) { <span class="um-spinner-xs" aria-hidden="true"></span> }
+                        @(_editing ? "Save Changes" : "Create Override")
+                    </button>
+                </div>
+            </EditForm>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- Delete Confirm Dialog -->
+<SfDialog @bind-Visible="_deleteDialogVisible"
+          Width="420px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="Confirm Delete">
+    <DialogTemplates>
+        <Content>
+            <p>Delete quota override for <strong>@_deleteTarget?.TenantName / @_deleteTarget?.MetricTypeCode</strong>?</p>
+            <div class="um-dialog-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _deleteDialogVisible = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    SfGrid<TenantQuotaDto>? _grid;
+    SfToast? _toast;
+
+    List<TenantQuotaDto> _items = [];
+    bool _loading;
+    bool _saving;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string _searchTerm = string.Empty;
+
+    bool _dialogVisible;
+    bool _deleteDialogVisible;
+    bool _editing;
+    TenantQuotaDto? _deleteTarget;
+
+    readonly TenantQuotaFormModel _form = new();
+
+    readonly List<StatusOption> _periodOptions =
+    [
+        new("Monthly",  "Monthly"),
+        new("Daily",    "Daily"),
+        new("Hourly",   "Hourly"),
+        new("Lifetime", "Lifetime")
+    ];
+
+    readonly List<StatusOption> _boolOptions =
+    [
+        new("true",  "Yes"),
+        new("false", "No")
+    ];
+
+    readonly List<StatusOption> _statusOptions =
+    [
+        new("Active",    "Active"),
+        new("Suspended", "Suspended"),
+        new("Exhausted", "Exhausted")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Quotas", "/platform/quotas"),
+            new BreadcrumbService.BreadcrumbItem("Tenant Quotas", "/platform/quotas/tenant"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchTenantQuotasAsync(
+                searchTerm: _searchTerm,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    void OnSearchKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") InvokeAsync(LoadAsync); }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    void OpenCreate()
+    {
+        _editing = false;
+        _form.Reset();
+        _dialogVisible = true;
+    }
+
+    void OpenEdit(TenantQuotaDto row)
+    {
+        _editing = true;
+        _form.LoadFrom(row);
+        _dialogVisible = true;
+    }
+
+    void CloseDialog() => _dialogVisible = false;
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (!Guid.TryParse(_form.TenantIdStr, out var tenantId))
+            {
+                await ShowToast("Invalid Tenant ID.", "Error");
+                return;
+            }
+            await Api.UpsertTenantQuotaAsync(tenantId, _form.ToUpsertRequest());
+            await ShowToast(_editing ? "Quota updated." : "Quota created.", "Success");
+            _dialogVisible = false;
+            await LoadAsync();
+        }
+        catch { await ShowToast("An error occurred. Please try again.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmDelete(TenantQuotaDto row)
+    {
+        _deleteTarget = row;
+        _deleteDialogVisible = true;
+    }
+
+    async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteTenantQuotaAsync(_deleteTarget.TenantQuotaId);
+            _deleteDialogVisible = false;
+            await ShowToast("Quota deleted.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Delete failed.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    async Task ShowToast(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content      = message,
+            CssClass     = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            ShowCloseButton = true
+        });
+    }
+
+    static string StatusBadgeCss(string status) => status switch
+    {
+        "Active"    => "um-badge--success",
+        "Suspended" => "um-badge--warning",
+        "Exhausted" => "um-badge--danger",
+        _           => "um-badge--neutral"
+    };
+
+    static string UtilCss(decimal pct) => pct switch
+    {
+        >= 100 => "load-critical",
+        >= 80  => "load-high",
+        >= 50  => "load-moderate",
+        _      => "load-low"
+    };
+
+    sealed record StatusOption(string Value, string Text);
+
+    sealed class TenantQuotaFormModel
+    {
+        public string  TenantIdStr     { get; set; } = string.Empty;
+        public string  MetricTypeCode  { get; set; } = string.Empty;
+        public decimal LimitValue      { get; set; }
+        public string  LimitUnit       { get; set; } = "Count";
+        public string  PeriodCode      { get; set; } = "Monthly";
+        public string  IsEnforcedStr   { get; set; } = "true";
+        public string  StatusCode      { get; set; } = "Active";
+        public string? OverrideReason  { get; set; }
+
+        public void Reset()
+        {
+            TenantIdStr = string.Empty; MetricTypeCode = string.Empty;
+            LimitValue = 0; LimitUnit = "Count"; PeriodCode = "Monthly";
+            IsEnforcedStr = "true"; StatusCode = "Active"; OverrideReason = null;
+        }
+
+        public void LoadFrom(TenantQuotaDto dto)
+        {
+            TenantIdStr = dto.TenantId.ToString(); MetricTypeCode = dto.MetricTypeCode;
+            LimitValue = dto.LimitValue; LimitUnit = dto.LimitUnit; PeriodCode = dto.PeriodCode;
+            IsEnforcedStr = dto.IsEnforced ? "true" : "false"; StatusCode = dto.StatusCode;
+            OverrideReason = dto.OverrideReason;
+        }
+
+        public UpsertTenantQuotaRequest ToUpsertRequest() => new()
+        {
+            MetricTypeCode = MetricTypeCode, LimitValue = LimitValue,
+            LimitUnit = LimitUnit, PeriodCode = PeriodCode,
+            IsEnforced = IsEnforcedStr == "true", StatusCode = StatusCode,
+            OverrideReason = OverrideReason
+        };
+    }
+}

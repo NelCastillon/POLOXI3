@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Leads;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -14,7 +15,7 @@ public sealed class LeadRepository : ILeadRepository
         _connectionFactory = connectionFactory;
     }
 
-    public async Task<Guid> CreateAsync(Ams.Application.Features.Leads.CreateLeadRequest request, CancellationToken cancellationToken = default)
+    public async Task<Guid> CreateAsync(CreateLeadRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
 INSERT INTO CRM.Lead

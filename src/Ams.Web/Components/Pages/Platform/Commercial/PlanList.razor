@@ -1,0 +1,491 @@
+@page "/platform/plans"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Plans
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Plans — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Plans"
+               Subtitle="Subscription plans and pricing"
+               Icon="bi-award">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Create Plan
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Search + Grid -->
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search plans…" @onkeyup="OnSearchKeyUp" />
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading plans…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="PlanDto"
+            DataSource="@_plans"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row" />
+        <GridColumns>
+            <GridColumn Field="@nameof(PlanDto.PlanCode)" HeaderText="Plan Code" Width="140">
+                <Template>
+                    @{ var row = (PlanDto)context; }
+                    <span class="td-monospace">@row.PlanCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PlanDto.PlanName)" HeaderText="Plan Name" Width="180" />
+            <GridColumn Field="@nameof(PlanDto.BillingFrequency)" HeaderText="Billing Frequency" Width="160">
+                <Template>
+                    @{ var row = (PlanDto)context; }
+                    <span class="td-stat-chip">
+                        <i class="bi bi-calendar3" aria-hidden="true"></i> @row.BillingFrequency
+                    </span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PlanDto.BasePrice)" HeaderText="Base Price" Width="130">
+                <Template>
+                    @{ var row = (PlanDto)context; }
+                    <span>@row.BasePrice.ToString("N2")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PlanDto.IncludedUsers)" HeaderText="Included Users" Width="140">
+                <Template>
+                    @{ var row = (PlanDto)context; }
+                    <span><i class="bi bi-people" aria-hidden="true"></i> @row.IncludedUsers</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PlanDto.IncludedStorageGb)" HeaderText="Storage (GB)" Width="130">
+                <Template>
+                    @{ var row = (PlanDto)context; }
+                    <span>@row.IncludedStorageGb.ToString("N1") GB</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PlanDto.IncludedApiCallsPerDay)" HeaderText="API Calls / Day" Width="150">
+                <Template>
+                    @{ var row = (PlanDto)context; }
+                    <span>@row.IncludedApiCallsPerDay.ToString("N0")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PlanDto.IsEnterprise)" HeaderText="Enterprise" Width="120">
+                <Template>
+                    @{ var row = (PlanDto)context; }
+                    @if (row.IsEnterprise)
+                    {
+                        <span class="td-pill td-pill--info"><i class="bi bi-building" aria-hidden="true"></i> Enterprise</span>
+                    }
+                    else
+                    {
+                        <span class="td-pill td-pill--muted">Standard</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PlanDto.IsActive)" HeaderText="Active" Width="100">
+                <Template>
+                    @{ var row = (PlanDto)context; }
+                    @if (row.IsActive)
+                    {
+                        <span class="td-pill td-pill--success">Active</span>
+                    }
+                    else
+                    {
+                        <span class="td-pill td-pill--muted">Inactive</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="200" AllowSorting="false">
+                <Template>
+                    @{ var row = (PlanDto)context; }
+                    <div class="td-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="View Features" @onclick="() => ViewFeatures(row)">
+                            <i class="bi bi-list-check" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Edit" @onclick="() => OpenEdit(row)">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Clone" @onclick="() => OpenClone(row)">
+                            <i class="bi bi-copy" aria-hidden="true"></i>
+                        </button>
+                        @if (row.IsActive)
+                        {
+                            <button class="um-btn um-btn-xs um-btn-warning" title="Deactivate" @onclick="() => OpenSetActive(row, false)">
+                                <i class="bi bi-pause-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        else
+                        {
+                            <button class="um-btn um-btn-xs um-btn-primary" title="Activate" @onclick="() => OpenSetActive(row, true)">
+                                <i class="bi bi-play-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-xs um-btn-danger" title="Delete" @onclick="() => OpenDelete(row)">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Create / Edit Dialog -->
+<SfDialog @bind-Visible="_showFormDialog" Width="560px" IsModal="true" ShowCloseIcon="true" Header="@_formDialogTitle" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="form-row">
+                    <label class="form-label">Plan Code <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_form.PlanCode" Placeholder="e.g. ENTERPRISE" Disabled="@_isEdit" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Plan Name <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_form.PlanName" Placeholder="e.g. Enterprise Plan" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Billing Frequency</label>
+                    <SfDropDownList TValue="string" TItem="string"
+                                    DataSource="_frequencyOptions"
+                                    @bind-Value="_form.BillingFrequency" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Base Price</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_form.BasePrice" Min="0" Format="N2" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Included Users</label>
+                    <SfNumericTextBox TValue="int" @bind-Value="_form.IncludedUsers" Min="0" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Included Storage (GB)</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_form.IncludedStorageGb" Min="0" Format="N1" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Included API Calls / Day</label>
+                    <SfNumericTextBox TValue="int" @bind-Value="_form.IncludedApiCallsPerDay" Min="0" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Enterprise Plan</label>
+                    <SfSwitch @bind-Checked="_form.IsEnterprise" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showFormDialog = false" />
+        <DialogButton Content="@(_isEdit ? "Save Changes" : "Create Plan")" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmForm" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Clone Dialog -->
+<SfDialog @bind-Visible="_showCloneDialog" Width="480px" IsModal="true" ShowCloseIcon="true" Header="Clone Plan" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Cloning <strong>@_actionTarget?.PlanName</strong>. Enter details for the new plan:</p>
+                <div class="form-row">
+                    <label class="form-label">New Plan Code <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_cloneCode" Placeholder="e.g. ENTERPRISE_V2" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">New Plan Name <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_cloneName" Placeholder="e.g. Enterprise Plan V2" />
+                </div>
+                <p class="td-hint">The cloned plan will be created as <strong>inactive</strong>. Activate it when ready.</p>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showCloneDialog = false" />
+        <DialogButton Content="Clone Plan" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmClone" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Activate / Deactivate Dialog -->
+<SfDialog @bind-Visible="_showActiveDialog" Width="440px" IsModal="true" ShowCloseIcon="true" Header="@(_setActiveValue ? "Activate Plan" : "Deactivate Plan")" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                @if (_setActiveValue)
+                {
+                    <p>Activate <strong>@_actionTarget?.PlanName</strong>? It will become available for tenant assignment.</p>
+                }
+                else
+                {
+                    <div class="td-warning-notice">
+                        <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                        <span>Deactivate <strong>@_actionTarget?.PlanName</strong>? Existing tenants on this plan are unaffected, but it cannot be assigned to new tenants.</span>
+                    </div>
+                }
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showActiveDialog = false" />
+        <DialogButton Content="@(_setActiveValue ? "Activate" : "Deactivate")" IsPrimary="@_setActiveValue" CssClass="@(_setActiveValue ? "um-btn um-btn-primary" : "um-btn um-btn-warning")" OnClick="ConfirmSetActive" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Delete Dialog -->
+<SfDialog @bind-Visible="_showDeleteDialog" Width="440px" IsModal="true" ShowCloseIcon="true" Header="Delete Plan" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="td-warning-notice">
+                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                    <span>This action cannot be undone. Are you sure you want to delete <strong>@_actionTarget?.PlanName</strong>?</span>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showDeleteDialog = false" />
+        <DialogButton Content="Delete Plan" CssClass="um-btn um-btn-danger" OnClick="ConfirmDelete" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    private SfGrid<PlanDto>? _grid;
+    private SfToast? _toast;
+
+    private bool _loading = true;
+    private bool _saving;
+    private string? _searchTerm;
+    private List<PlanDto> _plans = [];
+
+    // Form dialog (create + edit)
+    private bool   _showFormDialog;
+    private bool   _isEdit;
+    private string _formDialogTitle = "Create Plan";
+    private PlanFormModel _form = new();
+
+    // Action dialogs
+    private bool    _showCloneDialog;
+    private bool    _showActiveDialog;
+    private bool    _showDeleteDialog;
+    private PlanDto? _actionTarget;
+    private string  _cloneCode = "";
+    private string  _cloneName = "";
+    private bool    _setActiveValue;
+
+    private static readonly List<string> _frequencyOptions = ["Monthly", "Annual", "Quarterly", "OneTime"];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Plans")
+        );
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchPlansAsync(_searchTerm);
+            _plans = result?.Items?.ToList() ?? [];
+        }
+        catch
+        {
+            _plans = [];
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnSearchKeyUp(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await LoadAsync();
+    }
+
+    // ── Create ──────────────────────────────────────────────
+    private void OpenCreate()
+    {
+        _form = new();
+        _isEdit = false;
+        _formDialogTitle = "Create Plan";
+        _showFormDialog = true;
+    }
+
+    // ── Edit ────────────────────────────────────────────────
+    private void OpenEdit(PlanDto row)
+    {
+        _actionTarget = row;
+        _form = new PlanFormModel
+        {
+            PlanCode               = row.PlanCode,
+            PlanName               = row.PlanName,
+            BillingFrequency       = row.BillingFrequency,
+            BasePrice              = row.BasePrice,
+            IncludedUsers          = row.IncludedUsers,
+            IncludedStorageGb      = row.IncludedStorageGb,
+            IncludedApiCallsPerDay = row.IncludedApiCallsPerDay,
+            IsEnterprise           = row.IsEnterprise,
+        };
+        _isEdit = true;
+        _formDialogTitle = $"Edit — {row.PlanName}";
+        _showFormDialog = true;
+    }
+
+    private async Task ConfirmForm()
+    {
+        if (string.IsNullOrWhiteSpace(_form.PlanCode) || string.IsNullOrWhiteSpace(_form.PlanName)) return;
+        _saving = true;
+        try
+        {
+            if (_isEdit && _actionTarget is not null)
+            {
+                await Api.UpdatePlanAsync(_actionTarget.PlanId, new UpdatePlanRequest
+                {
+                    PlanName               = _form.PlanName,
+                    BillingFrequency       = _form.BillingFrequency,
+                    BasePrice              = _form.BasePrice,
+                    IncludedUsers          = _form.IncludedUsers,
+                    IncludedStorageGb      = _form.IncludedStorageGb,
+                    IncludedApiCallsPerDay = _form.IncludedApiCallsPerDay,
+                    IsEnterprise           = _form.IsEnterprise,
+                });
+                _showFormDialog = false;
+                await ShowToast("Plan Updated", $"{_form.PlanName} has been saved.", "e-toast-success");
+            }
+            else
+            {
+                await Api.CreatePlanAsync(new CreatePlanRequest
+                {
+                    PlanCode               = _form.PlanCode.Trim().ToUpperInvariant(),
+                    PlanName               = _form.PlanName,
+                    BillingFrequency       = _form.BillingFrequency,
+                    BasePrice              = _form.BasePrice,
+                    IncludedUsers          = _form.IncludedUsers,
+                    IncludedStorageGb      = _form.IncludedStorageGb,
+                    IncludedApiCallsPerDay = _form.IncludedApiCallsPerDay,
+                    IsEnterprise           = _form.IsEnterprise,
+                });
+                _showFormDialog = false;
+                await ShowToast("Plan Created", $"{_form.PlanName} has been created.", "e-toast-success");
+            }
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Clone ───────────────────────────────────────────────
+    private void OpenClone(PlanDto row)
+    {
+        _actionTarget = row;
+        _cloneCode = row.PlanCode + "_COPY";
+        _cloneName = row.PlanName + " (Copy)";
+        _showCloneDialog = true;
+    }
+
+    private async Task ConfirmClone()
+    {
+        if (_actionTarget is null || string.IsNullOrWhiteSpace(_cloneCode) || string.IsNullOrWhiteSpace(_cloneName)) return;
+        _saving = true;
+        try
+        {
+            await Api.ClonePlanAsync(_actionTarget.PlanId, _cloneCode.Trim().ToUpperInvariant(), _cloneName.Trim());
+            _showCloneDialog = false;
+            await ShowToast("Plan Cloned", $"{_cloneName.Trim()} has been created as inactive.", "e-toast-success");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Activate / Deactivate ───────────────────────────────
+    private void OpenSetActive(PlanDto row, bool activate)
+    {
+        _actionTarget = row;
+        _setActiveValue = activate;
+        _showActiveDialog = true;
+    }
+
+    private async Task ConfirmSetActive()
+    {
+        if (_actionTarget is null) return;
+        _saving = true;
+        try
+        {
+            if (_setActiveValue)
+                await Api.ActivatePlanAsync(_actionTarget.PlanId);
+            else
+                await Api.DeactivatePlanAsync(_actionTarget.PlanId);
+            _showActiveDialog = false;
+            await ShowToast(
+                _setActiveValue ? "Plan Activated" : "Plan Deactivated",
+                $"{_actionTarget.PlanName} has been {(_setActiveValue ? "activated" : "deactivated")}.",
+                _setActiveValue ? "e-toast-success" : "e-toast-warning");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Delete ──────────────────────────────────────────────
+    private void OpenDelete(PlanDto row)
+    {
+        _actionTarget = row;
+        _showDeleteDialog = true;
+    }
+
+    private async Task ConfirmDelete()
+    {
+        if (_actionTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeletePlanAsync(_actionTarget.PlanId);
+            _showDeleteDialog = false;
+            await ShowToast("Plan Deleted", $"{_actionTarget.PlanName} has been deleted.", "e-toast-warning");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Helpers ─────────────────────────────────────────────
+    private async Task ShowToast(string title, string content, string cssClass)
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Title = title, Content = content, CssClass = cssClass });
+    }
+
+    private sealed class PlanFormModel
+    {
+        public string  PlanCode               { get; set; } = string.Empty;
+        public string  PlanName               { get; set; } = string.Empty;
+        public string  BillingFrequency       { get; set; } = "Monthly";
+        public decimal BasePrice              { get; set; }
+        public int     IncludedUsers          { get; set; }
+        public decimal IncludedStorageGb      { get; set; }
+        public int     IncludedApiCallsPerDay { get; set; }
+        public bool    IsEnterprise           { get; set; }
+    }
+
+    private void ViewFeatures(PlanDto row) => Nav.NavigateTo($"/platform/plans/{row.PlanId}/features");
+}

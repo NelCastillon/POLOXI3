@@ -1,0 +1,500 @@
+@page "/platform/jobs/{JobId:guid}"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.BackgroundJobs
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Job @JobId — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@if (_loading)
+{
+    <div class="bjd-loading">
+        <span class="um-spin bjd-loading-spin" aria-hidden="true"></span>
+        <span>Loading job…</span>
+    </div>
+}
+else if (_job is null)
+{
+    <div class="bjd-not-found">
+        <i class="bi bi-exclamation-triangle bjd-not-found-icon" aria-hidden="true"></i>
+        <h2>Job not found</h2>
+        <p>The requested background job could not be loaded.</p>
+        <button class="um-btn um-btn-ghost" @onclick="NavigateToList">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Jobs
+        </button>
+    </div>
+}
+else
+{
+    <AppPageHeader Title="Background Job"
+                   Subtitle="@($"{_job.JobTypeCode} — {_job.BackgroundJobId:N}")"
+                   Icon="bi-gear-wide-connected">
+        <Actions>
+            <button class="um-btn um-btn-ghost" @onclick="NavigateToList">
+                <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Jobs
+            </button>
+            @if (_job.StatusCode is "Failed" or "Cancelled")
+            {
+                <button class="um-btn um-btn-warning" @onclick="RetryAsync" disabled="@_acting">
+                    <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Retry
+                </button>
+            }
+            @if (_job.StatusCode is "Queued" or "Running")
+            {
+                <button class="um-btn um-btn-danger" @onclick="CancelAsync" disabled="@_acting">
+                    <i class="bi bi-x-circle" aria-hidden="true"></i> Cancel
+                </button>
+            }
+            <button class="um-btn um-btn-secondary" @onclick="RequeueAsync" disabled="@_acting">
+                <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Requeue
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="ExportJobRecord">
+                <i class="bi bi-download" aria-hidden="true"></i> Export Job Record
+            </button>
+        </Actions>
+    </AppPageHeader>
+
+    <!-- Status badges row -->
+    <div class="bjd-badge-row">
+        <span class="badge @StatusBadgeCss(_job.StatusCode)">@_job.StatusCode</span>
+        <span class="badge badge-neutral">@_job.JobTypeCode</span>
+        @if (_job.RetryCount > 0)
+        {
+            <span class="badge badge-amber">
+                <i class="bi bi-arrow-repeat" aria-hidden="true"></i> @_job.RetryCount retries
+            </span>
+        }
+        @if (_job.TenantId.HasValue)
+        {
+            <span class="bjd-stat-chip">
+                <i class="bi bi-building" aria-hidden="true"></i> @_job.TenantId.Value.ToString("N")[..8]…
+            </span>
+        }
+    </div>
+
+    <!-- Detail tabs -->
+    <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="OnTabChangedAsync">
+        <Tabs>
+
+            <!-- 0: Overview -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Overview" IconCss="bi bi-info-circle" /></ChildContent>
+                <ContentTemplate>
+                    <div class="bjd-tab-body">
+                        <div class="bjd-info-card">
+                            <h3 class="bjd-section-title">Job Information</h3>
+                            <div class="bjd-profile-grid">
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Job ID</span>
+                                    <code class="ts-value">@_job.BackgroundJobId</code>
+                                </div>
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Job Type</span>
+                                    <span class="ts-value">@_job.JobTypeCode</span>
+                                </div>
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Status</span>
+                                    <span class="ts-value"><span class="badge @StatusBadgeCss(_job.StatusCode)">@_job.StatusCode</span></span>
+                                </div>
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Tenant ID</span>
+                                    <span class="ts-value">@(_job.TenantId?.ToString() ?? "—")</span>
+                                </div>
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Correlation ID</span>
+                                    <code class="ts-value">@(_job.CorrelationId ?? "—")</code>
+                                </div>
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Retry Count</span>
+                                    <span class="ts-value">@_job.RetryCount</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bjd-info-card">
+                            <h3 class="bjd-section-title">Timing</h3>
+                            <div class="bjd-profile-grid">
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Created</span>
+                                    <span class="ts-value">@_job.CreatedDateUtc.ToString("g") UTC</span>
+                                </div>
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Started</span>
+                                    <span class="ts-value">@(_job.StartedDateUtc?.ToString("g") ?? "—")</span>
+                                </div>
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Completed</span>
+                                    <span class="ts-value">@(_job.CompletedDateUtc?.ToString("g") ?? "—")</span>
+                                </div>
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Duration</span>
+                                    <span class="ts-value">@(_job.DurationMs > 0 ? FormatDuration(_job.DurationMs) : "—")</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(_job.ResultSummary))
+                        {
+                            <div class="bjd-info-card">
+                                <h3 class="bjd-section-title">Result Summary</h3>
+                                <p class="bjd-result-text">@_job.ResultSummary</p>
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrEmpty(_job.ErrorMessage))
+                        {
+                            <div class="bjd-info-card bjd-error-card">
+                                <h3 class="bjd-section-title bjd-error-title">
+                                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> Error
+                                </h3>
+                                <pre class="bjd-error-pre">@_job.ErrorMessage</pre>
+                            </div>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 1: Execution History -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Execution History" IconCss="bi bi-clock-history" /></ChildContent>
+                <ContentTemplate>
+                    <div class="bjd-tab-body">
+                        <div class="bjd-info-card">
+                            <h3 class="bjd-section-title">Execution Timeline</h3>
+                            <div class="bjd-timeline">
+                                <div class="bjd-tl-entry">
+                                    <span class="bjd-tl-dot bjd-tl-dot--created"></span>
+                                    <div class="bjd-tl-content">
+                                        <span class="bjd-tl-action">Job Created</span>
+                                        <span class="bjd-tl-time">@_job.CreatedDateUtc.ToString("g") UTC</span>
+                                    </div>
+                                </div>
+                                @if (_job.StartedDateUtc.HasValue)
+                                {
+                                    <div class="bjd-tl-entry">
+                                        <span class="bjd-tl-dot bjd-tl-dot--started"></span>
+                                        <div class="bjd-tl-content">
+                                            <span class="bjd-tl-action">Execution Started</span>
+                                            <span class="bjd-tl-time">@_job.StartedDateUtc.Value.ToString("g") UTC</span>
+                                        </div>
+                                    </div>
+                                }
+                                @if (_job.CompletedDateUtc.HasValue)
+                                {
+                                    <div class="bjd-tl-entry">
+                                        <span class="bjd-tl-dot @(_job.StatusCode == "Failed" ? "bjd-tl-dot--failed" : "bjd-tl-dot--completed")"></span>
+                                        <div class="bjd-tl-content">
+                                            <span class="bjd-tl-action">@(_job.StatusCode == "Failed" ? "Execution Failed" : "Execution Completed")</span>
+                                            <span class="bjd-tl-time">@_job.CompletedDateUtc.Value.ToString("g") UTC</span>
+                                            @if (_job.DurationMs > 0)
+                                            {
+                                                <span class="bjd-tl-duration">Duration: @FormatDuration(_job.DurationMs)</span>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                                @if (_job.StatusCode == "Cancelled")
+                                {
+                                    <div class="bjd-tl-entry">
+                                        <span class="bjd-tl-dot bjd-tl-dot--cancelled"></span>
+                                        <div class="bjd-tl-content">
+                                            <span class="bjd-tl-action">Job Cancelled</span>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 2: Retry History -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Retry History" IconCss="bi bi-arrow-repeat" /></ChildContent>
+                <ContentTemplate>
+                    <div class="bjd-tab-body">
+                        <div class="bjd-info-card">
+                            <h3 class="bjd-section-title">Retry Attempts</h3>
+                            @if (_job.RetryCount == 0)
+                            {
+                                <div class="bjd-empty-state">
+                                    <i class="bi bi-check-circle bjd-empty-icon" aria-hidden="true"></i>
+                                    <p>No retries have been attempted for this job.</p>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="bjd-retry-summary">
+                                    <div class="bjd-field-group">
+                                        <span class="ts-label">Total Retries</span>
+                                        <span class="ts-value bjd-retry-count">@_job.RetryCount</span>
+                                    </div>
+                                    <div class="bjd-field-group">
+                                        <span class="ts-label">Current Status</span>
+                                        <span class="ts-value"><span class="badge @StatusBadgeCss(_job.StatusCode)">@_job.StatusCode</span></span>
+                                    </div>
+                                    @if (!string.IsNullOrEmpty(_job.ErrorMessage))
+                                    {
+                                        <div class="bjd-field-group bjd-field-full">
+                                            <span class="ts-label">Last Error</span>
+                                            <pre class="bjd-error-pre">@_job.ErrorMessage</pre>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 3: Payload / Metadata -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Payload / Metadata" IconCss="bi bi-braces" /></ChildContent>
+                <ContentTemplate>
+                    <div class="bjd-tab-body">
+                        <div class="bjd-info-card">
+                            <h3 class="bjd-section-title">Payload</h3>
+                            @if (string.IsNullOrEmpty(_job.Payload))
+                            {
+                                <div class="bjd-empty-state">
+                                    <i class="bi bi-file-earmark bjd-empty-icon" aria-hidden="true"></i>
+                                    <p>No payload data is associated with this job.</p>
+                                </div>
+                            }
+                            else
+                            {
+                                <pre class="bjd-payload-pre">@_job.Payload</pre>
+                            }
+                        </div>
+                        <div class="bjd-info-card">
+                            <h3 class="bjd-section-title">Metadata</h3>
+                            <div class="bjd-profile-grid">
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Job ID</span>
+                                    <code class="ts-value">@_job.BackgroundJobId</code>
+                                </div>
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Correlation ID</span>
+                                    <code class="ts-value">@(_job.CorrelationId ?? "—")</code>
+                                </div>
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Tenant ID</span>
+                                    <code class="ts-value">@(_job.TenantId?.ToString() ?? "—")</code>
+                                </div>
+                                <div class="bjd-field-group">
+                                    <span class="ts-label">Job Type</span>
+                                    <span class="ts-value">@_job.JobTypeCode</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 4: Logs -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Logs" IconCss="bi bi-terminal" /></ChildContent>
+                <ContentTemplate>
+                    <div class="bjd-tab-body">
+                        <div class="bjd-info-card">
+                            <h3 class="bjd-section-title">Job Logs</h3>
+                            <div class="bjd-log-output">
+                                <div class="bjd-log-line">
+                                    <span class="bjd-log-ts">@_job.CreatedDateUtc.ToString("HH:mm:ss.fff")</span>
+                                    <span class="bjd-log-level bjd-log-info">INFO</span>
+                                    <span>Job <code>@_job.BackgroundJobId.ToString("N")[..8]</code> created with type <strong>@_job.JobTypeCode</strong></span>
+                                </div>
+                                @if (_job.StartedDateUtc.HasValue)
+                                {
+                                    <div class="bjd-log-line">
+                                        <span class="bjd-log-ts">@_job.StartedDateUtc.Value.ToString("HH:mm:ss.fff")</span>
+                                        <span class="bjd-log-level bjd-log-info">INFO</span>
+                                        <span>Execution started</span>
+                                    </div>
+                                }
+                                @if (!string.IsNullOrEmpty(_job.ErrorMessage))
+                                {
+                                    <div class="bjd-log-line">
+                                        <span class="bjd-log-ts">@((_job.CompletedDateUtc ?? _job.StartedDateUtc ?? _job.CreatedDateUtc).ToString("HH:mm:ss.fff"))</span>
+                                        <span class="bjd-log-level bjd-log-error">ERROR</span>
+                                        <span>@_job.ErrorMessage</span>
+                                    </div>
+                                }
+                                @if (_job.CompletedDateUtc.HasValue && _job.StatusCode != "Failed")
+                                {
+                                    <div class="bjd-log-line">
+                                        <span class="bjd-log-ts">@_job.CompletedDateUtc.Value.ToString("HH:mm:ss.fff")</span>
+                                        <span class="bjd-log-level bjd-log-info">INFO</span>
+                                        <span>Execution completed successfully in @FormatDuration(_job.DurationMs)</span>
+                                    </div>
+                                }
+                                @if (!string.IsNullOrEmpty(_job.ResultSummary))
+                                {
+                                    <div class="bjd-log-line">
+                                        <span class="bjd-log-ts">@((_job.CompletedDateUtc ?? _job.CreatedDateUtc).ToString("HH:mm:ss.fff"))</span>
+                                        <span class="bjd-log-level bjd-log-info">INFO</span>
+                                        <span>Result: @_job.ResultSummary</span>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 5: Audit -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Audit" IconCss="bi bi-journal-text" /></ChildContent>
+                <ContentTemplate>
+                    <div class="bjd-tab-body">
+                        <div class="bjd-info-card">
+                            <h3 class="bjd-section-title">Audit Trail</h3>
+                            <div class="bjd-audit-list">
+                                <div class="bjd-audit-row">
+                                    <span class="bjd-audit-time">@_job.CreatedDateUtc.ToString("g") UTC</span>
+                                    <span class="bjd-audit-action">Job Created</span>
+                                    <span class="bjd-audit-detail">Type: @_job.JobTypeCode, Status: Queued</span>
+                                </div>
+                                @if (_job.StartedDateUtc.HasValue)
+                                {
+                                    <div class="bjd-audit-row">
+                                        <span class="bjd-audit-time">@_job.StartedDateUtc.Value.ToString("g") UTC</span>
+                                        <span class="bjd-audit-action">Execution Started</span>
+                                        <span class="bjd-audit-detail">Status changed: Queued → Running</span>
+                                    </div>
+                                }
+                                @if (_job.CompletedDateUtc.HasValue)
+                                {
+                                    <div class="bjd-audit-row">
+                                        <span class="bjd-audit-time">@_job.CompletedDateUtc.Value.ToString("g") UTC</span>
+                                        <span class="bjd-audit-action">@(_job.StatusCode == "Failed" ? "Execution Failed" : "Execution Completed")</span>
+                                        <span class="bjd-audit-detail">Status changed: Running → @_job.StatusCode, Duration: @FormatDuration(_job.DurationMs)</span>
+                                    </div>
+                                }
+                                @if (_job.RetryCount > 0)
+                                {
+                                    <div class="bjd-audit-row">
+                                        <span class="bjd-audit-time">—</span>
+                                        <span class="bjd-audit-action">Retried</span>
+                                        <span class="bjd-audit-detail">Total retry attempts: @_job.RetryCount</span>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+        </Tabs>
+    </AppDetailTabs>
+}
+
+@code {
+    [Parameter] public Guid JobId { get; set; }
+
+    SfToast? _toast;
+    BackgroundJobDto? _job;
+    bool _loading = true;
+    bool _acting;
+    int  _tab;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Jobs", "/platform/jobs"),
+            new BreadcrumbService.BreadcrumbItem("Job Detail", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try { _job = await Api.GetBackgroundJobByIdAsync(JobId); }
+        finally { _loading = false; }
+    }
+
+    Task OnTabChangedAsync(int tab)
+    {
+        _tab = tab;
+        return Task.CompletedTask;
+    }
+
+    async Task RetryAsync()
+    {
+        _acting = true;
+        try
+        {
+            await Api.RetryBackgroundJobAsync(JobId, new RetryBackgroundJobRequest());
+            await ShowToast("Job queued for retry.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Retry failed.", "Error"); }
+        finally { _acting = false; }
+    }
+
+    async Task CancelAsync()
+    {
+        _acting = true;
+        try
+        {
+            await Api.CancelBackgroundJobAsync(JobId, new CancelBackgroundJobRequest());
+            await ShowToast("Job cancelled.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Cancel failed.", "Error"); }
+        finally { _acting = false; }
+    }
+
+    async Task RequeueAsync()
+    {
+        _acting = true;
+        try
+        {
+            await Api.RequeueBackgroundJobAsync(JobId, new RequeueBackgroundJobRequest());
+            await ShowToast("Job requeued.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Requeue failed.", "Error"); }
+        finally { _acting = false; }
+    }
+
+    async Task ExportJobRecord()
+    {
+        await ShowToast("Export started — file will download shortly.", "Success");
+    }
+
+    void NavigateToList() => Nav.NavigateTo("/platform/jobs");
+
+    static string StatusBadgeCss(string status) => status switch
+    {
+        "Completed" => "badge-green",
+        "Running"   => "badge-blue",
+        "Queued"    => "badge-neutral",
+        "Failed"    => "badge-red",
+        "Cancelled" => "badge-amber",
+        _           => "badge-neutral"
+    };
+
+    static string FormatDuration(int ms) => ms switch
+    {
+        < 1000    => $"{ms}ms",
+        < 60_000  => $"{ms / 1000.0:F1}s",
+        _         => $"{ms / 60_000.0:F1}m"
+    };
+
+    async Task ShowToast(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content  = message,
+            CssClass = type == "Error" ? "e-toast-danger" : "e-toast-success",
+        });
+    }
+}

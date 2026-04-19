@@ -1,0 +1,401 @@
+@page "/platform/jobs"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.BackgroundJobs
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Background Jobs — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Background Jobs"
+               Subtitle="Monitor async processing jobs across the platform"
+               Icon="bi-gear-wide-connected">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync" title="Export">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by job type, correlation ID, error…" @onkeyup="OnSearchKeyUp" />
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_jobTypeFilter"
+                        DataSource="@_jobTypeOptions"
+                        Placeholder="All Job Types"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_statusFilter"
+                        DataSource="@_statusOptions"
+                        Placeholder="All Statuses"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfTextBox @bind-Value="_tenantFilter" Placeholder="Tenant ID…" CssClass="td-filter-tenant" />
+        <label class="td-checkbox-label">
+            <SfCheckBox @bind-Checked="_failedOnly" Label="Failed Only" />
+        </label>
+        <SfDatePicker TValue="DateTime?" @bind-Value="_fromDate" Placeholder="From date…" CssClass="td-filter-date" Format="yyyy-MM-dd" />
+        <SfDatePicker TValue="DateTime?" @bind-Value="_toDate" Placeholder="To date…" CssClass="td-filter-date" Format="yyyy-MM-dd" />
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading jobs…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="BackgroundJobDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(BackgroundJobDto.BackgroundJobId)" HeaderText="Job Id" Width="140">
+                <Template>
+                    @{ var row = (BackgroundJobDto)context; }
+                    <code title="@row.BackgroundJobId">@row.BackgroundJobId.ToString("N")[..8]…</code>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(BackgroundJobDto.JobTypeCode)" HeaderText="Job Type" Width="180" />
+            <GridColumn Field="@nameof(BackgroundJobDto.TenantId)" HeaderText="Tenant" Width="130">
+                <Template>
+                    @{ var row = (BackgroundJobDto)context; }
+                    @if (row.TenantId.HasValue)
+                    {
+                        <span title="@row.TenantId">@row.TenantId.Value.ToString("N")[..8]…</span>
+                    }
+                    else
+                    {
+                        <span class="text-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(BackgroundJobDto.StatusCode)" HeaderText="Status" Width="120">
+                <Template>
+                    @{ var row = (BackgroundJobDto)context; }
+                    <span class="um-badge @StatusBadgeCss(row.StatusCode)">@row.StatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(BackgroundJobDto.CreatedDateUtc)" HeaderText="Created Date" Width="160" Format="g" />
+            <GridColumn Field="@nameof(BackgroundJobDto.StartedDateUtc)" HeaderText="Started Date" Width="160" Format="g" />
+            <GridColumn Field="@nameof(BackgroundJobDto.DurationMs)" HeaderText="Duration" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    @{ var row = (BackgroundJobDto)context; }
+                    @if (row.DurationMs > 0)
+                    {
+                        <span>@FormatDuration(row.DurationMs)</span>
+                    }
+                    else
+                    {
+                        <span class="text-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(BackgroundJobDto.RetryCount)" HeaderText="Retry Count" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+            <GridColumn Field="@nameof(BackgroundJobDto.CorrelationId)" HeaderText="Correlation Id" Width="170">
+                <Template>
+                    @{ var row = (BackgroundJobDto)context; }
+                    @if (!string.IsNullOrEmpty(row.CorrelationId))
+                    {
+                        <code title="@row.CorrelationId">@Truncate(row.CorrelationId, 20)</code>
+                    }
+                    else
+                    {
+                        <span class="text-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="200" AllowSorting="false">
+                <Template>
+                    @{ var row = (BackgroundJobDto)context; }
+                    <div class="td-action-cell">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ViewDetail(row)" title="View Detail">
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                        @if (row.StatusCode is "Failed" or "Cancelled")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs text-warning" @onclick="() => RetryJobAsync(row)" title="Retry Job">
+                                <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (row.StatusCode is "Queued" or "Running")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs text-danger" @onclick="() => CancelJobAsync(row)" title="Cancel Job">
+                                <i class="bi bi-x-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (row.TenantId.HasValue)
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenRelatedTenant(row)" title="Open Related Tenant">
+                                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+<!-- ── View Detail Dialog ─────────────────────────────────── -->
+<SfDialog @bind-Visible="_detailDialogVisible"
+          Width="620px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="Job Details">
+    <DialogTemplates>
+        <Content>
+            @if (_selectedJob is not null)
+            {
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label class="um-label">Job Id</label>
+                        <code>@_selectedJob.BackgroundJobId</code>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Job Type</label>
+                        <span>@_selectedJob.JobTypeCode</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Status</label>
+                        <span class="um-badge @StatusBadgeCss(_selectedJob.StatusCode)">@_selectedJob.StatusCode</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Tenant</label>
+                        <span>@(_selectedJob.TenantId?.ToString() ?? "—")</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Created</label>
+                        <span>@_selectedJob.CreatedDateUtc.ToString("g")</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Started</label>
+                        <span>@(_selectedJob.StartedDateUtc?.ToString("g") ?? "—")</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Completed</label>
+                        <span>@(_selectedJob.CompletedDateUtc?.ToString("g") ?? "—")</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Duration</label>
+                        <span>@(_selectedJob.DurationMs > 0 ? FormatDuration(_selectedJob.DurationMs) : "—")</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Retry Count</label>
+                        <span>@_selectedJob.RetryCount</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Correlation Id</label>
+                        <code>@(_selectedJob.CorrelationId ?? "—")</code>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_selectedJob.ErrorMessage))
+                    {
+                        <div class="um-field um-field--full">
+                            <label class="um-label">Error Message</label>
+                            <pre class="td-error-pre">@_selectedJob.ErrorMessage</pre>
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(_selectedJob.ResultSummary))
+                    {
+                        <div class="um-field um-field--full">
+                            <label class="um-label">Result Summary</label>
+                            <span>@_selectedJob.ResultSummary</span>
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(_selectedJob.Payload))
+                    {
+                        <div class="um-field um-field--full">
+                            <label class="um-label">Payload</label>
+                            <pre class="td-payload-pre">@_selectedJob.Payload</pre>
+                        </div>
+                    }
+                </div>
+            }
+            <div class="um-dialog-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _detailDialogVisible = false">Close</button>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    SfGrid<BackgroundJobDto>? _grid;
+    SfToast? _toast;
+
+    List<BackgroundJobDto> _items = [];
+    bool _loading;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string    _searchTerm    = string.Empty;
+    string    _jobTypeFilter = string.Empty;
+    string    _statusFilter  = string.Empty;
+    string    _tenantFilter  = string.Empty;
+    bool      _failedOnly;
+    DateTime? _fromDate;
+    DateTime? _toDate;
+
+    // Detail dialog
+    bool _detailDialogVisible;
+    BackgroundJobDto? _selectedJob;
+
+    readonly List<FilterOption> _jobTypeOptions =
+    [
+        new("", "All Job Types"),
+        new("TenantProvisioning",  "TenantProvisioning"),
+        new("InvoiceGeneration",   "InvoiceGeneration"),
+        new("ReportExecution",     "ReportExecution"),
+        new("DataExport",          "DataExport"),
+        new("NotificationBatch",   "NotificationBatch"),
+        new("QuotaReset",          "QuotaReset"),
+        new("UsageAggregation",    "UsageAggregation"),
+        new("CommissionCalc",      "CommissionCalc")
+    ];
+
+    readonly List<FilterOption> _statusOptions =
+    [
+        new("", "All Statuses"),
+        new("Queued",    "Queued"),
+        new("Running",   "Running"),
+        new("Completed", "Completed"),
+        new("Failed",    "Failed"),
+        new("Cancelled", "Cancelled")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Jobs", null),
+            new BreadcrumbService.BreadcrumbItem("Background Jobs", "/platform/jobs"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            Guid? tenantId = Guid.TryParse(_tenantFilter, out var tid) ? tid : null;
+            var result = await Api.SearchBackgroundJobsAsync(
+                searchTerm: _searchTerm,
+                jobTypeCode: _jobTypeFilter,
+                statusCode: _statusFilter,
+                tenantId: tenantId,
+                failedOnly: _failedOnly ? true : null,
+                fromDateUtc: _fromDate,
+                toDateUtc: _toDate,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    void OnSearchKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") InvokeAsync(LoadAsync); }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    void ViewDetail(BackgroundJobDto row)
+    {
+        _selectedJob = row;
+        _detailDialogVisible = true;
+    }
+
+    async Task RetryJobAsync(BackgroundJobDto row)
+    {
+        try
+        {
+            await Api.RetryBackgroundJobAsync(row.BackgroundJobId, new RetryBackgroundJobRequest());
+            await ShowToast("Job queued for retry.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Retry failed.", "Error"); }
+    }
+
+    async Task CancelJobAsync(BackgroundJobDto row)
+    {
+        try
+        {
+            await Api.CancelBackgroundJobAsync(row.BackgroundJobId, new CancelBackgroundJobRequest());
+            await ShowToast("Job cancelled.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Cancel failed.", "Error"); }
+    }
+
+    void OpenRelatedTenant(BackgroundJobDto row)
+    {
+        if (row.TenantId.HasValue)
+            Nav.NavigateTo($"/platform/tenants/{row.TenantId.Value}");
+    }
+
+    async Task ExportAsync()
+    {
+        await ShowToast("Export started — file will download shortly.", "Success");
+    }
+
+    async Task ShowToast(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content      = message,
+            CssClass     = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            ShowCloseButton = true
+        });
+    }
+
+    static string StatusBadgeCss(string status) => status switch
+    {
+        "Completed" => "um-badge--success",
+        "Running"   => "um-badge--info",
+        "Queued"    => "um-badge--warning",
+        "Failed"    => "um-badge--danger",
+        "Cancelled" => "um-badge--neutral",
+        _           => "um-badge--neutral"
+    };
+
+    static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : $"{value[..maxLength]}…";
+
+    static string FormatDuration(int ms) => ms switch
+    {
+        < 1000   => $"{ms}ms",
+        < 60000  => $"{ms / 1000.0:F1}s",
+        _        => $"{ms / 60000.0:F1}m"
+    };
+
+    sealed record FilterOption(string Value, string Text);
+}

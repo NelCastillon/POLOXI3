@@ -1,0 +1,371 @@
+@page "/platform/sla/targets"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.SlaDefinitions
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>SLA Targets — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="SLA Targets"
+               Subtitle="Define and monitor service-level agreement targets across platform services"
+               Icon="bi-speedometer2">
+    <Actions>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New SLA Target
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by name, service…" @onkeyup="OnSearchKeyUp" />
+        <SfDropDownList TValue="string" TItem="StatusOption"
+                        @bind-Value="_complianceFilter"
+                        DataSource="@_complianceOptions"
+                        Placeholder="All Compliance"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading SLA targets…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="SlaDefinitionDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(SlaDefinitionDto.SlaName)" HeaderText="SLA Name" MinWidth="200" />
+            <GridColumn Field="@nameof(SlaDefinitionDto.ServiceName)" HeaderText="Service" Width="160" />
+            <GridColumn Field="@nameof(SlaDefinitionDto.MetricTypeCode)" HeaderText="Metric" Width="130" />
+            <GridColumn Field="@nameof(SlaDefinitionDto.TargetValue)" HeaderText="Target" Width="100" Format="N4" TextAlign="TextAlign.Right" />
+            <GridColumn Field="@nameof(SlaDefinitionDto.CurrentValue)" HeaderText="Current" Width="100" Format="N4" TextAlign="TextAlign.Right" />
+            <GridColumn Field="@nameof(SlaDefinitionDto.TargetUnit)" HeaderText="Unit" Width="110" />
+            <GridColumn Field="@nameof(SlaDefinitionDto.PeriodCode)" HeaderText="Period" Width="100" />
+            <GridColumn Field="@nameof(SlaDefinitionDto.ComplianceStatus)" HeaderText="Compliance" Width="130">
+                <Template>
+                    @{ var row = (SlaDefinitionDto)context; }
+                    <span class="um-badge @ComplianceBadgeCss(row.ComplianceStatus)">@row.ComplianceStatus</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SlaDefinitionDto.IsActive)" HeaderText="Active" Width="90">
+                <Template>
+                    @{ var row = (SlaDefinitionDto)context; }
+                    <span class="um-badge @(row.IsActive ? "um-badge--success" : "um-badge--neutral")">@(row.IsActive ? "Yes" : "No")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="120" AllowSorting="false">
+                <Template>
+                    @{ var row = (SlaDefinitionDto)context; }
+                    <div class="td-action-cell">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(row)" title="Edit">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs text-danger" @onclick="() => DeleteAsync(row)" title="Delete">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+<!-- ── Create / Edit Dialog ──────────────────────────────── -->
+<SfDialog @bind-Visible="_dialogVisible"
+          Width="620px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="@(_isEdit ? "Edit SLA Target" : "New SLA Target")">
+    <DialogTemplates>
+        <Content>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="um-form-grid">
+                    <div class="um-field um-field--full">
+                        <label class="um-label">SLA Name *</label>
+                        <SfTextBox @bind-Value="_form.SlaName" Placeholder="e.g. API Uptime SLA" />
+                        <ValidationMessage For="() => _form.SlaName" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Service Name *</label>
+                        <SfTextBox @bind-Value="_form.ServiceName" Placeholder="e.g. API Gateway" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Metric Type *</label>
+                        <SfTextBox @bind-Value="_form.MetricTypeCode" Placeholder="e.g. Uptime" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Target Value *</label>
+                        <SfNumericTextBox TValue="decimal" @bind-Value="_form.TargetValue" Format="N4" Min="0" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Target Unit</label>
+                        <SfTextBox @bind-Value="_form.TargetUnit" Placeholder="e.g. Percent" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Period</label>
+                        <SfDropDownList TValue="string" TItem="StatusOption"
+                                        @bind-Value="_form.PeriodCode"
+                                        DataSource="@_periodOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+
+                    @if (_isEdit)
+                    {
+                        <div class="um-field">
+                            <label class="um-label">Current Value</label>
+                            <SfNumericTextBox TValue="decimal" @bind-Value="_form.CurrentValue" Format="N4" Min="0" />
+                        </div>
+                        <div class="um-field">
+                            <label class="um-label">Compliance Status</label>
+                            <SfDropDownList TValue="string" TItem="StatusOption"
+                                            @bind-Value="_form.ComplianceStatus"
+                                            DataSource="@_complianceEditOptions">
+                                <DropDownListFieldSettings Value="Value" Text="Text" />
+                            </SfDropDownList>
+                        </div>
+                        <div class="um-field">
+                            <label class="um-label">Active</label>
+                            <SfDropDownList TValue="string" TItem="StatusOption"
+                                            @bind-Value="_form.IsActiveText"
+                                            DataSource="@_boolOptions">
+                                <DropDownListFieldSettings Value="Value" Text="Text" />
+                            </SfDropDownList>
+                        </div>
+                    }
+
+                    <div class="um-field um-field--full">
+                        <label class="um-label">Notes</label>
+                        <SfTextBox @bind-Value="_form.Notes" Multiline="true" />
+                    </div>
+                </div>
+                <div class="um-dialog-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _dialogVisible = false">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary">@(_isEdit ? "Update" : "Create")</button>
+                </div>
+            </EditForm>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    SfGrid<SlaDefinitionDto>? _grid;
+    SfToast? _toast;
+
+    List<SlaDefinitionDto> _items = [];
+    bool _loading;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string _searchTerm       = string.Empty;
+    string _complianceFilter = string.Empty;
+
+    bool   _dialogVisible;
+    bool   _isEdit;
+    Guid?  _editId;
+    SlaFormModel _form = new();
+
+    readonly List<StatusOption> _complianceOptions =
+    [
+        new("", "All Compliance"),
+        new("Compliant", "Compliant"),
+        new("AtRisk",    "At Risk"),
+        new("Breached",  "Breached")
+    ];
+
+    readonly List<StatusOption> _complianceEditOptions =
+    [
+        new("Compliant", "Compliant"),
+        new("AtRisk",    "At Risk"),
+        new("Breached",  "Breached")
+    ];
+
+    readonly List<StatusOption> _periodOptions =
+    [
+        new("Monthly",   "Monthly"),
+        new("Weekly",    "Weekly"),
+        new("Daily",     "Daily"),
+        new("Quarterly", "Quarterly")
+    ];
+
+    readonly List<StatusOption> _boolOptions =
+    [
+        new("true",  "Yes"),
+        new("false", "No")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Monitoring", null),
+            new BreadcrumbService.BreadcrumbItem("SLA Targets", "/platform/sla/targets"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchSlaDefinitionsAsync(
+                searchTerm: _searchTerm,
+                complianceStatus: _complianceFilter,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    void OnSearchKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") InvokeAsync(LoadAsync); }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    void OpenCreate()
+    {
+        _isEdit = false;
+        _editId = null;
+        _form   = new SlaFormModel();
+        _dialogVisible = true;
+    }
+
+    void OpenEdit(SlaDefinitionDto row)
+    {
+        _isEdit = true;
+        _editId = row.SlaDefinitionId;
+        _form = new SlaFormModel
+        {
+            SlaName          = row.SlaName,
+            ServiceName      = row.ServiceName,
+            MetricTypeCode   = row.MetricTypeCode,
+            TargetValue      = row.TargetValue,
+            TargetUnit       = row.TargetUnit,
+            PeriodCode       = row.PeriodCode,
+            CurrentValue     = row.CurrentValue,
+            ComplianceStatus = row.ComplianceStatus,
+            IsActiveText     = row.IsActive ? "true" : "false",
+            Notes            = row.Notes
+        };
+        _dialogVisible = true;
+    }
+
+    async Task SaveAsync()
+    {
+        try
+        {
+            if (_isEdit && _editId.HasValue)
+            {
+                await Api.UpdateSlaDefinitionAsync(_editId.Value, new UpdateSlaDefinitionRequest
+                {
+                    SlaName          = _form.SlaName,
+                    ServiceName      = _form.ServiceName,
+                    MetricTypeCode   = _form.MetricTypeCode,
+                    TargetValue      = _form.TargetValue,
+                    TargetUnit       = _form.TargetUnit,
+                    PeriodCode       = _form.PeriodCode,
+                    CurrentValue     = _form.CurrentValue,
+                    ComplianceStatus = _form.ComplianceStatus,
+                    IsActive         = _form.IsActiveText == "true",
+                    Notes            = _form.Notes
+                });
+                await ShowToast("SLA target updated.", "Success");
+            }
+            else
+            {
+                await Api.CreateSlaDefinitionAsync(new CreateSlaDefinitionRequest
+                {
+                    SlaName        = _form.SlaName,
+                    ServiceName    = _form.ServiceName,
+                    MetricTypeCode = _form.MetricTypeCode,
+                    TargetValue    = _form.TargetValue,
+                    TargetUnit     = _form.TargetUnit,
+                    PeriodCode     = _form.PeriodCode,
+                    Notes          = _form.Notes
+                });
+                await ShowToast("SLA target created.", "Success");
+            }
+            _dialogVisible = false;
+            await LoadAsync();
+        }
+        catch { await ShowToast("Save failed.", "Error"); }
+    }
+
+    async Task DeleteAsync(SlaDefinitionDto row)
+    {
+        try
+        {
+            await Api.DeleteSlaDefinitionAsync(row.SlaDefinitionId);
+            await ShowToast("SLA target deleted.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Delete failed.", "Error"); }
+    }
+
+    async Task ShowToast(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content         = message,
+            CssClass        = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            ShowCloseButton = true
+        });
+    }
+
+    static string ComplianceBadgeCss(string status) => status switch
+    {
+        "Compliant" => "um-badge--success",
+        "AtRisk"    => "um-badge--warning",
+        "Breached"  => "um-badge--danger",
+        _           => "um-badge--neutral"
+    };
+
+    sealed record StatusOption(string Value, string Text);
+
+    sealed class SlaFormModel
+    {
+        public string  SlaName          { get; set; } = string.Empty;
+        public string  ServiceName      { get; set; } = string.Empty;
+        public string  MetricTypeCode   { get; set; } = string.Empty;
+        public decimal TargetValue      { get; set; }
+        public string  TargetUnit       { get; set; } = "Percent";
+        public string  PeriodCode       { get; set; } = "Monthly";
+        public decimal CurrentValue     { get; set; }
+        public string  ComplianceStatus { get; set; } = "Compliant";
+        public string  IsActiveText     { get; set; } = "true";
+        public string? Notes            { get; set; }
+    }
+}

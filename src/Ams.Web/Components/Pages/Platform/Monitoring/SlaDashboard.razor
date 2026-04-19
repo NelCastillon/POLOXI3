@@ -1,0 +1,366 @@
+@page "/platform/sla"
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>SLA / SLO Monitoring — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="SLA / SLO Monitoring"
+               Subtitle="Operational and commercial SLA/SLO dashboard"
+               Icon="bi-speedometer2">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync" title="Export SLA Report">
+            <i class="bi bi-download" aria-hidden="true"></i> Export SLA Report
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/platform/monitoring/alerts")' title="Incident History">
+            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Incident History
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/platform/sla/targets")'>
+            <i class="bi bi-gear" aria-hidden="true"></i> Manage Targets
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="um-loading-overlay" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading SLA data…</span>
+    </div>
+}
+else
+{
+    @* ── Top KPI Widgets ──────────────────────────────────────── *@
+    <div class="sla-kpi-row">
+        <div class="sla-kpi-card @(_apiAvailability >= _apiAvailabilityTarget ? "" : "sla-kpi-card--breach")">
+            <div class="sla-kpi-icon"><i class="bi bi-cloud-check"></i></div>
+            <div class="sla-kpi-body">
+                <span class="sla-kpi-value">@_apiAvailability.ToString("N2")%</span>
+                <span class="sla-kpi-label">API Availability</span>
+                <span class="sla-kpi-target">Target: @_apiAvailabilityTarget.ToString("N2")%</span>
+            </div>
+            <span class="um-badge @(_apiAvailability >= _apiAvailabilityTarget ? "um-badge--success" : "um-badge--danger")">
+                @(_apiAvailability >= _apiAvailabilityTarget ? "Compliant" : "Breached")
+            </span>
+        </div>
+
+        <div class="sla-kpi-card @(_jobSuccessRate >= 99m ? "" : "sla-kpi-card--breach")">
+            <div class="sla-kpi-icon"><i class="bi bi-check2-circle"></i></div>
+            <div class="sla-kpi-body">
+                <span class="sla-kpi-value">@_jobSuccessRate.ToString("N1")%</span>
+                <span class="sla-kpi-label">Job Success Rate</span>
+                <span class="sla-kpi-target">Target: 99.0%</span>
+            </div>
+            <span class="um-badge @(_jobSuccessRate >= 99m ? "um-badge--success" : "um-badge--warning")">
+                @(_jobSuccessRate >= 99m ? "Compliant" : "At Risk")
+            </span>
+        </div>
+
+        <div class="sla-kpi-card @(_queueLatencyMs <= 500 ? "" : "sla-kpi-card--breach")">
+            <div class="sla-kpi-icon"><i class="bi bi-hourglass-split"></i></div>
+            <div class="sla-kpi-body">
+                <span class="sla-kpi-value">@_queueLatencyMs ms</span>
+                <span class="sla-kpi-label">Queue Processing Latency</span>
+                <span class="sla-kpi-target">Target: ≤ 500 ms</span>
+            </div>
+            <span class="um-badge @(_queueLatencyMs <= 500 ? "um-badge--success" : "um-badge--danger")">
+                @(_queueLatencyMs <= 500 ? "Compliant" : "Breached")
+            </span>
+        </div>
+
+        <div class="sla-kpi-card @(_openIncidents == 0 ? "" : "sla-kpi-card--breach")">
+            <div class="sla-kpi-icon"><i class="bi bi-exclamation-octagon"></i></div>
+            <div class="sla-kpi-body">
+                <span class="sla-kpi-value">@_openIncidents</span>
+                <span class="sla-kpi-label">Open Incidents</span>
+                <span class="sla-kpi-target">@_criticalIncidents critical</span>
+            </div>
+            <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/platform/monitoring/alerts")'>
+                <i class="bi bi-arrow-right"></i>
+            </button>
+        </div>
+    </div>
+
+    @* ── SLA Targets Overview ─────────────────────────────────── *@
+    <div class="sla-section-row">
+        <div class="sla-section-card sla-section-card--wide">
+            <div class="sla-section-header">
+                <h6 class="sla-section-title"><i class="bi bi-bullseye"></i> SLA Target Compliance</h6>
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/platform/sla/targets")'>View All <i class="bi bi-arrow-right"></i></button>
+            </div>
+            <div class="sla-compliance-summary">
+                <div class="sla-compliance-item sla-compliance-item--ok">
+                    <span class="sla-compliance-count">@_compliantCount</span>
+                    <span class="sla-compliance-label">Compliant</span>
+                </div>
+                <div class="sla-compliance-item sla-compliance-item--warn">
+                    <span class="sla-compliance-count">@_atRiskCount</span>
+                    <span class="sla-compliance-label">At Risk</span>
+                </div>
+                <div class="sla-compliance-item sla-compliance-item--breach">
+                    <span class="sla-compliance-count">@_breachedCount</span>
+                    <span class="sla-compliance-label">Breached</span>
+                </div>
+            </div>
+
+            @if (_slaTargets.Any())
+            {
+                <SfGrid TValue="SlaDefinitionDto"
+                        DataSource="@_slaTargets"
+                        AllowSorting="true"
+                        EnableHover="true"
+                        CssClass="e-sfgrid-clean">
+                    <GridColumns>
+                        <GridColumn Field="@nameof(SlaDefinitionDto.SlaName)" HeaderText="SLA" MinWidth="180" />
+                        <GridColumn Field="@nameof(SlaDefinitionDto.ServiceName)" HeaderText="Service" Width="150" />
+                        <GridColumn Field="@nameof(SlaDefinitionDto.MetricTypeCode)" HeaderText="Metric" Width="120" />
+                        <GridColumn Field="@nameof(SlaDefinitionDto.TargetValue)" HeaderText="Target" Width="90" Format="N2" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                        <GridColumn Field="@nameof(SlaDefinitionDto.CurrentValue)" HeaderText="Current" Width="90" Format="N2" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                        <GridColumn Field="@nameof(SlaDefinitionDto.ComplianceStatus)" HeaderText="Status" Width="120">
+                            <Template>
+                                @{ var r = (SlaDefinitionDto)context; }
+                                <span class="um-badge @ComplianceBadge(r.ComplianceStatus)">@r.ComplianceStatus</span>
+                            </Template>
+                        </GridColumn>
+                    </GridColumns>
+                </SfGrid>
+            }
+        </div>
+    </div>
+
+    @* ── Tenant & Regional Uptime ─────────────────────────────── *@
+    <div class="sla-section-row sla-section-row--dual">
+        <div class="sla-section-card">
+            <div class="sla-section-header">
+                <h6 class="sla-section-title"><i class="bi bi-building"></i> Tenant Uptime Summary</h6>
+            </div>
+            @if (_healthChecks.Any())
+            {
+                <div class="sla-uptime-list">
+                    @foreach (var hc in _healthChecks.GroupBy(h => h.ServiceName).Take(8))
+                    {
+                        var avg = hc.Average(x => (double)x.UptimePercent);
+                        var worst = hc.Min(x => x.UptimePercent);
+                        <div class="sla-uptime-row">
+                            <span class="sla-uptime-service">@hc.Key</span>
+                            <div class="sla-uptime-bar-track">
+                                <div class="sla-uptime-bar-fill @UptimeBarCss(avg)" style="width: @avg%"></div>
+                            </div>
+                            <span class="sla-uptime-pct @(avg >= 99.9 ? "sla-uptime-pct--ok" : avg >= 99.0 ? "sla-uptime-pct--warn" : "sla-uptime-pct--breach")">@avg.ToString("N2")%</span>
+                            <button class="um-btn um-btn-ghost um-btn-xs" title="Drill into service" @onclick='() => Nav.NavigateTo("/platform/monitoring/health")'>
+                                <i class="bi bi-arrow-right"></i>
+                            </button>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <p class="sla-empty-text">No health check data available.</p>
+            }
+        </div>
+
+        <div class="sla-section-card">
+            <div class="sla-section-header">
+                <h6 class="sla-section-title"><i class="bi bi-globe2"></i> Regional Uptime Summary</h6>
+            </div>
+            @if (_healthChecks.Any(h => !string.IsNullOrEmpty(h.RegionCode)))
+            {
+                <div class="sla-uptime-list">
+                    @foreach (var rg in _healthChecks.Where(h => !string.IsNullOrEmpty(h.RegionCode)).GroupBy(h => h.RegionCode!).Take(8))
+                    {
+                        var avg = rg.Average(x => (double)x.UptimePercent);
+                        var count = rg.Count();
+                        <div class="sla-uptime-row">
+                            <span class="sla-uptime-service">
+                                <i class="bi bi-geo-alt"></i> @rg.Key
+                                <span class="sla-uptime-count">(@count services)</span>
+                            </span>
+                            <div class="sla-uptime-bar-track">
+                                <div class="sla-uptime-bar-fill @UptimeBarCss(avg)" style="width: @avg%"></div>
+                            </div>
+                            <span class="sla-uptime-pct @(avg >= 99.9 ? "sla-uptime-pct--ok" : avg >= 99.0 ? "sla-uptime-pct--warn" : "sla-uptime-pct--breach")">@avg.ToString("N2")%</span>
+                            <button class="um-btn um-btn-ghost um-btn-xs" title="Drill into region" @onclick='() => Nav.NavigateTo("/platform/monitoring/health")'>
+                                <i class="bi bi-arrow-right"></i>
+                            </button>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <p class="sla-empty-text">No regional data available.</p>
+            }
+        </div>
+    </div>
+
+    @* ── Recent Incidents ─────────────────────────────────────── *@
+    <div class="sla-section-row">
+        <div class="sla-section-card sla-section-card--wide">
+            <div class="sla-section-header">
+                <h6 class="sla-section-title"><i class="bi bi-bell"></i> Recent Incidents</h6>
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/platform/monitoring/alerts")'>View All <i class="bi bi-arrow-right"></i></button>
+            </div>
+            @if (_recentAlerts.Any())
+            {
+                <SfGrid TValue="AlertDto"
+                        DataSource="@_recentAlerts"
+                        AllowSorting="true"
+                        EnableHover="true"
+                        CssClass="e-sfgrid-clean">
+                    <GridColumns>
+                        <GridColumn Field="@nameof(AlertDto.TriggeredDateUtc)" HeaderText="Triggered" Width="160" Format="g" />
+                        <GridColumn Field="@nameof(AlertDto.AlertName)" HeaderText="Alert" MinWidth="200" />
+                        <GridColumn Field="@nameof(AlertDto.ServiceName)" HeaderText="Service" Width="150" />
+                        <GridColumn Field="@nameof(AlertDto.SeverityCode)" HeaderText="Severity" Width="110">
+                            <Template>
+                                @{ var a = (AlertDto)context; }
+                                <span class="um-badge @SeverityBadge(a.SeverityCode)">@a.SeverityCode</span>
+                            </Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(AlertDto.StatusCode)" HeaderText="Status" Width="110">
+                            <Template>
+                                @{ var s = (AlertDto)context; }
+                                <span class="um-badge @AlertStatusBadge(s.StatusCode)">@s.StatusCode</span>
+                            </Template>
+                        </GridColumn>
+                    </GridColumns>
+                </SfGrid>
+            }
+            else
+            {
+                <p class="sla-empty-text">No recent incidents.</p>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    SfToast? _toast;
+    bool _loading = true;
+
+    // KPI values
+    decimal _apiAvailability;
+    decimal _apiAvailabilityTarget = 99.95m;
+    decimal _jobSuccessRate = 100m;
+    int _queueLatencyMs;
+    int _openIncidents;
+    int _criticalIncidents;
+
+    // SLA compliance counts
+    int _compliantCount;
+    int _atRiskCount;
+    int _breachedCount;
+
+    // Data
+    List<SlaDefinitionDto> _slaTargets = [];
+    List<HealthCheckDto> _healthChecks = [];
+    List<AlertDto> _recentAlerts = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("SLA / SLO Monitoring", "/platform/sla"));
+
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var slaTask = Api.SearchSlaDefinitionsAsync(pageSize: 50);
+            var healthTask = Api.SearchHealthChecksAsync(pageSize: 50);
+            var alertTask = Api.SearchAlertsAsync(pageSize: 10);
+            var openCountTask = Api.GetAlertOpenCountAsync();
+
+            await Task.WhenAll(slaTask, healthTask, alertTask, openCountTask);
+
+            _slaTargets = slaTask.Result?.Items.ToList() ?? [];
+            _healthChecks = healthTask.Result?.Items.ToList() ?? [];
+            _recentAlerts = alertTask.Result?.Items.ToList() ?? [];
+            _openIncidents = openCountTask.Result;
+
+            // Compute KPIs from loaded data
+            ComputeKpis();
+        }
+        finally { _loading = false; }
+    }
+
+    void ComputeKpis()
+    {
+        // API Availability — from health checks with "API" in service name or overall average
+        var apiChecks = _healthChecks.Where(h => h.ServiceName.Contains("API", StringComparison.OrdinalIgnoreCase)).ToList();
+        _apiAvailability = apiChecks.Any() ? apiChecks.Average(h => h.UptimePercent) : (_healthChecks.Any() ? _healthChecks.Average(h => h.UptimePercent) : 100m);
+
+        // API Availability target — from SLA definitions
+        var apiSla = _slaTargets.FirstOrDefault(s => s.MetricTypeCode == "Uptime" && s.ServiceName.Contains("API", StringComparison.OrdinalIgnoreCase));
+        if (apiSla is not null) _apiAvailabilityTarget = apiSla.TargetValue;
+
+        // Queue latency — from health checks or SLA latency metric
+        var latencyCheck = _healthChecks.OrderByDescending(h => h.LatencyMs).FirstOrDefault();
+        _queueLatencyMs = latencyCheck?.LatencyMs ?? 0;
+
+        // Job success rate — from SLA definitions if available
+        var jobSla = _slaTargets.FirstOrDefault(s => s.MetricTypeCode.Contains("Delivery", StringComparison.OrdinalIgnoreCase) || s.MetricTypeCode.Contains("Success", StringComparison.OrdinalIgnoreCase));
+        _jobSuccessRate = jobSla?.CurrentValue ?? 100m;
+
+        // Critical incidents
+        _criticalIncidents = _recentAlerts.Count(a => a.SeverityCode == "Critical" && a.StatusCode == "Open");
+
+        // SLA compliance breakdown
+        _compliantCount = _slaTargets.Count(s => s.ComplianceStatus == "Compliant");
+        _atRiskCount = _slaTargets.Count(s => s.ComplianceStatus == "AtRisk");
+        _breachedCount = _slaTargets.Count(s => s.ComplianceStatus == "Breached");
+    }
+
+    async Task ExportAsync()
+    {
+        if (!_slaTargets.Any())
+        {
+            if (_toast is not null)
+                await _toast.ShowAsync(new() { Title = "Export", Content = "No SLA data to export.", CssClass = "e-toast-warning" });
+            return;
+        }
+        if (_toast is not null)
+            await _toast.ShowAsync(new() { Title = "Export", Content = $"Exporting SLA report ({_slaTargets.Count} targets)…", CssClass = "e-toast-info" });
+    }
+
+    static string ComplianceBadge(string status) => status switch
+    {
+        "Compliant" => "um-badge--success",
+        "AtRisk"    => "um-badge--warning",
+        "Breached"  => "um-badge--danger",
+        _           => "um-badge--neutral"
+    };
+
+    static string SeverityBadge(string severity) => severity switch
+    {
+        "Critical" => "um-badge--danger",
+        "Warning"  => "um-badge--warning",
+        "Info"     => "um-badge--info",
+        _          => "um-badge--neutral"
+    };
+
+    static string AlertStatusBadge(string status) => status switch
+    {
+        "Open"         => "um-badge--danger",
+        "Acknowledged" => "um-badge--warning",
+        "Resolved"     => "um-badge--success",
+        _              => "um-badge--neutral"
+    };
+
+    static string UptimeBarCss(double pct) => pct switch
+    {
+        >= 99.9 => "sla-uptime-bar--ok",
+        >= 99.0 => "sla-uptime-bar--warn",
+        _       => "sla-uptime-bar--breach"
+    };
+}

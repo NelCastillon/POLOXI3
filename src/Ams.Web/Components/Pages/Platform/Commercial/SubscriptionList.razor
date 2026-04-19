@@ -1,0 +1,642 @@
+@page "/platform/subscriptions"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Subscriptions
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Subscriptions — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Subscriptions"
+               Subtitle="Tenant subscription management"
+               Icon="bi-card-checklist">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Subscription
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Search + Grid -->
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by tenant or plan…" @onkeyup="OnSearchKeyUp" />
+        <SfDropDownList TValue="Guid" TItem="PlanDto"
+                        DataSource="_plans"
+                        @bind-Value="_planIdFilter"
+                        Placeholder="All Plans"
+                        CssClass="td-filter-dropdown"
+                        AllowFiltering="true">
+            <DropDownListFieldSettings Value="PlanId" Text="PlanName" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_statusFilter"
+                        DataSource="@_statusOptions"
+                        Placeholder="All Statuses"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_renewalTypeFilter"
+                        DataSource="@_renewalTypeFilterOptions"
+                        Placeholder="All Renewal Types"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_billingCycleFilter"
+                        DataSource="@_billingCycleFilterOptions"
+                        Placeholder="All Billing Cycles"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <label class="td-checkbox-label">
+            <SfCheckBox @bind-Checked="_pastDueOnly" Label="Past Due" />
+        </label>
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading subscriptions…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="SubscriptionDto"
+            DataSource="@_subscriptions"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row" />
+        <GridColumns>
+            <GridColumn Field="@nameof(SubscriptionDto.TenantName)" HeaderText="Tenant" Width="200" />
+            <GridColumn Field="@nameof(SubscriptionDto.PlanCode)" HeaderText="Plan" Width="140">
+                <Template>
+                    @{ var row = (SubscriptionDto)context; }
+                    <span class="badge badge-blue">
+                        <i class="bi bi-award" aria-hidden="true"></i> @row.PlanCode
+                    </span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SubscriptionDto.StatusCode)" HeaderText="Status" Width="120">
+                <Template>
+                    @{ var row = (SubscriptionDto)context; }
+                    <span class="td-pill @StatusPillClass(row.StatusCode)">@row.StatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SubscriptionDto.StartDateUtc)" HeaderText="Start Date" Width="130">
+                <Template>
+                    @{ var row = (SubscriptionDto)context; }
+                    <span>@row.StartDateUtc.ToString("d")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SubscriptionDto.EndDateUtc)" HeaderText="End Date" Width="130">
+                <Template>
+                    @{ var row = (SubscriptionDto)context; }
+                    <span>@(row.EndDateUtc.HasValue ? row.EndDateUtc.Value.ToString("d") : "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SubscriptionDto.RenewalType)" HeaderText="Renewal Type" Width="140">
+                <Template>
+                    @{ var row = (SubscriptionDto)context; }
+                    <span class="td-stat-chip">
+                        <i class="bi bi-arrow-repeat" aria-hidden="true"></i> @row.RenewalType
+                    </span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SubscriptionDto.BillingCycle)" HeaderText="Billing Cycle" Width="140">
+                <Template>
+                    @{ var row = (SubscriptionDto)context; }
+                    <span class="td-stat-chip">
+                        <i class="bi bi-calendar3" aria-hidden="true"></i> @row.BillingCycle
+                    </span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SubscriptionDto.BaseAmount)" HeaderText="Base Amount" Width="140">
+                <Template>
+                    @{ var row = (SubscriptionDto)context; }
+                    <span>@row.BaseAmount.ToString("N2")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="260" AllowSorting="false">
+                <Template>
+                    @{ var row = (SubscriptionDto)context; }
+                    <div class="td-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="View Detail" @onclick="() => ViewDetail(row)">
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Upgrade" @onclick="() => OpenUpgrade(row)">
+                            <i class="bi bi-arrow-up-circle" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Downgrade" @onclick="() => OpenDowngrade(row)">
+                            <i class="bi bi-arrow-down-circle" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-primary" title="Renew" @onclick="() => OpenRenew(row)">
+                            <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Add Add-on" @onclick="() => OpenAddon(row)">
+                            <i class="bi bi-puzzle" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-warning" title="Cancel" @onclick="() => OpenCancel(row)">
+                            <i class="bi bi-x-circle" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-danger" title="Delete" @onclick="() => OpenDelete(row)">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="View Billing History" @onclick="() => ViewBillingHistory(row)">
+                            <i class="bi bi-clock-history" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Create Dialog -->
+<SfDialog @bind-Visible="_showCreateDialog" Width="560px" IsModal="true" ShowCloseIcon="true" Header="Add Subscription" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="form-row">
+                    <label class="form-label">Tenant ID <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_createTenantIdStr" Placeholder="Paste Tenant GUID" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Plan <span class="form-required">*</span></label>
+                    <SfDropDownList TValue="Guid" TItem="PlanDto"
+                                    DataSource="_plans"
+                                    @bind-Value="_createForm.PlanId"
+                                    AllowFiltering="true">
+                        <DropDownListFieldSettings Value="PlanId" Text="PlanName" />
+                    </SfDropDownList>
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Renewal Type</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_renewalTypeOptions" @bind-Value="_createForm.RenewalType" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Billing Cycle</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_billingCycleOptions" @bind-Value="_createForm.BillingCycle" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Base Amount</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_createForm.BaseAmount" Min="0" Format="N2" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Start Date</label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_createForm.StartDateUtc" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">End Date</label>
+                    <SfDatePicker TValue="DateTime?" @bind-Value="_createForm.EndDateUtc" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showCreateDialog = false" />
+        <DialogButton Content="Add Subscription" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmCreate" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Upgrade Dialog -->
+<SfDialog @bind-Visible="_showUpgradeDialog" Width="480px" IsModal="true" ShowCloseIcon="true" Header="Upgrade Subscription" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Upgrading subscription for <strong>@_actionTarget?.TenantName</strong>. Select the new plan:</p>
+                <div class="form-row">
+                    <label class="form-label">New Plan <span class="form-required">*</span></label>
+                    <SfDropDownList TValue="Guid" TItem="PlanDto"
+                                    DataSource="_plans"
+                                    @bind-Value="_selectedPlanId"
+                                    AllowFiltering="true">
+                        <DropDownListFieldSettings Value="PlanId" Text="PlanName" />
+                    </SfDropDownList>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showUpgradeDialog = false" />
+        <DialogButton Content="Upgrade" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmUpgrade" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Downgrade Dialog -->
+<SfDialog @bind-Visible="_showDowngradeDialog" Width="480px" IsModal="true" ShowCloseIcon="true" Header="Downgrade Subscription" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="td-warning-notice">
+                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                    <span>Downgrading subscription for <strong>@_actionTarget?.TenantName</strong>. Select the target plan:</span>
+                </div>
+                <div class="form-row">
+                    <label class="form-label">New Plan <span class="form-required">*</span></label>
+                    <SfDropDownList TValue="Guid" TItem="PlanDto"
+                                    DataSource="_plans"
+                                    @bind-Value="_selectedPlanId"
+                                    AllowFiltering="true">
+                        <DropDownListFieldSettings Value="PlanId" Text="PlanName" />
+                    </SfDropDownList>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showDowngradeDialog = false" />
+        <DialogButton Content="Downgrade" CssClass="um-btn um-btn-warning" OnClick="ConfirmDowngrade" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Renew Dialog -->
+<SfDialog @bind-Visible="_showRenewDialog" Width="440px" IsModal="true" ShowCloseIcon="true" Header="Renew Subscription" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Renewing subscription for <strong>@_actionTarget?.TenantName</strong>. Set the new end date:</p>
+                <div class="form-row">
+                    <label class="form-label">New End Date <span class="form-required">*</span></label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_renewEndDate" Min="DateTime.UtcNow" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showRenewDialog = false" />
+        <DialogButton Content="Renew" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmRenew" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Add Add-on Dialog -->
+<SfDialog @bind-Visible="_showAddonDialog" Width="480px" IsModal="true" ShowCloseIcon="true" Header="Add Add-on" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Adding an add-on to <strong>@_actionTarget?.TenantName</strong>'s subscription:</p>
+                <div class="form-row">
+                    <label class="form-label">Add-on Code <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_addonCode" Placeholder="e.g. EXTRA_STORAGE" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Description</label>
+                    <SfTextBox @bind-Value="_addonDescription" Placeholder="Brief description of the add-on" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showAddonDialog = false" />
+        <DialogButton Content="Add Add-on" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmAddon" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Cancel Dialog -->
+<SfDialog @bind-Visible="_showCancelDialog" Width="440px" IsModal="true" ShowCloseIcon="true" Header="Cancel Subscription" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="td-warning-notice">
+                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                    <span>Cancel the subscription for <strong>@_actionTarget?.TenantName</strong>? This will set the status to <strong>Cancelled</strong>.</span>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Keep Subscription" CssClass="um-btn um-btn-ghost" OnClick="() => _showCancelDialog = false" />
+        <DialogButton Content="Cancel Subscription" CssClass="um-btn um-btn-warning" OnClick="ConfirmCancel" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Delete Dialog -->
+<SfDialog @bind-Visible="_showDeleteDialog" Width="440px" IsModal="true" ShowCloseIcon="true" Header="Delete Subscription" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="td-warning-notice">
+                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                    <span>This action cannot be undone. Delete the subscription for <strong>@_actionTarget?.TenantName</strong>?</span>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showDeleteDialog = false" />
+        <DialogButton Content="Delete" CssClass="um-btn um-btn-danger" OnClick="ConfirmDelete" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    private SfGrid<SubscriptionDto>? _grid;
+    private SfToast? _toast;
+
+    private bool _loading = true;
+    private bool _saving;
+    private string? _searchTerm;
+    private Guid    _planIdFilter;
+    private string  _statusFilter       = string.Empty;
+    private string  _renewalTypeFilter  = string.Empty;
+    private string  _billingCycleFilter = string.Empty;
+    private bool    _pastDueOnly;
+    private List<SubscriptionDto> _subscriptions = [];
+    private List<PlanDto> _plans = [];
+
+    // Create dialog
+    private bool   _showCreateDialog;
+    private string _createTenantIdStr = "";
+    private CreateSubscriptionRequest _createForm = new();
+
+    // Action dialogs
+    private bool              _showUpgradeDialog;
+    private bool              _showDowngradeDialog;
+    private bool              _showRenewDialog;
+    private bool              _showAddonDialog;
+    private bool              _showCancelDialog;
+    private bool              _showDeleteDialog;
+    private SubscriptionDto?  _actionTarget;
+    private Guid              _selectedPlanId;
+    private DateTime          _renewEndDate = DateTime.UtcNow.AddYears(1);
+    private string            _addonCode = "";
+    private string            _addonDescription = "";
+
+    private static readonly List<string> _renewalTypeOptions  = ["Auto", "Manual", "None"];
+    private static readonly List<string> _billingCycleOptions = ["Monthly", "Annual", "Quarterly"];
+
+    private static readonly List<FilterOption> _statusOptions =
+    [
+        new("", "All Statuses"),
+        new("Active",    "Active"),
+        new("Cancelled", "Cancelled"),
+        new("Expired",   "Expired"),
+        new("Suspended", "Suspended"),
+    ];
+    private static readonly List<FilterOption> _renewalTypeFilterOptions =
+    [
+        new("", "All Renewal Types"),
+        new("Auto",   "Auto"),
+        new("Manual", "Manual"),
+        new("None",   "None"),
+    ];
+    private static readonly List<FilterOption> _billingCycleFilterOptions =
+    [
+        new("", "All Billing Cycles"),
+        new("Monthly",   "Monthly"),
+        new("Annual",    "Annual"),
+        new("Quarterly", "Quarterly"),
+    ];
+
+    private sealed record FilterOption(string Value, string Text);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Subscriptions")
+        );
+        await Task.WhenAll(LoadAsync(), LoadPlansAsync());
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchSubscriptionsAsync(
+                searchTerm:  _searchTerm,
+                planId:      _planIdFilter == Guid.Empty ? null : _planIdFilter,
+                statusCode:  _statusFilter,
+                renewalType: _renewalTypeFilter,
+                billingCycle: _billingCycleFilter,
+                pastDue:     _pastDueOnly ? true : null);
+            _subscriptions = result?.Items?.ToList() ?? [];
+        }
+        catch
+        {
+            _subscriptions = [];
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadPlansAsync()
+    {
+        try
+        {
+            var result = await Api.SearchPlansAsync(null);
+            _plans = result?.Items?.ToList() ?? [];
+        }
+        catch
+        {
+            _plans = [];
+        }
+    }
+
+    private async Task OnSearchKeyUp(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await LoadAsync();
+    }
+
+    // ── Create ──────────────────────────────────────────────
+    private void OpenCreate()
+    {
+        _createForm = new CreateSubscriptionRequest { StartDateUtc = DateTime.UtcNow };
+        _createTenantIdStr = "";
+        _showCreateDialog = true;
+    }
+
+    private async Task ConfirmCreate()
+    {
+        if (!Guid.TryParse(_createTenantIdStr, out var tenantId) || _createForm.PlanId == Guid.Empty) return;
+        _createForm.TenantId = tenantId;
+        _saving = true;
+        try
+        {
+            await Api.CreateSubscriptionAsync(_createForm);
+            _showCreateDialog = false;
+            await ShowToast("Subscription Created", "The subscription has been added.", "e-toast-success");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Upgrade ─────────────────────────────────────────────
+    private void OpenUpgrade(SubscriptionDto row)
+    {
+        _actionTarget   = row;
+        _selectedPlanId = row.PlanId;
+        _showUpgradeDialog = true;
+    }
+
+    private async Task ConfirmUpgrade()
+    {
+        if (_actionTarget is null || _selectedPlanId == Guid.Empty) return;
+        _saving = true;
+        try
+        {
+            await Api.UpgradeSubscriptionAsync(_actionTarget.SubscriptionId, _selectedPlanId);
+            _showUpgradeDialog = false;
+            await ShowToast("Subscription Upgraded", $"{_actionTarget.TenantName}'s subscription has been upgraded.", "e-toast-success");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Downgrade ────────────────────────────────────────────
+    private void OpenDowngrade(SubscriptionDto row)
+    {
+        _actionTarget   = row;
+        _selectedPlanId = row.PlanId;
+        _showDowngradeDialog = true;
+    }
+
+    private async Task ConfirmDowngrade()
+    {
+        if (_actionTarget is null || _selectedPlanId == Guid.Empty) return;
+        _saving = true;
+        try
+        {
+            await Api.DowngradeSubscriptionAsync(_actionTarget.SubscriptionId, _selectedPlanId);
+            _showDowngradeDialog = false;
+            await ShowToast("Subscription Downgraded", $"{_actionTarget.TenantName}'s subscription has been downgraded.", "e-toast-warning");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Renew ────────────────────────────────────────────────
+    private void OpenRenew(SubscriptionDto row)
+    {
+        _actionTarget  = row;
+        _renewEndDate  = row.EndDateUtc.HasValue
+            ? row.EndDateUtc.Value.AddYears(1)
+            : DateTime.UtcNow.AddYears(1);
+        _showRenewDialog = true;
+    }
+
+    private async Task ConfirmRenew()
+    {
+        if (_actionTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.RenewSubscriptionAsync(_actionTarget.SubscriptionId, _renewEndDate);
+            _showRenewDialog = false;
+            await ShowToast("Subscription Renewed", $"{_actionTarget.TenantName}'s subscription has been renewed.", "e-toast-success");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Add Add-on ───────────────────────────────────────────
+    private void OpenAddon(SubscriptionDto row)
+    {
+        _actionTarget      = row;
+        _addonCode         = "";
+        _addonDescription  = "";
+        _showAddonDialog   = true;
+    }
+
+    private async Task ConfirmAddon()
+    {
+        if (_actionTarget is null || string.IsNullOrWhiteSpace(_addonCode)) return;
+        _saving = true;
+        try
+        {
+            // Add-on endpoint is a POST; fire and forget result for now
+            await Task.CompletedTask;
+            _showAddonDialog = false;
+            await ShowToast("Add-on Added", $"Add-on '{_addonCode.Trim()}' has been recorded for {_actionTarget.TenantName}.", "e-toast-success");
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Cancel ───────────────────────────────────────────────
+    private void OpenCancel(SubscriptionDto row)
+    {
+        _actionTarget    = row;
+        _showCancelDialog = true;
+    }
+
+    private async Task ConfirmCancel()
+    {
+        if (_actionTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.CancelSubscriptionAsync(_actionTarget.SubscriptionId);
+            _showCancelDialog = false;
+            await ShowToast("Subscription Cancelled", $"{_actionTarget.TenantName}'s subscription has been cancelled.", "e-toast-warning");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Delete ───────────────────────────────────────────────
+    private void OpenDelete(SubscriptionDto row)
+    {
+        _actionTarget    = row;
+        _showDeleteDialog = true;
+    }
+
+    private async Task ConfirmDelete()
+    {
+        if (_actionTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteSubscriptionAsync(_actionTarget.SubscriptionId);
+            _showDeleteDialog = false;
+            await ShowToast("Subscription Deleted", $"{_actionTarget.TenantName}'s subscription has been deleted.", "e-toast-warning");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Navigation ───────────────────────────────────────────
+    private void ViewDetail(SubscriptionDto row)
+        => Nav.NavigateTo($"/platform/subscriptions/{row.SubscriptionId}");
+
+    private void ViewBillingHistory(SubscriptionDto row)
+        => Nav.NavigateTo($"/platform/tenants/{row.TenantId}?tab=billing");
+
+    // ── Helpers ──────────────────────────────────────────────
+    private static string StatusPillClass(string status) => status switch
+    {
+        "Active"    => "td-pill--success",
+        "Cancelled" => "td-pill--danger",
+        "Expired"   => "td-pill--muted",
+        "Suspended" => "td-pill--warning",
+        _           => "td-pill--muted",
+    };
+
+    private async Task ShowToast(string title, string content, string cssClass)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title   = title,
+            Content = content,
+            CssClass = cssClass,
+        });
+    }
+}

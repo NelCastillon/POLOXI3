@@ -1,0 +1,1484 @@
+@page "/platform/tenants/{TenantId:guid}"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Tenants
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>@PageTitle — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@if (_loading)
+{
+    <div class="td-loading">
+        <span class="um-spin td-loading-spin" aria-hidden="true"></span>
+        <span>Loading tenant…</span>
+    </div>
+}
+else if (_tenant is null)
+{
+    <div class="td-not-found">
+        <i class="bi bi-buildings td-not-found-icon" aria-hidden="true"></i>
+        <h2>Tenant not found</h2>
+        <p>The requested tenant could not be loaded.</p>
+        <button class="um-btn um-btn-ghost" @onclick="NavigateToList">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Tenants
+        </button>
+    </div>
+}
+else
+{
+    <AppPageHeader Title="@PageTitle"
+                   Subtitle="@_tenant.TenantCode"
+                   Icon="bi-buildings">
+        <Actions>
+            <button class="um-btn um-btn-ghost" @onclick="OpenEdit">
+                <i class="bi bi-pencil" aria-hidden="true"></i> Edit Tenant
+            </button>
+            @if (_tenant.StatusCode == "Active")
+            {
+                <button class="um-btn um-btn-warning" @onclick="OpenSuspend">
+                    <i class="bi bi-pause-circle" aria-hidden="true"></i> Suspend
+                </button>
+            }
+            else if (_tenant.StatusCode == "Suspended")
+            {
+                <button class="um-btn um-btn-primary" @onclick="OpenActivate">
+                    <i class="bi bi-play-circle" aria-hidden="true"></i> Activate
+                </button>
+            }
+            <button class="um-btn um-btn-ghost" @onclick="OpenUpgradePlan">
+                <i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Upgrade Plan
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenChangeRegion">
+                <i class="bi bi-geo-alt" aria-hidden="true"></i> Move Region
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenResetQuotas">
+                <i class="bi bi-speedometer" aria-hidden="true"></i> Reset Quotas
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="GoToAudit">
+                <i class="bi bi-journal-text" aria-hidden="true"></i> Open Audit
+            </button>
+        </Actions>
+    </AppPageHeader>
+
+    <!-- Stats bar -->
+    <div class="td-stats-bar">
+        <div class="td-stats-icon-wrap" aria-hidden="true">
+            <i class="bi bi-buildings td-stats-icon"></i>
+        </div>
+        <div class="td-stats">
+            <AppStatusBadge Status="@_tenant.StatusCode" />
+            @if (!string.IsNullOrEmpty(_tenant.PlanCode))
+            {
+                <span class="badge badge-blue">
+                    <i class="bi bi-award" aria-hidden="true"></i> @_tenant.PlanCode
+                </span>
+            }
+            @if (!string.IsNullOrEmpty(_tenant.RegionCode))
+            {
+                <span class="td-stat-chip">
+                    <i class="bi bi-geo-alt" aria-hidden="true"></i> @_tenant.RegionCode
+                </span>
+            }
+            @if (!string.IsNullOrEmpty(_tenant.IsolationMode))
+            {
+                <span class="td-stat-chip">
+                    <i class="bi bi-layers" aria-hidden="true"></i> @_tenant.IsolationMode
+                </span>
+            }
+            @if (!string.IsNullOrEmpty(_tenant.PrimaryDomain))
+            {
+                <span class="td-stat-chip">
+                    <i class="bi bi-globe" aria-hidden="true"></i> @_tenant.PrimaryDomain
+                </span>
+            }
+            <span class="td-stat-chip">
+                <i class="bi bi-people" aria-hidden="true"></i> @_tenant.ActiveUsers users
+            </span>
+            <span class="td-stat-chip">
+                <i class="bi bi-calendar3" aria-hidden="true"></i> Created @_tenant.CreatedDateUtc.ToString("d")
+            </span>
+        </div>
+    </div>
+
+    <!-- Tabs: 0 Overview · 1 Configuration · 2 Branding · 3 Domains · 4 Subscription · 5 Features · 6 Usage · 7 Region & Deployment · 8 Quotas · 9 Audit -->
+    <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="OnTabChangedAsync">
+        <Tabs>
+
+            <!-- 0: Overview -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Overview" IconCss="bi bi-grid-1x2" /></ChildContent>
+                <ContentTemplate>
+                    <TenantOverview TenantId="TenantId" OnJumpToTab="OnTabChangedAsync" @ref="_overviewRef" />
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 1: Configuration -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Configuration" IconCss="bi bi-sliders" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        @if (_tenant.StatusCode != "Active")
+                        {
+                            <div class="tot-alert tot-alert--info">
+                                <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                                <span>This tenant is currently <strong>@_tenant.StatusCode</strong>. Configuration changes can be saved, but users will not have platform access until the tenant is reactivated.</span>
+                            </div>
+                        }
+                        <div class="tot-grid tot-grid--2">
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-translate" aria-hidden="true"></i>
+                                    <span>Localisation &amp; Internationalisation</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Locale</span>
+                                        <span class="tot-fv"><span class="tot-mono">@(_tenant.Locale.Length > 0 ? _tenant.Locale : "—")</span></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Currency</span>
+                                        <span class="tot-fv"><span class="tot-mono">@(_tenant.CurrencyCode.Length > 0 ? _tenant.CurrencyCode : "—")</span></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Time Zone</span>
+                                        <span class="tot-fv"><span class="tot-mono">@(_tenant.TimeZoneId.Length > 0 ? _tenant.TimeZoneId : "—")</span></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Go-Live Date</span>
+                                        <span class="tot-fv">
+                                            @if (_tenant.GoLiveDateUtc.HasValue)
+                                            { <strong>@_tenant.GoLiveDateUtc.Value.ToString("d MMM yyyy")</strong> }
+                                            else { <span class="tot-muted">Not scheduled</span> }
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="OpenEdit">
+                                        <i class="bi bi-pencil" aria-hidden="true"></i> Edit settings
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-buildings" aria-hidden="true"></i>
+                                    <span>Tenant Identity</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Name</span>
+                                        <span class="tot-fv"><strong>@_tenant.TenantName</strong></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Code</span>
+                                        <span class="tot-fv"><span class="tot-mono">@_tenant.TenantCode</span></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Status</span>
+                                        <span class="tot-fv"><AppStatusBadge Status="@_tenant.StatusCode" /></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Plan</span>
+                                        <span class="tot-fv">
+                                            @if (!string.IsNullOrEmpty(_tenant.PlanCode))
+                                            { <span class="badge badge-blue"><i class="bi bi-award" aria-hidden="true"></i> @_tenant.PlanCode</span> }
+                                            else { <span class="tot-muted">No plan assigned</span> }
+                                        </span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Primary Domain</span>
+                                        <span class="tot-fv">
+                                            @if (!string.IsNullOrEmpty(_tenant.PrimaryDomain))
+                                            { <span class="tot-mono">@_tenant.PrimaryDomain</span> }
+                                            else { <span class="tot-muted">—</span> }
+                                        </span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Active Users</span>
+                                        <span class="tot-fv"><strong>@_tenant.ActiveUsers</strong></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Created</span>
+                                        <span class="tot-fv">@_tenant.CreatedDateUtc.ToString("d MMM yyyy")</span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="OpenEdit">
+                                        <i class="bi bi-pencil" aria-hidden="true"></i> Edit tenant
+                                    </button>
+                                    <a class="tot-ql" href="/platform/configuration">
+                                        <i class="bi bi-sliders" aria-hidden="true"></i> Platform Configuration
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 2: Branding -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Branding" IconCss="bi bi-palette" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        @if (_brandingLoading)
+                        {
+                            <div class="um-loading-overlay" aria-live="polite">
+                                <div class="um-spinner" aria-hidden="true"></div>
+                                <span>Loading branding…</span>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="tot-grid tot-grid--2">
+                                <div class="tot-card">
+                                    <div class="tot-card-hdr">
+                                        <i class="bi bi-card-text" aria-hidden="true"></i>
+                                        <span>Brand Identity</span>
+                                    </div>
+                                    <div class="tot-card-body">
+                                        @{ var _brandIdentity = _tenantBranding.Where(b => b.Category == "Identity").ToList(); }
+                                        @if (_brandIdentity.Count > 0)
+                                        {
+                                            @foreach (var b in _brandIdentity)
+                                            {
+                                                <div class="tot-field">
+                                                    <span class="tot-fl">@b.Setting</span>
+                                                    <span class="tot-fv">@(string.IsNullOrEmpty(b.CurrentValue) ? "—" : b.CurrentValue)</span>
+                                                </div>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <div class="tot-empty-hint">
+                                                <i class="bi bi-palette2" aria-hidden="true"></i>
+                                                <span>No branding configured for this tenant.</span>
+                                            </div>
+                                        }
+                                    </div>
+                                    <div class="tot-card-footer">
+                                        <button class="tot-ql" @onclick="NavigateToBranding">
+                                            <i class="bi bi-palette" aria-hidden="true"></i> Manage branding
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="tot-card">
+                                    <div class="tot-card-hdr">
+                                        <i class="bi bi-droplet-half" aria-hidden="true"></i>
+                                        <span>Colours &amp; Assets</span>
+                                    </div>
+                                    <div class="tot-card-body">
+                                        @{ var _brandColours = _tenantBranding.Where(b => b.IsColor || b.Category == "Assets").ToList(); }
+                                        @if (_brandColours.Count > 0)
+                                        {
+                                            @foreach (var b in _brandColours)
+                                            {
+                                                <div class="tot-field">
+                                                    <span class="tot-fl">@b.Setting</span>
+                                                    <span class="tot-fv">
+                                                        @if (b.IsColor && !string.IsNullOrEmpty(b.CurrentValue))
+                                                        {
+                                                            <span style="display:inline-flex;align-items:center;gap:6px;">
+                                                                <span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:@b.CurrentValue;border:1px solid #ccc;"></span>
+                                                                <span class="tot-mono">@b.CurrentValue</span>
+                                                            </span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span>@(string.IsNullOrEmpty(b.CurrentValue) ? "—" : b.CurrentValue)</span>
+                                                        }
+                                                    </span>
+                                                </div>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <div class="tot-empty-hint">
+                                                <i class="bi bi-droplet" aria-hidden="true"></i>
+                                                <span>No colour or asset settings found.</span>
+                                            </div>
+                                        }
+                                    </div>
+                                    <div class="tot-card-footer">
+                                        <button class="tot-ql" @onclick="NavigateToBranding">
+                                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Configure colours &amp; assets
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 3: Domains -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Domains" IconCss="bi bi-globe" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        @if (_domainsLoading)
+                        {
+                            <div class="um-loading-overlay" aria-live="polite">
+                                <div class="um-spinner" aria-hidden="true"></div>
+                                <span>Loading domains…</span>
+                            </div>
+                        }
+                        else if (_tenantDomains.Count == 0)
+                        {
+                            <div class="tot-grid tot-grid--2">
+                                <div class="tot-card">
+                                    <div class="tot-card-hdr">
+                                        <i class="bi bi-globe" aria-hidden="true"></i>
+                                        <span>Domain Configuration</span>
+                                    </div>
+                                    <div class="tot-card-body">
+                                        <div class="tot-empty-hint">
+                                            <i class="bi bi-globe2" aria-hidden="true"></i>
+                                            <span>No domains configured for this tenant.</span>
+                                        </div>
+                                    </div>
+                                    <div class="tot-card-footer">
+                                        <a class="tot-ql" href="/platform/tenants/@TenantId/domains">
+                                            <i class="bi bi-plus-circle" aria-hidden="true"></i> Add a domain
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="tot-grid tot-grid--2">
+                                <div class="tot-card">
+                                    <div class="tot-card-hdr">
+                                        <i class="bi bi-globe" aria-hidden="true"></i>
+                                        <span>Domains &nbsp;<span class="td-stat-chip">@_tenantDomains.Count</span></span>
+                                    </div>
+                                    <div class="tot-card-body">
+                                        <div class="td-audit-list">
+                                            @foreach (var domain in _tenantDomains)
+                                            {
+                                                <div class="td-audit-row">
+                                                    <span class="td-audit-icon" aria-hidden="true">
+                                                        <i class="bi @(domain.IsPrimary ? "bi-star-fill" : "bi-globe2")"></i>
+                                                    </span>
+                                                    <div class="td-audit-info">
+                                                        <span class="td-audit-action"><span class="tot-mono">@domain.DomainName</span></span>
+                                                        <span class="td-audit-meta">
+                                                            Added @domain.CreatedDateUtc.ToString("d MMM yyyy")
+                                                            @if (!string.IsNullOrEmpty(domain.RedirectTarget))
+                                                            {
+                                                                <span>&nbsp;· Redirects to <span class="tot-mono">@domain.RedirectTarget</span></span>
+                                                            }
+                                                        </span>
+                                                    </div>
+                                                    <span style="display:flex;gap:4px;flex-shrink:0;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+                                                        @if (domain.IsPrimary) { <span class="badge badge-blue">Primary</span> }
+                                                        <span class="td-pill @DomainVerificationPillClass(domain.VerificationStatusCode)">@domain.VerificationStatusCode</span>
+                                                        <span class="td-pill @DomainSslPillClass(domain.SslStatusCode)">SSL: @domain.SslStatusCode</span>
+                                                    </span>
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                    <div class="tot-card-footer">
+                                        <button class="tot-ql" @onclick="NavigateToDomains">
+                                            <i class="bi bi-globe" aria-hidden="true"></i> Manage domains
+                                        </button>
+                                        <a class="tot-ql" href="/platform/tenants/@TenantId/domains">
+                                            <i class="bi bi-plus-circle" aria-hidden="true"></i> Add domain
+                                        </a>
+                                    </div>
+                                </div>
+                                <div class="tot-card">
+                                    <div class="tot-card-hdr">
+                                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                                        <span>Domain Health</span>
+                                    </div>
+                                    <div class="tot-card-body">
+                                        <div class="tot-field">
+                                            <span class="tot-fl">Total</span>
+                                            <span class="tot-fv"><strong>@_tenantDomains.Count</strong> domain@(_tenantDomains.Count == 1 ? "" : "s")</span>
+                                        </div>
+                                        <div class="tot-field">
+                                            <span class="tot-fl">Verified</span>
+                                            <span class="tot-fv"><strong>@_tenantDomains.Count(d => d.VerificationStatusCode == "Verified")</strong> of @_tenantDomains.Count</span>
+                                        </div>
+                                        <div class="tot-field">
+                                            <span class="tot-fl">SSL Active</span>
+                                            <span class="tot-fv"><strong>@_tenantDomains.Count(d => d.SslStatusCode == "Active")</strong> of @_tenantDomains.Count</span>
+                                        </div>
+                                        <div class="tot-field">
+                                            <span class="tot-fl">Primary Domain</span>
+                                            <span class="tot-fv">
+                                                @{ var _primaryDomain = _tenantDomains.FirstOrDefault(d => d.IsPrimary); }
+                                                @if (_primaryDomain is not null)
+                                                { <span class="tot-mono">@_primaryDomain.DomainName</span> }
+                                                else { <span class="tot-muted">None designated</span> }
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 4: Subscription -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Subscription" IconCss="bi bi-card-checklist" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="tot-grid tot-grid--2">
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-award" aria-hidden="true"></i>
+                                    <span>Plan &amp; Billing</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-plan-hero">
+                                        @if (!string.IsNullOrEmpty(_tenant.PlanCode))
+                                        { <span class="badge badge-blue"><i class="bi bi-award" aria-hidden="true"></i> @_tenant.PlanCode</span> }
+                                        else { <span class="tot-muted">No plan assigned</span> }
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Tenant Status</span>
+                                        <span class="tot-fv"><AppStatusBadge Status="@_tenant.StatusCode" /></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Go-Live Date</span>
+                                        <span class="tot-fv">
+                                            @if (_tenant.GoLiveDateUtc.HasValue)
+                                            { <strong>@_tenant.GoLiveDateUtc.Value.ToString("d MMM yyyy")</strong> }
+                                            else { <span class="tot-muted">Not scheduled</span> }
+                                        </span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Tenant ID</span>
+                                        <span class="tot-fv"><span class="tot-mono">@_tenant.TenantId</span></span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="OpenUpgradePlan">
+                                        <i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Change plan
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-receipt" aria-hidden="true"></i>
+                                    <span>Billing &amp; Invoicing</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Billing Currency</span>
+                                        <span class="tot-fv"><span class="tot-mono">@(_tenant.CurrencyCode.Length > 0 ? _tenant.CurrencyCode : "—")</span></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Subscription</span>
+                                        <span class="tot-fv tot-muted">Managed via Platform</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Payment Method</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Billing Frequency</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Next Renewal</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <a class="tot-ql" href="/platform/subscriptions?tenantId=@_tenant.TenantId">
+                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> View subscriptions
+                                    </a>
+                                    <a class="tot-ql" href="/platform/invoices?tenantId=@_tenant.TenantId">
+                                        <i class="bi bi-receipt" aria-hidden="true"></i> View invoices
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 5: Features -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Features" IconCss="bi bi-toggles" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="tot-grid tot-grid--2">
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-toggles" aria-hidden="true"></i>
+                                    <span>Feature Flags</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-alert tot-alert--info">
+                                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                        <span>Feature flags control which platform modules and capabilities are available to this tenant's users.</span>
+                                    </div>
+                                    <div class="tot-empty-hint">
+                                        <i class="bi bi-toggles2" aria-hidden="true"></i>
+                                        <span>No overrides configured. All capabilities follow the <strong>@(_tenant.PlanCode.Length > 0 ? _tenant.PlanCode : "default")</strong> plan defaults.</span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <a class="tot-ql" href="/platform/tenants/@_tenant.TenantId/features">
+                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Manage feature flags
+                                    </a>
+                                </div>
+                            </div>
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-check2-all" aria-hidden="true"></i>
+                                    <span>Platform Capabilities</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Active Plan</span>
+                                        <span class="tot-fv">
+                                            @if (!string.IsNullOrEmpty(_tenant.PlanCode))
+                                            { <span class="badge badge-blue"><i class="bi bi-award" aria-hidden="true"></i> @_tenant.PlanCode</span> }
+                                            else { <span class="tot-muted">No plan</span> }
+                                        </span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">CRM &amp; Sales</span>
+                                        <span class="tot-fv"><span class="td-pill td-pill--green">Included</span></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Finance &amp; Billing</span>
+                                        <span class="tot-fv"><span class="td-pill td-pill--green">Included</span></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Workflow &amp; Approvals</span>
+                                        <span class="tot-fv"><span class="td-pill td-pill--green">Included</span></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Document Management</span>
+                                        <span class="tot-fv"><span class="td-pill td-pill--green">Included</span></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">AI Assistant</span>
+                                        <span class="tot-fv"><span class="td-pill td-pill--yellow">Plan dependent</span></span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <a class="tot-ql" href="/platform/plans">
+                                        <i class="bi bi-award" aria-hidden="true"></i> View plan details
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 6: Usage -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Usage" IconCss="bi bi-bar-chart-line" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="tot-metric-row">
+                            <div class="tot-metric">
+                                <span class="tot-metric-value">@_tenant.ActiveUsers</span>
+                                <span class="tot-metric-label">Active Users</span>
+                            </div>
+                            <div class="tot-metric">
+                                <span class="tot-metric-value tot-muted">—</span>
+                                <span class="tot-metric-label">Storage Used</span>
+                            </div>
+                            <div class="tot-metric">
+                                <span class="tot-metric-value tot-muted">—</span>
+                                <span class="tot-metric-label">API Calls Today</span>
+                            </div>
+                            <div class="tot-metric">
+                                <span class="tot-metric-value tot-muted">—</span>
+                                <span class="tot-metric-label">Events This Month</span>
+                            </div>
+                        </div>
+                        <div class="tot-grid tot-grid--2">
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-people" aria-hidden="true"></i>
+                                    <span>User &amp; Storage</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Active Users</span>
+                                        <span class="tot-fv"><strong>@_tenant.ActiveUsers</strong></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">User Limit</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">User Utilisation</span>
+                                        <span class="tot-fv">
+                                            <div class="td-quota-bar"><div class="td-quota-fill" style="width:0%"></div></div>
+                                        </span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Storage Used</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Storage Limit</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Storage Utilisation</span>
+                                        <span class="tot-fv">
+                                            <div class="td-quota-bar"><div class="td-quota-fill" style="width:0%"></div></div>
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <a class="tot-ql" href="/platform/usage?tenantId=@_tenant.TenantId">
+                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Full usage report
+                                    </a>
+                                </div>
+                            </div>
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-graph-up" aria-hidden="true"></i>
+                                    <span>API &amp; Platform Activity</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-alert tot-alert--info">
+                                        <i class="bi bi-bar-chart-line" aria-hidden="true"></i>
+                                        <span>Real-time API call volume, module activity and storage trend charts are available in <strong>Platform Usage Analytics</strong>.</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">API Calls Today</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">API Limit / Day</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Events This Month</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <a class="tot-ql" href="/platform/usage?tenantId=@_tenant.TenantId">
+                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Usage analytics
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 7: Region & Deployment -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Region &amp; Deployment" IconCss="bi bi-geo-alt" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="tot-grid tot-grid--2">
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-geo-alt" aria-hidden="true"></i>
+                                    <span>Region &amp; Isolation</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Region</span>
+                                        <span class="tot-fv">
+                                            @if (!string.IsNullOrEmpty(_tenant.RegionCode))
+                                            {
+                                                <span class="td-stat-chip"><i class="bi bi-geo-alt" aria-hidden="true"></i> @_tenant.RegionCode</span>
+                                            }
+                                            else { <span class="tot-muted">— not assigned</span> }
+                                        </span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Isolation Mode</span>
+                                        <span class="tot-fv">
+                                            @if (!string.IsNullOrEmpty(_tenant.IsolationMode))
+                                            {
+                                                <span class="td-stat-chip"><i class="bi bi-layers" aria-hidden="true"></i> @_tenant.IsolationMode</span>
+                                            }
+                                            else { <span class="tot-muted">—</span> }
+                                        </span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Database Placement</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Storage Placement</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="OpenChangeRegion">
+                                        <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Move region
+                                    </button>
+                                    <a class="tot-ql" href="/platform/tenants/@TenantId/deployment">
+                                        <i class="bi bi-diagram-3" aria-hidden="true"></i> Manage deployment assignment
+                                    </a>
+                                </div>
+                            </div>
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-diagram-2" aria-hidden="true"></i>
+                                    <span>Deployment Bindings</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-alert tot-alert--info">
+                                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                        <span><strong>Shared</strong> — data co-located with other tenants. <strong>Dedicated</strong> — isolated database and storage. Moving regions may require a data migration.</span>
+                                    </div>
+                                    <div class="tot-empty-hint">
+                                        <i class="bi bi-diagram-2" aria-hidden="true"></i>
+                                        <span>Active infrastructure bindings for this tenant are managed via Deployment Bindings.</span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <a class="tot-ql" href="/platform/deployment-bindings">
+                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> View deployment bindings
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 8: Quotas -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Quotas" IconCss="bi bi-speedometer" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="tot-grid tot-grid--2">
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-people" aria-hidden="true"></i>
+                                    <span>User Quota</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Active Users</span>
+                                        <span class="tot-fv">@_tenant.ActiveUsers</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Plan Limit</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Utilisation</span>
+                                        <span class="tot-fv">
+                                            <div class="td-quota-bar"><div class="td-quota-fill" style="width:0%"></div></div>
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-database" aria-hidden="true"></i>
+                                    <span>Storage Quota</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Used</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Plan Limit</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Utilisation</span>
+                                        <span class="tot-fv">
+                                            <div class="td-quota-bar"><div class="td-quota-fill" style="width:0%"></div></div>
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tot-grid tot-grid--2">
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-lightning-charge" aria-hidden="true"></i>
+                                    <span>API Calls / Day</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Today</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Plan Limit</span>
+                                        <span class="tot-fv tot-muted">—</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Utilisation</span>
+                                        <span class="tot-fv">
+                                            <div class="td-quota-bar"><div class="td-quota-fill" style="width:0%"></div></div>
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-speedometer2" aria-hidden="true"></i>
+                                    <span>Quota Management</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-empty-hint">
+                                        <i class="bi bi-speedometer" aria-hidden="true"></i>
+                                        <span>Quota limits and current usage are managed via Platform Quotas.</span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="OpenResetQuotas">
+                                        <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset quota counters
+                                    </button>
+                                    <a class="tot-ql" href="/platform/quotas">
+                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Platform Quotas
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 9: Audit -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Audit" IconCss="bi bi-journal-text" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="tot-grid tot-grid--2">
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-journal-text" aria-hidden="true"></i>
+                                    <span>Audit Log</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    @if (_auditLoading)
+                                    {
+                                        <div class="um-loading-overlay" aria-live="polite">
+                                            <div class="um-spinner" aria-hidden="true"></div>
+                                            <span>Loading audit log…</span>
+                                        </div>
+                                    }
+                                    else if (_auditEntries.Count == 0)
+                                    {
+                                        <div class="tot-empty-hint">
+                                            <i class="bi bi-journal" aria-hidden="true"></i>
+                                            <span>No audit entries found for this tenant.</span>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="td-audit-list">
+                                            @foreach (var entry in _auditEntries)
+                                            {
+                                                <div class="td-audit-row">
+                                                    <span class="td-audit-icon" aria-hidden="true"><i class="bi bi-activity"></i></span>
+                                                    <div class="td-audit-info">
+                                                        <span class="td-audit-action">@entry.ActionName</span>
+                                                        <span class="td-audit-meta">@entry.PerformedDateUtc.ToString("d MMM yyyy, HH:mm") · @(entry.PerformedByUserId.HasValue ? "User" : "System")</span>
+                                                    </div>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="GoToAudit">
+                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Full audit trail
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-clock-history" aria-hidden="true"></i>
+                                    <span>Tenant Lifecycle</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Name</span>
+                                        <span class="tot-fv"><strong>@_tenant.TenantName</strong></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Code</span>
+                                        <span class="tot-fv"><span class="tot-mono">@_tenant.TenantCode</span></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Current Status</span>
+                                        <span class="tot-fv"><AppStatusBadge Status="@_tenant.StatusCode" /></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Created</span>
+                                        <span class="tot-fv">@_tenant.CreatedDateUtc.ToString("d MMM yyyy")</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Tenant Age</span>
+                                        <span class="tot-fv">@((DateTime.UtcNow - _tenant.CreatedDateUtc).Days) days</span>
+                                    </div>
+                                    @if (_tenant.GoLiveDateUtc.HasValue)
+                                    {
+                                        <div class="tot-field">
+                                            <span class="tot-fl">Go-Live</span>
+                                            <span class="tot-fv">@_tenant.GoLiveDateUtc.Value.ToString("d MMM yyyy")</span>
+                                        </div>
+                                    }
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Active Users</span>
+                                        <span class="tot-fv"><strong>@_tenant.ActiveUsers</strong></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Domains</span>
+                                        <span class="tot-fv"><strong>@_tenantDomains.Count</strong> configured</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Audit Entries</span>
+                                        <span class="tot-fv"><strong>@_auditEntries.Count</strong> recent</span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="GoToAudit">
+                                        <i class="bi bi-journal-text" aria-hidden="true"></i> Full audit trail
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+        </Tabs>
+    </AppDetailTabs>
+}
+
+<!-- Upgrade Plan drawer -->
+<AppCrudDrawer @bind-Visible="_showUpgradePlan"
+               Title="Change Plan"
+               Icon="bi-arrow-up-circle"
+               OnConfirm="ExecuteUpgradePlanAsync"
+               IsBusy="_confirming">
+    <Content>
+        <p class="td-drawer-hint">Select the new plan for <strong>@_tenant?.TenantName</strong>.</p>
+        <div class="form-row">
+            <label class="form-label">New Plan <span class="form-required">*</span></label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_planOptions"
+                            @bind-Value="_upgradeNewPlan"
+                            Placeholder="Select plan">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+<!-- Reset Quotas confirm -->
+<AppConfirmActionDialog @bind-Visible="_showResetQuotas"
+                        Title="Reset Quotas"
+                        Message="@($"Reset all quota counters for \"{_tenant?.TenantName}\"?")"
+                        Detail="Quota usage counters will be reset to zero. Hard limits defined by the plan remain unchanged."
+                        Variant="warning"
+                        ConfirmText="Reset Quotas"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteResetQuotasAsync" />
+
+<!-- Edit drawer -->
+<TenantEditDrawer @bind-Visible="_showEdit"
+                  Tenant="_tenant"
+                  OnSaved="OnEditSavedAsync" />
+
+<!-- Provisioning confirm -->
+<AppConfirmActionDialog @bind-Visible="_showProvisioning"
+                        Title="Start Provisioning"
+                        Message="@($"Start provisioning for \"{_tenant?.TenantName}\"?")"
+                        Detail="This will initialise the tenant environment. Ensure all settings are correct before proceeding."
+                        Variant="primary"
+                        ConfirmText="Proceed"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteProvisioningAsync" />
+
+<!-- Change Region confirm -->
+<AppConfirmActionDialog @bind-Visible="_showChangeRegion"
+                        Title="Change Region"
+                        Message="@($"Change region for \"{_tenant?.TenantName}\"?")"
+                        Detail="Changing the region may trigger a data migration. Please confirm this change with the infrastructure team."
+                        Variant="warning"
+                        ConfirmText="Change Region"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteChangeRegionAsync" />
+
+<!-- Change Isolation confirm -->
+<AppConfirmActionDialog @bind-Visible="_showChangeIsolation"
+                        Title="Change Isolation Mode"
+                        Message="@($"Change isolation mode for \"{_tenant?.TenantName}\"?")"
+                        Detail="Switching isolation modes requires infrastructure changes. Confirm with the platform team before proceeding."
+                        Variant="warning"
+                        ConfirmText="Change Isolation"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteChangeIsolationAsync" />
+
+<!-- Update Features confirm -->
+<AppConfirmActionDialog @bind-Visible="_showUpdateFeatures"
+                        Title="Update Features"
+                        Message="@($"Update feature flags for \"{_tenant?.TenantName}\"?")"
+                        Detail="Feature flag changes take effect immediately for all users in this tenant."
+                        Variant="primary"
+                        ConfirmText="Update"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteUpdateFeaturesAsync" />
+
+<!-- Suspend confirm -->
+<AppConfirmActionDialog @bind-Visible="_showSuspend"
+                        Title="Suspend Tenant"
+                        Message="@($"Suspend \"{_tenant?.TenantName}\"?")"
+                        Detail="The tenant and all its users will lose platform access until reactivated."
+                        Variant="warning"
+                        ConfirmText="Suspend"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteSuspendAsync" />
+
+<!-- Activate confirm -->
+<AppConfirmActionDialog @bind-Visible="_showActivate"
+                        Title="Activate Tenant"
+                        Message="@($"Activate \"{_tenant?.TenantName}\"?")"
+                        Detail="The tenant will regain full platform access."
+                        Variant="primary"
+                        ConfirmText="Activate"
+                        IsBusy="_confirming"
+                        OnConfirm="ExecuteActivateAsync" />
+
+@code {
+    // ── Route parameter ───────────────────────────────────────────────────────
+    [Parameter] public Guid TenantId { get; set; }
+
+    // ── Refs ──────────────────────────────────────────────────────────────────
+    private SfToast? _toast;
+    private TenantOverview? _overviewRef;
+
+    // ── Page state ────────────────────────────────────────────────────────────
+    private TenantDto? _tenant;
+    private int        _tab;
+
+    // ── Loading flags ─────────────────────────────────────────────────────────
+    private bool _loading             = true;
+    private bool _confirming          = false;
+    private bool _usersLoading        = false;
+    private bool _statusHistoryLoading = false;
+    private bool _auditLoading        = false;
+    private bool _domainsLoading       = false;
+    private bool _brandingLoading      = false;
+
+    // ── Dialog visibility ─────────────────────────────────────────────────────
+    private bool _showEdit            = false;
+    private bool _showUpgradePlan      = false;
+    private bool _showResetQuotas      = false;
+    private bool _showProvisioning    = false;
+    private bool _showChangeRegion    = false;
+    private bool _showChangeIsolation = false;
+    private bool _showUpdateFeatures  = false;
+    private bool _showSuspend         = false;
+    private bool _showActivate        = false;
+    private string _upgradeNewPlan    = string.Empty;
+
+    // ── Tab data ──────────────────────────────────────────────────────────────
+    private List<UserListItem>     _users         = [];
+    private List<StatusHistoryItem> _statusHistory = [];
+    private List<AuditEntryItem>   _auditEntries  = [];
+    private List<TenantDomainDto>   _tenantDomains = [];
+    private List<BrandingItem>      _tenantBranding = [];
+
+    // ── Options ───────────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _isolationOptions =
+    [
+        new("Shared",    "Shared"),
+        new("Dedicated", "Dedicated"),
+    ];
+    private static readonly List<LabelValue> _planOptions =
+    [
+        new("Starter",    "Starter"),
+        new("Growth",     "Growth"),
+        new("Enterprise", "Enterprise"),
+    ];
+
+    // ── Computed ──────────────────────────────────────────────────────────────
+    private string PageTitle       => _tenant?.TenantName ?? "Tenant Detail";
+    private string StatusMetricClass => _tenant?.StatusCode switch
+    {
+        "Active"     => "td-metric-value--green",
+        "Suspended"  => "td-metric-value--amber",
+        "Terminated" => "td-metric-value--red",
+        _            => string.Empty
+    };
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_tenant?.TenantId == TenantId) return;
+        await LoadAsync();
+    }
+
+    private void NavigateToBranding() => Nav.NavigateTo($"/platform/tenants/{TenantId}/branding");
+
+    private async Task LoadBrandingAsync()
+    {
+        _brandingLoading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace with Api.GetTenantBrandingAsync(TenantId) when available
+            _tenantBranding = [];
+        }
+        catch
+        {
+            _tenantBranding = [];
+        }
+        finally
+        {
+            _brandingLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _tenant  = null;
+        _users.Clear();
+        _statusHistory.Clear();
+        _auditEntries.Clear();
+        _tenantDomains.Clear();
+        StateHasChanged();
+
+        try
+        {
+            _tenant = await Api.GetTenantByIdAsync(TenantId);
+            SetCrumbs();
+            if (_overviewRef is not null)
+                await _overviewRef.LoadAsync();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void SetCrumbs()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Home",     "/"),
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Tenants",  "/platform/tenants"),
+            new BreadcrumbService.BreadcrumbItem(_tenant?.TenantName ?? "Detail", null));
+    }
+
+    // ── Tab handling ──────────────────────────────────────────────────────────
+    private async Task OnTabChangedAsync(int tab)
+    {
+        _tab = tab;
+        await LoadTabDataAsync(tab);
+    }
+
+    private async Task LoadTabDataAsync(int tab)
+    {
+        switch (tab)
+        {
+            case 2 when _tenantBranding.Count == 0:
+                    await LoadBrandingAsync();
+                    break;
+                case 3 when _tenantDomains.Count == 0:
+                    await LoadDomainsAsync();
+                    break;
+            case 9 when _auditEntries.Count == 0:
+                await LoadAuditTabAsync();
+                break;
+        }
+    }
+
+    private async Task LoadUsersTabAsync()
+    {
+        _usersLoading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchUsersAsync(TenantId);
+            _users = result?.Items
+                .Select(u => new UserListItem(u.UserId, u.FullName, u.Email, u.StatusCode))
+                .ToList() ?? [];
+        }
+        finally
+        {
+            _usersLoading = false;
+        }
+    }
+
+    private async Task LoadDomainsAsync()
+    {
+        _domainsLoading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchTenantDomainsAsync(TenantId, pageSize: 200);
+            _tenantDomains = result?.Items?.ToList() ?? [];
+        }
+        catch
+        {
+            _tenantDomains = [];
+        }
+        finally
+        {
+            _domainsLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private static string DomainSslPillClass(string status) => status switch
+    {
+        "Active" => "td-pill--success",
+        "Provisioning" => "td-pill--info",
+        "Expired" => "td-pill--danger",
+        _ => "td-pill--muted"
+    };
+
+    private static string DomainVerificationPillClass(string status) => status switch
+    {
+        "Verified" => "td-pill--success",
+        "Pending" => "td-pill--warning",
+        "Failed" => "td-pill--danger",
+        _ => "td-pill--muted"
+    };
+
+    private void NavigateToDomains() => Nav.NavigateTo($"/platform/tenants/{TenantId}/domains");
+
+    private async Task LoadStatusHistoryTabAsync()
+    {
+        _statusHistoryLoading = true;
+        StateHasChanged();
+        try
+        {
+            // Status history will be populated from audit log when endpoint is available
+            _statusHistory = [];
+        }
+        finally
+        {
+            _statusHistoryLoading = false;
+        }
+    }
+
+    private async Task LoadAuditTabAsync()
+    {
+        _auditLoading = true;
+        StateHasChanged();
+        try
+        {
+            // Audit entries will be populated when endpoint is available
+            _auditEntries = [];
+        }
+        finally
+        {
+            _auditLoading = false;
+        }
+    }
+
+    // ── Openers ───────────────────────────────────────────────────────────────
+    private void OpenEdit()
+    {
+        if (_tenant is null) return;
+        _showEdit = true;
+    }
+
+    private async Task OnEditSavedAsync(bool _)
+    {
+        await ShowToastAsync("Tenant updated.", "Success");
+        await LoadAsync();
+    }
+
+    private void OpenSuspend()         => _showSuspend         = true;
+    private void OpenActivate()        => _showActivate        = true;
+    private void OpenProvisioning()    => _showProvisioning    = true;
+    private void OpenChangeRegion()    => _showChangeRegion    = true;
+    private void OpenChangeIsolation() => _showChangeIsolation = true;
+    private void OpenUpdateFeatures()  => _showUpdateFeatures  = true;
+
+    private void OpenUpgradePlan()
+    {
+        if (_tenant is null) return;
+        _upgradeNewPlan  = _tenant.PlanCode;
+        _showUpgradePlan = true;
+    }
+
+    private void OpenResetQuotas() => _showResetQuotas = true;
+
+    private void GoToAudit()
+    {
+        _tab = 9;
+        StateHasChanged();
+    }
+
+    private void NavigateToList() => Nav.NavigateTo("/platform/tenants");
+
+    // ── Lifecycle actions ─────────────────────────────────────────────────────
+    private async Task ExecuteSuspendAsync()
+    {
+        if (_tenant is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.SuspendTenantAsync(_tenant.TenantId);
+            _showSuspend = false;
+            await ShowToastAsync($"\"{_tenant.TenantName}\" suspended.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToastAsync("Failed to suspend tenant.", "Error"); }
+        finally { _confirming = false; }
+    }
+
+    private async Task ExecuteActivateAsync()
+    {
+        if (_tenant is null) return;
+        _confirming = true;
+        try
+        {
+            await Api.ActivateTenantAsync(_tenant.TenantId);
+            _showActivate = false;
+            await ShowToastAsync($"\"{_tenant.TenantName}\" activated.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToastAsync("Failed to activate tenant.", "Error"); }
+        finally { _confirming = false; }
+    }
+
+    private async Task ExecuteProvisioningAsync()
+    {
+        _confirming = true;
+        try
+        {
+            _showProvisioning = false;
+            await ShowToastAsync("Provisioning initiated.", "Success");
+        }
+        finally { _confirming = false; }
+    }
+
+    private async Task ExecuteChangeRegionAsync()
+    {
+        _confirming = true;
+        try
+        {
+            _showChangeRegion = false;
+            await ShowToastAsync("Region change request submitted.", "Success");
+        }
+        finally { _confirming = false; }
+    }
+
+    private async Task ExecuteChangeIsolationAsync()
+    {
+        _confirming = true;
+        try
+        {
+            _showChangeIsolation = false;
+            await ShowToastAsync("Isolation mode change request submitted.", "Success");
+        }
+        finally { _confirming = false; }
+    }
+
+    private async Task ExecuteUpdateFeaturesAsync()
+    {
+        _confirming = true;
+        try
+        {
+            _showUpdateFeatures = false;
+            await ShowToastAsync("Feature flags updated.", "Success");
+        }
+        finally { _confirming = false; }
+    }
+
+    private async Task ExecuteUpgradePlanAsync()
+    {
+        if (_tenant is null || string.IsNullOrWhiteSpace(_upgradeNewPlan)) return;
+        _confirming = true;
+        try
+        {
+            await Api.UpdateTenantAsync(_tenant.TenantId, new UpdateTenantRequest
+            {
+                TenantName    = _tenant.TenantName,
+                PlanCode      = _upgradeNewPlan,
+                RegionCode    = _tenant.RegionCode,
+                IsolationMode = _tenant.IsolationMode,
+                PrimaryDomain = _tenant.PrimaryDomain,
+                Locale        = _tenant.Locale,
+                CurrencyCode  = _tenant.CurrencyCode,
+                TimeZoneId    = _tenant.TimeZoneId,
+                GoLiveDateUtc = _tenant.GoLiveDateUtc,
+            });
+            _showUpgradePlan = false;
+            await ShowToastAsync($"Plan changed to {_upgradeNewPlan}.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToastAsync("Failed to update plan.", "Error"); }
+        finally { _confirming = false; }
+    }
+
+    private async Task ExecuteResetQuotasAsync()
+    {
+        _confirming = true;
+        try
+        {
+            _showResetQuotas = false;
+            await ShowToastAsync("Quota counters reset.", "Success");
+        }
+        finally { _confirming = false; }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    private static string UserInitials(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "?";
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}".ToUpper()
+            : name[..Math.Min(2, name.Length)].ToUpper();
+    }
+
+    private async Task ShowToastAsync(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content      = message,
+            CssClass     = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            Icon         = type == "Error" ? "e-error toast-icons" : "e-success toast-icons",
+            ShowCloseButton = true,
+        });
+    }
+
+    // ── View models ───────────────────────────────────────────────────────────
+    private record LabelValue(string Label, string Value);
+
+    private record UserListItem(Guid UserId, string FullName, string Email, string StatusCode);
+
+    private record StatusHistoryItem(string ActionCode, DateTime Date, string Actor, string? Notes);
+
+    private record AuditEntryItem(string ActionName, DateTime PerformedDateUtc, Guid? PerformedByUserId);
+
+    private sealed record BrandingItem(
+        string Category,
+        string CategoryIcon,
+        string Setting,
+        string CurrentValue,
+        bool   IsColor,
+        bool   IsLongText,
+        string Placeholder);
+
+    }

@@ -1,0 +1,469 @@
+@page "/platform/deployment-bindings"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.DeploymentBindings
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Deployment Bindings — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Deployment Bindings"
+               Subtitle="Tenant-to-region deployment assignments, stamps, and isolation modes"
+               Icon="bi-diagram-2">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Binding
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by tenant, region, stamp…" @onkeyup="OnSearchKeyUp" />
+        <SfDropDownList TValue="string" TItem="StatusOption"
+                        @bind-Value="_statusFilter"
+                        DataSource="@_statusOptions"
+                        Placeholder="All Statuses"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading deployment bindings…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="DeploymentBindingDto"
+            DataSource="@_bindings"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+
+            <GridColumn Field="@nameof(DeploymentBindingDto.TenantName)" HeaderText="Tenant" Width="200" />
+
+            <GridColumn Field="@nameof(DeploymentBindingDto.RegionCode)" HeaderText="Region" Width="160">
+                <Template>
+                    @{ var row = (DeploymentBindingDto)context; }
+                    <div>
+                        <span class="td-monospace">@row.RegionCode</span>
+                        @if (!string.IsNullOrEmpty(row.RegionName))
+                        {
+                            <br /><span class="fc-muted td-text-sm">@row.RegionName</span>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(DeploymentBindingDto.EnvironmentCode)" HeaderText="Environment" Width="140">
+                <Template>
+                    @{ var row = (DeploymentBindingDto)context; }
+                    @{
+                        var envCss = row.EnvironmentCode switch
+                        {
+                            "Production" => "td-pill td-pill--success",
+                            "Staging"    => "td-pill td-pill--warning",
+                            "Dev"        => "td-pill td-pill--muted",
+                            _            => "td-pill td-pill--info"
+                        };
+                    }
+                    <span class="@envCss">@row.EnvironmentCode</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(DeploymentBindingDto.StampCode)" HeaderText="Stamp" Width="150">
+                <Template>
+                    @{ var row = (DeploymentBindingDto)context; }
+                    @if (!string.IsNullOrEmpty(row.StampCode))
+                    {
+                        <span class="td-monospace td-text-sm">@row.StampCode</span>
+                    }
+                    else
+                    {
+                        <span class="fc-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(DeploymentBindingDto.IsolationMode)" HeaderText="Isolation" Width="130">
+                <Template>
+                    @{ var row = (DeploymentBindingDto)context; }
+                    <span class="badge @(row.IsolationMode == "Dedicated" ? "badge-info" : "badge-secondary")">@row.IsolationMode</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(DeploymentBindingDto.IsPrimary)" HeaderText="Primary" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
+                <Template>
+                    @{ var row = (DeploymentBindingDto)context; }
+                    @if (row.IsPrimary)
+                    {
+                        <i class="bi bi-star-fill text-warning" title="Primary binding" aria-label="Primary"></i>
+                    }
+                    else
+                    {
+                        <span class="fc-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(DeploymentBindingDto.StatusCode)" HeaderText="Status" Width="120">
+                <Template>
+                    @{ var row = (DeploymentBindingDto)context; }
+                    @{
+                        var stCss = row.StatusCode switch
+                        {
+                            "Active"         => "td-pill td-pill--success",
+                            "Suspended"      => "td-pill td-pill--warning",
+                            "Decommissioned" => "td-pill td-pill--muted",
+                            _                => "td-pill"
+                        };
+                    }
+                    <span class="@stCss">@row.StatusCode</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText="" Width="150" AllowSorting="false">
+                <Template>
+                    @{ var row = (DeploymentBindingDto)context; }
+                    <div class="td-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Edit" @onclick="() => OpenEdit(row)">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        @if (row.StatusCode == "Active")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-warning" title="Suspend" @onclick='() => SetStatus(row, "Suspended")'>
+                                <i class="bi bi-pause-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        else if (row.StatusCode == "Suspended")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-primary" title="Reactivate" @onclick='() => SetStatus(row, "Active")'>
+                                <i class="bi bi-play-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-xs um-btn-danger" title="Delete" @onclick="() => OpenDelete(row)">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- ── Create / Edit Dialog ─────────────────────────────────── -->
+<SfDialog @bind-Visible="_showFormDialog" Width="540px" IsModal="true" ShowCloseIcon="true" Header="@_formDialogTitle" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="form-row">
+                    <label class="form-label">Tenant ID <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_form.TenantIdText" Placeholder="Paste tenant GUID" Disabled="@_isEdit" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Region Code <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_form.RegionCode" Placeholder="e.g. US-EAST" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Environment <span class="form-required">*</span></label>
+                    <SfDropDownList TValue="string" TItem="string"
+                                    @bind-Value="_form.EnvironmentCode"
+                                    DataSource="@_environments"
+                                    Placeholder="Select environment" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Stamp Code</label>
+                    <SfTextBox @bind-Value="_form.StampCode" Placeholder="e.g. stamp-use-01" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Isolation Mode <span class="form-required">*</span></label>
+                    <SfDropDownList TValue="string" TItem="string"
+                                    @bind-Value="_form.IsolationMode"
+                                    DataSource="@_isolationModes"
+                                    Placeholder="Select isolation" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Status <span class="form-required">*</span></label>
+                    <SfDropDownList TValue="string" TItem="string"
+                                    @bind-Value="_form.StatusCode"
+                                    DataSource="@_statuses"
+                                    Placeholder="Select status" />
+                </div>
+                <div class="form-row form-row--inline">
+                    <label class="form-label">Primary Binding</label>
+                    <SfSwitch @bind-Checked="_form.IsPrimary" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Notes</label>
+                    <SfTextBox @bind-Value="_form.Notes" Placeholder="Optional notes" Multiline="true" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel"                                        CssClass="um-btn um-btn-ghost"   OnClick="() => _showFormDialog = false" />
+        <DialogButton Content="@(_isEdit ? "Save Changes" : "Add Binding")"  IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmForm" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ── Delete Confirm Dialog ────────────────────────────────── -->
+<SfDialog @bind-Visible="_showDeleteDialog" Width="420px" IsModal="true" ShowCloseIcon="true" Header="Delete Deployment Binding" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Are you sure you want to delete the binding for <strong>@_actionTarget?.TenantName</strong> in <strong>@_actionTarget?.RegionCode</strong> (@_actionTarget?.EnvironmentCode)?</p>
+                <p class="td-hint">This action is permanent and will remove the deployment record.</p>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost"  OnClick="() => _showDeleteDialog = false" />
+        <DialogButton Content="Delete" IsPrimary="true" CssClass="um-btn um-btn-danger" OnClick="ConfirmDelete" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    // ── state ────────────────────────────────────────────────
+    private SfGrid<DeploymentBindingDto>? _grid;
+    private SfToast?                      _toast;
+
+    private List<DeploymentBindingDto> _bindings     = [];
+    private bool                       _loading      = true;
+    private string?                    _searchTerm;
+    private string?                    _statusFilter;
+
+    // form
+    private bool      _showFormDialog  = false;
+    private bool      _isEdit          = false;
+    private string    _formDialogTitle = "Add Deployment Binding";
+    private bool      _saving          = false;
+    private Guid      _editId;
+    private FormModel _form            = new();
+
+    // delete
+    private bool                  _showDeleteDialog = false;
+    private DeploymentBindingDto? _actionTarget;
+
+    // dropdown data sources
+    private static readonly List<string> _environments   = ["Production", "Staging", "Dev", "QA", "UAT"];
+    private static readonly List<string> _isolationModes = ["Shared", "Dedicated", "Isolated"];
+    private static readonly List<string> _statuses       = ["Active", "Suspended", "Decommissioned"];
+
+    private static readonly List<StatusOption> _statusOptions =
+    [
+        new("",               "All Statuses"),
+        new("Active",         "Active"),
+        new("Suspended",      "Suspended"),
+        new("Decommissioned", "Decommissioned"),
+    ];
+
+    // ── lifecycle ────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Platform",   "/platform"),
+            new("Deployment", "/platform/deployment-bindings")
+        );
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchDeploymentBindingsAsync(_searchTerm, _statusFilter, 1, 200);
+            _bindings = result?.Items.ToList() ?? [];
+        }
+        catch
+        {
+            await ShowToast("Failed to load deployment bindings.", "Error", "e-toast-danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnSearchKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await LoadAsync();
+    }
+
+    // ── create / edit ─────────────────────────────────────────
+    private void OpenCreate()
+    {
+        _isEdit          = false;
+        _formDialogTitle = "Add Deployment Binding";
+        _editId          = Guid.Empty;
+        _form            = new FormModel();
+        _showFormDialog  = true;
+    }
+
+    private void OpenEdit(DeploymentBindingDto row)
+    {
+        _isEdit          = true;
+        _formDialogTitle = $"Edit Binding — {row.TenantName} / {row.RegionCode}";
+        _editId          = row.DeploymentBindingId;
+        _form = new FormModel
+        {
+            TenantIdText    = row.TenantId.ToString(),
+            RegionCode      = row.RegionCode,
+            EnvironmentCode = row.EnvironmentCode,
+            StampCode       = row.StampCode,
+            IsolationMode   = row.IsolationMode,
+            IsPrimary       = row.IsPrimary,
+            StatusCode      = row.StatusCode,
+            Notes           = row.Notes
+        };
+        _showFormDialog = true;
+    }
+
+    private async Task ConfirmForm()
+    {
+        if (string.IsNullOrWhiteSpace(_form.RegionCode) || string.IsNullOrWhiteSpace(_form.EnvironmentCode))
+        {
+            await ShowToast("Region Code and Environment are required.", "Validation", "e-toast-warning");
+            return;
+        }
+
+        if (!_isEdit && !Guid.TryParse(_form.TenantIdText, out _))
+        {
+            await ShowToast("A valid Tenant ID (GUID) is required.", "Validation", "e-toast-warning");
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            if (_isEdit)
+            {
+                await Api.UpdateDeploymentBindingAsync(_editId, new UpdateDeploymentBindingRequest
+                {
+                    RegionCode      = _form.RegionCode,
+                    EnvironmentCode = _form.EnvironmentCode,
+                    StampCode       = _form.StampCode,
+                    IsolationMode   = _form.IsolationMode,
+                    IsPrimary       = _form.IsPrimary,
+                    StatusCode      = _form.StatusCode,
+                    Notes           = _form.Notes
+                });
+                await ShowToast("Binding updated.", "Saved", "e-toast-success");
+            }
+            else
+            {
+                await Api.CreateDeploymentBindingAsync(new CreateDeploymentBindingRequest
+                {
+                    TenantId        = Guid.Parse(_form.TenantIdText!),
+                    RegionCode      = _form.RegionCode,
+                    EnvironmentCode = _form.EnvironmentCode,
+                    StampCode       = _form.StampCode,
+                    IsolationMode   = _form.IsolationMode,
+                    IsPrimary       = _form.IsPrimary,
+                    StatusCode      = _form.StatusCode,
+                    Notes           = _form.Notes
+                });
+                await ShowToast("Deployment binding created.", "Created", "e-toast-success");
+            }
+
+            _showFormDialog = false;
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToast("Failed to save deployment binding.", "Error", "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // ── status change ─────────────────────────────────────────
+    private async Task SetStatus(DeploymentBindingDto row, string newStatus)
+    {
+        try
+        {
+            await Api.SetDeploymentBindingStatusAsync(row.DeploymentBindingId, newStatus);
+            await ShowToast($"Binding set to {newStatus}.", "Updated", "e-toast-success");
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToast("Failed to update binding status.", "Error", "e-toast-danger");
+        }
+    }
+
+    // ── delete ───────────────────────────────────────────────
+    private void OpenDelete(DeploymentBindingDto row)
+    {
+        _actionTarget     = row;
+        _showDeleteDialog = true;
+    }
+
+    private async Task ConfirmDelete()
+    {
+        if (_actionTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteDeploymentBindingAsync(_actionTarget.DeploymentBindingId);
+            await ShowToast("Deployment binding deleted.", "Deleted", "e-toast-success");
+            _showDeleteDialog = false;
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToast("Failed to delete binding.", "Error", "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // ── helpers ──────────────────────────────────────────────
+    private async Task ShowToast(string message, string title, string cssClass)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = title,
+            Content  = message,
+            CssClass = cssClass
+        });
+    }
+
+    // ── inner models ─────────────────────────────────────────
+    private sealed class FormModel
+    {
+        public string? TenantIdText    { get; set; }
+        public string  RegionCode      { get; set; } = string.Empty;
+        public string  EnvironmentCode { get; set; } = "Production";
+        public string? StampCode       { get; set; }
+        public string  IsolationMode   { get; set; } = "Shared";
+        public bool    IsPrimary       { get; set; }
+        public string  StatusCode      { get; set; } = "Active";
+        public string? Notes           { get; set; }
+    }
+
+    private sealed record StatusOption(string Value, string Text);
+}

@@ -1,0 +1,435 @@
+@page "/platform/tenants/{TenantId:guid}/domains"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Tenants
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Domains — @_tenantName</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Domain Management"
+               Subtitle="@_tenantName"
+               Icon="bi-globe">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="NavigateBack">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Tenant
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAdd">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Domain
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading domains…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="TenantDomainDto"
+            DataSource="@_domains"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row" />
+        <GridColumns>
+            <GridColumn Field="@nameof(TenantDomainDto.DomainName)" HeaderText="Domain Name" Width="220">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    <div class="td-domain-cell">
+                        <i class="bi bi-globe2" aria-hidden="true"></i>
+                        <span>@row.DomainName</span>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDomainDto.IsPrimary)" HeaderText="Primary" Width="100">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    @if (row.IsPrimary)
+                    {
+                        <span class="td-badge td-badge--primary"><i class="bi bi-star-fill" aria-hidden="true"></i> Primary</span>
+                    }
+                    else
+                    {
+                        <span class="td-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDomainDto.SslStatusCode)" HeaderText="SSL Status" Width="130">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    <span class="td-pill @SslPillClass(row.SslStatusCode)">@row.SslStatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDomainDto.VerificationStatusCode)" HeaderText="Verification" Width="140">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    <span class="td-pill @VerificationPillClass(row.VerificationStatusCode)">@row.VerificationStatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDomainDto.RedirectTarget)" HeaderText="Redirect Target" Width="200">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    <span>@(row.RedirectTarget ?? "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDomainDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="120" />
+            <GridColumn HeaderText="" Width="220" AllowSorting="false">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    <div class="td-row-actions">
+                        @if (row.VerificationStatusCode != "Verified")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost" title="Verify" @onclick="() => OpenVerify(row)">
+                                <i class="bi bi-patch-check" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (!row.IsPrimary && row.VerificationStatusCode == "Verified")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost" title="Set Primary" @onclick="() => OpenSetPrimary(row)">
+                                <i class="bi bi-star" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Edit Redirect" @onclick="() => OpenEditRedirect(row)">
+                            <i class="bi bi-arrow-right-circle" aria-hidden="true"></i>
+                        </button>
+                        @if (!row.IsPrimary)
+                        {
+                            <button class="um-btn um-btn-xs um-btn-danger" title="Remove" @onclick="() => OpenRemove(row)">
+                                <i class="bi bi-trash" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add Domain Dialog -->
+<SfDialog @bind-Visible="_showAddDialog" Width="480px" IsModal="true" ShowCloseIcon="true" Header="Add Domain" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="form-row">
+                    <label class="form-label">Domain Name <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_addForm.DomainName" Placeholder="e.g. app.acme.com" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Redirect Target</label>
+                    <SfTextBox @bind-Value="_addForm.RedirectTarget" Placeholder="e.g. https://portal.acme.com" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Set as Primary</label>
+                    <SfSwitch @bind-Checked="_addForm.IsPrimary" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Notes</label>
+                    <SfTextBox @bind-Value="_addForm.Notes" Multiline="true" Placeholder="Optional notes…" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showAddDialog = false" />
+        <DialogButton Content="Add Domain" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmAdd" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Verify Domain Dialog -->
+<SfDialog @bind-Visible="_showVerifyDialog" Width="520px" IsModal="true" ShowCloseIcon="true" Header="Verify Domain" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>To verify <strong>@_actionTarget?.DomainName</strong>, add the following TXT record to your DNS:</p>
+                <div class="td-verify-token">
+                    <code>@(_actionTarget?.VerificationToken ?? "—")</code>
+                </div>
+                <p class="td-hint">After adding the record, click <strong>Check Verification</strong>. DNS propagation may take up to 48 hours.</p>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Close" CssClass="um-btn um-btn-ghost" OnClick="() => _showVerifyDialog = false" />
+        <DialogButton Content="Check Verification" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmVerify" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Set Primary Dialog -->
+<SfDialog @bind-Visible="_showPrimaryDialog" Width="440px" IsModal="true" ShowCloseIcon="true" Header="Set Primary Domain" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Set <strong>@_actionTarget?.DomainName</strong> as the primary domain for this tenant?</p>
+                <p class="td-hint">The current primary domain will be demoted to a secondary domain.</p>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showPrimaryDialog = false" />
+        <DialogButton Content="Set Primary" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmSetPrimary" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Edit Redirect Dialog -->
+<SfDialog @bind-Visible="_showRedirectDialog" Width="480px" IsModal="true" ShowCloseIcon="true" Header="Edit Redirect" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Redirect target for <strong>@_actionTarget?.DomainName</strong>:</p>
+                <div class="form-row">
+                    <label class="form-label">Redirect URL</label>
+                    <SfTextBox @bind-Value="_redirectUrl" Placeholder="e.g. https://portal.acme.com" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Notes</label>
+                    <SfTextBox @bind-Value="_redirectNotes" Multiline="true" Placeholder="Optional notes…" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showRedirectDialog = false" />
+        <DialogButton Content="Save Redirect" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmEditRedirect" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- Remove Domain Dialog -->
+<SfDialog @bind-Visible="_showRemoveDialog" Width="440px" IsModal="true" ShowCloseIcon="true" Header="Remove Domain" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="td-warning-notice">
+                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                    <span>This action cannot be undone. Are you sure you want to remove <strong>@_actionTarget?.DomainName</strong>?</span>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showRemoveDialog = false" />
+        <DialogButton Content="Remove Domain" CssClass="um-btn um-btn-danger" OnClick="ConfirmRemove" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid TenantId { get; set; }
+
+    private SfGrid<TenantDomainDto>? _grid;
+    private SfToast? _toast;
+
+    private bool _loading = true;
+    private bool _saving;
+    private string _tenantName = "";
+
+    private List<TenantDomainDto> _domains = new();
+
+    // Add dialog
+    private bool _showAddDialog;
+    private AddDomainForm _addForm = new();
+
+    // Action dialogs
+    private bool _showVerifyDialog;
+    private bool _showPrimaryDialog;
+    private bool _showRedirectDialog;
+    private bool _showRemoveDialog;
+    private TenantDomainDto? _actionTarget;
+    private string? _redirectUrl;
+    private string? _redirectNotes;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Tenants", "/platform/tenants"),
+            new BreadcrumbService.BreadcrumbItem("Domains")
+        );
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var tenant = await Api.GetTenantByIdAsync(TenantId);
+            _tenantName = tenant?.TenantName ?? "Unknown Tenant";
+
+            var result = await Api.SearchTenantDomainsAsync(TenantId, pageSize: 200);
+            _domains = result?.Items?.ToList() ?? [];
+        }
+        catch
+        {
+            _domains = [];
+            _tenantName = "Error loading tenant";
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    // ── Add Domain ──────────────────────────────────────────
+    private void OpenAdd()
+    {
+        _addForm = new();
+        _showAddDialog = true;
+    }
+
+    private async Task ConfirmAdd()
+    {
+        if (string.IsNullOrWhiteSpace(_addForm.DomainName)) return;
+        _saving = true;
+        try
+        {
+            await Api.CreateTenantDomainAsync(new CreateTenantDomainRequest
+            {
+                TenantId = TenantId,
+                DomainName = _addForm.DomainName.Trim(),
+                IsPrimary = _addForm.IsPrimary,
+                RedirectTarget = string.IsNullOrWhiteSpace(_addForm.RedirectTarget) ? null : _addForm.RedirectTarget.Trim(),
+                Notes = string.IsNullOrWhiteSpace(_addForm.Notes) ? null : _addForm.Notes.Trim()
+            });
+            _showAddDialog = false;
+            await ShowToast("Domain Added", $"{_addForm.DomainName.Trim()} has been added.", "e-toast-success");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Verify ──────────────────────────────────────────────
+    private void OpenVerify(TenantDomainDto row)
+    {
+        _actionTarget = row;
+        _showVerifyDialog = true;
+    }
+
+    private async Task ConfirmVerify()
+    {
+        if (_actionTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.VerifyTenantDomainAsync(_actionTarget.TenantDomainId);
+            _showVerifyDialog = false;
+            await ShowToast("Domain Verified", $"{_actionTarget.DomainName} has been verified.", "e-toast-success");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Set Primary ─────────────────────────────────────────
+    private void OpenSetPrimary(TenantDomainDto row)
+    {
+        _actionTarget = row;
+        _showPrimaryDialog = true;
+    }
+
+    private async Task ConfirmSetPrimary()
+    {
+        if (_actionTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.SetTenantDomainPrimaryAsync(TenantId, _actionTarget.TenantDomainId);
+            _showPrimaryDialog = false;
+            await ShowToast("Primary Domain Updated", $"{_actionTarget.DomainName} is now the primary domain.", "e-toast-success");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Edit Redirect ───────────────────────────────────────
+    private void OpenEditRedirect(TenantDomainDto row)
+    {
+        _actionTarget = row;
+        _redirectUrl = row.RedirectTarget;
+        _redirectNotes = row.Notes;
+        _showRedirectDialog = true;
+    }
+
+    private async Task ConfirmEditRedirect()
+    {
+        if (_actionTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateTenantDomainRedirectAsync(_actionTarget.TenantDomainId, string.IsNullOrWhiteSpace(_redirectUrl) ? null : _redirectUrl.Trim(), string.IsNullOrWhiteSpace(_redirectNotes) ? null : _redirectNotes.Trim());
+            _showRedirectDialog = false;
+            await ShowToast("Redirect Updated", $"Redirect for {_actionTarget.DomainName} has been saved.", "e-toast-success");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Remove Domain ───────────────────────────────────────
+    private void OpenRemove(TenantDomainDto row)
+    {
+        _actionTarget = row;
+        _showRemoveDialog = true;
+    }
+
+    private async Task ConfirmRemove()
+    {
+        if (_actionTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteTenantDomainAsync(_actionTarget.TenantDomainId);
+            _showRemoveDialog = false;
+            await ShowToast("Domain Removed", $"{_actionTarget.DomainName} has been removed.", "e-toast-warning");
+            await LoadAsync();
+        }
+        finally { _saving = false; }
+    }
+
+    // ── Navigation ──────────────────────────────────────────
+    private void NavigateBack() => Nav.NavigateTo($"/platform/tenants/{TenantId}");
+
+    // ── Helpers ─────────────────────────────────────────────
+    private static string SslPillClass(string status) => status switch
+    {
+        "Active" => "td-pill--success",
+        "Provisioning" => "td-pill--info",
+        "Expired" => "td-pill--danger",
+        "None" => "td-pill--muted",
+        _ => "td-pill--muted"
+    };
+
+    private static string VerificationPillClass(string status) => status switch
+    {
+        "Verified" => "td-pill--success",
+        "Pending" => "td-pill--warning",
+        "Failed" => "td-pill--danger",
+        _ => "td-pill--muted"
+    };
+
+    private async Task ShowToast(string title, string content, string cssClass)
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Title = title, Content = content, CssClass = cssClass });
+    }
+
+    private sealed class AddDomainForm
+    {
+        public string DomainName { get; set; } = "";
+        public string? RedirectTarget { get; set; }
+        public string? Notes { get; set; }
+        public bool IsPrimary { get; set; }
+    }
+}

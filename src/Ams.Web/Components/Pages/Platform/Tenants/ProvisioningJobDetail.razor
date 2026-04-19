@@ -1,0 +1,438 @@
+@page "/platform/tenants/provision/{JobId}"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Provisioning Job @JobId — Platform</PageTitle>
+
+<AppPageHeader Title="Provisioning Job"
+               Subtitle="@($"Track provisioning progress for job {JobId}")"
+               Icon="bi-gear-wide-connected">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="GoBackToTenants">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Tenants
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pjd-layout">
+
+    <!-- ── Left: main content ── -->
+    <div class="pjd-main">
+
+        <!-- Job Summary Card -->
+        <SfCard CssClass="pjd-card">
+            <CardHeader>
+                <div class="pjd-card-hd">
+                    <i class="bi bi-info-circle" aria-hidden="true"></i>
+                    <span>Job Summary</span>
+                    <span class="badge @GetStatusBadgeCss(_job.Status)">@_job.Status</span>
+                </div>
+            </CardHeader>
+            <CardContent>
+                <div class="pjd-summary-grid">
+                    <div class="pjd-field"><span class="pjd-label">Job ID</span><span class="pjd-value pjd-mono">@JobId</span></div>
+                    <div class="pjd-field"><span class="pjd-label">Tenant Code</span><span class="pjd-value pjd-mono">@_job.TenantCode</span></div>
+                    <div class="pjd-field"><span class="pjd-label">Tenant Name</span><span class="pjd-value">@_job.TenantName</span></div>
+                    <div class="pjd-field"><span class="pjd-label">Region</span><span class="pjd-value">@_job.Region</span></div>
+                    <div class="pjd-field"><span class="pjd-label">Isolation</span><span class="pjd-value">@_job.IsolationMode</span></div>
+                    <div class="pjd-field"><span class="pjd-label">Plan</span><span class="pjd-value">@_job.PlanCode</span></div>
+                    <div class="pjd-field"><span class="pjd-label">Submitted</span><span class="pjd-value">@_job.SubmittedAt.ToString("g")</span></div>
+                    <div class="pjd-field"><span class="pjd-label">Submitted By</span><span class="pjd-value">@_job.SubmittedBy</span></div>
+                </div>
+            </CardContent>
+        </SfCard>
+
+        <!-- Current Step -->
+        <SfCard CssClass="pjd-card">
+            <CardHeader>
+                <div class="pjd-card-hd">
+                    <i class="bi bi-play-circle" aria-hidden="true"></i>
+                    <span>Current Step</span>
+                </div>
+            </CardHeader>
+            <CardContent>
+                <div class="pjd-current-step">
+                    <div class="pjd-current-step-icon">
+                        <i class="bi @GetStepIcon(_job.CurrentStepIndex)" aria-hidden="true"></i>
+                    </div>
+                    <div class="pjd-current-step-info">
+                        <span class="pjd-current-step-name">@(_job.Steps.ElementAtOrDefault(_job.CurrentStepIndex)?.Name ?? "Complete")</span>
+                        <span class="pjd-current-step-desc">@(_job.Steps.ElementAtOrDefault(_job.CurrentStepIndex)?.Description ?? "All steps have been executed.")</span>
+                    </div>
+                    @if (_job.Status == "InProgress")
+                    {
+                        <span class="um-spin pjd-step-spinner" aria-hidden="true"></span>
+                    }
+                </div>
+            </CardContent>
+        </SfCard>
+
+        <!-- Execution Timeline -->
+        <SfCard CssClass="pjd-card">
+            <CardHeader>
+                <div class="pjd-card-hd">
+                    <i class="bi bi-clock-history" aria-hidden="true"></i>
+                    <span>Execution Timeline</span>
+                </div>
+            </CardHeader>
+            <CardContent>
+                <div class="pjd-timeline">
+                    @for (int i = 0; i < _job.Steps.Count; i++)
+                    {
+                        var step = _job.Steps[i];
+                        var stepCls = step.Status switch
+                        {
+                            "Completed" => "pjd-tl-step pjd-tl-step--done",
+                            "InProgress" => "pjd-tl-step pjd-tl-step--active",
+                            "Failed" => "pjd-tl-step pjd-tl-step--failed",
+                            "Skipped" => "pjd-tl-step pjd-tl-step--skipped",
+                            _ => "pjd-tl-step"
+                        };
+                        <div class="@stepCls">
+                            <div class="pjd-tl-dot">
+                                @if (step.Status == "Completed")
+                                {
+                                    <i class="bi bi-check-lg" aria-hidden="true"></i>
+                                }
+                                else if (step.Status == "Failed")
+                                {
+                                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                                }
+                                else if (step.Status == "InProgress")
+                                {
+                                    <span class="um-spin um-spin-sm" aria-hidden="true"></span>
+                                }
+                                else
+                                {
+                                    <span class="pjd-tl-num">@(i + 1)</span>
+                                }
+                            </div>
+                            <div class="pjd-tl-body">
+                                <div class="pjd-tl-header">
+                                    <span class="pjd-tl-name">@step.Name</span>
+                                    <span class="badge @GetStepStatusBadge(step.Status)">@step.Status</span>
+                                </div>
+                                <span class="pjd-tl-desc">@step.Description</span>
+                                @if (step.StartedAt.HasValue)
+                                {
+                                    <div class="pjd-tl-meta">
+                                        <span><i class="bi bi-clock" aria-hidden="true"></i> @step.StartedAt.Value.ToString("T")</span>
+                                        @if (step.CompletedAt.HasValue)
+                                        {
+                                            <span><i class="bi bi-stopwatch" aria-hidden="true"></i> @((step.CompletedAt.Value - step.StartedAt.Value).TotalSeconds.ToString("F1"))s</span>
+                                        }
+                                    </div>
+                                }
+                                @if (!string.IsNullOrEmpty(step.ErrorMessage))
+                                {
+                                    <div class="pjd-tl-error">
+                                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+                                        <span>@step.ErrorMessage</span>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                        @if (i < _job.Steps.Count - 1)
+                        {
+                            <div class="pjd-tl-connector @(step.Status == "Completed" ? "pjd-tl-connector--done" : "")"></div>
+                        }
+                    }
+                </div>
+            </CardContent>
+        </SfCard>
+
+        <!-- Provisioned Resources -->
+        @if (_job.Resources.Count > 0)
+        {
+            <SfCard CssClass="pjd-card">
+                <CardHeader>
+                    <div class="pjd-card-hd">
+                        <i class="bi bi-box-seam" aria-hidden="true"></i>
+                        <span>Provisioned Resources</span>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div class="pjd-resources">
+                        @foreach (var res in _job.Resources)
+                        {
+                            <div class="pjd-resource-row">
+                                <i class="bi @res.Icon" aria-hidden="true"></i>
+                                <div class="pjd-resource-info">
+                                    <span class="pjd-resource-name">@res.Name</span>
+                                    <span class="pjd-resource-type">@res.Type</span>
+                                </div>
+                                <span class="badge @(res.Ready ? "badge-green" : "badge-yellow")">@(res.Ready ? "Ready" : "Pending")</span>
+                            </div>
+                        }
+                    </div>
+                </CardContent>
+            </SfCard>
+        }
+
+        <!-- Error Details -->
+        @if (_job.Status == "Failed" && !string.IsNullOrEmpty(_job.ErrorDetail))
+        {
+            <SfCard CssClass="pjd-card pjd-card--error">
+                <CardHeader>
+                    <div class="pjd-card-hd pjd-card-hd--error">
+                        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                        <span>Error Details</span>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div class="pjd-error-panel">
+                        <p class="pjd-error-message">@_job.ErrorDetail</p>
+                        @if (!string.IsNullOrEmpty(_job.ErrorStack))
+                        {
+                            <details class="pjd-error-stack">
+                                <summary>Stack Trace</summary>
+                                <pre>@_job.ErrorStack</pre>
+                            </details>
+                        }
+                    </div>
+                </CardContent>
+            </SfCard>
+        }
+
+        <!-- Audit Trail -->
+        <SfCard CssClass="pjd-card">
+            <CardHeader>
+                <div class="pjd-card-hd">
+                    <i class="bi bi-journal-text" aria-hidden="true"></i>
+                    <span>Audit Trail</span>
+                </div>
+            </CardHeader>
+            <CardContent>
+                <div class="pjd-audit-list">
+                    @foreach (var entry in _job.AuditTrail)
+                    {
+                        <div class="pjd-audit-row">
+                            <span class="pjd-audit-time">@entry.Timestamp.ToString("T")</span>
+                            <span class="pjd-audit-action">@entry.Action</span>
+                            <span class="pjd-audit-user">@entry.User</span>
+                        </div>
+                    }
+                </div>
+            </CardContent>
+        </SfCard>
+    </div>
+
+    <!-- ── Right: actions sidebar ── -->
+    <aside class="pjd-sidebar">
+        <SfCard CssClass="pjd-sidebar-card">
+            <CardHeader>
+                <div class="pjd-sidebar-title">
+                    <i class="bi bi-lightning-charge" aria-hidden="true"></i>
+                    <span>Actions</span>
+                </div>
+            </CardHeader>
+            <CardContent>
+                <div class="pjd-actions">
+                    @if (_job.Status == "Failed")
+                    {
+                        <button class="um-btn um-btn-primary pjd-action-btn" @onclick="RetryFailedStepAsync" disabled="@_acting">
+                            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Retry Failed Step
+                        </button>
+                        <button class="um-btn um-btn-secondary pjd-action-btn" @onclick="ResumeJobAsync" disabled="@_acting">
+                            <i class="bi bi-play-fill" aria-hidden="true"></i> Resume Job
+                        </button>
+                    }
+                    @if (_job.Status is "InProgress" or "Failed")
+                    {
+                        <button class="um-btn um-btn-danger pjd-action-btn" @onclick="CancelJobAsync" disabled="@_acting">
+                            <i class="bi bi-stop-circle" aria-hidden="true"></i> Cancel Job
+                        </button>
+                    }
+                    @if (_job.Status == "Completed")
+                    {
+                        <button class="um-btn um-btn-primary pjd-action-btn" @onclick="OpenTenantDetail">
+                            <i class="bi bi-building" aria-hidden="true"></i> Open Tenant Detail
+                        </button>
+                    }
+                    <button class="um-btn um-btn-ghost pjd-action-btn" @onclick="GoBackToTenants">
+                        <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Tenants
+                    </button>
+                </div>
+            </CardContent>
+        </SfCard>
+
+        <!-- Tenant Summary -->
+        <SfCard CssClass="pjd-sidebar-card">
+            <CardHeader>
+                <div class="pjd-sidebar-title">
+                    <i class="bi bi-buildings" aria-hidden="true"></i>
+                    <span>Tenant Summary</span>
+                </div>
+            </CardHeader>
+            <CardContent>
+                <div class="pjd-sidebar-rows">
+                    <div class="pjd-sidebar-row"><span class="pjd-sidebar-label">Code</span><span class="pjd-sidebar-value pjd-mono">@_job.TenantCode</span></div>
+                    <div class="pjd-sidebar-row"><span class="pjd-sidebar-label">Name</span><span class="pjd-sidebar-value">@_job.TenantName</span></div>
+                    <div class="pjd-sidebar-row"><span class="pjd-sidebar-label">Plan</span><span class="pjd-sidebar-value">@_job.PlanCode</span></div>
+                    <div class="pjd-sidebar-row"><span class="pjd-sidebar-label">Region</span><span class="pjd-sidebar-value">@_job.Region</span></div>
+                    <div class="pjd-sidebar-row"><span class="pjd-sidebar-label">Isolation</span><span class="pjd-sidebar-value">@_job.IsolationMode</span></div>
+                </div>
+            </CardContent>
+        </SfCard>
+    </aside>
+</div>
+
+@code {
+    [Parameter] public string JobId { get; set; } = string.Empty;
+
+    private bool _acting = false;
+    private JobViewModel _job = new();
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Home",        "/"),
+            new BreadcrumbService.BreadcrumbItem("Platform",    "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Tenants",     "/platform/tenants"),
+            new BreadcrumbService.BreadcrumbItem("Provisioning Job", null));
+
+        // Simulate job data — replace with real API call
+        _job = BuildDemoJob();
+    }
+
+    // ── Actions ──
+    private async Task RetryFailedStepAsync()
+    {
+        _acting = true;
+        await Task.Delay(800);
+        var failed = _job.Steps.FirstOrDefault(s => s.Status == "Failed");
+        if (failed != null) { failed.Status = "InProgress"; failed.ErrorMessage = null; }
+        _job.Status = "InProgress";
+        _acting = false;
+    }
+
+    private async Task ResumeJobAsync()
+    {
+        _acting = true;
+        await Task.Delay(800);
+        _job.Status = "InProgress";
+        _acting = false;
+    }
+
+    private async Task CancelJobAsync()
+    {
+        _acting = true;
+        await Task.Delay(600);
+        _job.Status = "Cancelled";
+        _acting = false;
+    }
+
+    private void OpenTenantDetail() => Nav.NavigateTo($"/platform/tenants/{_job.TenantId}");
+    private void GoBackToTenants() => Nav.NavigateTo("/platform/tenants");
+
+    // ── Helpers ──
+    private static string GetStatusBadgeCss(string status) => status switch
+    {
+        "Completed"  => "badge-green",
+        "InProgress" => "badge-blue",
+        "Failed"     => "badge-red",
+        "Cancelled"  => "badge-yellow",
+        "Queued"     => "badge-gray",
+        _            => "badge-gray"
+    };
+
+    private static string GetStepStatusBadge(string status) => status switch
+    {
+        "Completed"  => "badge-green",
+        "InProgress" => "badge-blue",
+        "Failed"     => "badge-red",
+        "Skipped"    => "badge-yellow",
+        "Pending"    => "badge-gray",
+        _            => "badge-gray"
+    };
+
+    private string GetStepIcon(int idx) => idx < _job.Steps.Count ? _job.Steps[idx].Icon : "bi-check-circle-fill";
+
+    private JobViewModel BuildDemoJob() => new()
+    {
+        TenantId     = "t-001",
+        TenantCode   = "ACME",
+        TenantName   = "Acme Corporation",
+        Region       = "US East (N. Virginia)",
+        IsolationMode = "Shared Schema",
+        PlanCode     = "Standard",
+        Status       = "InProgress",
+        SubmittedAt  = DateTime.Now.AddMinutes(-3),
+        SubmittedBy  = "admin@platform.com",
+        CurrentStepIndex = 3,
+        Steps =
+        [
+            new() { Name = "Create Tenant Record",     Description = "Register metadata in platform catalog.",       Icon = "bi-database-add",  Status = "Completed",  StartedAt = DateTime.Now.AddMinutes(-3),   CompletedAt = DateTime.Now.AddMinutes(-2.8) },
+            new() { Name = "Provision Admin Account",  Description = "Create admin user and send invitation.",        Icon = "bi-person-plus",   Status = "Completed",  StartedAt = DateTime.Now.AddMinutes(-2.8), CompletedAt = DateTime.Now.AddMinutes(-2.5) },
+            new() { Name = "Assign Shared Database",   Description = "Allocate tenant schema in shared pool.",        Icon = "bi-hdd-stack",     Status = "Completed",  StartedAt = DateTime.Now.AddMinutes(-2.5), CompletedAt = DateTime.Now.AddMinutes(-2) },
+            new() { Name = "Configure Subdomain",      Description = "Set up subdomain routing and SSL.",             Icon = "bi-globe",         Status = "InProgress", StartedAt = DateTime.Now.AddMinutes(-2) },
+            new() { Name = "Apply Feature Flags",      Description = "Enable selected modules for this tenant.",      Icon = "bi-toggles2",      Status = "Pending" },
+            new() { Name = "Apply Branding",           Description = "Configure portal theme and logo.",              Icon = "bi-palette",       Status = "Pending" },
+            new() { Name = "Send Welcome Email",       Description = "Dispatch onboarding email to tenant admin.",    Icon = "bi-envelope-check",Status = "Pending" },
+        ],
+        Resources =
+        [
+            new() { Name = "acme-db-schema",    Type = "Database Schema",    Icon = "bi-database",     Ready = true },
+            new() { Name = "acme.platform.com", Type = "Subdomain",          Icon = "bi-globe",        Ready = false },
+            new() { Name = "admin@acme.com",    Type = "Admin Account",      Icon = "bi-person-badge", Ready = true },
+        ],
+        AuditTrail =
+        [
+            new() { Timestamp = DateTime.Now.AddMinutes(-3),   Action = "Job created",                  User = "admin@platform.com" },
+            new() { Timestamp = DateTime.Now.AddMinutes(-3),   Action = "Step 1: Create Tenant started", User = "system" },
+            new() { Timestamp = DateTime.Now.AddMinutes(-2.8), Action = "Step 1: Completed",             User = "system" },
+            new() { Timestamp = DateTime.Now.AddMinutes(-2.8), Action = "Step 2: Provision Admin started",User = "system" },
+            new() { Timestamp = DateTime.Now.AddMinutes(-2.5), Action = "Step 2: Completed",             User = "system" },
+            new() { Timestamp = DateTime.Now.AddMinutes(-2.5), Action = "Step 3: Assign DB started",     User = "system" },
+            new() { Timestamp = DateTime.Now.AddMinutes(-2),   Action = "Step 3: Completed",             User = "system" },
+            new() { Timestamp = DateTime.Now.AddMinutes(-2),   Action = "Step 4: Configure Subdomain started", User = "system" },
+        ],
+    };
+
+    // ── View models ──
+    private sealed class JobViewModel
+    {
+        public string   TenantId        { get; set; } = string.Empty;
+        public string   TenantCode      { get; set; } = string.Empty;
+        public string   TenantName      { get; set; } = string.Empty;
+        public string   Region          { get; set; } = string.Empty;
+        public string   IsolationMode   { get; set; } = string.Empty;
+        public string   PlanCode        { get; set; } = string.Empty;
+        public string   Status          { get; set; } = "Queued";
+        public DateTime SubmittedAt     { get; set; }
+        public string   SubmittedBy     { get; set; } = string.Empty;
+        public int      CurrentStepIndex { get; set; }
+        public string?  ErrorDetail     { get; set; }
+        public string?  ErrorStack      { get; set; }
+        public List<JobStep>      Steps      { get; set; } = [];
+        public List<JobResource>  Resources  { get; set; } = [];
+        public List<AuditEntry>   AuditTrail { get; set; } = [];
+    }
+
+    private sealed class JobStep
+    {
+        public string    Name          { get; set; } = string.Empty;
+        public string    Description   { get; set; } = string.Empty;
+        public string    Icon          { get; set; } = "bi-circle";
+        public string    Status        { get; set; } = "Pending";
+        public DateTime? StartedAt     { get; set; }
+        public DateTime? CompletedAt   { get; set; }
+        public string?   ErrorMessage  { get; set; }
+    }
+
+    private sealed class JobResource
+    {
+        public string Name  { get; set; } = string.Empty;
+        public string Type  { get; set; } = string.Empty;
+        public string Icon  { get; set; } = "bi-box";
+        public bool   Ready { get; set; }
+    }
+
+    private sealed class AuditEntry
+    {
+        public DateTime Timestamp { get; set; }
+        public string   Action    { get; set; } = string.Empty;
+        public string   User      { get; set; } = string.Empty;
+    }
+}

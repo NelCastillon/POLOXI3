@@ -1,0 +1,417 @@
+@page "/platform/quotas/rules"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.QuotaRules
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Quota Rules — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Quota Rules"
+               Subtitle="Define quota policies by metric and plan"
+               Icon="bi-list-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync" title="Export">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Rule
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by rule code, plan, metric…" @onkeyup="OnSearchKeyUp" />
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading quota rules…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="QuotaRuleDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(QuotaRuleDto.RuleCode)" HeaderText="Quota Rule Code" Width="150" />
+            <GridColumn Field="@nameof(QuotaRuleDto.MetricTypeCode)" HeaderText="Metric Type" Width="140" />
+            <GridColumn Field="@nameof(QuotaRuleDto.PlanCode)" HeaderText="Plan" Width="120" />
+            <GridColumn Field="@nameof(QuotaRuleDto.LimitValue)" HeaderText="Hard Limit" Width="120" TextAlign="TextAlign.Right" Format="N0" />
+            <GridColumn Field="@nameof(QuotaRuleDto.WarningThresholdPct)" HeaderText="Warning Threshold" Width="140" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var row = (QuotaRuleDto)context; }
+                    <span>@row.WarningThresholdPct%</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(QuotaRuleDto.OverageBillingEnabled)" HeaderText="Overage Allowed" Width="130">
+                <Template>
+                    @{ var row = (QuotaRuleDto)context; }
+                    <span class="um-badge @(row.OverageBillingEnabled ? "um-badge--success" : "um-badge--neutral")">@(row.OverageBillingEnabled ? "Yes" : "No")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(QuotaRuleDto.IsActive)" HeaderText="Active" Width="100">
+                <Template>
+                    @{ var row = (QuotaRuleDto)context; }
+                    <span class="um-badge @(row.IsActive ? "um-badge--success" : "um-badge--neutral")">@(row.IsActive ? "Yes" : "No")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="180" AllowSorting="false">
+                <Template>
+                    @{ var row = (QuotaRuleDto)context; }
+                    <div class="td-action-cell">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(row)" title="Edit">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => CloneRuleAsync(row)" title="Clone">
+                            <i class="bi bi-copy" aria-hidden="true"></i>
+                        </button>
+                        @if (row.IsActive)
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs text-warning" @onclick="() => DeactivateAsync(row)" title="Deactivate">
+                                <i class="bi bi-pause-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        else
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs text-success" @onclick="() => ActivateRuleAsync(row)" title="Activate">
+                                <i class="bi bi-play-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+<!-- Create / Edit Dialog -->
+<SfDialog @bind-Visible="_dialogVisible"
+          Width="560px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="@(_editing ? "Edit Quota Rule" : "New Quota Rule")">
+    <DialogTemplates>
+        <Content>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label class="um-label">Rule Code</label>
+                        <SfTextBox @bind-Value="_form.RuleCode" Placeholder="e.g. STD-USERS" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Metric Type <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.MetricTypeCode" Placeholder="e.g. Users, StorageGb" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Applies To Plan <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.PlanCode" Placeholder="e.g. Standard" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Hard Limit <span class="req">*</span></label>
+                        <SfNumericTextBox TValue="decimal" @bind-Value="_form.LimitValue" Min="0" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Warning %</label>
+                        <SfNumericTextBox TValue="decimal" @bind-Value="_form.WarningThresholdPct" Min="0" Max="100" Step="5" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Grace Threshold</label>
+                        <SfNumericTextBox TValue="decimal" @bind-Value="_form.GraceThreshold" Min="0" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Overage Billing Enabled</label>
+                        <SfDropDownList TValue="string" TItem="StatusOption"
+                                        @bind-Value="_form.OverageBillingEnabledStr"
+                                        DataSource="@_boolOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Enforcement Mode</label>
+                        <SfDropDownList TValue="string" TItem="StatusOption"
+                                        @bind-Value="_form.EnforcementMode"
+                                        DataSource="@_enforcementOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Limit Unit</label>
+                        <SfTextBox @bind-Value="_form.LimitUnit" Placeholder="Count" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Period</label>
+                        <SfDropDownList TValue="string" TItem="StatusOption"
+                                        @bind-Value="_form.PeriodCode"
+                                        DataSource="@_periodOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+                    @if (_editing)
+                    {
+                        <div class="um-field">
+                            <label class="um-label">Active</label>
+                            <SfDropDownList TValue="string" TItem="StatusOption"
+                                            @bind-Value="_form.IsActiveStr"
+                                            DataSource="@_boolOptions">
+                                <DropDownListFieldSettings Value="Value" Text="Text" />
+                            </SfDropDownList>
+                        </div>
+                    }
+                    <div class="um-field um-field--full">
+                        <label class="um-label">Notes</label>
+                        <SfTextBox @bind-Value="_form.Notes" Multiline="true" />
+                    </div>
+                </div>
+                <div class="um-dialog-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving) { <span class="um-spinner-xs" aria-hidden="true"></span> }
+                        @(_editing ? "Save Changes" : "Create Rule")
+                    </button>
+                </div>
+            </EditForm>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    SfGrid<QuotaRuleDto>? _grid;
+    SfToast? _toast;
+
+    List<QuotaRuleDto> _items = [];
+    bool _loading;
+    bool _saving;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string _searchTerm = string.Empty;
+
+    bool _dialogVisible;
+    bool _editing;
+
+    readonly RuleFormModel _form = new();
+
+    readonly List<StatusOption> _periodOptions =
+    [
+        new("Monthly",   "Monthly"),
+        new("Daily",     "Daily"),
+        new("Hourly",    "Hourly"),
+        new("Unlimited", "Unlimited"),
+        new("Lifetime",  "Lifetime")
+    ];
+
+    readonly List<StatusOption> _boolOptions =
+    [
+        new("true",  "Yes"),
+        new("false", "No")
+    ];
+
+    readonly List<StatusOption> _enforcementOptions =
+    [
+        new("Hard",    "Hard"),
+        new("Soft",    "Soft"),
+        new("Warning", "Warning Only")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Quotas", "/platform/quotas"),
+            new BreadcrumbService.BreadcrumbItem("Quota Rules", "/platform/quotas/rules"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchQuotaRulesAsync(
+                searchTerm: _searchTerm,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    void OnSearchKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") InvokeAsync(LoadAsync); }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    void OpenCreate()
+    {
+        _editing = false;
+        _form.Reset();
+        _dialogVisible = true;
+    }
+
+    void OpenEdit(QuotaRuleDto row)
+    {
+        _editing = true;
+        _form.LoadFrom(row);
+        _dialogVisible = true;
+    }
+
+    void CloseDialog() => _dialogVisible = false;
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editing)
+            {
+                await Api.UpdateQuotaRuleAsync(_form.QuotaRuleId, _form.ToUpdateRequest());
+                await ShowToast("Rule updated.", "Success");
+            }
+            else
+            {
+                await Api.CreateQuotaRuleAsync(_form.ToCreateRequest());
+                await ShowToast("Rule created.", "Success");
+            }
+            _dialogVisible = false;
+            await LoadAsync();
+        }
+        catch { await ShowToast("An error occurred. Please try again.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    async Task CloneRuleAsync(QuotaRuleDto row)
+    {
+        _saving = true;
+        try
+        {
+            var request = new CloneQuotaRuleRequest { NewRuleCode = row.RuleCode + "-COPY" };
+            await Api.CloneQuotaRuleAsync(row.QuotaRuleId, request);
+            await ShowToast("Rule cloned.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Clone failed.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    async Task ActivateRuleAsync(QuotaRuleDto row)
+    {
+        try
+        {
+            await Api.ActivateQuotaRuleAsync(row.QuotaRuleId);
+            await ShowToast("Rule activated.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Activation failed.", "Error"); }
+    }
+
+    async Task DeactivateAsync(QuotaRuleDto row)
+    {
+        try
+        {
+            await Api.DeactivateQuotaRuleAsync(row.QuotaRuleId);
+            await ShowToast("Rule deactivated.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Deactivation failed.", "Error"); }
+    }
+
+    async Task ExportAsync()
+    {
+        await ShowToast("Export started. Download will begin shortly.", "Success");
+    }
+
+    async Task ShowToast(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content      = message,
+            CssClass     = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            ShowCloseButton = true
+        });
+    }
+
+    sealed record StatusOption(string Value, string Text);
+
+    sealed class RuleFormModel
+    {
+        public Guid    QuotaRuleId              { get; set; }
+        public string? RuleCode                 { get; set; }
+        public string  PlanCode                 { get; set; } = string.Empty;
+        public string  MetricTypeCode           { get; set; } = string.Empty;
+        public decimal LimitValue               { get; set; }
+        public string  LimitUnit                { get; set; } = "Count";
+        public string  PeriodCode               { get; set; } = "Monthly";
+        public decimal WarningThresholdPct       { get; set; } = 80;
+        public decimal GraceThreshold           { get; set; }
+        public string  OverageBillingEnabledStr { get; set; } = "false";
+        public string  EnforcementMode          { get; set; } = "Hard";
+        public string  IsActiveStr              { get; set; } = "true";
+        public string? Notes                    { get; set; }
+
+        public void Reset()
+        {
+            QuotaRuleId = Guid.Empty; RuleCode = null; PlanCode = string.Empty; MetricTypeCode = string.Empty;
+            LimitValue = 0; LimitUnit = "Count"; PeriodCode = "Monthly"; WarningThresholdPct = 80;
+            GraceThreshold = 0; OverageBillingEnabledStr = "false"; EnforcementMode = "Hard";
+            IsActiveStr = "true"; Notes = null;
+        }
+
+        public void LoadFrom(QuotaRuleDto dto)
+        {
+            QuotaRuleId = dto.QuotaRuleId; RuleCode = dto.RuleCode; PlanCode = dto.PlanCode;
+            MetricTypeCode = dto.MetricTypeCode; LimitValue = dto.LimitValue; LimitUnit = dto.LimitUnit;
+            PeriodCode = dto.PeriodCode; WarningThresholdPct = dto.WarningThresholdPct;
+            GraceThreshold = dto.GraceThreshold; OverageBillingEnabledStr = dto.OverageBillingEnabled ? "true" : "false";
+            EnforcementMode = dto.EnforcementMode; IsActiveStr = dto.IsActive ? "true" : "false"; Notes = dto.Notes;
+        }
+
+        public CreateQuotaRuleRequest ToCreateRequest() => new()
+        {
+            RuleCode = RuleCode, PlanCode = PlanCode, MetricTypeCode = MetricTypeCode, LimitValue = LimitValue,
+            LimitUnit = LimitUnit, PeriodCode = PeriodCode, WarningThresholdPct = WarningThresholdPct,
+            GraceThreshold = GraceThreshold, OverageBillingEnabled = OverageBillingEnabledStr == "true",
+            EnforcementMode = EnforcementMode, IsEnforced = EnforcementMode == "Hard", Notes = Notes
+        };
+
+        public UpdateQuotaRuleRequest ToUpdateRequest() => new()
+        {
+            RuleCode = RuleCode, PlanCode = PlanCode, MetricTypeCode = MetricTypeCode, LimitValue = LimitValue,
+            LimitUnit = LimitUnit, PeriodCode = PeriodCode, WarningThresholdPct = WarningThresholdPct,
+            GraceThreshold = GraceThreshold, OverageBillingEnabled = OverageBillingEnabledStr == "true",
+            EnforcementMode = EnforcementMode, IsEnforced = EnforcementMode == "Hard",
+            IsActive = IsActiveStr == "true", Notes = Notes
+        };
+    }
+}

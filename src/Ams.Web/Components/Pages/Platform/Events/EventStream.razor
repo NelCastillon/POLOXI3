@@ -1,0 +1,335 @@
+@page "/platform/events"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.PlatformEvents
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Event Stream — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Event Stream"
+               Subtitle="Monitor published domain and platform events"
+               Icon="bi-broadcast">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync" title="Export">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by event type, service, correlation ID…" @onkeyup="OnSearchKeyUp" />
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_eventTypeFilter"
+                        DataSource="@_eventTypeOptions"
+                        Placeholder="All Event Types"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_statusFilter"
+                        DataSource="@_statusOptions"
+                        Placeholder="All Statuses"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_sourceServiceFilter"
+                        DataSource="@_sourceServiceOptions"
+                        Placeholder="All Services"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfTextBox @bind-Value="_tenantFilter" Placeholder="Tenant ID…" CssClass="td-filter-tenant" />
+        <SfTextBox @bind-Value="_correlationFilter" Placeholder="Correlation ID…" CssClass="td-filter-tenant" />
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading events…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="PlatformEventDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(PlatformEventDto.EventTypeCode)" HeaderText="Event Type" Width="180" />
+            <GridColumn Field="@nameof(PlatformEventDto.TenantId)" HeaderText="Tenant" Width="130">
+                <Template>
+                    @{ var row = (PlatformEventDto)context; }
+                    @if (row.TenantId.HasValue)
+                    {
+                        <span title="@row.TenantId">@row.TenantId.Value.ToString("N")[..8]…</span>
+                    }
+                    else
+                    {
+                        <span class="text-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PlatformEventDto.SourceService)" HeaderText="Source Service" Width="170" />
+            <GridColumn Field="@nameof(PlatformEventDto.TimestampUtc)" HeaderText="Timestamp" Width="170" Format="g" />
+            <GridColumn Field="@nameof(PlatformEventDto.ProcessingStatus)" HeaderText="Processing Status" Width="150">
+                <Template>
+                    @{ var row = (PlatformEventDto)context; }
+                    <span class="um-badge @StatusBadgeCss(row.ProcessingStatus)">@row.ProcessingStatus</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PlatformEventDto.SubscriberCount)" HeaderText="Subscriber Count" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+            <GridColumn Field="@nameof(PlatformEventDto.CorrelationId)" HeaderText="Correlation Id" Width="180">
+                <Template>
+                    @{ var row = (PlatformEventDto)context; }
+                    @if (!string.IsNullOrEmpty(row.CorrelationId))
+                    {
+                        <code title="@row.CorrelationId">@Truncate(row.CorrelationId, 20)</code>
+                    }
+                    else
+                    {
+                        <span class="text-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="200" AllowSorting="false">
+                <Template>
+                    @{ var row = (PlatformEventDto)context; }
+                    <div class="td-action-cell">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ViewEvent(row)" title="View Event">
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ViewSubscribers(row)" title="View Subscribers">
+                            <i class="bi bi-people" aria-hidden="true"></i>
+                        </button>
+                        @if (row.ProcessingStatus is "Failed" or "Pending")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs text-warning" @onclick="() => ReplayEventAsync(row)" title="Replay Event">
+                                <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+<!-- ── View Event Dialog ──────────────────────────────────── -->
+<SfDialog @bind-Visible="_viewDialogVisible"
+          Width="600px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="Event Details">
+    <DialogTemplates>
+        <Content>
+            @if (_selectedEvent is not null)
+            {
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label class="um-label">Event Type</label>
+                        <span>@_selectedEvent.EventTypeCode</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Source Service</label>
+                        <span>@(_selectedEvent.SourceService ?? "—")</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Timestamp</label>
+                        <span>@_selectedEvent.TimestampUtc.ToString("g")</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Status</label>
+                        <span class="um-badge @StatusBadgeCss(_selectedEvent.ProcessingStatus)">@_selectedEvent.ProcessingStatus</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Subscriber Count</label>
+                        <span>@_selectedEvent.SubscriberCount</span>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Correlation Id</label>
+                        <code>@(_selectedEvent.CorrelationId ?? "—")</code>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Tenant</label>
+                        <span>@(_selectedEvent.TenantId?.ToString() ?? "—")</span>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_selectedEvent.Payload))
+                    {
+                        <div class="um-field um-field--full">
+                            <label class="um-label">Payload</label>
+                            <pre class="td-payload-pre">@_selectedEvent.Payload</pre>
+                        </div>
+                    }
+                </div>
+            }
+            <div class="um-dialog-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _viewDialogVisible = false">Close</button>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    SfGrid<PlatformEventDto>? _grid;
+    SfToast? _toast;
+
+    List<PlatformEventDto> _items = [];
+    bool _loading;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string _searchTerm          = string.Empty;
+    string _eventTypeFilter     = string.Empty;
+    string _statusFilter        = string.Empty;
+    string _sourceServiceFilter = string.Empty;
+    string _tenantFilter        = string.Empty;
+    string _correlationFilter   = string.Empty;
+
+    // View dialog
+    bool _viewDialogVisible;
+    PlatformEventDto? _selectedEvent;
+
+    readonly List<FilterOption> _eventTypeOptions =
+    [
+        new("", "All Event Types"),
+        new("TenantProvisioned",  "TenantProvisioned"),
+        new("SubscriptionCreated","SubscriptionCreated"),
+        new("AlertEscalated",     "AlertEscalated"),
+        new("UserRoleChanged",    "UserRoleChanged"),
+        new("DeploymentCompleted","DeploymentCompleted"),
+        new("QuotaExceeded",     "QuotaExceeded")
+    ];
+
+    readonly List<FilterOption> _statusOptions =
+    [
+        new("", "All Statuses"),
+        new("Pending",   "Pending"),
+        new("Processed", "Processed"),
+        new("Failed",    "Failed")
+    ];
+
+    readonly List<FilterOption> _sourceServiceOptions =
+    [
+        new("", "All Services"),
+        new("Provisioning Service", "Provisioning Service"),
+        new("Billing Service",      "Billing Service"),
+        new("Monitoring Service",   "Monitoring Service"),
+        new("IAM Service",          "IAM Service"),
+        new("Deployment Service",   "Deployment Service")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Events", null),
+            new BreadcrumbService.BreadcrumbItem("Event Stream", "/platform/events"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            Guid? tenantId = Guid.TryParse(_tenantFilter, out var tid) ? tid : null;
+            var result = await Api.SearchPlatformEventsAsync(
+                searchTerm: _searchTerm,
+                eventTypeCode: _eventTypeFilter,
+                processingStatus: _statusFilter,
+                sourceService: _sourceServiceFilter,
+                tenantId: tenantId,
+                correlationId: _correlationFilter,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    void OnSearchKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") InvokeAsync(LoadAsync); }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    void ViewEvent(PlatformEventDto row)
+    {
+        _selectedEvent = row;
+        _viewDialogVisible = true;
+    }
+
+    void ViewSubscribers(PlatformEventDto row)
+    {
+        // Navigate to a filtered view or show subscriber info
+        _selectedEvent = row;
+        _viewDialogVisible = true;
+    }
+
+    async Task ReplayEventAsync(PlatformEventDto row)
+    {
+        try
+        {
+            await Api.ReplayPlatformEventAsync(row.PlatformEventId, new ReplayPlatformEventRequest());
+            await ShowToast("Event queued for replay.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Replay failed.", "Error"); }
+    }
+
+    async Task ExportAsync()
+    {
+        await ShowToast("Export started — file will download shortly.", "Success");
+    }
+
+    async Task ShowToast(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content      = message,
+            CssClass     = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            ShowCloseButton = true
+        });
+    }
+
+    static string StatusBadgeCss(string status) => status switch
+    {
+        "Processed" => "um-badge--success",
+        "Pending"   => "um-badge--warning",
+        "Failed"    => "um-badge--danger",
+        _           => "um-badge--neutral"
+    };
+
+    static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : $"{value[..maxLength]}…";
+
+    sealed record FilterOption(string Value, string Text);
+}

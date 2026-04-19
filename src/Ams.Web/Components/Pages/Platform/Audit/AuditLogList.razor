@@ -1,0 +1,312 @@
+@page "/platform/audit"
+@using Ams.Application.Common.Dtos
+@using System.Text.Json
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Platform Audit — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Platform Audit Log"
+               Subtitle="Audit all critical platform actions"
+               Icon="bi-shield-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync" title="Export">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_actorFilter" Placeholder="Actor (user id)" CssClass="td-filter-input" />
+        <SfTextBox @bind-Value="_entityFilter" Placeholder="Entity name" CssClass="td-filter-input" />
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_actionFilter"
+                        DataSource="@_actionOptions"
+                        Placeholder="All Actions"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfTextBox @bind-Value="_tenantFilter" Placeholder="Tenant ID" CssClass="td-filter-input" />
+        <SfDatePicker TValue="DateTime?" @bind-Value="_fromDate" Placeholder="From date" CssClass="td-filter-date" Format="yyyy-MM-dd" />
+        <SfDatePicker TValue="DateTime?" @bind-Value="_toDate" Placeholder="To date" CssClass="td-filter-date" Format="yyyy-MM-dd" />
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="ApplyFilters">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters">
+            <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading audit logs…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="AuditLogDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(AuditLogDto.PerformedDateUtc)" HeaderText="Timestamp" Width="170" Format="g" />
+            <GridColumn Field="@nameof(AuditLogDto.PerformedByUserId)" HeaderText="Actor" Width="150">
+                <Template>
+                    @{ var a = (AuditLogDto)context; }
+                    <span class="td-mono">@(a.PerformedByUserId?.ToString("N")[..8] ?? "—")…</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AuditLogDto.ActionName)" HeaderText="Action" MinWidth="160" />
+            <GridColumn Field="@nameof(AuditLogDto.EntityName)" HeaderText="Entity" Width="150" />
+            <GridColumn Field="@nameof(AuditLogDto.EntityId)" HeaderText="Entity ID" Width="140">
+                <Template>
+                    @{ var e = (AuditLogDto)context; }
+                    <span class="td-mono">@e.EntityId.ToString("N")[..8]…</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AuditLogDto.RegionCode)" HeaderText="Region" Width="110">
+                <Template>
+                    @{ var r = (AuditLogDto)context; }
+                    <span>@(r.RegionCode ?? "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AuditLogDto.TenantId)" HeaderText="Tenant" Width="140">
+                <Template>
+                    @{ var t = (AuditLogDto)context; }
+                    <span class="td-mono">@(t.TenantId?.ToString("N")[..8] ?? "—")…</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AuditLogDto.CorrelationId)" HeaderText="Correlation ID" Width="160">
+                <Template>
+                    @{ var c = (AuditLogDto)context; }
+                    <span class="td-mono">@(string.IsNullOrEmpty(c.CorrelationId) ? "—" : (c.CorrelationId.Length > 12 ? c.CorrelationId[..12] + "…" : c.CorrelationId))</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Actions" Width="160" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
+                <Template>
+                    @{ var row = (AuditLogDto)context; }
+                    <button class="um-btn um-btn-ghost um-btn-xs" title="View Detail" @onclick="() => ShowDetail(row)">
+                        <i class="bi bi-eye"></i>
+                    </button>
+                    @if (!string.IsNullOrEmpty(row.OldValues) || !string.IsNullOrEmpty(row.NewValues))
+                    {
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Compare Before/After" @onclick="() => ShowCompare(row)">
+                            <i class="bi bi-arrows-expand"></i>
+                        </button>
+                    }
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+@* ── Detail Dialog ─────────────────────────────────────────── *@
+<SfDialog @bind-Visible="_detailVisible" Header="Audit Log Detail" Width="600px" IsModal="true" ShowCloseIcon="true" CssClass="um-dialog">
+    <DialogTemplates>
+        <Content>
+            @if (_selected is not null)
+            {
+                <div class="td-detail-grid">
+                    <div class="td-detail-label">Audit Log ID</div>
+                    <div class="td-detail-value td-mono">@_selected.AuditLogId</div>
+                    <div class="td-detail-label">Timestamp</div>
+                    <div class="td-detail-value">@_selected.PerformedDateUtc.ToString("g")</div>
+                    <div class="td-detail-label">Actor</div>
+                    <div class="td-detail-value td-mono">@(_selected.PerformedByUserId?.ToString() ?? "—")</div>
+                    <div class="td-detail-label">Action</div>
+                    <div class="td-detail-value">@_selected.ActionName</div>
+                    <div class="td-detail-label">Event Type</div>
+                    <div class="td-detail-value"><span class="um-badge @EventTypeBadgeCss(_selected.EventTypeCode)">@_selected.EventTypeCode</span></div>
+                    <div class="td-detail-label">Entity</div>
+                    <div class="td-detail-value">@_selected.EntityName</div>
+                    <div class="td-detail-label">Entity ID</div>
+                    <div class="td-detail-value td-mono">@_selected.EntityId</div>
+                    <div class="td-detail-label">Region</div>
+                    <div class="td-detail-value">@(_selected.RegionCode ?? "—")</div>
+                    <div class="td-detail-label">Tenant</div>
+                    <div class="td-detail-value td-mono">@(_selected.TenantId?.ToString() ?? "—")</div>
+                    <div class="td-detail-label">Correlation ID</div>
+                    <div class="td-detail-value td-mono">@(_selected.CorrelationId ?? "—")</div>
+                    <div class="td-detail-label">IP Address</div>
+                    <div class="td-detail-value">@(_selected.IpAddress ?? "—")</div>
+                </div>
+            }
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@* ── Compare Before/After Dialog ──────────────────────────── *@
+<SfDialog @bind-Visible="_compareVisible" Header="Compare Before / After" Width="900px" IsModal="true" ShowCloseIcon="true" CssClass="um-dialog">
+    <DialogTemplates>
+        <Content>
+            @if (_selected is not null)
+            {
+                <div class="td-compare-container">
+                    <div class="td-compare-pane">
+                        <h6 class="td-compare-heading">Before (Old Values)</h6>
+                        <pre class="td-compare-json">@FormatJson(_selected.OldValues)</pre>
+                    </div>
+                    <div class="td-compare-pane">
+                        <h6 class="td-compare-heading">After (New Values)</h6>
+                        <pre class="td-compare-json">@FormatJson(_selected.NewValues)</pre>
+                    </div>
+                </div>
+            }
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    SfGrid<AuditLogDto>? _grid;
+    SfToast? _toast;
+
+    List<AuditLogDto> _items = [];
+    bool _loading;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string _actorFilter  = string.Empty;
+    string _entityFilter = string.Empty;
+    string _actionFilter = string.Empty;
+    string _tenantFilter = string.Empty;
+    DateTime? _fromDate;
+    DateTime? _toDate;
+
+    AuditLogDto? _selected;
+    bool _detailVisible;
+    bool _compareVisible;
+
+    readonly List<FilterOption> _actionOptions =
+    [
+        new("", "All Actions"),
+        new("Create", "Create"),
+        new("Update", "Update"),
+        new("Delete", "Delete"),
+        new("Login",  "Login"),
+        new("Export", "Export")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Audit", null),
+            new BreadcrumbService.BreadcrumbItem("Platform Audit Log", "/platform/audit"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchAuditLogsAsync(
+                eventTypeCode: _actionFilter,
+                actor: _actorFilter,
+                entityName: _entityFilter,
+                tenantId: _tenantFilter,
+                fromDate: _fromDate,
+                toDate: _toDate,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    async Task ApplyFilters()
+    {
+        _pageNumber = 1;
+        await LoadAsync();
+    }
+
+    async Task ClearFilters()
+    {
+        _actorFilter = string.Empty;
+        _entityFilter = string.Empty;
+        _actionFilter = string.Empty;
+        _tenantFilter = string.Empty;
+        _fromDate = null;
+        _toDate = null;
+        _pageNumber = 1;
+        await LoadAsync();
+    }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    void ShowDetail(AuditLogDto row)
+    {
+        _selected = row;
+        _detailVisible = true;
+    }
+
+    void ShowCompare(AuditLogDto row)
+    {
+        _selected = row;
+        _compareVisible = true;
+    }
+
+    async Task ExportAsync()
+    {
+        if (!_items.Any())
+        {
+            if (_toast is not null)
+                await _toast.ShowAsync(new() { Title = "Export", Content = "No data to export.", CssClass = "e-toast-warning" });
+            return;
+        }
+
+        if (_toast is not null)
+            await _toast.ShowAsync(new() { Title = "Export", Content = $"Exporting {_totalCount} audit records…", CssClass = "e-toast-info" });
+    }
+
+    static string FormatJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return "(empty)";
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch
+        {
+            return json;
+        }
+    }
+
+    static string EventTypeBadgeCss(string type) => type switch
+    {
+        "Create" => "um-badge--success",
+        "Update" => "um-badge--info",
+        "Delete" => "um-badge--danger",
+        "Login"  => "um-badge--warning",
+        "Export" => "um-badge--neutral",
+        _        => "um-badge--neutral"
+    };
+
+    sealed record FilterOption(string Value, string Text);
+}

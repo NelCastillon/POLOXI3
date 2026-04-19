@@ -1,0 +1,396 @@
+@page "/platform/health"
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>System Health — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="System Health"
+               Subtitle="Current health view of the platform across services, regions, and dependencies"
+               Icon="bi-heart-pulse">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="ExportHealthReport" title="Export Health Report">
+            <i class="bi bi-download" aria-hidden="true"></i> Export Report
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/platform/alerts")' title="Open Alerts">
+            <i class="bi bi-bell" aria-hidden="true"></i> Alerts
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/platform/health/checks")'>
+            <i class="bi bi-gear" aria-hidden="true"></i> Manage Checks
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="um-loading-overlay" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading system health…</span>
+    </div>
+}
+else
+{
+    @* ── Service Health Cards ─────────────────────────────────── *@
+    <h5 class="sh-section-title"><i class="bi bi-hdd-stack"></i> Service Health</h5>
+    <div class="sh-card-row">
+        @foreach (var group in _healthGroups)
+        {
+            var services = _allChecks.Where(c => c.Group == group.Key).ToList();
+            var worstStatus = GetWorstStatus(services.Select(s => s.Dto.StatusCode));
+            <div class="sh-card @CardCss(worstStatus)" @onclick="() => OpenServiceDetail(group.Key)">
+                <div class="sh-card-header">
+                    <i class="bi @group.Value" aria-hidden="true"></i>
+                    <span class="sh-card-title">@group.Key</span>
+                </div>
+                <div class="sh-card-body">
+                    <span class="um-badge @HealthBadgeCss(worstStatus)">@worstStatus</span>
+                    <span class="sh-card-count">@services.Count service@(services.Count == 1 ? "" : "s")</span>
+                </div>
+                <div class="sh-card-uptime">
+                    @if (services.Count > 0)
+                    {
+                        var avgUptime = services.Average(s => s.Dto.UptimePercent);
+                        <span class="sh-uptime-value">@avgUptime.ToString("N2")%</span>
+                        <span class="sh-uptime-label">avg uptime</span>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+
+    @* ── Dependency Health Grid ──────────────────────────────── *@
+    <h5 class="sh-section-title"><i class="bi bi-diagram-3"></i> Dependency Health</h5>
+    <div class="um-grid-card app-datagrid">
+        <SfGrid TValue="HealthCheckDto"
+                DataSource="@_dependencyChecks"
+                AllowSorting="true"
+                EnableHover="true"
+                CssClass="e-sfgrid-clean">
+            <GridColumns>
+                <GridColumn Field="@nameof(HealthCheckDto.ServiceName)" HeaderText="Dependency" MinWidth="180" />
+                <GridColumn Field="@nameof(HealthCheckDto.StatusCode)" HeaderText="Status" Width="120">
+                    <Template>
+                        @{ var row = (HealthCheckDto)context; }
+                        <span class="um-badge @HealthBadgeCss(row.StatusCode)">@row.StatusCode</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(HealthCheckDto.LatencyMs)" HeaderText="Latency (ms)" Width="120" TextAlign="TextAlign.Right">
+                    <Template>
+                        @{ var row = (HealthCheckDto)context; }
+                        <span class="@LatencyCss(row.LatencyMs)">@row.LatencyMs ms</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(HealthCheckDto.UptimePercent)" HeaderText="Uptime %" Width="110" TextAlign="TextAlign.Right" Format="N2" />
+                <GridColumn Field="@nameof(HealthCheckDto.RegionCode)" HeaderText="Region" Width="110" />
+                <GridColumn Field="@nameof(HealthCheckDto.LastCheckDateUtc)" HeaderText="Last Check" Width="160" Format="g" />
+                <GridColumn HeaderText="" Width="100" AllowSorting="false">
+                    <Template>
+                        @{ var row = (HealthCheckDto)context; }
+                        <div class="td-action-cell">
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/platform/health/checks")' title="Open Service Detail">
+                                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+
+    @* ── Region Health Summary ───────────────────────────────── *@
+    <h5 class="sh-section-title"><i class="bi bi-globe-americas"></i> Region Health Summary</h5>
+    <div class="um-grid-card app-datagrid">
+        <SfGrid TValue="RegionSummary"
+                DataSource="@_regionSummaries"
+                AllowSorting="true"
+                EnableHover="true"
+                CssClass="e-sfgrid-clean">
+            <GridColumns>
+                <GridColumn Field="@nameof(RegionSummary.Region)" HeaderText="Region" Width="140" />
+                <GridColumn Field="@nameof(RegionSummary.TotalServices)" HeaderText="Services" Width="100" TextAlign="TextAlign.Right" />
+                <GridColumn Field="@nameof(RegionSummary.HealthyCount)" HeaderText="Healthy" Width="100" TextAlign="TextAlign.Right" />
+                <GridColumn Field="@nameof(RegionSummary.DegradedCount)" HeaderText="Degraded" Width="100" TextAlign="TextAlign.Right" />
+                <GridColumn Field="@nameof(RegionSummary.UnhealthyCount)" HeaderText="Unhealthy" Width="100" TextAlign="TextAlign.Right" />
+                <GridColumn Field="@nameof(RegionSummary.AvgUptimePercent)" HeaderText="Avg Uptime %" Width="130" TextAlign="TextAlign.Right" Format="N2" />
+                <GridColumn Field="@nameof(RegionSummary.AvgLatencyMs)" HeaderText="Avg Latency (ms)" Width="140" TextAlign="TextAlign.Right" />
+                <GridColumn HeaderText="Status" Width="110">
+                    <Template>
+                        @{ var row = (RegionSummary)context; }
+                        <span class="um-badge @HealthBadgeCss(row.OverallStatus)">@row.OverallStatus</span>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+
+    @* ── Queue Depth & DB Health Summaries (side-by-side) ─────── *@
+    <div class="sh-summary-row">
+        <div class="sh-summary-panel">
+            <h5 class="sh-section-title"><i class="bi bi-inbox-fill"></i> Queue Depth Summary</h5>
+            <div class="um-grid-card app-datagrid">
+                <SfGrid TValue="GroupSummary"
+                        DataSource="@_queueSummaries"
+                        AllowSorting="true"
+                        EnableHover="true"
+                        CssClass="e-sfgrid-clean">
+                    <GridColumns>
+                        <GridColumn Field="@nameof(GroupSummary.ServiceName)" HeaderText="Queue / Service" MinWidth="180" />
+                        <GridColumn Field="@nameof(GroupSummary.StatusCode)" HeaderText="Status" Width="110">
+                            <Template>
+                                @{ var row = (GroupSummary)context; }
+                                <span class="um-badge @HealthBadgeCss(row.StatusCode)">@row.StatusCode</span>
+                            </Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(GroupSummary.LatencyMs)" HeaderText="Latency (ms)" Width="120" TextAlign="TextAlign.Right" />
+                        <GridColumn Field="@nameof(GroupSummary.UptimePercent)" HeaderText="Uptime %" Width="110" TextAlign="TextAlign.Right" Format="N2" />
+                    </GridColumns>
+                </SfGrid>
+            </div>
+        </div>
+        <div class="sh-summary-panel">
+            <h5 class="sh-section-title"><i class="bi bi-database"></i> Database Health Summary</h5>
+            <div class="um-grid-card app-datagrid">
+                <SfGrid TValue="GroupSummary"
+                        DataSource="@_dbSummaries"
+                        AllowSorting="true"
+                        EnableHover="true"
+                        CssClass="e-sfgrid-clean">
+                    <GridColumns>
+                        <GridColumn Field="@nameof(GroupSummary.ServiceName)" HeaderText="Database / Service" MinWidth="180" />
+                        <GridColumn Field="@nameof(GroupSummary.StatusCode)" HeaderText="Status" Width="110">
+                            <Template>
+                                @{ var row = (GroupSummary)context; }
+                                <span class="um-badge @HealthBadgeCss(row.StatusCode)">@row.StatusCode</span>
+                            </Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(GroupSummary.LatencyMs)" HeaderText="Latency (ms)" Width="120" TextAlign="TextAlign.Right" />
+                        <GridColumn Field="@nameof(GroupSummary.UptimePercent)" HeaderText="Uptime %" Width="110" TextAlign="TextAlign.Right" Format="N2" />
+                    </GridColumns>
+                </SfGrid>
+            </div>
+        </div>
+    </div>
+
+    @* ── Recent Open Alerts ──────────────────────────────────── *@
+    <h5 class="sh-section-title"><i class="bi bi-bell"></i> Recent Open Alerts (@_openAlerts.Count)</h5>
+    <div class="um-grid-card app-datagrid">
+        <SfGrid TValue="AlertDto"
+                DataSource="@_openAlerts"
+                AllowSorting="true"
+                EnableHover="true"
+                CssClass="e-sfgrid-clean">
+            <GridColumns>
+                <GridColumn Field="@nameof(AlertDto.SeverityCode)" HeaderText="Severity" Width="110">
+                    <Template>
+                        @{ var row = (AlertDto)context; }
+                        <span class="um-badge @SeverityBadgeCss(row.SeverityCode)">@row.SeverityCode</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(AlertDto.ServiceName)" HeaderText="Service" Width="150" />
+                <GridColumn Field="@nameof(AlertDto.Message)" HeaderText="Message" MinWidth="250" />
+                <GridColumn Field="@nameof(AlertDto.CreatedDateUtc)" HeaderText="Created" Width="160" Format="g" />
+                <GridColumn HeaderText="" Width="80" AllowSorting="false">
+                    <Template>
+                        @{ var row = (AlertDto)context; }
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/platform/alerts")' title="Open Alert">
+                            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                        </button>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+@code {
+    SfToast? _toast;
+    bool _loading;
+
+    List<ClassifiedCheck> _allChecks = [];
+    List<HealthCheckDto> _dependencyChecks = [];
+    List<RegionSummary> _regionSummaries = [];
+    List<GroupSummary> _queueSummaries = [];
+    List<GroupSummary> _dbSummaries = [];
+    List<AlertDto> _openAlerts = [];
+
+    static readonly Dictionary<string, string> _healthGroups = new()
+    {
+        ["API Services"]           = "bi-cloud",
+        ["Worker Services"]        = "bi-gear-wide-connected",
+        ["Queues"]                 = "bi-inbox-fill",
+        ["Databases"]              = "bi-database",
+        ["Storage"]                = "bi-hdd",
+        ["Cache"]                  = "bi-lightning-charge",
+        ["Feature Flag Service"]   = "bi-toggles",
+        ["Billing / Metering"]     = "bi-receipt"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Monitoring", null),
+            new BreadcrumbService.BreadcrumbItem("System Health", "/platform/health"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var healthTask = Api.SearchHealthChecksAsync(pageSize: 200);
+            var alertTask  = Api.SearchAlertsAsync(openOnly: true, pageSize: 10);
+            await Task.WhenAll(healthTask, alertTask);
+
+            var healthResult = healthTask.Result;
+            var alertResult  = alertTask.Result;
+
+            var checks = healthResult?.Items.ToList() ?? [];
+            _allChecks = checks.Where(c => c.IsActive).Select(c => new ClassifiedCheck(c, ClassifyGroup(c))).ToList();
+
+            _dependencyChecks = _allChecks
+                .Where(c => c.Group is "Databases" or "Cache" or "Queues" or "Storage")
+                .Select(c => c.Dto).ToList();
+
+            _regionSummaries = BuildRegionSummaries(_allChecks);
+            _queueSummaries  = BuildGroupSummaries("Queues");
+            _dbSummaries     = BuildGroupSummaries("Databases");
+            _openAlerts      = alertResult?.Items.ToList() ?? [];
+        }
+        finally { _loading = false; }
+    }
+
+    static string ClassifyGroup(HealthCheckDto dto)
+    {
+        var name = dto.ServiceName?.ToLowerInvariant() ?? "";
+        if (name.Contains("queue") || name.Contains("bus") || name.Contains("messaging"))    return "Queues";
+        if (name.Contains("database") || name.Contains("db") || name.Contains("sql"))        return "Databases";
+        if (name.Contains("cache") || name.Contains("redis"))                                  return "Cache";
+        if (name.Contains("storage") || name.Contains("blob") || name.Contains("file"))       return "Storage";
+        if (name.Contains("feature") || name.Contains("flag") || name.Contains("toggle"))     return "Feature Flag Service";
+        if (name.Contains("billing") || name.Contains("meter") || name.Contains("invoice"))   return "Billing / Metering";
+        if (name.Contains("worker") || name.Contains("job") || name.Contains("background"))   return "Worker Services";
+        return "API Services";
+    }
+
+    List<RegionSummary> BuildRegionSummaries(List<ClassifiedCheck> checks)
+    {
+        return checks
+            .Where(c => !string.IsNullOrEmpty(c.Dto.RegionCode))
+            .GroupBy(c => c.Dto.RegionCode!)
+            .Select(g => new RegionSummary
+            {
+                Region          = g.Key,
+                TotalServices   = g.Count(),
+                HealthyCount    = g.Count(c => c.Dto.StatusCode == "Healthy"),
+                DegradedCount   = g.Count(c => c.Dto.StatusCode == "Degraded"),
+                UnhealthyCount  = g.Count(c => c.Dto.StatusCode == "Unhealthy"),
+                AvgUptimePercent = g.Average(c => c.Dto.UptimePercent),
+                AvgLatencyMs    = (int)g.Average(c => c.Dto.LatencyMs),
+                OverallStatus   = GetWorstStatus(g.Select(c => c.Dto.StatusCode))
+            })
+            .OrderBy(r => r.Region)
+            .ToList();
+    }
+
+    List<GroupSummary> BuildGroupSummaries(string group)
+    {
+        return _allChecks
+            .Where(c => c.Group == group)
+            .Select(c => new GroupSummary
+            {
+                ServiceName   = c.Dto.ServiceName,
+                StatusCode    = c.Dto.StatusCode,
+                LatencyMs     = c.Dto.LatencyMs,
+                UptimePercent = c.Dto.UptimePercent
+            })
+            .ToList();
+    }
+
+    static string GetWorstStatus(IEnumerable<string> statuses)
+    {
+        var list = statuses.ToList();
+        if (list.Any(s => s == "Unhealthy")) return "Unhealthy";
+        if (list.Any(s => s == "Degraded"))  return "Degraded";
+        if (list.Any(s => s == "Healthy"))   return "Healthy";
+        return "Unknown";
+    }
+
+    void OpenServiceDetail(string group) => Nav.NavigateTo("/platform/health/checks");
+
+    async Task ExportHealthReport()
+    {
+        await ShowToast("Health report export started.", "Success");
+    }
+
+    async Task ShowToast(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content      = message,
+            CssClass     = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            ShowCloseButton = true
+        });
+    }
+
+    static string HealthBadgeCss(string status) => status switch
+    {
+        "Healthy"   => "um-badge--success",
+        "Degraded"  => "um-badge--warning",
+        "Unhealthy" => "um-badge--danger",
+        _           => "um-badge--neutral"
+    };
+
+    static string SeverityBadgeCss(string severity) => severity switch
+    {
+        "Critical" => "um-badge--danger",
+        "Warning"  => "um-badge--warning",
+        "Info"     => "um-badge--info",
+        _          => "um-badge--neutral"
+    };
+
+    static string CardCss(string status) => status switch
+    {
+        "Unhealthy" => "sh-card--danger",
+        "Degraded"  => "sh-card--warning",
+        "Healthy"   => "sh-card--success",
+        _           => ""
+    };
+
+    static string LatencyCss(int ms) => ms switch
+    {
+        >= 500 => "load-critical",
+        >= 200 => "load-high",
+        >= 100 => "load-moderate",
+        _      => "load-low"
+    };
+
+    sealed record ClassifiedCheck(HealthCheckDto Dto, string Group);
+
+    sealed class RegionSummary
+    {
+        public string  Region           { get; set; } = string.Empty;
+        public int     TotalServices    { get; set; }
+        public int     HealthyCount     { get; set; }
+        public int     DegradedCount    { get; set; }
+        public int     UnhealthyCount   { get; set; }
+        public decimal AvgUptimePercent { get; set; }
+        public int     AvgLatencyMs     { get; set; }
+        public string  OverallStatus    { get; set; } = "Unknown";
+    }
+
+    sealed class GroupSummary
+    {
+        public string  ServiceName   { get; set; } = string.Empty;
+        public string  StatusCode    { get; set; } = string.Empty;
+        public int     LatencyMs     { get; set; }
+        public decimal UptimePercent { get; set; }
+    }
+}

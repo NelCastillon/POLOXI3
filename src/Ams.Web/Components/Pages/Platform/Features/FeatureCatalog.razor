@@ -1,0 +1,394 @@
+@page "/platform/features"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.FeatureCatalog
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Feature Catalog — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Feature Catalog"
+               Subtitle="Platform feature flags and capability toggles"
+               Icon="bi-toggles">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Feature
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search features…" @onkeyup="OnSearchKeyUp" />
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading features…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="FeatureCatalogDto"
+            DataSource="@_features"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+
+            <GridColumn Field="@nameof(FeatureCatalogDto.FeatureCode)" HeaderText="Feature Code" Width="160">
+                <Template>
+                    @{ var row = (FeatureCatalogDto)context; }
+                    <span class="td-monospace">@row.FeatureCode</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(FeatureCatalogDto.FeatureName)" HeaderText="Feature Name" Width="220" />
+
+            <GridColumn Field="@nameof(FeatureCatalogDto.Module)" HeaderText="Module" Width="150">
+                <Template>
+                    @{ var row = (FeatureCatalogDto)context; }
+                    @if (!string.IsNullOrEmpty(row.Module))
+                    {
+                        <span class="td-stat-chip">
+                            <i class="bi bi-box" aria-hidden="true"></i> @row.Module
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="fc-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(FeatureCatalogDto.TypeCode)" HeaderText="Type" Width="120">
+                <Template>
+                    @{ var row = (FeatureCatalogDto)context; }
+                    <span class="badge @TypeBadgeClass(row.TypeCode)">@row.TypeCode</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(FeatureCatalogDto.DefaultEnabled)" HeaderText="Default Enabled" Width="150" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
+                <Template>
+                    @{ var row = (FeatureCatalogDto)context; }
+                    @if (row.DefaultEnabled)
+                    {
+                        <span class="td-pill td-pill--success">On</span>
+                    }
+                    else
+                    {
+                        <span class="td-pill td-pill--muted">Off</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(FeatureCatalogDto.IsEnabled)" HeaderText="Active" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
+                <Template>
+                    @{ var row = (FeatureCatalogDto)context; }
+                    @if (row.IsEnabled)
+                    {
+                        <span class="td-pill td-pill--success">Active</span>
+                    }
+                    else
+                    {
+                        <span class="td-pill td-pill--muted">Inactive</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText="" Width="160" AllowSorting="false">
+                <Template>
+                    @{ var row = (FeatureCatalogDto)context; }
+                    <div class="td-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Edit" @onclick="() => OpenEdit(row)">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        @if (row.IsEnabled)
+                        {
+                            <button class="um-btn um-btn-xs um-btn-warning" title="Disable" @onclick="() => ToggleEnabled(row, false)">
+                                <i class="bi bi-toggle-on" aria-hidden="true"></i>
+                            </button>
+                        }
+                        else
+                        {
+                            <button class="um-btn um-btn-xs um-btn-primary" title="Enable" @onclick="() => ToggleEnabled(row, true)">
+                                <i class="bi bi-toggle-off" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-xs um-btn-danger" title="Delete" @onclick="() => OpenDelete(row)">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- ── Create / Edit Dialog ─────────────────────────────────── -->
+<SfDialog @bind-Visible="_showFormDialog" Width="520px" IsModal="true" ShowCloseIcon="true" Header="@_formDialogTitle" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="form-row">
+                    <label class="form-label">Feature Code <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_form.FeatureCode" Placeholder="e.g. ADVANCED_REPORTING" Disabled="@_isEdit" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Feature Name <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_form.FeatureName" Placeholder="e.g. Advanced Reporting" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Module</label>
+                    <SfTextBox @bind-Value="_form.Module" Placeholder="e.g. Reporting" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Type</label>
+                    <SfDropDownList TValue="string" TItem="string"
+                                    DataSource="_typeOptions"
+                                    @bind-Value="_form.TypeCode" />
+                </div>
+                <div class="form-row form-row--inline">
+                    <label class="form-label">Default Enabled</label>
+                    <SfSwitch @bind-Checked="_form.DefaultEnabled" />
+                </div>
+                @if (!_isEdit)
+                {
+                    <div class="form-row form-row--inline">
+                        <label class="form-label">Active</label>
+                        <SfSwitch @bind-Checked="_form.IsEnabled" />
+                    </div>
+                }
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel"                             CssClass="um-btn um-btn-ghost"   OnClick="() => _showFormDialog = false" />
+        <DialogButton Content="@(_isEdit ? "Save Changes" : "Add Feature")" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmForm" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ── Delete Confirm Dialog ────────────────────────────────── -->
+<SfDialog @bind-Visible="_showDeleteDialog" Width="420px" IsModal="true" ShowCloseIcon="true" Header="Delete Feature" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Are you sure you want to delete <strong>@_actionTarget?.FeatureName</strong>?</p>
+                <p class="td-hint">This will permanently remove the feature flag from the catalog. Any tenant-level overrides referencing this code will be orphaned.</p>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost"  OnClick="() => _showDeleteDialog = false" />
+        <DialogButton Content="Delete" IsPrimary="true" CssClass="um-btn um-btn-danger" OnClick="ConfirmDelete" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    private SfGrid<FeatureCatalogDto>? _grid;
+    private SfToast?                  _toast;
+
+    private List<FeatureCatalogDto> _features    = [];
+    private bool                    _loading     = true;
+    private string?                 _searchTerm;
+
+    // ── Dialog state ────────────────────────────────────────
+    private bool   _showFormDialog   = false;
+    private bool   _showDeleteDialog = false;
+    private bool   _isEdit           = false;
+    private bool   _saving           = false;
+    private string _formDialogTitle  = string.Empty;
+
+    private FeatureCatalogDto? _actionTarget;
+    private FeatureFormModel   _form = new();
+
+    private static readonly List<string> _typeOptions = ["Toggle", "Entitlement", "Experiment", "Limit"];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Feature Catalog", "/platform/features"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchFeaturesAsync(_searchTerm, pageSize: 200);
+            _features = result?.Items?.ToList() ?? [];
+        }
+        catch
+        {
+            _features = [];
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnSearchKeyUp(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await LoadAsync();
+    }
+
+    // ── Create ──────────────────────────────────────────────
+    private void OpenCreate()
+    {
+        _form            = new();
+        _isEdit          = false;
+        _formDialogTitle = "Add Feature";
+        _showFormDialog  = true;
+    }
+
+    // ── Edit ────────────────────────────────────────────────
+    private void OpenEdit(FeatureCatalogDto row)
+    {
+        _actionTarget    = row;
+        _form            = new FeatureFormModel
+        {
+            FeatureCode    = row.FeatureCode,
+            FeatureName    = row.FeatureName,
+            Module         = row.Module,
+            TypeCode       = row.TypeCode,
+            DefaultEnabled = row.DefaultEnabled,
+            IsEnabled      = row.IsEnabled
+        };
+        _isEdit          = true;
+        _formDialogTitle = $"Edit — {row.FeatureName}";
+        _showFormDialog  = true;
+    }
+
+    private async Task ConfirmForm()
+    {
+        if (string.IsNullOrWhiteSpace(_form.FeatureCode) || string.IsNullOrWhiteSpace(_form.FeatureName)) return;
+        _saving = true;
+        try
+        {
+            if (_isEdit && _actionTarget is not null)
+            {
+                await Api.UpdateFeatureAsync(_actionTarget.FeatureId, new UpdateFeatureRequest
+                {
+                    FeatureName    = _form.FeatureName,
+                    Module         = _form.Module,
+                    TypeCode       = _form.TypeCode,
+                    DefaultEnabled = _form.DefaultEnabled
+                });
+                _showFormDialog = false;
+                await ShowToast("Feature Updated", $"{_form.FeatureName} has been saved.", "e-toast-success");
+            }
+            else
+            {
+                await Api.CreateFeatureAsync(new CreateFeatureRequest
+                {
+                    FeatureCode    = _form.FeatureCode.Trim().ToUpperInvariant(),
+                    FeatureName    = _form.FeatureName,
+                    Module         = _form.Module,
+                    TypeCode       = _form.TypeCode,
+                    DefaultEnabled = _form.DefaultEnabled,
+                    IsEnabled      = _form.IsEnabled
+                });
+                _showFormDialog = false;
+                await ShowToast("Feature Added", $"{_form.FeatureName} has been added to the catalog.", "e-toast-success");
+            }
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToast("Error", "Could not save feature. Please try again.", "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // ── Toggle active ────────────────────────────────────────
+    private async Task ToggleEnabled(FeatureCatalogDto row, bool enabled)
+    {
+        try
+        {
+            await Api.SetFeatureEnabledAsync(row.FeatureId, enabled);
+            var label = enabled ? "enabled" : "disabled";
+            await ShowToast("Feature Updated", $"{row.FeatureName} has been {label}.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToast("Error", "Could not update feature status.", "e-toast-danger");
+        }
+    }
+
+    // ── Delete ───────────────────────────────────────────────
+    private void OpenDelete(FeatureCatalogDto row)
+    {
+        _actionTarget      = row;
+        _showDeleteDialog  = true;
+    }
+
+    private async Task ConfirmDelete()
+    {
+        if (_actionTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteFeatureAsync(_actionTarget.FeatureId);
+            _showDeleteDialog = false;
+            await ShowToast("Feature Deleted", $"{_actionTarget.FeatureName} has been removed.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToast("Error", "Could not delete feature.", "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────
+    private static string TypeBadgeClass(string typeCode) => typeCode switch
+    {
+        "Entitlement" => "badge-purple",
+        "Experiment"  => "badge-amber",
+        "Limit"       => "badge-teal",
+        _             => "badge-blue"   // Toggle
+    };
+
+    private async Task ShowToast(string title, string content, string cssClass)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel { Title = title, Content = content, CssClass = cssClass });
+    }
+
+    private sealed class FeatureFormModel
+    {
+        public string FeatureCode    { get; set; } = string.Empty;
+        public string FeatureName    { get; set; } = string.Empty;
+        public string Module         { get; set; } = string.Empty;
+        public string TypeCode       { get; set; } = "Toggle";
+        public bool   DefaultEnabled { get; set; }
+        public bool   IsEnabled      { get; set; } = true;
+    }
+}

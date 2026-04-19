@@ -1,0 +1,152 @@
+@page "/platform/security-logs"
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Security Logs — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Security Event Logs"
+               Subtitle="Track authentication, authorization, and security-related events"
+               Icon="bi-shield-lock">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by description, user, IP…" @onkeyup="OnSearchKeyUp" />
+        <SfDropDownList TValue="string" TItem="StatusOption"
+                        @bind-Value="_eventTypeFilter"
+                        DataSource="@_eventTypeOptions"
+                        Placeholder="All Event Types"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading security events…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="SecurityEventLogDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(SecurityEventLogDto.EventTypeCode)" HeaderText="Event Type" Width="140">
+                <Template>
+                    @{ var row = (SecurityEventLogDto)context; }
+                    <span class="um-badge @EventTypeBadgeCss(row.EventTypeCode)">@row.EventTypeCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SecurityEventLogDto.EventDescription)" HeaderText="Description" MinWidth="220" />
+            <GridColumn Field="@nameof(SecurityEventLogDto.UserFullName)" HeaderText="User" Width="160" />
+            <GridColumn Field="@nameof(SecurityEventLogDto.IsSuccess)" HeaderText="Success" Width="100">
+                <Template>
+                    @{ var row = (SecurityEventLogDto)context; }
+                    <span class="um-badge @(row.IsSuccess ? "um-badge--success" : "um-badge--danger")">@(row.IsSuccess ? "Yes" : "No")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SecurityEventLogDto.RiskScore)" HeaderText="Risk" Width="90" />
+            <GridColumn Field="@nameof(SecurityEventLogDto.IpAddress)" HeaderText="IP Address" Width="130" />
+            <GridColumn Field="@nameof(SecurityEventLogDto.CreatedDateUtc)" HeaderText="Date" Width="170" Format="g" />
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+@code {
+    SfGrid<SecurityEventLogDto>? _grid;
+    SfToast? _toast;
+
+    List<SecurityEventLogDto> _items = [];
+    bool _loading;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string _searchTerm      = string.Empty;
+    string _eventTypeFilter = string.Empty;
+
+    readonly List<StatusOption> _eventTypeOptions =
+    [
+        new("", "All Event Types"),
+        new("Login",             "Login"),
+        new("Logout",            "Logout"),
+        new("LoginFailed",       "Login Failed"),
+        new("PasswordReset",     "Password Reset"),
+        new("MfaChallenge",      "MFA Challenge"),
+        new("PermissionDenied",  "Permission Denied"),
+        new("AccountLocked",     "Account Locked")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Audit", null),
+            new BreadcrumbService.BreadcrumbItem("Security Logs", "/platform/security-logs"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchSecurityEventLogsAsync(
+                searchTerm: _searchTerm,
+                eventTypeCode: _eventTypeFilter,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    void OnSearchKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") InvokeAsync(LoadAsync); }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    static string EventTypeBadgeCss(string type) => type switch
+    {
+        "Login"            => "um-badge--success",
+        "Logout"           => "um-badge--neutral",
+        "LoginFailed"      => "um-badge--danger",
+        "PasswordReset"    => "um-badge--warning",
+        "MfaChallenge"     => "um-badge--info",
+        "PermissionDenied" => "um-badge--danger",
+        "AccountLocked"    => "um-badge--danger",
+        _                  => "um-badge--neutral"
+    };
+
+    sealed record StatusOption(string Value, string Text);
+}

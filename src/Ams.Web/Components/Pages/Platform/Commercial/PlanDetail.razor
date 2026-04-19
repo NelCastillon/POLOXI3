@@ -1,0 +1,1181 @@
+@page "/platform/plans/{PlanId:guid}"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Plans
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>@(_plan?.PlanName ?? "Plan") — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@if (_loading)
+{
+    <div class="um-loading-overlay" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading plan…</span>
+    </div>
+}
+else if (_plan is null)
+{
+    <div class="td-not-found">
+        <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+        <p>Plan not found.</p>
+        <button class="um-btn um-btn-ghost" @onclick="GoToPlans">
+            Back to Plans
+        </button>
+    </div>
+}
+else
+{
+    <AppPageHeader Title="@_plan.PlanName"
+                   Subtitle="@($"{_plan.PlanCode} · {_plan.BillingFrequency}")"
+                   Icon="bi-award">
+        <Actions>
+            <button class="um-btn um-btn-ghost" @onclick="LoadAllAsync" title="Refresh">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenEdit">
+                <i class="bi bi-pencil" aria-hidden="true"></i> Edit Plan
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenClone">
+                <i class="bi bi-copy" aria-hidden="true"></i> Clone Plan
+            </button>
+            <button class="um-btn um-btn-primary" @onclick="OpenAddFeature">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Feature
+            </button>
+            <button class="um-btn um-btn-primary" @onclick="OpenAddLimit">
+                <i class="bi bi-sliders" aria-hidden="true"></i> Update Limits
+            </button>
+        </Actions>
+    </AppPageHeader>
+
+    <!-- Stats bar -->
+    <div class="pd-stats-bar">
+        @if (_plan.IsEnterprise)
+        {
+            <span class="td-stat-chip">
+                <i class="bi bi-building" aria-hidden="true"></i> Enterprise
+            </span>
+        }
+        <span class="td-stat-chip">
+            <i class="bi bi-currency-dollar" aria-hidden="true"></i> @_plan.BasePrice.ToString("N2") / @_plan.BillingFrequency
+        </span>
+        <span class="td-stat-chip">
+            <i class="bi bi-people" aria-hidden="true"></i> @_plan.IncludedUsers users
+        </span>
+        <span class="td-stat-chip">
+            <i class="bi bi-hdd" aria-hidden="true"></i> @_plan.IncludedStorageGb.ToString("N1") GB
+        </span>
+        <span class="td-stat-chip">
+            <i class="bi bi-lightning" aria-hidden="true"></i> @_plan.IncludedApiCallsPerDay.ToString("N0") API/day
+        </span>
+        <span class="td-stat-chip">
+            <i class="bi bi-calendar3" aria-hidden="true"></i> Created @_plan.CreatedDateUtc.ToString("d MMM yyyy")
+        </span>
+        @if (_plan.IsActive)
+        {
+            <span class="td-pill td-pill--success">Active</span>
+        }
+        else
+        {
+            <span class="td-pill td-pill--muted">Inactive</span>
+        }
+    </div>
+
+    <!-- Tabs: 0 Overview · 1 Features · 2 Limits · 3 Add-ons · 4 Audit -->
+    <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="OnTabChangedAsync">
+        <Tabs>
+
+            <!-- 0: Overview -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Overview" IconCss="bi bi-grid-1x2" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="tot-grid tot-grid--2">
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-award" aria-hidden="true"></i>
+                                    <span>Plan Details</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Plan Code</span>
+                                        <span class="tot-fv"><span class="tot-mono">@_plan.PlanCode</span></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Plan Name</span>
+                                        <span class="tot-fv"><strong>@_plan.PlanName</strong></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Billing Frequency</span>
+                                        <span class="tot-fv">@_plan.BillingFrequency</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Base Price</span>
+                                        <span class="tot-fv"><strong>@_plan.BasePrice.ToString("C2")</strong></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Enterprise</span>
+                                        <span class="tot-fv">
+                                            @if (_plan.IsEnterprise)
+                                            { <span class="td-pill td-pill--info"><i class="bi bi-building" aria-hidden="true"></i> Yes</span> }
+                                            else
+                                            { <span class="tot-muted">No</span> }
+                                        </span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Status</span>
+                                        <span class="tot-fv">
+                                            @if (_plan.IsActive)
+                                            { <span class="td-pill td-pill--success">Active</span> }
+                                            else
+                                            { <span class="td-pill td-pill--muted">Inactive</span> }
+                                        </span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Created</span>
+                                        <span class="tot-fv">@_plan.CreatedDateUtc.ToString("d MMM yyyy HH:mm")</span>
+                                    </div>
+                                    @if (_plan.ModifiedDateUtc.HasValue)
+                                    {
+                                        <div class="tot-field">
+                                            <span class="tot-fl">Last Modified</span>
+                                            <span class="tot-fv">@_plan.ModifiedDateUtc.Value.ToString("d MMM yyyy HH:mm")</span>
+                                        </div>
+                                    }
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="OpenEdit">
+                                        <i class="bi bi-pencil" aria-hidden="true"></i> Edit plan
+                                    </button>
+                                    <button class="tot-ql" @onclick="OpenClone">
+                                        <i class="bi bi-copy" aria-hidden="true"></i> Clone plan
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-bar-chart" aria-hidden="true"></i>
+                                    <span>Included Quotas</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Users</span>
+                                        <span class="tot-fv"><strong>@_plan.IncludedUsers.ToString("N0")</strong></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Storage</span>
+                                        <span class="tot-fv"><strong>@_plan.IncludedStorageGb.ToString("N1") GB</strong></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">API Calls / Day</span>
+                                        <span class="tot-fv"><strong>@_plan.IncludedApiCallsPerDay.ToString("N0")</strong></span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="() => OnTabChangedAsync(2)">
+                                        <i class="bi bi-sliders" aria-hidden="true"></i> Manage limits
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-list-check" aria-hidden="true"></i>
+                                    <span>Features (@_features.Count)</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    @if (_features.Count == 0)
+                                    {
+                                        <p class="tot-muted">No features defined yet.</p>
+                                    }
+                                    else
+                                    {
+                                        @foreach (var f in _features.Take(5))
+                                        {
+                                            <div class="tot-field">
+                                                <span class="tot-fl">@f.FeatureCode</span>
+                                                <span class="tot-fv">
+                                                    @if (f.IsIncluded)
+                                                    { <span class="td-pill td-pill--success">Included</span> }
+                                                    else
+                                                    { <span class="td-pill td-pill--muted">Excluded</span> }
+                                                </span>
+                                            </div>
+                                        }
+                                        @if (_features.Count > 5)
+                                        {
+                                            <p class="tot-muted pd-more-hint">+@(_features.Count - 5) more…</p>
+                                        }
+                                    }
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="() => OnTabChangedAsync(1)">
+                                        <i class="bi bi-list-check" aria-hidden="true"></i> View all features
+                                    </button>
+                                    <button class="tot-ql" @onclick="OpenAddFeature">
+                                        <i class="bi bi-plus-lg" aria-hidden="true"></i> Add feature
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-bag-plus" aria-hidden="true"></i>
+                                    <span>Add-Ons (@_addOns.Count)</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    @if (_addOns.Count == 0)
+                                    {
+                                        <p class="tot-muted">No add-ons defined yet.</p>
+                                    }
+                                    else
+                                    {
+                                        @foreach (var a in _addOns.Take(5))
+                                        {
+                                            <div class="tot-field">
+                                                <span class="tot-fl">@a.AddOnName</span>
+                                                <span class="tot-fv"><strong>@a.Price.ToString("C2")</strong> / @a.BillingFrequency</span>
+                                            </div>
+                                        }
+                                    }
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="() => OnTabChangedAsync(3)">
+                                        <i class="bi bi-bag-plus" aria-hidden="true"></i> Manage add-ons
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 1: Features -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Features" IconCss="bi bi-list-check" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">@_features.Count feature(s)</span>
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenAddFeature">
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Feature
+                            </button>
+                        </div>
+                        @if (_features.Count == 0)
+                        {
+                            <div class="pd-empty-state">
+                                <i class="bi bi-list-check" aria-hidden="true"></i>
+                                <p>No features defined for this plan.</p>
+                                <button class="um-btn um-btn-primary" @onclick="OpenAddFeature">Add First Feature</button>
+                            </div>
+                        }
+                        else
+                        {
+                            <SfGrid TValue="PlanFeatureDto"
+                                    DataSource="@_features"
+                                    AllowSorting="true"
+                                    EnableHover="true"
+                                    RowHeight="48">
+                                <GridColumns>
+                                    <GridColumn Field="@nameof(PlanFeatureDto.FeatureCode)" HeaderText="Feature Code" Width="160">
+                                        <Template>
+                                            @{ var row = (PlanFeatureDto)context; }
+                                            <span class="tot-mono">@row.FeatureCode</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(PlanFeatureDto.FeatureName)" HeaderText="Feature Name" MinWidth="160" />
+                                    <GridColumn Field="@nameof(PlanFeatureDto.IsIncluded)" HeaderText="Included" Width="120">
+                                        <Template>
+                                            @{ var row = (PlanFeatureDto)context; }
+                                            @if (row.IsIncluded)
+                                            { <span class="td-pill td-pill--success">Included</span> }
+                                            else
+                                            { <span class="td-pill td-pill--muted">Excluded</span> }
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(PlanFeatureDto.Notes)" HeaderText="Notes" MinWidth="160" />
+                                    <GridColumn HeaderText="" Width="100" AllowSorting="false">
+                                        <Template>
+                                            @{ var row = (PlanFeatureDto)context; }
+                                            <div class="td-row-actions">
+                                                <button class="um-btn um-btn-xs um-btn-danger" title="Remove" @onclick="() => ConfirmRemoveFeature(row)">
+                                                    <i class="bi bi-trash" aria-hidden="true"></i>
+                                                </button>
+                                            </div>
+                                        </Template>
+                                    </GridColumn>
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 2: Limits -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Limits" IconCss="bi bi-sliders" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">@_limits.Count limit(s)</span>
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenAddLimit">
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Limit
+                            </button>
+                        </div>
+                        @if (_limits.Count == 0)
+                        {
+                            <div class="pd-empty-state">
+                                <i class="bi bi-sliders" aria-hidden="true"></i>
+                                <p>No limits defined for this plan.</p>
+                                <button class="um-btn um-btn-primary" @onclick="OpenAddLimit">Add First Limit</button>
+                            </div>
+                        }
+                        else
+                        {
+                            <SfGrid TValue="PlanLimitDto"
+                                    DataSource="@_limits"
+                                    AllowSorting="true"
+                                    EnableHover="true"
+                                    RowHeight="48">
+                                <GridColumns>
+                                    <GridColumn Field="@nameof(PlanLimitDto.MetricTypeCode)" HeaderText="Metric" Width="160" />
+                                    <GridColumn Field="@nameof(PlanLimitDto.LimitValue)" HeaderText="Limit" Width="120">
+                                        <Template>
+                                            @{ var row = (PlanLimitDto)context; }
+                                            <strong>@row.LimitValue.ToString("N0")</strong>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(PlanLimitDto.LimitUnit)" HeaderText="Unit" Width="100" />
+                                    <GridColumn Field="@nameof(PlanLimitDto.PeriodCode)" HeaderText="Period" Width="110" />
+                                    <GridColumn Field="@nameof(PlanLimitDto.IsEnforced)" HeaderText="Enforced" Width="110">
+                                        <Template>
+                                            @{ var row = (PlanLimitDto)context; }
+                                            @if (row.IsEnforced)
+                                            { <span class="td-pill td-pill--danger">Enforced</span> }
+                                            else
+                                            { <span class="td-pill td-pill--muted">Advisory</span> }
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(PlanLimitDto.Notes)" HeaderText="Notes" MinWidth="120" />
+                                    <GridColumn HeaderText="" Width="140" AllowSorting="false">
+                                        <Template>
+                                            @{ var row = (PlanLimitDto)context; }
+                                            <div class="td-row-actions">
+                                                <button class="um-btn um-btn-xs um-btn-ghost" title="Edit" @onclick="() => OpenEditLimit(row)">
+                                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                                </button>
+                                                <button class="um-btn um-btn-xs um-btn-danger" title="Remove" @onclick="() => ConfirmRemoveLimit(row)">
+                                                    <i class="bi bi-trash" aria-hidden="true"></i>
+                                                </button>
+                                            </div>
+                                        </Template>
+                                    </GridColumn>
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 3: Add-ons -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Add-ons" IconCss="bi bi-bag-plus" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">@_addOns.Count add-on(s)</span>
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenAddAddOn">
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Add-on
+                            </button>
+                        </div>
+                        @if (_addOns.Count == 0)
+                        {
+                            <div class="pd-empty-state">
+                                <i class="bi bi-bag-plus" aria-hidden="true"></i>
+                                <p>No add-ons defined for this plan.</p>
+                                <button class="um-btn um-btn-primary" @onclick="OpenAddAddOn">Add First Add-on</button>
+                            </div>
+                        }
+                        else
+                        {
+                            <SfGrid TValue="PlanAddOnDto"
+                                    DataSource="@_addOns"
+                                    AllowSorting="true"
+                                    EnableHover="true"
+                                    RowHeight="48">
+                                <GridColumns>
+                                    <GridColumn Field="@nameof(PlanAddOnDto.AddOnCode)" HeaderText="Code" Width="130">
+                                        <Template>
+                                            @{ var row = (PlanAddOnDto)context; }
+                                            <span class="tot-mono">@row.AddOnCode</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(PlanAddOnDto.AddOnName)" HeaderText="Name" MinWidth="140" />
+                                    <GridColumn Field="@nameof(PlanAddOnDto.Price)" HeaderText="Price" Width="120">
+                                        <Template>
+                                            @{ var row = (PlanAddOnDto)context; }
+                                            <strong>@row.Price.ToString("C2")</strong>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(PlanAddOnDto.BillingFrequency)" HeaderText="Billing" Width="120" />
+                                    <GridColumn Field="@nameof(PlanAddOnDto.Description)" HeaderText="Description" MinWidth="140" />
+                                    <GridColumn Field="@nameof(PlanAddOnDto.IsActive)" HeaderText="Active" Width="100">
+                                        <Template>
+                                            @{ var row = (PlanAddOnDto)context; }
+                                            @if (row.IsActive)
+                                            { <span class="td-pill td-pill--success">Active</span> }
+                                            else
+                                            { <span class="td-pill td-pill--muted">Inactive</span> }
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn HeaderText="" Width="100" AllowSorting="false">
+                                        <Template>
+                                            @{ var row = (PlanAddOnDto)context; }
+                                            <div class="td-row-actions">
+                                                <button class="um-btn um-btn-xs um-btn-danger" title="Remove" @onclick="() => ConfirmRemoveAddOn(row)">
+                                                    <i class="bi bi-trash" aria-hidden="true"></i>
+                                                </button>
+                                            </div>
+                                        </Template>
+                                    </GridColumn>
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 4: Audit -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Audit" IconCss="bi bi-journal-text" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">Audit trail for this plan</span>
+                            <a class="um-btn um-btn-ghost um-btn-sm" href="/platform/audit?entityName=Commercial.Plan&entityId=@PlanId" target="_blank">
+                                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open in Audit Log
+                            </a>
+                        </div>
+                        @if (_auditLoading)
+                        {
+                            <div class="um-loading-overlay" aria-live="polite">
+                                <div class="um-spinner" aria-hidden="true"></div>
+                                <span>Loading audit entries…</span>
+                            </div>
+                        }
+                        else if (_auditItems.Count == 0)
+                        {
+                            <div class="pd-empty-state">
+                                <i class="bi bi-journal-text" aria-hidden="true"></i>
+                                <p>No audit entries found for this plan.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <SfGrid TValue="AuditLogDto"
+                                    DataSource="@_auditItems"
+                                    AllowSorting="true"
+                                    EnableHover="true"
+                                    RowHeight="48">
+                                <GridColumns>
+                                    <GridColumn Field="@nameof(AuditLogDto.PerformedDateUtc)" HeaderText="Date" Width="160" Format="g" />
+                                    <GridColumn Field="@nameof(AuditLogDto.EventTypeCode)" HeaderText="Event" Width="140" />
+                                    <GridColumn Field="@nameof(AuditLogDto.ActionName)" HeaderText="Action" MinWidth="160" />
+                                    <GridColumn Field="@nameof(AuditLogDto.PerformedByUserId)" HeaderText="By" Width="140">
+                                        <Template>
+                                            @{ var row = (AuditLogDto)context; }
+                                            @if (row.PerformedByUserId.HasValue)
+                                            { <span class="tot-mono">@row.PerformedByUserId.Value.ToString("N")[..8]…</span> }
+                                            else
+                                            { <span class="tot-muted">System</span> }
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(AuditLogDto.IpAddress)" HeaderText="IP" Width="130" />
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+        </Tabs>
+    </AppDetailTabs>
+}
+
+<!-- ══════════════════════════════════════════════════
+     Edit Plan Dialog
+══════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showEditDialog" Width="560px" IsModal="true" ShowCloseIcon="true" Header="Edit Plan" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="form-row">
+                    <label class="form-label">Plan Name <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_editForm.PlanName" Placeholder="e.g. Enterprise Plan" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Billing Frequency</label>
+                    <SfDropDownList TValue="string" TItem="string"
+                                    DataSource="_frequencyOptions"
+                                    @bind-Value="_editForm.BillingFrequency" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Base Price</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_editForm.BasePrice" Min="0" Format="N2" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Included Users</label>
+                    <SfNumericTextBox TValue="int" @bind-Value="_editForm.IncludedUsers" Min="0" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Included Storage (GB)</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_editForm.IncludedStorageGb" Min="0" Format="N1" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Included API Calls / Day</label>
+                    <SfNumericTextBox TValue="int" @bind-Value="_editForm.IncludedApiCallsPerDay" Min="0" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Enterprise Plan</label>
+                    <SfSwitch @bind-Checked="_editForm.IsEnterprise" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showEditDialog = false" />
+        <DialogButton Content="Save Changes" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmEditAsync" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════
+     Clone Plan Dialog
+══════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showCloneDialog" Width="480px" IsModal="true" ShowCloseIcon="true" Header="Clone Plan" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Cloning <strong>@_plan?.PlanName</strong>. Enter details for the new plan:</p>
+                <div class="form-row">
+                    <label class="form-label">New Plan Code <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_cloneCode" Placeholder="e.g. ENTERPRISE_V2" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">New Plan Name <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_cloneName" Placeholder="e.g. Enterprise Plan V2" />
+                </div>
+                <p class="td-hint">The cloned plan will be created as <strong>inactive</strong>.</p>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showCloneDialog = false" />
+        <DialogButton Content="Clone Plan" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmCloneAsync" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════
+     Add Feature Dialog
+══════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showAddFeatureDialog" Width="500px" IsModal="true" ShowCloseIcon="true" Header="Add Feature" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="form-row">
+                    <label class="form-label">Feature Code <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_featureForm.FeatureCode" Placeholder="e.g. CRM_MODULE" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Feature Name <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_featureForm.FeatureName" Placeholder="e.g. CRM Module" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Included</label>
+                    <SfSwitch @bind-Checked="_featureForm.IsIncluded" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Notes</label>
+                    <SfTextBox @bind-Value="_featureForm.Notes" Multiline="true" Placeholder="Optional notes…" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showAddFeatureDialog = false" />
+        <DialogButton Content="Add Feature" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmAddFeatureAsync" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════
+     Remove Feature Confirm Dialog
+══════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showRemoveFeatureDialog" Width="440px" IsModal="true" ShowCloseIcon="true" Header="Remove Feature" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="td-warning-notice">
+                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                    <span>Remove feature <strong>@_targetFeature?.FeatureName</strong> from this plan?</span>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showRemoveFeatureDialog = false" />
+        <DialogButton Content="Remove" CssClass="um-btn um-btn-danger" OnClick="ConfirmRemoveFeatureAsync" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════
+     Add / Edit Limit Dialog
+══════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showLimitDialog" Width="500px" IsModal="true" ShowCloseIcon="true" Header="@_limitDialogTitle" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                @if (!_isEditLimit)
+                {
+                    <div class="form-row">
+                        <label class="form-label">Metric Type <span class="form-required">*</span></label>
+                        <SfDropDownList TValue="string" TItem="string"
+                                        DataSource="_metricOptions"
+                                        @bind-Value="_limitForm.MetricTypeCode"
+                                        Placeholder="Select metric…" />
+                    </div>
+                    <div class="form-row">
+                        <label class="form-label">Unit</label>
+                        <SfDropDownList TValue="string" TItem="string"
+                                        DataSource="_unitOptions"
+                                        @bind-Value="_limitForm.LimitUnit" />
+                    </div>
+                    <div class="form-row">
+                        <label class="form-label">Period</label>
+                        <SfDropDownList TValue="string" TItem="string"
+                                        DataSource="_periodOptions"
+                                        @bind-Value="_limitForm.PeriodCode" />
+                    </div>
+                }
+                <div class="form-row">
+                    <label class="form-label">Limit Value <span class="form-required">*</span></label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_limitForm.LimitValue" Min="0" Format="N0" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Enforced</label>
+                    <SfSwitch @bind-Checked="_limitForm.IsEnforced" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Notes</label>
+                    <SfTextBox @bind-Value="_limitForm.Notes" Multiline="true" Placeholder="Optional notes…" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showLimitDialog = false" />
+        <DialogButton Content="@(_isEditLimit ? "Save Changes" : "Add Limit")" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmLimitAsync" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════
+     Remove Limit Confirm Dialog
+══════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showRemoveLimitDialog" Width="440px" IsModal="true" ShowCloseIcon="true" Header="Remove Limit" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="td-warning-notice">
+                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                    <span>Remove the <strong>@_targetLimit?.MetricTypeCode</strong> limit from this plan?</span>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showRemoveLimitDialog = false" />
+        <DialogButton Content="Remove" CssClass="um-btn um-btn-danger" OnClick="ConfirmRemoveLimitAsync" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════
+     Add Add-on Dialog
+══════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showAddOnDialog" Width="520px" IsModal="true" ShowCloseIcon="true" Header="Add Add-on" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="form-row">
+                    <label class="form-label">Add-on Code <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_addOnForm.AddOnCode" Placeholder="e.g. EXTRA_STORAGE" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Add-on Name <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_addOnForm.AddOnName" Placeholder="e.g. Extra Storage" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Price</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_addOnForm.Price" Min="0" Format="N2" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Billing Frequency</label>
+                    <SfDropDownList TValue="string" TItem="string"
+                                    DataSource="_frequencyOptions"
+                                    @bind-Value="_addOnForm.BillingFrequency" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Description</label>
+                    <SfTextBox @bind-Value="_addOnForm.Description" Multiline="true" Placeholder="Optional description…" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showAddOnDialog = false" />
+        <DialogButton Content="Add Add-on" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmAddOnAsync" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════
+     Remove Add-on Confirm Dialog
+══════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showRemoveAddOnDialog" Width="440px" IsModal="true" ShowCloseIcon="true" Header="Remove Add-on" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="td-warning-notice">
+                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                    <span>Remove add-on <strong>@_targetAddOn?.AddOnName</strong> from this plan?</span>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showRemoveAddOnDialog = false" />
+        <DialogButton Content="Remove" CssClass="um-btn um-btn-danger" OnClick="ConfirmRemoveAddOnAsync" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid PlanId { get; set; }
+
+    SfToast? _toast;
+
+    bool     _loading      = true;
+    bool     _auditLoading = false;
+    bool     _saving;
+    int      _tab;
+    PlanDto? _plan;
+
+    List<PlanFeatureDto> _features  = [];
+    List<PlanLimitDto>   _limits    = [];
+    List<PlanAddOnDto>   _addOns    = [];
+    List<AuditLogDto>    _auditItems = [];
+
+    // ── Options ───────────────────────────────────────────────
+    static readonly List<string> _frequencyOptions = ["Monthly", "Annual", "Quarterly", "OneTime"];
+    static readonly List<string> _metricOptions    = ["Users", "StorageGb", "ApiCallsPerDay", "Branches", "Reports", "Workflows", "Documents"];
+    static readonly List<string> _unitOptions      = ["Count", "GB", "MB", "Requests", "Percent"];
+    static readonly List<string> _periodOptions    = ["Daily", "Monthly", "Annual", "Unlimited"];
+
+    // ── Edit form ────────────────────────────────────────────
+    bool          _showEditDialog;
+    PlanFormModel _editForm = new();
+
+    // ── Clone ────────────────────────────────────────────────
+    bool   _showCloneDialog;
+    string _cloneCode = string.Empty;
+    string _cloneName = string.Empty;
+
+    // ── Feature form ─────────────────────────────────────────
+    bool              _showAddFeatureDialog;
+    bool              _showRemoveFeatureDialog;
+    PlanFeatureDto?   _targetFeature;
+    FeatureFormModel  _featureForm = new();
+
+    // ── Limit form ───────────────────────────────────────────
+    bool           _showLimitDialog;
+    bool           _showRemoveLimitDialog;
+    bool           _isEditLimit;
+    string         _limitDialogTitle = "Add Limit";
+    PlanLimitDto?  _targetLimit;
+    LimitFormModel _limitForm = new();
+
+    // ── Add-on form ──────────────────────────────────────────
+    bool          _showAddOnDialog;
+    bool          _showRemoveAddOnDialog;
+    PlanAddOnDto? _targetAddOn;
+    AddOnFormModel _addOnForm = new();
+
+    // ─────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Plans", "/platform/plans"),
+            new BreadcrumbService.BreadcrumbItem("Plan Detail"));
+        await LoadAllAsync();
+    }
+
+    async Task LoadAllAsync()
+    {
+        _loading = true;
+        try
+        {
+            _plan = await Api.GetPlanByIdAsync(PlanId);
+            if (_plan is not null)
+            {
+                await Task.WhenAll(LoadFeaturesAsync(), LoadLimitsAsync(), LoadAddOnsAsync());
+            }
+        }
+        finally { _loading = false; }
+    }
+
+    async Task LoadFeaturesAsync()
+    {
+        var rows = await Api.GetPlanFeaturesAsync(PlanId);
+        _features = rows?.ToList() ?? [];
+    }
+
+    async Task LoadLimitsAsync()
+    {
+        var rows = await Api.GetPlanLimitsAsync(PlanId);
+        _limits = rows?.ToList() ?? [];
+    }
+
+    async Task LoadAddOnsAsync()
+    {
+        var rows = await Api.GetPlanAddOnsAsync(PlanId);
+        _addOns = rows?.ToList() ?? [];
+    }
+
+    async Task LoadAuditAsync()
+    {
+        _auditLoading = true;
+        try
+        {
+            var result = await Api.SearchAuditLogsAsync(
+                entityName: "Commercial.Plan",
+                searchTerm: PlanId.ToString("N"),
+                pageSize: 50);
+            _auditItems = result?.Items?.ToList() ?? [];
+        }
+        catch { _auditItems = []; }
+        finally { _auditLoading = false; }
+    }
+
+    async Task OnTabChangedAsync(int index)
+    {
+        _tab = index;
+        if (index == 4 && _auditItems.Count == 0)
+            await LoadAuditAsync();
+        StateHasChanged();
+    }
+
+    // ── Edit ─────────────────────────────────────────────────
+    void OpenEdit()
+    {
+        if (_plan is null) return;
+        _editForm = new PlanFormModel
+        {
+            PlanName               = _plan.PlanName,
+            BillingFrequency       = _plan.BillingFrequency,
+            BasePrice              = _plan.BasePrice,
+            IncludedUsers          = _plan.IncludedUsers,
+            IncludedStorageGb      = _plan.IncludedStorageGb,
+            IncludedApiCallsPerDay = _plan.IncludedApiCallsPerDay,
+            IsEnterprise           = _plan.IsEnterprise,
+        };
+        _showEditDialog = true;
+    }
+
+    async Task ConfirmEditAsync()
+    {
+        if (_plan is null || string.IsNullOrWhiteSpace(_editForm.PlanName)) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdatePlanAsync(PlanId, new UpdatePlanRequest
+            {
+                PlanName               = _editForm.PlanName,
+                BillingFrequency       = _editForm.BillingFrequency,
+                BasePrice              = _editForm.BasePrice,
+                IncludedUsers          = _editForm.IncludedUsers,
+                IncludedStorageGb      = _editForm.IncludedStorageGb,
+                IncludedApiCallsPerDay = _editForm.IncludedApiCallsPerDay,
+                IsEnterprise           = _editForm.IsEnterprise,
+            });
+            _showEditDialog = false;
+            await ShowToastAsync("Plan updated.", "Success");
+            await LoadAllAsync();
+        }
+        catch { await ShowToastAsync("Failed to update plan.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    // ── Clone ────────────────────────────────────────────────
+    void OpenClone()
+    {
+        if (_plan is null) return;
+        _cloneCode = _plan.PlanCode + "_COPY";
+        _cloneName = _plan.PlanName + " (Copy)";
+        _showCloneDialog = true;
+    }
+
+    async Task ConfirmCloneAsync()
+    {
+        if (_plan is null || string.IsNullOrWhiteSpace(_cloneCode) || string.IsNullOrWhiteSpace(_cloneName)) return;
+        _saving = true;
+        try
+        {
+            await Api.ClonePlanAsync(PlanId, _cloneCode.Trim().ToUpperInvariant(), _cloneName.Trim());
+            _showCloneDialog = false;
+            await ShowToastAsync($"Plan cloned as \"{_cloneName.Trim()}\".", "Success");
+            Nav.NavigateTo("/platform/plans");
+        }
+        catch { await ShowToastAsync("Failed to clone plan.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    // ── Features ─────────────────────────────────────────────
+    void OpenAddFeature()
+    {
+        _featureForm = new FeatureFormModel { IsIncluded = true };
+        _showAddFeatureDialog = true;
+    }
+
+    async Task ConfirmAddFeatureAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_featureForm.FeatureCode) || string.IsNullOrWhiteSpace(_featureForm.FeatureName)) return;
+        _saving = true;
+        try
+        {
+            await Api.AddPlanFeatureAsync(PlanId, new AddPlanFeatureRequest
+            {
+                PlanId      = PlanId,
+                FeatureCode = _featureForm.FeatureCode.Trim().ToUpperInvariant(),
+                FeatureName = _featureForm.FeatureName.Trim(),
+                IsIncluded  = _featureForm.IsIncluded,
+                Notes       = _featureForm.Notes,
+            });
+            _showAddFeatureDialog = false;
+            await ShowToastAsync("Feature added.", "Success");
+            await LoadFeaturesAsync();
+        }
+        catch { await ShowToastAsync("Failed to add feature.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmRemoveFeature(PlanFeatureDto row)
+    {
+        _targetFeature = row;
+        _showRemoveFeatureDialog = true;
+    }
+
+    async Task ConfirmRemoveFeatureAsync()
+    {
+        if (_targetFeature is null) return;
+        _saving = true;
+        try
+        {
+            await Api.RemovePlanFeatureAsync(PlanId, _targetFeature.PlanFeatureId);
+            _showRemoveFeatureDialog = false;
+            await ShowToastAsync("Feature removed.", "Success");
+            await LoadFeaturesAsync();
+        }
+        catch { await ShowToastAsync("Failed to remove feature.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    // ── Limits ───────────────────────────────────────────────
+    void OpenAddLimit()
+    {
+        _limitForm = new LimitFormModel { LimitUnit = "Count", PeriodCode = "Monthly", IsEnforced = true };
+        _isEditLimit = false;
+        _limitDialogTitle = "Add Limit";
+        _showLimitDialog = true;
+    }
+
+    void OpenEditLimit(PlanLimitDto row)
+    {
+        _targetLimit = row;
+        _limitForm = new LimitFormModel
+        {
+            MetricTypeCode = row.MetricTypeCode,
+            LimitValue     = row.LimitValue,
+            LimitUnit      = row.LimitUnit,
+            PeriodCode     = row.PeriodCode,
+            IsEnforced     = row.IsEnforced,
+            Notes          = row.Notes,
+        };
+        _isEditLimit = true;
+        _limitDialogTitle = $"Edit Limit — {row.MetricTypeCode}";
+        _showLimitDialog = true;
+    }
+
+    async Task ConfirmLimitAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_limitForm.MetricTypeCode)) return;
+        _saving = true;
+        try
+        {
+            if (_isEditLimit && _targetLimit is not null)
+            {
+                await Api.UpdatePlanLimitAsync(PlanId, _targetLimit.PlanLimitId, new UpdatePlanLimitRequest
+                {
+                    PlanLimitId = _targetLimit.PlanLimitId,
+                    LimitValue  = _limitForm.LimitValue,
+                    IsEnforced  = _limitForm.IsEnforced,
+                    Notes       = _limitForm.Notes,
+                });
+                await ShowToastAsync("Limit updated.", "Success");
+            }
+            else
+            {
+                await Api.AddPlanLimitAsync(PlanId, new AddPlanLimitRequest
+                {
+                    PlanId         = PlanId,
+                    MetricTypeCode = _limitForm.MetricTypeCode,
+                    LimitValue     = _limitForm.LimitValue,
+                    LimitUnit      = _limitForm.LimitUnit,
+                    PeriodCode     = _limitForm.PeriodCode,
+                    IsEnforced     = _limitForm.IsEnforced,
+                    Notes          = _limitForm.Notes,
+                });
+                await ShowToastAsync("Limit added.", "Success");
+            }
+            _showLimitDialog = false;
+            await LoadLimitsAsync();
+        }
+        catch { await ShowToastAsync("Failed to save limit.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmRemoveLimit(PlanLimitDto row)
+    {
+        _targetLimit = row;
+        _showRemoveLimitDialog = true;
+    }
+
+    async Task ConfirmRemoveLimitAsync()
+    {
+        if (_targetLimit is null) return;
+        _saving = true;
+        try
+        {
+            await Api.RemovePlanLimitAsync(PlanId, _targetLimit.PlanLimitId);
+            _showRemoveLimitDialog = false;
+            await ShowToastAsync("Limit removed.", "Success");
+            await LoadLimitsAsync();
+        }
+        catch { await ShowToastAsync("Failed to remove limit.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    // ── Add-ons ──────────────────────────────────────────────
+    void OpenAddAddOn()
+    {
+        _addOnForm = new AddOnFormModel { BillingFrequency = "Monthly" };
+        _showAddOnDialog = true;
+    }
+
+    async Task ConfirmAddOnAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_addOnForm.AddOnCode) || string.IsNullOrWhiteSpace(_addOnForm.AddOnName)) return;
+        _saving = true;
+        try
+        {
+            await Api.AddPlanAddOnAsync(PlanId, new AddPlanAddOnRequest
+            {
+                PlanId           = PlanId,
+                AddOnCode        = _addOnForm.AddOnCode.Trim().ToUpperInvariant(),
+                AddOnName        = _addOnForm.AddOnName.Trim(),
+                Price            = _addOnForm.Price,
+                BillingFrequency = _addOnForm.BillingFrequency,
+                Description      = _addOnForm.Description,
+            });
+            _showAddOnDialog = false;
+            await ShowToastAsync("Add-on created.", "Success");
+            await LoadAddOnsAsync();
+        }
+        catch { await ShowToastAsync("Failed to create add-on.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmRemoveAddOn(PlanAddOnDto row)
+    {
+        _targetAddOn = row;
+        _showRemoveAddOnDialog = true;
+    }
+
+    async Task ConfirmRemoveAddOnAsync()
+    {
+        if (_targetAddOn is null) return;
+        _saving = true;
+        try
+        {
+            await Api.RemovePlanAddOnAsync(PlanId, _targetAddOn.PlanAddOnId);
+            _showRemoveAddOnDialog = false;
+            await ShowToastAsync("Add-on removed.", "Success");
+            await LoadAddOnsAsync();
+        }
+        catch { await ShowToastAsync("Failed to remove add-on.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    // ── Toast ─────────────────────────────────────────────────
+    async Task ShowToastAsync(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content         = message,
+            CssClass        = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            ShowCloseButton = true
+        });
+    }
+
+    void GoToPlans() => Nav.NavigateTo("/platform/plans");
+
+    // ── Local form models ─────────────────────────────────────
+    sealed class PlanFormModel
+    {
+        public string  PlanName               { get; set; } = string.Empty;
+        public string  BillingFrequency       { get; set; } = "Monthly";
+        public decimal BasePrice              { get; set; }
+        public int     IncludedUsers          { get; set; }
+        public decimal IncludedStorageGb      { get; set; }
+        public int     IncludedApiCallsPerDay { get; set; }
+        public bool    IsEnterprise           { get; set; }
+    }
+
+    sealed class FeatureFormModel
+    {
+        public string FeatureCode { get; set; } = string.Empty;
+        public string FeatureName { get; set; } = string.Empty;
+        public bool   IsIncluded  { get; set; } = true;
+        public string Notes       { get; set; } = string.Empty;
+    }
+
+    sealed class LimitFormModel
+    {
+        public string  MetricTypeCode { get; set; } = string.Empty;
+        public decimal LimitValue     { get; set; }
+        public string  LimitUnit      { get; set; } = "Count";
+        public string  PeriodCode     { get; set; } = "Monthly";
+        public bool    IsEnforced     { get; set; } = true;
+        public string  Notes          { get; set; } = string.Empty;
+    }
+
+    sealed class AddOnFormModel
+    {
+        public string  AddOnCode        { get; set; } = string.Empty;
+        public string  AddOnName        { get; set; } = string.Empty;
+        public decimal Price             { get; set; }
+        public string  BillingFrequency { get; set; } = "Monthly";
+        public string  Description      { get; set; } = string.Empty;
+    }
+}

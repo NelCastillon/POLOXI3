@@ -1,0 +1,273 @@
+@page "/platform/tenants/{TenantId:guid}/changes"
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Tenant Change Log — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Tenant Change Log"
+               Subtitle="@($"Change history for tenant {TenantId.ToString("N")[..8]}…")"
+               Icon="bi-clock-history">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync" title="Export History">
+            <i class="bi bi-download" aria-hidden="true"></i> Export History
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by section, field, value…" CssClass="td-filter-input" @onkeyup="OnSearchKeyUp" />
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_sectionFilter"
+                        DataSource="@_sectionOptions"
+                        Placeholder="All Sections"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfDatePicker TValue="DateTime?" @bind-Value="_fromDate" Placeholder="From date" CssClass="td-filter-date" Format="yyyy-MM-dd" />
+        <SfDatePicker TValue="DateTime?" @bind-Value="_toDate" Placeholder="To date" CssClass="td-filter-date" Format="yyyy-MM-dd" />
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="ApplyFilters">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters">
+            <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading change history…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="FieldChangeLogDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(FieldChangeLogDto.ChangedDateUtc)" HeaderText="Timestamp" Width="170" Format="g" />
+            <GridColumn Field="@nameof(FieldChangeLogDto.ChangedByUserId)" HeaderText="Changed By" Width="150">
+                <Template>
+                    @{ var cb = (FieldChangeLogDto)context; }
+                    <span class="td-mono">@(cb.ChangedByUserId?.ToString("N")[..8] ?? "—")…</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(FieldChangeLogDto.EntityName)" HeaderText="Section" Width="160">
+                <Template>
+                    @{ var s = (FieldChangeLogDto)context; }
+                    <span class="td-section-badge">@FormatSection(s.EntityName)</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(FieldChangeLogDto.FieldName)" HeaderText="Action" Width="160">
+                <Template>
+                    @{ var ac = (FieldChangeLogDto)context; }
+                    <span>@ac.FieldName</span>
+                    @if (!string.IsNullOrEmpty(ac.ChangeSource))
+                    {
+                        <span class="td-source-tag">@ac.ChangeSource</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(FieldChangeLogDto.OldValue)" HeaderText="Old Value" MinWidth="160">
+                <Template>
+                    @{ var ov = (FieldChangeLogDto)context; }
+                    <span class="td-value-cell td-value-old">@(string.IsNullOrEmpty(ov.OldValue) ? "—" : Truncate(ov.OldValue, 60))</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(FieldChangeLogDto.NewValue)" HeaderText="New Value" MinWidth="160">
+                <Template>
+                    @{ var nv = (FieldChangeLogDto)context; }
+                    <span class="td-value-cell td-value-new">@(string.IsNullOrEmpty(nv.NewValue) ? "—" : Truncate(nv.NewValue, 60))</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Actions" Width="160" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
+                <Template>
+                    @{ var row = (FieldChangeLogDto)context; }
+                    <button class="um-btn um-btn-ghost um-btn-xs" title="Compare Changes" @onclick="() => ShowCompare(row)">
+                        <i class="bi bi-arrows-expand"></i>
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" title="Open Related Audit Entry" @onclick="() => OpenAuditEntry(row)">
+                        <i class="bi bi-box-arrow-up-right"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+@* ── Compare Changes Dialog ───────────────────────────────── *@
+<SfDialog @bind-Visible="_compareVisible" Header="Compare Changes" Width="700px" IsModal="true" ShowCloseIcon="true" CssClass="um-dialog">
+    <DialogTemplates>
+        <Content>
+            @if (_selected is not null)
+            {
+                <div class="td-compare-meta">
+                    <div class="td-detail-grid">
+                        <div class="td-detail-label">Section</div>
+                        <div class="td-detail-value">@FormatSection(_selected.EntityName)</div>
+                        <div class="td-detail-label">Field</div>
+                        <div class="td-detail-value">@_selected.FieldName</div>
+                        <div class="td-detail-label">Changed By</div>
+                        <div class="td-detail-value td-mono">@(_selected.ChangedByUserId?.ToString() ?? "—")</div>
+                        <div class="td-detail-label">Timestamp</div>
+                        <div class="td-detail-value">@_selected.ChangedDateUtc.ToString("g")</div>
+                        <div class="td-detail-label">Source</div>
+                        <div class="td-detail-value">@(_selected.ChangeSource ?? "—")</div>
+                        <div class="td-detail-label">IP Address</div>
+                        <div class="td-detail-value">@(_selected.IpAddress ?? "—")</div>
+                    </div>
+                </div>
+                <div class="td-compare-container">
+                    <div class="td-compare-pane td-compare-old">
+                        <h6 class="td-compare-heading"><i class="bi bi-dash-circle"></i> Old Value</h6>
+                        <pre class="td-compare-value">@(string.IsNullOrEmpty(_selected.OldValue) ? "(empty)" : _selected.OldValue)</pre>
+                    </div>
+                    <div class="td-compare-pane td-compare-new">
+                        <h6 class="td-compare-heading"><i class="bi bi-plus-circle"></i> New Value</h6>
+                        <pre class="td-compare-value">@(string.IsNullOrEmpty(_selected.NewValue) ? "(empty)" : _selected.NewValue)</pre>
+                    </div>
+                </div>
+            }
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid TenantId { get; set; }
+
+    SfGrid<FieldChangeLogDto>? _grid;
+    SfToast? _toast;
+
+    List<FieldChangeLogDto> _items = [];
+    bool _loading;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string _searchTerm    = string.Empty;
+    string _sectionFilter = string.Empty;
+    DateTime? _fromDate;
+    DateTime? _toDate;
+
+    FieldChangeLogDto? _selected;
+    bool _compareVisible;
+
+    readonly List<FilterOption> _sectionOptions =
+    [
+        new("", "All Sections"),
+        new("Core.Tenant", "Tenant"),
+        new("Core.TenantBranding", "Branding"),
+        new("Core.TenantFeature", "Features"),
+        new("Core.TenantDomain", "Domains"),
+        new("IAM.User", "Users"),
+        new("IAM.Role", "Roles"),
+        new("Commercial.Subscription", "Subscription"),
+        new("Core.ConfigurationSetting", "Settings")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Tenants", "/platform/tenants"),
+            new BreadcrumbService.BreadcrumbItem("Change Log", $"/platform/tenants/{TenantId}/changes"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchFieldChangeLogsAsync(
+                tenantId: TenantId,
+                searchTerm: _searchTerm,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    async Task ApplyFilters()
+    {
+        _pageNumber = 1;
+        await LoadAsync();
+    }
+
+    async Task ClearFilters()
+    {
+        _searchTerm = string.Empty;
+        _sectionFilter = string.Empty;
+        _fromDate = null;
+        _toDate = null;
+        _pageNumber = 1;
+        await LoadAsync();
+    }
+
+    void OnSearchKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") InvokeAsync(LoadAsync); }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    void ShowCompare(FieldChangeLogDto row)
+    {
+        _selected = row;
+        _compareVisible = true;
+    }
+
+    void OpenAuditEntry(FieldChangeLogDto row)
+    {
+        Nav.NavigateTo($"/platform/audit?entity={Uri.EscapeDataString(row.EntityName)}&entityId={row.EntityId}");
+    }
+
+    async Task ExportAsync()
+    {
+        if (!_items.Any())
+        {
+            if (_toast is not null)
+                await _toast.ShowAsync(new() { Title = "Export", Content = "No data to export.", CssClass = "e-toast-warning" });
+            return;
+        }
+
+        if (_toast is not null)
+            await _toast.ShowAsync(new() { Title = "Export", Content = $"Exporting {_totalCount} change records…", CssClass = "e-toast-info" });
+    }
+
+    static string FormatSection(string entityName)
+    {
+        if (string.IsNullOrEmpty(entityName)) return "—";
+        var dot = entityName.LastIndexOf('.');
+        return dot >= 0 ? entityName[(dot + 1)..] : entityName;
+    }
+
+    static string Truncate(string value, int maxLength) =>
+        value.Length > maxLength ? string.Concat(value.AsSpan(0, maxLength), "…") : value;
+
+    sealed record FilterOption(string Value, string Text);
+}

@@ -54,6 +54,7 @@ public sealed class DatabaseMigrator
         new("0014_IAM_SodConflict_create", Migration0014_IamSodConflictCreate),
         new("0015_Compliance_PolicyDocument_create", Migration0015_CompliancePolicyDocumentCreate),
         new("0016_Compliance_PolicyAudience_create", Migration0016_CompliancePolicyAudienceCreate),
+        new("0017_Core_Tenant_registry_columns",   Migration0017_CoreTenantRegistryColumns),
     ];
 
     // ── 0001 — Add extended profile/security columns to IAM.[User] ────
@@ -802,6 +803,27 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Complianc
 
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Compliance.PolicyAudience') AND name = N'IsDeleted')
     ALTER TABLE Compliance.PolicyAudience ADD IsDeleted BIT NOT NULL DEFAULT 0;
+";
+
+    // ── 0017 — Add registry columns to Core.Tenant ────────────────────
+    private const string Migration0017_CoreTenantRegistryColumns = @"
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Core.Tenant') AND name = N'StatusCode')
+    ALTER TABLE Core.Tenant ADD StatusCode NVARCHAR(50) NOT NULL DEFAULT 'Active';
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Core.Tenant') AND name = N'RegionCode')
+    ALTER TABLE Core.Tenant ADD RegionCode NVARCHAR(100) NOT NULL DEFAULT '';
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Core.Tenant') AND name = N'IsolationMode')
+    ALTER TABLE Core.Tenant ADD IsolationMode NVARCHAR(50) NOT NULL DEFAULT 'Shared';
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Core.Tenant') AND name = N'PrimaryDomain')
+    ALTER TABLE Core.Tenant ADD PrimaryDomain NVARCHAR(253) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Core.Tenant') AND name = N'ActiveUsers')
+    ALTER TABLE Core.Tenant ADD ActiveUsers INT NOT NULL DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Core.Tenant') AND name = N'GoLiveDateUtc')
+    ALTER TABLE Core.Tenant ADD GoLiveDateUtc DATETIME2 NULL;
 ";
 
     // ── Internals ─────────────────────────────────────────────────────

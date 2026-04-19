@@ -1,0 +1,519 @@
+@page "/platform/tenants/{TenantId:guid}/deployment"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.TenantDeploymentAssignments
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Region &amp; Deployment — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@if (_loading)
+{
+    <div class="tda-loading">
+        <span class="um-spin tda-loading-spin" aria-hidden="true"></span>
+        <span>Loading deployment assignment…</span>
+    </div>
+}
+else
+{
+    <AppPageHeader Title="Region &amp; Deployment"
+                   Subtitle="@_tenantLabel"
+                   Icon="bi-diagram-3">
+        <Actions>
+            <button class="um-btn um-btn-ghost" @onclick="NavigateToTenant">
+                <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Tenant
+            </button>
+            @if (_assignment is not null && !_editing)
+            {
+                <button class="um-btn um-btn-ghost" @onclick="StartEdit">
+                    <i class="bi bi-pencil" aria-hidden="true"></i> Edit Assignment
+                </button>
+                <button class="um-btn um-btn-ghost text-danger" @onclick="OpenDeleteConfirm">
+                    <i class="bi bi-trash" aria-hidden="true"></i> Remove Assignment
+                </button>
+            }
+            @if (_editing)
+            {
+                <button class="um-btn um-btn-ghost" @onclick="CancelEdit">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i> Cancel
+                </button>
+            }
+        </Actions>
+    </AppPageHeader>
+
+    @if (_assignment is null && !_editing)
+    {
+        <div class="tda-empty-state">
+            <i class="bi bi-diagram-3 tda-empty-icon" aria-hidden="true"></i>
+            <h3>No deployment assignment</h3>
+            <p>This tenant has not been assigned to a region or deployment stamp yet.</p>
+            <button class="um-btn um-btn-primary" @onclick="StartCreate">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i> Create Assignment
+            </button>
+        </div>
+    }
+    else if (!_editing && _assignment is not null)
+    {
+        <!-- Read-only view -->
+        <div class="tda-grid">
+
+            <div class="tda-card">
+                <div class="tda-card-hdr">
+                    <i class="bi bi-geo-alt" aria-hidden="true"></i>
+                    <span>Region Placement</span>
+                </div>
+                <div class="tda-card-body">
+                    <div class="tda-field">
+                        <span class="tda-fl">Primary Region</span>
+                        <span class="tda-fv">
+                            @if (!string.IsNullOrEmpty(_assignment.PrimaryRegionCode))
+                            {
+                                <span class="tda-chip"><i class="bi bi-geo-alt" aria-hidden="true"></i> @_assignment.PrimaryRegionCode
+                                    @if (!string.IsNullOrEmpty(_assignment.PrimaryRegionName))
+                                    {
+                                        <span class="tda-chip-sub">— @_assignment.PrimaryRegionName</span>
+                                    }
+                                </span>
+                            }
+                            else { <span class="tda-muted">— not assigned</span> }
+                        </span>
+                    </div>
+                    <div class="tda-field">
+                        <span class="tda-fl">DR Region</span>
+                        <span class="tda-fv">
+                            @if (!string.IsNullOrEmpty(_assignment.DrRegionCode))
+                            {
+                                <span class="tda-chip"><i class="bi bi-shield-check" aria-hidden="true"></i> @_assignment.DrRegionCode
+                                    @if (!string.IsNullOrEmpty(_assignment.DrRegionName))
+                                    {
+                                        <span class="tda-chip-sub">— @_assignment.DrRegionName</span>
+                                    }
+                                </span>
+                            }
+                            else { <span class="tda-muted">— not assigned</span> }
+                        </span>
+                    </div>
+                    <div class="tda-field">
+                        <span class="tda-fl">Environment</span>
+                        <span class="tda-fv">
+                            <span class="tda-chip"><i class="bi bi-box-seam" aria-hidden="true"></i> @_assignment.EnvironmentCode</span>
+                        </span>
+                    </div>
+                    <div class="tda-field">
+                        <span class="tda-fl">Isolation Mode</span>
+                        <span class="tda-fv">
+                            <span class="tda-chip @IsolationCss(_assignment.IsolationMode)">
+                                <i class="bi bi-layers" aria-hidden="true"></i> @_assignment.IsolationMode
+                            </span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tda-card">
+                <div class="tda-card-hdr">
+                    <i class="bi bi-server" aria-hidden="true"></i>
+                    <span>Infrastructure Bindings</span>
+                </div>
+                <div class="tda-card-body">
+                    <div class="tda-field">
+                        <span class="tda-fl">Deployment Stamp</span>
+                        <span class="tda-fv">
+                            @if (!string.IsNullOrEmpty(_assignment.StampCode))
+                            {
+                                <span class="tda-mono">@_assignment.StampCode</span>
+                                @if (!string.IsNullOrEmpty(_assignment.StampName))
+                                {
+                                    <span class="tda-muted"> — @_assignment.StampName</span>
+                                }
+                            }
+                            else { <span class="tda-muted">—</span> }
+                        </span>
+                    </div>
+                    <div class="tda-field">
+                        <span class="tda-fl">Database Cluster</span>
+                        <span class="tda-fv">
+                            @if (!string.IsNullOrEmpty(_assignment.DatabaseCluster))
+                            { <span class="tda-mono">@_assignment.DatabaseCluster</span> }
+                            else { <span class="tda-muted">—</span> }
+                        </span>
+                    </div>
+                    <div class="tda-field">
+                        <span class="tda-fl">Storage Binding</span>
+                        <span class="tda-fv">
+                            @if (!string.IsNullOrEmpty(_assignment.StorageBinding))
+                            { <span class="tda-mono">@_assignment.StorageBinding</span> }
+                            else { <span class="tda-muted">—</span> }
+                        </span>
+                    </div>
+                    <div class="tda-field">
+                        <span class="tda-fl">Status</span>
+                        <span class="tda-fv">
+                            <span class="um-badge @StatusBadgeCss(_assignment.StatusCode)">@_assignment.StatusCode</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(_assignment.Notes))
+            {
+                <div class="tda-card tda-card--full">
+                    <div class="tda-card-hdr">
+                        <i class="bi bi-chat-left-text" aria-hidden="true"></i>
+                        <span>Notes</span>
+                    </div>
+                    <div class="tda-card-body">
+                        <p class="tda-notes-text">@_assignment.Notes</p>
+                    </div>
+                </div>
+            }
+
+            <div class="tda-card tda-card--full">
+                <div class="tda-card-hdr">
+                    <i class="bi bi-clock-history" aria-hidden="true"></i>
+                    <span>Record Info</span>
+                </div>
+                <div class="tda-card-body tda-record-info-row">
+                    <div class="tda-field">
+                        <span class="tda-fl">Assignment ID</span>
+                        <span class="tda-fv tda-mono tda-muted">@_assignment.AssignmentId</span>
+                    </div>
+                    <div class="tda-field">
+                        <span class="tda-fl">Created</span>
+                        <span class="tda-fv">@_assignment.CreatedDateUtc.ToString("d MMM yyyy, HH:mm") UTC</span>
+                    </div>
+                    @if (_assignment.ModifiedDateUtc.HasValue)
+                    {
+                        <div class="tda-field">
+                            <span class="tda-fl">Last Modified</span>
+                            <span class="tda-fv">@_assignment.ModifiedDateUtc.Value.ToString("d MMM yyyy, HH:mm") UTC</span>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+    else if (_editing)
+    {
+        <!-- Edit / Create form -->
+        <div class="tda-form-wrap">
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+
+                <div class="tda-section-hdr">
+                    <i class="bi bi-geo-alt" aria-hidden="true"></i>
+                    <span>Region Placement</span>
+                </div>
+                <div class="tda-form-grid">
+                    <div class="um-field">
+                        <label class="um-label">Primary Region</label>
+                        <SfDropDownList TValue="string" TItem="RegionOption"
+                                        @bind-Value="_form.PrimaryRegionCode"
+                                        DataSource="@_regionOptions"
+                                        Placeholder="— select region —"
+                                        AllowFiltering="true">
+                            <DropDownListFieldSettings Value="Code" Text="Label" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">DR Region</label>
+                        <SfDropDownList TValue="string" TItem="RegionOption"
+                                        @bind-Value="_form.DrRegionCode"
+                                        DataSource="@_regionOptions"
+                                        Placeholder="— select DR region —"
+                                        AllowFiltering="true">
+                            <DropDownListFieldSettings Value="Code" Text="Label" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Environment</label>
+                        <SfDropDownList TValue="string" TItem="PickOption"
+                                        @bind-Value="_form.EnvironmentCode"
+                                        DataSource="@_envOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Isolation Mode</label>
+                        <SfDropDownList TValue="string" TItem="PickOption"
+                                        @bind-Value="_form.IsolationMode"
+                                        DataSource="@_isolationOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+                </div>
+
+                <div class="tda-section-hdr">
+                    <i class="bi bi-server" aria-hidden="true"></i>
+                    <span>Infrastructure Bindings</span>
+                </div>
+                <div class="tda-form-grid">
+                    <div class="um-field">
+                        <label class="um-label">Deployment Stamp</label>
+                        <SfDropDownList TValue="string" TItem="StampOption"
+                                        @bind-Value="_form.StampCode"
+                                        DataSource="@_stampOptions"
+                                        Placeholder="— select stamp —"
+                                        AllowFiltering="true">
+                            <DropDownListFieldSettings Value="Code" Text="Label" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Status</label>
+                        <SfDropDownList TValue="string" TItem="PickOption"
+                                        @bind-Value="_form.StatusCode"
+                                        DataSource="@_statusOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="um-field um-field--full">
+                        <label class="um-label">Database Cluster</label>
+                        <SfTextBox @bind-Value="_form.DatabaseCluster"
+                                   Placeholder="e.g. sql-cluster-us-east-01.database.windows.net" />
+                    </div>
+                    <div class="um-field um-field--full">
+                        <label class="um-label">Storage Binding</label>
+                        <SfTextBox @bind-Value="_form.StorageBinding"
+                                   Placeholder="e.g. https://storageaccount.blob.core.windows.net/tenants" />
+                    </div>
+                    <div class="um-field um-field--full">
+                        <label class="um-label">Notes</label>
+                        <SfTextBox @bind-Value="_form.Notes" Multiline="true" />
+                    </div>
+                </div>
+
+                <div class="tda-form-actions">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelEdit">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving) { <span class="um-spinner-xs" aria-hidden="true"></span> }
+                        Save Assignment
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    }
+}
+
+<!-- Delete Confirm Dialog -->
+<SfDialog @bind-Visible="_deleteDialogVisible"
+          Width="440px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="Remove Deployment Assignment">
+    <DialogTemplates>
+        <Content>
+            <p>Remove the deployment assignment for <strong>@_tenantLabel</strong>? The tenant will no longer be mapped to a region or stamp.</p>
+            <div class="um-dialog-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _deleteDialogVisible = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Remove</button>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid TenantId { get; set; }
+
+    SfToast? _toast;
+
+    TenantDeploymentAssignmentDto? _assignment;
+    bool _loading = true;
+    bool _saving;
+    bool _editing;
+    bool _deleteDialogVisible;
+
+    string _tenantLabel = string.Empty;
+
+    readonly AssignmentFormModel _form = new();
+
+    List<RegionOption> _regionOptions = [];
+    List<StampOption>  _stampOptions  = [];
+
+    readonly List<PickOption> _envOptions =
+    [
+        new("Production",  "Production"),
+        new("Staging",     "Staging"),
+        new("Development", "Development"),
+        new("DR",          "DR")
+    ];
+
+    readonly List<PickOption> _isolationOptions =
+    [
+        new("Shared",    "Shared"),
+        new("Dedicated", "Dedicated"),
+        new("Hybrid",    "Hybrid")
+    ];
+
+    readonly List<PickOption> _statusOptions =
+    [
+        new("Active",        "Active"),
+        new("Provisioning",  "Provisioning"),
+        new("Decommissioned","Decommissioned")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Tenants", "/platform/tenants"),
+            new BreadcrumbService.BreadcrumbItem("Tenant", $"/platform/tenants/{TenantId}"),
+            new BreadcrumbService.BreadcrumbItem("Region & Deployment", null));
+
+        await Task.WhenAll(LoadAssignmentAsync(), LoadDropdownsAsync());
+    }
+
+    async Task LoadAssignmentAsync()
+    {
+        _loading = true;
+        try
+        {
+            _assignment = await Api.GetTenantDeploymentAssignmentAsync(TenantId);
+            _tenantLabel = _assignment is not null
+                ? $"{_assignment.TenantName} ({_assignment.TenantCode})"
+                : $"Tenant {TenantId}";
+        }
+        finally { _loading = false; }
+    }
+
+    async Task LoadDropdownsAsync()
+    {
+        var regions = await Api.SearchRegionsAsync(pageSize: 200);
+        _regionOptions = (regions?.Items ?? [])
+            .Select(r => new RegionOption(r.RegionCode, $"{r.RegionCode} — {r.RegionName}"))
+            .ToList();
+
+        var stamps = await Api.SearchDeploymentStampsAsync(pageSize: 200);
+        _stampOptions = (stamps?.Items ?? [])
+            .Select(s => new StampOption(s.StampCode, $"{s.StampCode} — {s.StampName} ({s.RegionCode})"))
+            .ToList();
+    }
+
+    void StartCreate()
+    {
+        _form.Reset();
+        _editing = true;
+    }
+
+    void StartEdit()
+    {
+        _form.LoadFrom(_assignment!);
+        _editing = true;
+    }
+
+    void CancelEdit() => _editing = false;
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            await Api.UpsertTenantDeploymentAssignmentAsync(TenantId, _form.ToRequest(TenantId));
+            await ShowToast("Deployment assignment saved.", "Success");
+            _editing = false;
+            await LoadAssignmentAsync();
+        }
+        catch { await ShowToast("An error occurred. Please try again.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    void OpenDeleteConfirm() => _deleteDialogVisible = true;
+
+    async Task ExecuteDeleteAsync()
+    {
+        _saving = true;
+        try
+        {
+            await Api.DeleteTenantDeploymentAssignmentAsync(TenantId);
+            _assignment = null;
+            _deleteDialogVisible = false;
+            await ShowToast("Assignment removed.", "Success");
+        }
+        catch { await ShowToast("An error occurred. Please try again.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    void NavigateToTenant() => Nav.NavigateTo($"/platform/tenants/{TenantId}");
+
+    async Task ShowToast(string message, string title)
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Title = title, Content = message });
+    }
+
+    static string StatusBadgeCss(string status) => status switch
+    {
+        "Active"         => "um-badge--green",
+        "Provisioning"   => "um-badge--yellow",
+        "Decommissioned" => "um-badge--red",
+        _                => "um-badge--grey"
+    };
+
+    static string IsolationCss(string mode) => mode switch
+    {
+        "Dedicated" => "tda-chip--blue",
+        "Hybrid"    => "tda-chip--yellow",
+        _           => string.Empty
+    };
+
+    // ── Local models ─────────────────────────────────────────
+    sealed record RegionOption(string Code, string Label);
+    sealed record StampOption(string Code, string Label);
+    sealed record PickOption(string Value, string Text);
+
+    sealed class AssignmentFormModel
+    {
+        public string? PrimaryRegionCode { get; set; }
+        public string? DrRegionCode      { get; set; }
+        public string  EnvironmentCode   { get; set; } = "Production";
+        public string  IsolationMode     { get; set; } = "Shared";
+        public string? StampCode         { get; set; }
+        public string? DatabaseCluster   { get; set; }
+        public string? StorageBinding    { get; set; }
+        public string  StatusCode        { get; set; } = "Active";
+        public string? Notes             { get; set; }
+
+        public void Reset()
+        {
+            PrimaryRegionCode = null;
+            DrRegionCode      = null;
+            EnvironmentCode   = "Production";
+            IsolationMode     = "Shared";
+            StampCode         = null;
+            DatabaseCluster   = null;
+            StorageBinding    = null;
+            StatusCode        = "Active";
+            Notes             = null;
+        }
+
+        public void LoadFrom(TenantDeploymentAssignmentDto dto)
+        {
+            PrimaryRegionCode = dto.PrimaryRegionCode;
+            DrRegionCode      = dto.DrRegionCode;
+            EnvironmentCode   = dto.EnvironmentCode;
+            IsolationMode     = dto.IsolationMode;
+            StampCode         = dto.StampCode;
+            DatabaseCluster   = dto.DatabaseCluster;
+            StorageBinding    = dto.StorageBinding;
+            StatusCode        = dto.StatusCode;
+            Notes             = dto.Notes;
+        }
+
+        public UpsertTenantDeploymentAssignmentRequest ToRequest(Guid tenantId) => new()
+        {
+            TenantId          = tenantId,
+            PrimaryRegionCode = PrimaryRegionCode,
+            DrRegionCode      = DrRegionCode,
+            EnvironmentCode   = EnvironmentCode,
+            IsolationMode     = IsolationMode,
+            StampCode         = StampCode,
+            DatabaseCluster   = DatabaseCluster,
+            StorageBinding    = StorageBinding,
+            StatusCode        = StatusCode,
+            Notes             = Notes
+        };
+    }
+}

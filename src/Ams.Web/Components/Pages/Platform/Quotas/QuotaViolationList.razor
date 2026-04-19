@@ -1,0 +1,272 @@
+@page "/platform/quotas/violations"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.QuotaViolations
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Quota Violations — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Quota Violations"
+               Subtitle="Track, acknowledge, and resolve quota breaches across tenants"
+               Icon="bi-exclamation-triangle">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by tenant, metric…" @onkeyup="OnSearchKeyUp" />
+        <SfDropDownList TValue="string" TItem="StatusOption"
+                        @bind-Value="_statusFilter"
+                        DataSource="@_statusOptions"
+                        Placeholder="All Statuses"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="StatusOption"
+                        @bind-Value="_severityFilter"
+                        DataSource="@_severityOptions"
+                        Placeholder="All Severities"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading violations…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="QuotaViolationDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(QuotaViolationDto.TenantName)" HeaderText="Tenant" MinWidth="150" />
+            <GridColumn Field="@nameof(QuotaViolationDto.MetricTypeCode)" HeaderText="Metric" Width="130" />
+            <GridColumn Field="@nameof(QuotaViolationDto.ActualValue)" HeaderText="Usage" Width="100" TextAlign="TextAlign.Right" Format="N0" />
+            <GridColumn Field="@nameof(QuotaViolationDto.LimitValue)" HeaderText="Limit" Width="100" TextAlign="TextAlign.Right" Format="N0" />
+            <GridColumn Field="@nameof(QuotaViolationDto.SeverityCode)" HeaderText="Violation Level" Width="130">
+                <Template>
+                    @{ var row = (QuotaViolationDto)context; }
+                    <span class="um-badge @SeverityBadgeCss(row.SeverityCode)">@row.SeverityCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(QuotaViolationDto.ViolationDateUtc)" HeaderText="First Detected" Width="160" Format="g" />
+            <GridColumn Field="@nameof(QuotaViolationDto.StatusCode)" HeaderText="Current Status" Width="140">
+                <Template>
+                    @{ var row = (QuotaViolationDto)context; }
+                    <span class="um-badge @StatusBadgeCss(row.StatusCode)">@row.StatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="280" AllowSorting="false">
+                <Template>
+                    @{ var row = (QuotaViolationDto)context; }
+                    <div class="td-action-cell">
+                        @if (row.StatusCode is "Open" or "Acknowledged")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs text-info" @onclick="() => NotifyAsync(row)" title="Notify">
+                                <i class="bi bi-bell" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-xs text-danger" @onclick="() => ApplyRestrictionAsync(row)" title="Apply Restriction">
+                                <i class="bi bi-slash-circle" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-xs text-primary" @onclick="() => GrantTemporaryIncreaseAsync(row)" title="Grant Temporary Increase">
+                                <i class="bi bi-arrow-up-circle" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-xs text-warning" @onclick="() => ConvertToOverageAsync(row)" title="Convert to Billing Overage">
+                                <i class="bi bi-currency-dollar" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-xs text-success" @onclick="() => ResolveAsync(row)" title="Resolve">
+                                <i class="bi bi-check-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+@code {
+    SfGrid<QuotaViolationDto>? _grid;
+    SfToast? _toast;
+
+    List<QuotaViolationDto> _items = [];
+    bool _loading;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string _searchTerm    = string.Empty;
+    string _statusFilter  = string.Empty;
+    string _severityFilter = string.Empty;
+
+    readonly List<StatusOption> _statusOptions =
+    [
+        new("", "All Statuses"),
+        new("Open",              "Open"),
+        new("Acknowledged",      "Acknowledged"),
+        new("Notified",          "Notified"),
+        new("Restricted",        "Restricted"),
+        new("TemporaryIncrease", "Temporary Increase"),
+        new("BillingOverage",    "Billing Overage"),
+        new("Resolved",          "Resolved")
+    ];
+
+    readonly List<StatusOption> _severityOptions =
+    [
+        new("", "All Severities"),
+        new("Low",      "Low"),
+        new("Medium",   "Medium"),
+        new("High",     "High"),
+        new("Critical", "Critical")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Quotas", "/platform/quotas"),
+            new BreadcrumbService.BreadcrumbItem("Violations", "/platform/quotas/violations"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchQuotaViolationsAsync(
+                searchTerm: _searchTerm,
+                statusCode: _statusFilter,
+                severityCode: _severityFilter,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    void OnSearchKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") InvokeAsync(LoadAsync); }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    async Task NotifyAsync(QuotaViolationDto row)
+    {
+        try
+        {
+            await Api.NotifyQuotaViolationAsync(row.ViolationId, new NotifyQuotaViolationRequest());
+            await ShowToast("Tenant notified.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Notify failed.", "Error"); }
+    }
+
+    async Task ApplyRestrictionAsync(QuotaViolationDto row)
+    {
+        try
+        {
+            await Api.ApplyQuotaRestrictionAsync(row.ViolationId, new ApplyRestrictionRequest());
+            await ShowToast("Restriction applied.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Apply restriction failed.", "Error"); }
+    }
+
+    async Task GrantTemporaryIncreaseAsync(QuotaViolationDto row)
+    {
+        try
+        {
+            await Api.GrantTemporaryQuotaIncreaseAsync(row.ViolationId, new GrantTemporaryIncreaseRequest());
+            await ShowToast("Temporary increase granted.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Grant temporary increase failed.", "Error"); }
+    }
+
+    async Task ConvertToOverageAsync(QuotaViolationDto row)
+    {
+        try
+        {
+            await Api.ConvertQuotaToOverageAsync(row.ViolationId, new ConvertToOverageRequest());
+            await ShowToast("Converted to billing overage.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Convert to overage failed.", "Error"); }
+    }
+
+    async Task ResolveAsync(QuotaViolationDto row)
+    {
+        try
+        {
+            await Api.ResolveQuotaViolationAsync(row.ViolationId, new ResolveQuotaViolationRequest());
+            await ShowToast("Violation resolved.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Resolve failed.", "Error"); }
+    }
+
+    async Task ShowToast(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content      = message,
+            CssClass     = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            ShowCloseButton = true
+        });
+    }
+
+    static string StatusBadgeCss(string status) => status switch
+    {
+        "Open"              => "um-badge--danger",
+        "Acknowledged"      => "um-badge--warning",
+        "Notified"          => "um-badge--info",
+        "Restricted"        => "um-badge--danger",
+        "TemporaryIncrease" => "um-badge--warning",
+        "BillingOverage"    => "um-badge--info",
+        "Resolved"          => "um-badge--success",
+        _                   => "um-badge--neutral"
+    };
+
+    static string SeverityBadgeCss(string severity) => severity switch
+    {
+        "Critical" => "um-badge--danger",
+        "High"     => "um-badge--warning",
+        "Medium"   => "um-badge--info",
+        "Low"      => "um-badge--neutral",
+        _          => "um-badge--neutral"
+    };
+
+    sealed record StatusOption(string Value, string Text);
+}

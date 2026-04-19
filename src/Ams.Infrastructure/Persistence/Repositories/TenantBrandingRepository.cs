@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Tenants;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -66,5 +67,66 @@ public sealed class TenantBrandingRepository : ITenantBrandingRepository
         var items = (await multi.ReadAsync<TenantBrandingDto>()).AsList();
         var total = await multi.ReadSingleAsync<int>();
         return new PagedResult<TenantBrandingDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task UpdateAsync(Guid tenantId, UpdateTenantBrandingRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+            IF EXISTS (SELECT 1 FROM Core.TenantBranding WHERE TenantId = @TenantId AND IsDeleted = 0)
+                UPDATE Core.TenantBranding SET
+                    WhiteLabelName  = @WhiteLabelName,
+                    LogoUrl         = @LogoUrl,
+                    FaviconUrl      = @FaviconUrl,
+                    PrimaryColor    = @PrimaryColor,
+                    SecondaryColor  = @SecondaryColor,
+                    AccentColor     = @AccentColor,
+                    CustomCssUrl    = @CustomCssUrl,
+                    SupportEmail    = @SupportEmail,
+                    SupportPhone    = @SupportPhone,
+                    FooterText      = @FooterText,
+                    ModifiedDateUtc = SYSUTCDATETIME()
+                WHERE TenantId = @TenantId AND IsDeleted = 0;
+            ELSE
+                INSERT INTO Core.TenantBranding
+                    (TenantId, WhiteLabelName, LogoUrl, FaviconUrl, PrimaryColor, SecondaryColor, AccentColor, CustomCssUrl, SupportEmail, SupportPhone, FooterText, IsActive, CreatedDateUtc, IsDeleted)
+                VALUES
+                    (@TenantId, @WhiteLabelName, @LogoUrl, @FaviconUrl, @PrimaryColor, @SecondaryColor, @AccentColor, @CustomCssUrl, @SupportEmail, @SupportPhone, @FooterText, 1, SYSUTCDATETIME(), 0);
+            """;
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            request.WhiteLabelName,
+            request.LogoUrl,
+            request.FaviconUrl,
+            request.PrimaryColor,
+            request.SecondaryColor,
+            request.AccentColor,
+            request.CustomCssUrl,
+            request.SupportEmail,
+            request.SupportPhone,
+            request.FooterText,
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task ResetToDefaultsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+            UPDATE Core.TenantBranding SET
+                WhiteLabelName  = NULL,
+                LogoUrl         = NULL,
+                FaviconUrl      = NULL,
+                PrimaryColor    = '#0d6efd',
+                SecondaryColor  = '#6c757d',
+                AccentColor     = '#198754',
+                CustomCssUrl    = NULL,
+                SupportEmail    = NULL,
+                SupportPhone    = NULL,
+                FooterText      = NULL,
+                ModifiedDateUtc = SYSUTCDATETIME()
+            WHERE TenantId = @TenantId AND IsDeleted = 0;
+            """;
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));
     }
 }

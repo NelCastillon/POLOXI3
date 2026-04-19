@@ -79,6 +79,39 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDashboardService, DashboardService>();
 
         // ── Platform Core engines ────────────────────────────────────
+        services.AddScoped<ITenantDomainRepository, TenantDomainRepository>();
+        services.AddScoped<ITenantDomainService, TenantDomainService>();
+
+        services.AddScoped<IPlanRepository, PlanRepository>();
+        services.AddScoped<IPlanService, PlanService>();
+
+        services.AddScoped<IPlanSubEntityRepository, PlanSubEntityRepository>();
+        services.AddScoped<IPlanSubEntityService, PlanSubEntityService>();
+
+        services.AddScoped<ISubscriptionRepository, SubscriptionRepository>();
+        services.AddScoped<ISubscriptionService, SubscriptionService>();
+
+        services.AddScoped<IUsageRepository, UsageRepository>();
+        services.AddScoped<IUsageService, UsageService>();
+
+        services.AddScoped<IFeatureCatalogRepository, FeatureCatalogRepository>();
+        services.AddScoped<IFeatureCatalogService, FeatureCatalogService>();
+
+        services.AddScoped<ITenantFeatureRepository, TenantFeatureRepository>();
+        services.AddScoped<ITenantFeatureService, TenantFeatureService>();
+
+        services.AddScoped<IRegionRepository, RegionRepository>();
+        services.AddScoped<IRegionService, RegionService>();
+
+        services.AddScoped<IDeploymentBindingRepository, DeploymentBindingRepository>();
+        services.AddScoped<IDeploymentBindingService, DeploymentBindingService>();
+
+        services.AddScoped<IDeploymentStampRepository, DeploymentStampRepository>();
+        services.AddScoped<IDeploymentStampService, DeploymentStampService>();
+
+        services.AddScoped<ITenantDeploymentAssignmentRepository, TenantDeploymentAssignmentRepository>();
+        services.AddScoped<ITenantDeploymentAssignmentService, TenantDeploymentAssignmentService>();
+
         services.AddScoped<ITenantBrandingRepository, TenantBrandingRepository>();
         services.AddScoped<INotificationRepository, NotificationRepository>();
         services.AddScoped<IReportRepository, ReportRepository>();
@@ -254,6 +287,36 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPolicyDocumentService, PolicyDocumentService>();
         services.AddScoped<IAcknowledgementRepository, AcknowledgementRepository>();
         services.AddScoped<IAcknowledgementService, AcknowledgementService>();
+
+        // ── Quotas ───────────────────────────────────────────────
+        services.AddScoped<IQuotaRuleRepository, QuotaRuleRepository>();
+        services.AddScoped<IQuotaRuleService, QuotaRuleService>();
+        services.AddScoped<ITenantQuotaRepository, TenantQuotaRepository>();
+        services.AddScoped<ITenantQuotaService, TenantQuotaService>();
+        services.AddScoped<IQuotaViolationRepository, QuotaViolationRepository>();
+        services.AddScoped<IQuotaViolationService, QuotaViolationService>();
+
+        // ── Monitoring ───────────────────────────────────────────
+        services.AddScoped<IHealthCheckRepository, HealthCheckRepository>();
+        services.AddScoped<IHealthCheckService, HealthCheckService>();
+        services.AddScoped<IAlertRepository, AlertRepository>();
+        services.AddScoped<IAlertService, AlertService>();
+        services.AddScoped<ISlaDefinitionRepository, SlaDefinitionRepository>();
+        services.AddScoped<ISlaDefinitionService, SlaDefinitionService>();
+        services.AddScoped<IPlatformEventRepository, PlatformEventRepository>();
+        services.AddScoped<IPlatformEventService, PlatformEventService>();
+        services.AddScoped<IBackgroundJobRepository, BackgroundJobRepository>();
+        services.AddScoped<IBackgroundJobService, BackgroundJobService>();
+
+        // ── Audit
+        services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+        services.AddScoped<IAuditLogService, AuditLogService>();
+        services.AddScoped<IFieldChangeLogRepository, FieldChangeLogRepository>();
+        services.AddScoped<IFieldChangeLogService, FieldChangeLogService>();
+        services.AddScoped<ISecurityEventLogRepository, SecurityEventLogRepository>();
+        services.AddScoped<ISecurityEventLogService, SecurityEventLogService>();
+        services.AddScoped<ISystemLogRepository, SystemLogRepository>();
+        services.AddScoped<ISystemLogService, SystemLogService>();
 
         return services;
     }

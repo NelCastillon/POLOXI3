@@ -1,0 +1,402 @@
+@page "/platform/stamps"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.DeploymentStamps
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Deployment Stamps — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Deployment Stamps"
+               Subtitle="Infrastructure stamps per region — capacity, load, and active service tracking"
+               Icon="bi-server">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Stamp
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by stamp code, name, region…" @onkeyup="OnSearchKeyUp" />
+        <SfDropDownList TValue="string" TItem="StatusOption"
+                        @bind-Value="_statusFilter"
+                        DataSource="@_statusOptions"
+                        Placeholder="All Statuses"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading deployment stamps…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="DeploymentStampDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(DeploymentStampDto.StampName)" HeaderText="Stamp Name" MinWidth="160" />
+            <GridColumn Field="@nameof(DeploymentStampDto.RegionName)" HeaderText="Region" Width="140" />
+            <GridColumn Field="@nameof(DeploymentStampDto.StatusCode)" HeaderText="Status" Width="130">
+                <Template>
+                    @{ var row = (DeploymentStampDto)context; }
+                    <span class="um-badge @StatusBadgeCss(row.StatusCode)">@row.StatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(DeploymentStampDto.TenantCount)" HeaderText="Tenant Count" Width="130" TextAlign="TextAlign.Right" />
+            <GridColumn Field="@nameof(DeploymentStampDto.LoadPercent)" HeaderText="Load %" Width="110" TextAlign="TextAlign.Right" Format="N1">
+                <Template>
+                    @{ var row = (DeploymentStampDto)context; }
+                    <span class="@LoadCss(row.LoadPercent)">@row.LoadPercent.ToString("N1")%</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(DeploymentStampDto.ActiveServices)" HeaderText="Active Services" Width="140" TextAlign="TextAlign.Right" />
+            <GridColumn HeaderText="" Width="160" AllowSorting="false">
+                <Template>
+                    @{ var row = (DeploymentStampDto)context; }
+                    <div class="td-action-cell">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(row)" title="Edit">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        @if (row.StatusCode == "Active")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs text-warning"
+                                    @onclick='() => SetStatus(row, "Maintenance")' title="Set Maintenance">
+                                <i class="bi bi-pause-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        else if (row.StatusCode == "Maintenance")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs text-success"
+                                    @onclick='() => SetStatus(row, "Active")' title="Set Active">
+                                <i class="bi bi-play-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-ghost um-btn-xs text-danger" @onclick="() => ConfirmDelete(row)" title="Delete">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+<!-- Create / Edit Dialog -->
+<SfDialog @bind-Visible="_dialogVisible"
+          Width="520px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="@(_editing ? "Edit Deployment Stamp" : "Add Deployment Stamp")">
+    <DialogTemplates>
+        <Content>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label class="um-label">Stamp Code <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.StampCode" Placeholder="e.g. STAMP-US-EAST-01" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Stamp Name <span class="req">*</span></label>
+                        <SfTextBox @bind-Value="_form.StampName" Placeholder="US East Stamp 01" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Region Code</label>
+                        <SfTextBox @bind-Value="_form.RegionCode" Placeholder="US-EAST" />
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Environment</label>
+                        <SfDropDownList TValue="string" TItem="StatusOption"
+                                        @bind-Value="_form.EnvironmentCode"
+                                        DataSource="@_envOptions">
+                            <DropDownListFieldSettings Value="Value" Text="Text" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="um-field">
+                        <label class="um-label">Max Tenant Capacity</label>
+                        <SfNumericTextBox TValue="int" @bind-Value="_form.MaxTenantCapacity" Min="0" />
+                    </div>
+                    @if (_editing)
+                    {
+                        <div class="um-field">
+                            <label class="um-label">Load %</label>
+                            <SfNumericTextBox TValue="decimal" @bind-Value="_form.LoadPercent" Min="0" Max="100" Decimals="1" />
+                        </div>
+                        <div class="um-field">
+                            <label class="um-label">Active Services</label>
+                            <SfNumericTextBox TValue="int" @bind-Value="_form.ActiveServices" Min="0" />
+                        </div>
+                    }
+                    <div class="um-field um-field--full">
+                        <label class="um-label">Notes</label>
+                        <SfTextBox @bind-Value="_form.NotesText" Multiline="true" />
+                    </div>
+                </div>
+                <div class="um-dialog-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving) { <span class="um-spinner-xs" aria-hidden="true"></span> }
+                        @(_editing ? "Save Changes" : "Create Stamp")
+                    </button>
+                </div>
+            </EditForm>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- Delete Confirm Dialog -->
+<SfDialog @bind-Visible="_deleteDialogVisible"
+          Width="420px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="Confirm Delete">
+    <DialogTemplates>
+        <Content>
+            <p>Delete stamp <strong>@_deleteTarget?.StampName</strong>? This action cannot be undone.</p>
+            <div class="um-dialog-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _deleteDialogVisible = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    SfGrid<DeploymentStampDto>? _grid;
+    SfToast? _toast;
+
+    List<DeploymentStampDto> _items = [];
+    bool _loading;
+    bool _saving;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string _searchTerm   = string.Empty;
+    string _statusFilter = string.Empty;
+
+    bool _dialogVisible;
+    bool _deleteDialogVisible;
+    bool _editing;
+    DeploymentStampDto? _deleteTarget;
+
+    readonly StampFormModel _form = new();
+
+    readonly List<StatusOption> _statusOptions =
+    [
+        new("", "All Statuses"),
+        new("Active",        "Active"),
+        new("Maintenance",   "Maintenance"),
+        new("Decommissioned","Decommissioned")
+    ];
+
+    readonly List<StatusOption> _envOptions =
+    [
+        new("Production",  "Production"),
+        new("Staging",     "Staging"),
+        new("Development", "Development"),
+        new("DR",          "DR")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Infrastructure", null),
+            new BreadcrumbService.BreadcrumbItem("Deployment Stamps", "/platform/stamps"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchDeploymentStampsAsync(
+                searchTerm: _searchTerm,
+                statusCode: _statusFilter,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    void OnSearchKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") InvokeAsync(LoadAsync); }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    void OpenCreate()
+    {
+        _editing = false;
+        _form.Reset();
+        _dialogVisible = true;
+    }
+
+    void OpenEdit(DeploymentStampDto row)
+    {
+        _editing = true;
+        _form.LoadFrom(row);
+        _dialogVisible = true;
+    }
+
+    void CloseDialog() => _dialogVisible = false;
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editing)
+            {
+                await Api.UpdateDeploymentStampAsync(_form.StampId, _form.ToUpdateRequest());
+                await ShowToast("Stamp updated.", "Success");
+            }
+            else
+            {
+                await Api.CreateDeploymentStampAsync(_form.ToCreateRequest());
+                await ShowToast("Stamp created.", "Success");
+            }
+            _dialogVisible = false;
+            await LoadAsync();
+        }
+        catch { await ShowToast("An error occurred. Please try again.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmDelete(DeploymentStampDto row)
+    {
+        _deleteTarget = row;
+        _deleteDialogVisible = true;
+    }
+
+    async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteDeploymentStampAsync(_deleteTarget.StampId);
+            _deleteDialogVisible = false;
+            await ShowToast("Stamp deleted.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Delete failed.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    async Task SetStatus(DeploymentStampDto row, string newStatus)
+    {
+        try
+        {
+            await Api.SetDeploymentStampStatusAsync(row.StampId, newStatus);
+            await ShowToast($"Stamp set to {newStatus}.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Status update failed.", "Error"); }
+    }
+
+    async Task ShowToast(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content      = message,
+            CssClass     = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            ShowCloseButton = true
+        });
+    }
+
+    static string StatusBadgeCss(string status) => status switch
+    {
+        "Active"         => "um-badge--success",
+        "Maintenance"    => "um-badge--warning",
+        "Decommissioned" => "um-badge--neutral",
+        _                => "um-badge--neutral"
+    };
+
+    static string LoadCss(decimal load) => load switch
+    {
+        >= 90 => "load-critical",
+        >= 70 => "load-high",
+        >= 40 => "load-moderate",
+        _     => "load-low"
+    };
+
+    sealed record StatusOption(string Value, string Text);
+
+    sealed class StampFormModel
+    {
+        public Guid    StampId           { get; set; }
+        public string  StampCode         { get; set; } = string.Empty;
+        public string  StampName         { get; set; } = string.Empty;
+        public string  RegionCode        { get; set; } = string.Empty;
+        public string  EnvironmentCode   { get; set; } = "Production";
+        public int     MaxTenantCapacity { get; set; }
+        public decimal LoadPercent       { get; set; }
+        public int     ActiveServices    { get; set; }
+        public string? NotesText         { get; set; }
+
+        public void Reset()
+        {
+            StampId = Guid.Empty; StampCode = string.Empty; StampName = string.Empty;
+            RegionCode = string.Empty; EnvironmentCode = "Production";
+            MaxTenantCapacity = 0; LoadPercent = 0; ActiveServices = 0; NotesText = null;
+        }
+
+        public void LoadFrom(DeploymentStampDto dto)
+        {
+            StampId = dto.StampId; StampCode = dto.StampCode; StampName = dto.StampName;
+            RegionCode = dto.RegionCode; EnvironmentCode = dto.EnvironmentCode;
+            MaxTenantCapacity = dto.MaxTenantCapacity; LoadPercent = dto.LoadPercent;
+            ActiveServices = dto.ActiveServices; NotesText = dto.Notes;
+        }
+
+        public CreateDeploymentStampRequest ToCreateRequest() => new()
+        {
+            StampCode = StampCode, StampName = StampName, RegionCode = RegionCode,
+            EnvironmentCode = EnvironmentCode, MaxTenantCapacity = MaxTenantCapacity,
+            Notes = NotesText
+        };
+
+        public UpdateDeploymentStampRequest ToUpdateRequest() => new()
+        {
+            StampCode = StampCode, StampName = StampName, RegionCode = RegionCode,
+            EnvironmentCode = EnvironmentCode, MaxTenantCapacity = MaxTenantCapacity,
+            LoadPercent = LoadPercent, ActiveServices = ActiveServices, Notes = NotesText
+        };
+    }
+}

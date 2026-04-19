@@ -1,0 +1,321 @@
+@page "/platform/logs"
+@using Ams.Application.Common.Dtos
+@using System.Text.Json
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>System Logs — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="System Logs"
+               Subtitle="Search operational logs across services and regions"
+               Icon="bi-terminal">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync" title="Export Search Result">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_levelFilter"
+                        DataSource="@_levelOptions"
+                        Placeholder="All Levels"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfTextBox @bind-Value="_serviceFilter" Placeholder="Service" CssClass="td-filter-input" />
+        <SfTextBox @bind-Value="_regionFilter" Placeholder="Region" CssClass="td-filter-input" />
+        <SfTextBox @bind-Value="_correlationFilter" Placeholder="Correlation ID" CssClass="td-filter-input" />
+        <SfTextBox @bind-Value="_tenantFilter" Placeholder="Tenant ID" CssClass="td-filter-input" />
+        <SfTextBox @bind-Value="_keywordFilter" Placeholder="Keyword…" CssClass="td-filter-input" @onkeyup="OnKeywordKeyUp" />
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="ApplyFilters">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters">
+            <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading system logs…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="SystemLogDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(SystemLogDto.CreatedDateUtc)" HeaderText="Timestamp" Width="170" Format="g" />
+            <GridColumn Field="@nameof(SystemLogDto.LogLevel)" HeaderText="Level" Width="110">
+                <Template>
+                    @{ var row = (SystemLogDto)context; }
+                    <span class="um-badge @LevelBadgeCss(row.LogLevel)">@row.LogLevel</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SystemLogDto.ServiceName)" HeaderText="Service" Width="160" />
+            <GridColumn Field="@nameof(SystemLogDto.Message)" HeaderText="Message" MinWidth="260">
+                <Template>
+                    @{ var m = (SystemLogDto)context; }
+                    <span class="td-message-truncate" title="@m.Message">@Truncate(m.Message, 120)</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SystemLogDto.RegionCode)" HeaderText="Region" Width="110">
+                <Template>
+                    @{ var r = (SystemLogDto)context; }
+                    <span>@(r.RegionCode ?? "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SystemLogDto.TenantId)" HeaderText="Tenant" Width="140">
+                <Template>
+                    @{ var t = (SystemLogDto)context; }
+                    <span class="td-mono">@(t.TenantId?.ToString("N")[..8] ?? "—")…</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SystemLogDto.CorrelationId)" HeaderText="Correlation ID" Width="160">
+                <Template>
+                    @{ var c = (SystemLogDto)context; }
+                    <span class="td-mono">@(string.IsNullOrEmpty(c.CorrelationId) ? "—" : (c.CorrelationId.Length > 12 ? c.CorrelationId[..12] + "…" : c.CorrelationId))</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Actions" Width="160" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
+                <Template>
+                    @{ var row = (SystemLogDto)context; }
+                    <button class="um-btn um-btn-ghost um-btn-xs" title="Open Log Detail" @onclick="() => ShowDetail(row)">
+                        <i class="bi bi-eye"></i>
+                    </button>
+                    @if (row.TenantId.HasValue)
+                    {
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Open Related Tenant" @onclick="() => OpenTenant(row.TenantId.Value)">
+                            <i class="bi bi-building"></i>
+                        </button>
+                    }
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+@* ── Log Detail Dialog ─────────────────────────────────────── *@
+<SfDialog @bind-Visible="_detailVisible" Header="System Log Detail" Width="700px" IsModal="true" ShowCloseIcon="true" CssClass="um-dialog">
+    <DialogTemplates>
+        <Content>
+            @if (_selected is not null)
+            {
+                <div class="td-detail-grid">
+                    <div class="td-detail-label">System Log ID</div>
+                    <div class="td-detail-value td-mono">@_selected.SystemLogId</div>
+                    <div class="td-detail-label">Timestamp</div>
+                    <div class="td-detail-value">@_selected.CreatedDateUtc.ToString("g")</div>
+                    <div class="td-detail-label">Level</div>
+                    <div class="td-detail-value"><span class="um-badge @LevelBadgeCss(_selected.LogLevel)">@_selected.LogLevel</span></div>
+                    <div class="td-detail-label">Service</div>
+                    <div class="td-detail-value">@_selected.ServiceName</div>
+                    <div class="td-detail-label">Source Context</div>
+                    <div class="td-detail-value td-mono">@(_selected.SourceContext ?? "—")</div>
+                    <div class="td-detail-label">Machine</div>
+                    <div class="td-detail-value">@(_selected.MachineName ?? "—")</div>
+                    <div class="td-detail-label">Region</div>
+                    <div class="td-detail-value">@(_selected.RegionCode ?? "—")</div>
+                    <div class="td-detail-label">Tenant</div>
+                    <div class="td-detail-value td-mono">@(_selected.TenantId?.ToString() ?? "—")</div>
+                    <div class="td-detail-label">Correlation ID</div>
+                    <div class="td-detail-value td-mono">@(_selected.CorrelationId ?? "—")</div>
+                    <div class="td-detail-label">User</div>
+                    <div class="td-detail-value td-mono">@(_selected.UserId?.ToString() ?? "—")</div>
+                    <div class="td-detail-label">Request</div>
+                    <div class="td-detail-value">@(_selected.HttpMethod ?? "") @(_selected.RequestPath ?? "—")</div>
+                    <div class="td-detail-label">HTTP Status</div>
+                    <div class="td-detail-value">@(_selected.HttpStatusCode?.ToString() ?? "—")</div>
+                    <div class="td-detail-label">Duration</div>
+                    <div class="td-detail-value">@(_selected.DurationMs.HasValue ? $"{_selected.DurationMs} ms" : "—")</div>
+                </div>
+
+                <h6 class="td-section-heading">Message</h6>
+                <pre class="td-log-block">@_selected.Message</pre>
+
+                @if (!string.IsNullOrWhiteSpace(_selected.ExceptionText))
+                {
+                    <h6 class="td-section-heading td-section-danger">Exception</h6>
+                    <pre class="td-log-block td-log-error">@_selected.ExceptionText</pre>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_selected.StackTrace))
+                {
+                    <h6 class="td-section-heading td-section-danger">Stack Trace</h6>
+                    <pre class="td-log-block td-log-error">@_selected.StackTrace</pre>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_selected.Properties))
+                {
+                    <h6 class="td-section-heading">Properties</h6>
+                    <pre class="td-log-block">@FormatJson(_selected.Properties)</pre>
+                }
+            }
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    SfGrid<SystemLogDto>? _grid;
+    SfToast? _toast;
+
+    List<SystemLogDto> _items = [];
+    bool _loading;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string _levelFilter       = string.Empty;
+    string _serviceFilter     = string.Empty;
+    string _regionFilter      = string.Empty;
+    string _correlationFilter = string.Empty;
+    string _tenantFilter      = string.Empty;
+    string _keywordFilter     = string.Empty;
+
+    SystemLogDto? _selected;
+    bool _detailVisible;
+
+    readonly List<FilterOption> _levelOptions =
+    [
+        new("", "All Levels"),
+        new("Trace",       "Trace"),
+        new("Debug",       "Debug"),
+        new("Information", "Information"),
+        new("Warning",     "Warning"),
+        new("Error",       "Error"),
+        new("Critical",    "Critical")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Audit", null),
+            new BreadcrumbService.BreadcrumbItem("System Logs", "/platform/logs"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchSystemLogsAsync(
+                keyword: _keywordFilter,
+                level: _levelFilter,
+                serviceName: _serviceFilter,
+                regionCode: _regionFilter,
+                correlationId: _correlationFilter,
+                tenantId: _tenantFilter,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    async Task ApplyFilters()
+    {
+        _pageNumber = 1;
+        await LoadAsync();
+    }
+
+    async Task ClearFilters()
+    {
+        _levelFilter = string.Empty;
+        _serviceFilter = string.Empty;
+        _regionFilter = string.Empty;
+        _correlationFilter = string.Empty;
+        _tenantFilter = string.Empty;
+        _keywordFilter = string.Empty;
+        _pageNumber = 1;
+        await LoadAsync();
+    }
+
+    void OnKeywordKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") InvokeAsync(ApplyFilters); }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    void ShowDetail(SystemLogDto row)
+    {
+        _selected = row;
+        _detailVisible = true;
+    }
+
+    void OpenTenant(Guid tenantId)
+    {
+        Nav.NavigateTo($"/platform/tenants/{tenantId}");
+    }
+
+    async Task ExportAsync()
+    {
+        if (!_items.Any())
+        {
+            if (_toast is not null)
+                await _toast.ShowAsync(new() { Title = "Export", Content = "No data to export.", CssClass = "e-toast-warning" });
+            return;
+        }
+
+        if (_toast is not null)
+            await _toast.ShowAsync(new() { Title = "Export", Content = $"Exporting {_totalCount} log records…", CssClass = "e-toast-info" });
+    }
+
+    static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..maxLength] + "…";
+
+    static string FormatJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return "(empty)";
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch
+        {
+            return json;
+        }
+    }
+
+    static string LevelBadgeCss(string level) => level switch
+    {
+        "Trace"       => "um-badge--neutral",
+        "Debug"       => "um-badge--neutral",
+        "Information" => "um-badge--info",
+        "Warning"     => "um-badge--warning",
+        "Error"       => "um-badge--danger",
+        "Critical"    => "um-badge--danger",
+        _             => "um-badge--neutral"
+    };
+
+    sealed record FilterOption(string Value, string Text);
+}

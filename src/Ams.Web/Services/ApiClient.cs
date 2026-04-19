@@ -3,6 +3,7 @@ using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
 using Ams.Application.Features.AccountNotes;
 using Ams.Application.Features.Accounts;
+using Ams.Application.Features.Tenants;
 using Ams.Application.Features.Compliance;
 using Ams.Application.Features.Contacts;
 using Ams.Application.Features.Documents;
@@ -19,7 +20,23 @@ using Ams.Application.Features.PortalInvites;
 using Ams.Application.Features.PricingRules;
 using Ams.Application.Features.Quotes;
 using Ams.Application.Features.Security;
+using Ams.Application.Features.Plans;
 using Ams.Application.Features.Sod;
+using Ams.Application.Features.Subscriptions;
+using Ams.Application.Features.FeatureCatalog;
+using Ams.Application.Features.TenantFeatures;
+using Ams.Application.Features.Regions;
+using Ams.Application.Features.DeploymentBindings;
+using Ams.Application.Features.DeploymentStamps;
+using Ams.Application.Features.TenantDeploymentAssignments;
+using Ams.Application.Features.QuotaRules;
+using Ams.Application.Features.TenantQuotas;
+using Ams.Application.Features.QuotaViolations;
+using Ams.Application.Features.HealthChecks;
+using Ams.Application.Features.Alerts;
+using Ams.Application.Features.SlaDefinitions;
+using Ams.Application.Features.PlatformEvents;
+using Ams.Application.Features.BackgroundJobs;
 
 namespace Ams.Web.Services;
 
@@ -37,8 +54,307 @@ public sealed class ApiClient
         => _httpClient.GetFromJsonAsync<DashboardKpiDto>($"api/dashboard?tenantId={tenantId}", cancellationToken);
 
     // ── Platform Core ────────────────────────────────────────
-    public Task<PagedResult<TenantDto>?> SearchTenantsAsync(string? searchTerm = null, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<TenantDto>>($"api/tenants?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+    public Task<PagedResult<TenantDto>?> SearchTenantsAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<TenantDto>>($"api/tenants?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<TenantDto?> GetTenantByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<TenantDto>($"api/tenants/{id}", cancellationToken);
+
+    public async Task<Guid> CreateTenantAsync(CreateTenantRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/tenants", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateTenantAsync(Guid id, UpdateTenantRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/tenants/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SuspendTenantAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/tenants/{id}/suspend", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ActivateTenantAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/tenants/{id}/activate", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task TerminateTenantAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/tenants/{id}/terminate", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Tenant Domains ───────────────────────────────────────
+    public Task<PagedResult<TenantDomainDto>?> SearchTenantDomainsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<TenantDomainDto>>($"api/tenant-domains?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<PagedResult<TenantDomainDto>?> SearchAllTenantDomainsAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<TenantDomainDto>>($"api/tenant-domains?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<TenantDomainDto?> GetTenantDomainByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<TenantDomainDto>($"api/tenant-domains/{id}", cancellationToken);
+
+    public async Task<Guid> CreateTenantDomainAsync(CreateTenantDomainRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/tenant-domains", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateTenantDomainRedirectAsync(Guid id, string? redirectTarget, string? notes = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/tenant-domains/{id}/redirect", new { RedirectTarget = redirectTarget, Notes = notes }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SetTenantDomainPrimaryAsync(Guid tenantId, Guid domainId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/tenant-domains/{tenantId}/set-primary/{domainId}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task VerifyTenantDomainAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/tenant-domains/{id}/verify", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteTenantDomainAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/tenant-domains/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Plans ────────────────────────────────────────────────
+    public Task<PagedResult<PlanDto>?> SearchPlansAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PlanDto>>($"api/plans?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<PlanDto?> GetPlanByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PlanDto>($"api/plans/{id}", cancellationToken);
+
+    public async Task<Guid> CreatePlanAsync(CreatePlanRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/plans", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdatePlanAsync(Guid id, UpdatePlanRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/plans/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ClonePlanAsync(Guid id, string newPlanCode, string newPlanName, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/plans/{id}/clone", new { NewPlanCode = newPlanCode, NewPlanName = newPlanName }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ActivatePlanAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/plans/{id}/activate", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeactivatePlanAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/plans/{id}/deactivate", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeletePlanAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/plans/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Plan Sub-entities ─────────────────────────────────────
+    public Task<IReadOnlyList<PlanFeatureDto>?> GetPlanFeaturesAsync(Guid planId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<PlanFeatureDto>>($"api/plans/{planId}/features", cancellationToken);
+
+    public async Task AddPlanFeatureAsync(Guid planId, AddPlanFeatureRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/plans/{planId}/features", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RemovePlanFeatureAsync(Guid planId, Guid planFeatureId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/plans/{planId}/features/{planFeatureId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<IReadOnlyList<PlanLimitDto>?> GetPlanLimitsAsync(Guid planId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<PlanLimitDto>>($"api/plans/{planId}/limits", cancellationToken);
+
+    public async Task AddPlanLimitAsync(Guid planId, AddPlanLimitRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/plans/{planId}/limits", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task UpdatePlanLimitAsync(Guid planId, Guid planLimitId, UpdatePlanLimitRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/plans/{planId}/limits/{planLimitId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RemovePlanLimitAsync(Guid planId, Guid planLimitId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/plans/{planId}/limits/{planLimitId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<IReadOnlyList<PlanAddOnDto>?> GetPlanAddOnsAsync(Guid planId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<PlanAddOnDto>>($"api/plans/{planId}/addons", cancellationToken);
+
+    public async Task AddPlanAddOnAsync(Guid planId, AddPlanAddOnRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/plans/{planId}/addons", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RemovePlanAddOnAsync(Guid planId, Guid planAddOnId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/plans/{planId}/addons/{planAddOnId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Platform Usage ─────────────────────────────────────────
+    public Task<PlatformUsageDto?> GetPlatformUsageAsync(CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PlatformUsageDto>("api/usage", cancellationToken);
+
+    // ── Feature Catalog ────────────────────────────────────────
+    public Task<PagedResult<FeatureCatalogDto>?> SearchFeaturesAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<FeatureCatalogDto>>($"api/features?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateFeatureAsync(CreateFeatureRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/features", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateFeatureAsync(Guid id, UpdateFeatureRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/features/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SetFeatureEnabledAsync(Guid id, bool enabled, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/features/{id}/{(enabled ? "enable" : "disable")}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteFeatureAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/features/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Tenant Features ────────────────────────────────────────
+    public Task<IReadOnlyList<TenantFeatureDto>?> GetTenantFeaturesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<TenantFeatureDto>>($"api/tenants/{tenantId}/features", cancellationToken);
+
+    public async Task OverrideTenantFeatureAsync(Guid tenantId, OverrideTenantFeatureRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/tenants/{tenantId}/features/override", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SetTenantFeatureEnabledAsync(Guid tenantId, string featureCode, bool enabled, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/tenants/{tenantId}/features/{Uri.EscapeDataString(featureCode)}/{(enabled ? "enable" : "disable")}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ResetTenantFeatureAsync(Guid tenantId, string featureCode, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/tenants/{tenantId}/features/{Uri.EscapeDataString(featureCode)}/reset", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<PagedResult<UsageEventDto>?> GetUsageEventsAsync(
+        Guid?   tenantId      = null,
+        string? metricType    = null,
+        string? sourceService = null,
+        int     pageNumber    = 1,
+        int     pageSize      = 50,
+        CancellationToken cancellationToken = default)
+    {
+        var url = $"api/usage/events?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (tenantId.HasValue)                    url += $"&tenantId={tenantId}";
+        if (!string.IsNullOrEmpty(metricType))    url += $"&metricType={Uri.EscapeDataString(metricType)}";
+        if (!string.IsNullOrEmpty(sourceService)) url += $"&sourceService={Uri.EscapeDataString(sourceService)}";
+        return _httpClient.GetFromJsonAsync<PagedResult<UsageEventDto>>(url, cancellationToken);
+    }
+
+    // ── Subscriptions ─────────────────────────────────────────
+    public Task<SubscriptionDto?> GetSubscriptionByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<SubscriptionDto>($"api/subscriptions/{id}", cancellationToken);
+
+    public Task<PagedResult<SubscriptionDto>?> SearchSubscriptionsAsync(string? searchTerm = null, Guid? tenantId = null, Guid? planId = null, string? statusCode = null, string? renewalType = null, string? billingCycle = null, bool? pastDue = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/subscriptions?pageNumber={pageNumber}&pageSize={pageSize}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}";
+        if (tenantId.HasValue)                          url += $"&tenantId={tenantId}";
+        if (planId.HasValue)                            url += $"&planId={planId}";
+        if (!string.IsNullOrEmpty(statusCode))          url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        if (!string.IsNullOrEmpty(renewalType))         url += $"&renewalType={Uri.EscapeDataString(renewalType)}";
+        if (!string.IsNullOrEmpty(billingCycle))        url += $"&billingCycle={Uri.EscapeDataString(billingCycle)}";
+        if (pastDue.HasValue)                           url += $"&pastDue={pastDue.Value}";
+        return _httpClient.GetFromJsonAsync<PagedResult<SubscriptionDto>>(url, cancellationToken);
+    }
+
+    public async Task<Guid> CreateSubscriptionAsync(CreateSubscriptionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/subscriptions", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpgradeSubscriptionAsync(Guid id, Guid newPlanId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/subscriptions/{id}/upgrade", new { PlanId = newPlanId }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DowngradeSubscriptionAsync(Guid id, Guid newPlanId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/subscriptions/{id}/downgrade", new { PlanId = newPlanId }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RenewSubscriptionAsync(Guid id, DateTime newEndDateUtc, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/subscriptions/{id}/renew", new { NewEndDateUtc = newEndDateUtc }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task CancelSubscriptionAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/subscriptions/{id}/cancel", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteSubscriptionAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/subscriptions/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
 
     public Task<PagedResult<BranchDto>?> SearchBranchesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<BranchDto>>($"api/branches?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
@@ -772,6 +1088,21 @@ public sealed class ApiClient
     public Task<PagedResult<TenantBrandingDto>?> SearchTenantBrandingAsync(string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<TenantBrandingDto>>($"api/platform/branding?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
+    public Task<TenantBrandingDto?> GetTenantBrandingAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<TenantBrandingDto>($"api/platform/branding/tenant/{tenantId}", cancellationToken);
+
+    public async Task UpdateTenantBrandingAsync(Guid tenantId, UpdateTenantBrandingRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/platform/branding/tenant/{tenantId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ResetTenantBrandingToDefaultsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/platform/branding/tenant/{tenantId}/reset", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     public Task<PagedResult<NotificationDto>?> SearchNotificationsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<NotificationDto>>($"api/notifications?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -1224,5 +1555,519 @@ public sealed class ApiClient
         return parts.Count > 0 ? $"{path}?{string.Join("&", parts)}" : path;
     }
 
+    // ── Regions ──────────────────────────────────────────────
+    public Task<PagedResult<RegionDto>?> SearchRegionsAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<RegionDto>>($"api/regions?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<RegionDto?> GetRegionByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<RegionDto>($"api/regions/{id}", cancellationToken);
+
+    public async Task<Guid> CreateRegionAsync(CreateRegionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/regions", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateRegionAsync(Guid id, UpdateRegionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/regions/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SetRegionActiveAsync(Guid id, bool activate, CancellationToken cancellationToken = default)
+    {
+        var action = activate ? "activate" : "deactivate";
+        var response = await _httpClient.PatchAsync($"api/regions/{id}/{action}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteRegionAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/regions/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Deployment Bindings ───────────────────────────────────
+    public Task<PagedResult<DeploymentBindingDto>?> SearchDeploymentBindingsAsync(string? searchTerm = null, string? statusCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/deployment-bindings?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(statusCode)) url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        return _httpClient.GetFromJsonAsync<PagedResult<DeploymentBindingDto>>(url, cancellationToken);
+    }
+
+    public Task<DeploymentBindingDto?> GetDeploymentBindingByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<DeploymentBindingDto>($"api/deployment-bindings/{id}", cancellationToken);
+
+    public async Task<Guid> CreateDeploymentBindingAsync(CreateDeploymentBindingRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/deployment-bindings", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateDeploymentBindingAsync(Guid id, UpdateDeploymentBindingRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/deployment-bindings/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SetDeploymentBindingStatusAsync(Guid id, string statusCode, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/deployment-bindings/{id}/status?statusCode={Uri.EscapeDataString(statusCode)}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteDeploymentBindingAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/deployment-bindings/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Deployment Stamps ─────────────────────────────────────
+    public Task<PagedResult<DeploymentStampDto>?> SearchDeploymentStampsAsync(string? searchTerm = null, string? statusCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/deployment-stamps?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(statusCode)) url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        return _httpClient.GetFromJsonAsync<PagedResult<DeploymentStampDto>>(url, cancellationToken);
+    }
+
+    public Task<DeploymentStampDto?> GetDeploymentStampByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<DeploymentStampDto>($"api/deployment-stamps/{id}", cancellationToken);
+
+    public async Task<Guid> CreateDeploymentStampAsync(CreateDeploymentStampRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/deployment-stamps", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateDeploymentStampAsync(Guid id, UpdateDeploymentStampRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/deployment-stamps/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SetDeploymentStampStatusAsync(Guid id, string statusCode, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/deployment-stamps/{id}/status?statusCode={Uri.EscapeDataString(statusCode)}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteDeploymentStampAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/deployment-stamps/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Tenant Deployment Assignments ─────────────────────────
+    public Task<TenantDeploymentAssignmentDto?> GetTenantDeploymentAssignmentAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<TenantDeploymentAssignmentDto>($"api/tenant-deployment-assignments/{tenantId}", cancellationToken);
+
+    public async Task<Guid> UpsertTenantDeploymentAssignmentAsync(Guid tenantId, UpsertTenantDeploymentAssignmentRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/tenant-deployment-assignments/{tenantId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task DeleteTenantDeploymentAssignmentAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/tenant-deployment-assignments/{tenantId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Quota Rules ───────────────────────────────────────
+    public Task<PagedResult<QuotaRuleDto>?> SearchQuotaRulesAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/quota-rules?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        return _httpClient.GetFromJsonAsync<PagedResult<QuotaRuleDto>>(url, cancellationToken);
+    }
+
+    public Task<QuotaRuleDto?> GetQuotaRuleByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<QuotaRuleDto>($"api/quota-rules/{id}", cancellationToken);
+
+    public async Task<Guid> CreateQuotaRuleAsync(CreateQuotaRuleRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/quota-rules", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateQuotaRuleAsync(Guid id, UpdateQuotaRuleRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/quota-rules/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteQuotaRuleAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/quota-rules/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<Guid> CloneQuotaRuleAsync(Guid id, CloneQuotaRuleRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/quota-rules/{id}/clone", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task ActivateQuotaRuleAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/quota-rules/{id}/activate", new { }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeactivateQuotaRuleAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/quota-rules/{id}/deactivate", new { }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Tenant Quotas ─────────────────────────────────────────
+    public Task<PagedResult<TenantQuotaDto>?> SearchTenantQuotasAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/tenant-quotas?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        return _httpClient.GetFromJsonAsync<PagedResult<TenantQuotaDto>>(url, cancellationToken);
+    }
+
+    public Task<List<TenantQuotaDto>?> GetTenantQuotasAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<List<TenantQuotaDto>>($"api/tenant-quotas/by-tenant/{tenantId}", cancellationToken);
+
+    public async Task<Guid> UpsertTenantQuotaAsync(Guid tenantId, UpsertTenantQuotaRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/tenant-quotas/by-tenant/{tenantId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task DeleteTenantQuotaAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/tenant-quotas/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task OverrideTenantQuotaLimitAsync(Guid id, OverrideLimitRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/tenant-quotas/{id}/override-limit", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ResetTenantQuotaOverrideAsync(Guid id, ResetOverrideRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/tenant-quotas/{id}/reset-override", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task NotifyTenantQuotaAsync(Guid id, NotifyTenantQuotaRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/tenant-quotas/{id}/notify", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Quota Violations ──────────────────────────────────────
+    public Task<PagedResult<QuotaViolationDto>?> SearchQuotaViolationsAsync(string? searchTerm = null, string? statusCode = null, string? severityCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/quota-violations?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm))   url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(statusCode))   url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        if (!string.IsNullOrEmpty(severityCode)) url += $"&severityCode={Uri.EscapeDataString(severityCode)}";
+        return _httpClient.GetFromJsonAsync<PagedResult<QuotaViolationDto>>(url, cancellationToken);
+    }
+
+    public Task<QuotaViolationDto?> GetQuotaViolationByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<QuotaViolationDto>($"api/quota-violations/{id}", cancellationToken);
+
+    public Task<int> GetQuotaViolationOpenCountAsync(CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<int>("api/quota-violations/open-count", cancellationToken);
+
+    public async Task AcknowledgeQuotaViolationAsync(Guid id, AcknowledgeQuotaViolationRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/quota-violations/{id}/acknowledge", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ResolveQuotaViolationAsync(Guid id, ResolveQuotaViolationRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/quota-violations/{id}/resolve", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task NotifyQuotaViolationAsync(Guid id, NotifyQuotaViolationRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/quota-violations/{id}/notify", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ApplyQuotaRestrictionAsync(Guid id, ApplyRestrictionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/quota-violations/{id}/restrict", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task GrantTemporaryQuotaIncreaseAsync(Guid id, GrantTemporaryIncreaseRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/quota-violations/{id}/temporary-increase", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ConvertQuotaToOverageAsync(Guid id, ConvertToOverageRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/quota-violations/{id}/convert-to-overage", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Health Checks ─────────────────────────────────────────
+    public Task<PagedResult<HealthCheckDto>?> SearchHealthChecksAsync(string? searchTerm = null, string? statusCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/health-checks?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(statusCode)) url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        return _httpClient.GetFromJsonAsync<PagedResult<HealthCheckDto>>(url, cancellationToken);
+    }
+
+    public Task<HealthCheckDto?> GetHealthCheckByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<HealthCheckDto>($"api/health-checks/{id}", cancellationToken);
+
+    public async Task<Guid> CreateHealthCheckAsync(CreateHealthCheckRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/health-checks", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateHealthCheckAsync(Guid id, UpdateHealthCheckRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/health-checks/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteHealthCheckAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/health-checks/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Alerts ────────────────────────────────────────────────
+    public Task<PagedResult<AlertDto>?> SearchAlertsAsync(string? searchTerm = null, string? statusCode = null, string? severityCode = null, string? regionCode = null, Guid? tenantId = null, bool? openOnly = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/alerts?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm))   url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(statusCode))   url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        if (!string.IsNullOrEmpty(severityCode)) url += $"&severityCode={Uri.EscapeDataString(severityCode)}";
+        if (!string.IsNullOrEmpty(regionCode))   url += $"&regionCode={Uri.EscapeDataString(regionCode)}";
+        if (tenantId.HasValue)                   url += $"&tenantId={tenantId.Value}";
+        if (openOnly == true)                    url += "&openOnly=true";
+        return _httpClient.GetFromJsonAsync<PagedResult<AlertDto>>(url, cancellationToken);
+    }
+
+    public Task<AlertDto?> GetAlertByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<AlertDto>($"api/alerts/{id}", cancellationToken);
+
+    public Task<int> GetAlertOpenCountAsync(CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<int>("api/alerts/open-count", cancellationToken);
+
+    public async Task AcknowledgeAlertAsync(Guid id, AcknowledgeAlertRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/alerts/{id}/acknowledge", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ResolveAlertAsync(Guid id, ResolveAlertRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/alerts/{id}/resolve", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task AssignAlertAsync(Guid id, AssignAlertRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/alerts/{id}/assign", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task EscalateAlertAsync(Guid id, EscalateAlertRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/alerts/{id}/escalate", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── SLA Definitions ──────────────────────────────────────
+    public Task<PagedResult<SlaDefinitionDto>?> SearchSlaDefinitionsAsync(string? searchTerm = null, string? complianceStatus = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/sla-definitions?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm))       url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(complianceStatus)) url += $"&complianceStatus={Uri.EscapeDataString(complianceStatus)}";
+        return _httpClient.GetFromJsonAsync<PagedResult<SlaDefinitionDto>>(url, cancellationToken);
+    }
+
+    public Task<SlaDefinitionDto?> GetSlaDefinitionByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<SlaDefinitionDto>($"api/sla-definitions/{id}", cancellationToken);
+
+    public async Task<Guid> CreateSlaDefinitionAsync(CreateSlaDefinitionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/sla-definitions", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateSlaDefinitionAsync(Guid id, UpdateSlaDefinitionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/sla-definitions/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteSlaDefinitionAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/sla-definitions/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Audit Logs ───────────────────────────────────────────
+    public Task<PagedResult<AuditLogDto>?> SearchAuditLogsAsync(string? searchTerm = null, string? eventTypeCode = null, string? actor = null, string? entityName = null, string? tenantId = null, DateTime? fromDate = null, DateTime? toDate = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/audit-logs?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm))    url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(eventTypeCode)) url += $"&eventTypeCode={Uri.EscapeDataString(eventTypeCode)}";
+        if (!string.IsNullOrEmpty(actor))         url += $"&actor={Uri.EscapeDataString(actor)}";
+        if (!string.IsNullOrEmpty(entityName))    url += $"&entityName={Uri.EscapeDataString(entityName)}";
+        if (!string.IsNullOrEmpty(tenantId))      url += $"&tenantId={Uri.EscapeDataString(tenantId)}";
+        if (fromDate.HasValue)                    url += $"&fromDate={fromDate.Value:O}";
+        if (toDate.HasValue)                      url += $"&toDate={toDate.Value:O}";
+        return _httpClient.GetFromJsonAsync<PagedResult<AuditLogDto>>(url, cancellationToken);
+    }
+
+    public Task<AuditLogDto?> GetAuditLogByIdAsync(Guid auditLogId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<AuditLogDto>($"api/audit-logs/{auditLogId}", cancellationToken);
+
+    // ── Field Change Logs ────────────────────────────────────
+    public Task<PagedResult<FieldChangeLogDto>?> SearchFieldChangeLogsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/field-change-logs?tenantId={tenantId}&pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        return _httpClient.GetFromJsonAsync<PagedResult<FieldChangeLogDto>>(url, cancellationToken);
+    }
+
+    // ── Security Event Logs ──────────────────────────────────
+    public Task<PagedResult<SecurityEventLogDto>?> SearchSecurityEventLogsAsync(string? searchTerm = null, string? eventTypeCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/security-event-logs?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm))    url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(eventTypeCode)) url += $"&eventTypeCode={Uri.EscapeDataString(eventTypeCode)}";
+        return _httpClient.GetFromJsonAsync<PagedResult<SecurityEventLogDto>>(url, cancellationToken);
+    }
+
+    // ── System Logs ─────────────────────────────────────────
+    public Task<PagedResult<SystemLogDto>?> SearchSystemLogsAsync(string? keyword = null, string? level = null, string? serviceName = null, string? regionCode = null, string? correlationId = null, string? tenantId = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/system-logs?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(keyword))       url += $"&keyword={Uri.EscapeDataString(keyword)}";
+        if (!string.IsNullOrEmpty(level))          url += $"&level={Uri.EscapeDataString(level)}";
+        if (!string.IsNullOrEmpty(serviceName))    url += $"&serviceName={Uri.EscapeDataString(serviceName)}";
+        if (!string.IsNullOrEmpty(regionCode))     url += $"&regionCode={Uri.EscapeDataString(regionCode)}";
+        if (!string.IsNullOrEmpty(correlationId))  url += $"&correlationId={Uri.EscapeDataString(correlationId)}";
+        if (!string.IsNullOrEmpty(tenantId))       url += $"&tenantId={Uri.EscapeDataString(tenantId)}";
+        return _httpClient.GetFromJsonAsync<PagedResult<SystemLogDto>>(url, cancellationToken);
+    }
+
+    public Task<SystemLogDto?> GetSystemLogByIdAsync(Guid systemLogId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<SystemLogDto>($"api/system-logs/{systemLogId}", cancellationToken);
+
+    // ── Platform Configuration ───────────────────────────────
+    public Task<List<ConfigurationSettingDto>?> GetConfigurationByScopeAsync(string scopeCode, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<List<ConfigurationSettingDto>>($"api/platform/configuration/scope/{Uri.EscapeDataString(scopeCode)}", cancellationToken);
+
+    public async Task UpdateConfigurationValueAsync(Guid settingId, string? settingValue, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/platform/configuration/{settingId}/value", new { SettingValue = settingValue }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Platform Events ────────────────────────────────────────
+    public Task<PagedResult<PlatformEventDto>?> SearchPlatformEventsAsync(string? searchTerm = null, string? eventTypeCode = null, string? processingStatus = null, string? sourceService = null, Guid? tenantId = null, string? correlationId = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/platform-events?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm))       url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(eventTypeCode))    url += $"&eventTypeCode={Uri.EscapeDataString(eventTypeCode)}";
+        if (!string.IsNullOrEmpty(processingStatus)) url += $"&processingStatus={Uri.EscapeDataString(processingStatus)}";
+        if (!string.IsNullOrEmpty(sourceService))    url += $"&sourceService={Uri.EscapeDataString(sourceService)}";
+        if (tenantId.HasValue)                        url += $"&tenantId={tenantId}";
+        if (!string.IsNullOrEmpty(correlationId))    url += $"&correlationId={Uri.EscapeDataString(correlationId)}";
+        return _httpClient.GetFromJsonAsync<PagedResult<PlatformEventDto>>(url, cancellationToken);
+    }
+
+    public Task<PlatformEventDto?> GetPlatformEventByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PlatformEventDto>($"api/platform-events/{id}", cancellationToken);
+
+    public async Task ReplayPlatformEventAsync(Guid id, ReplayPlatformEventRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/platform-events/{id}/replay", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Background Jobs ───────────────────────────────────────
+    public Task<PagedResult<BackgroundJobDto>?> SearchBackgroundJobsAsync(string? searchTerm = null, string? jobTypeCode = null, string? statusCode = null, Guid? tenantId = null, bool? failedOnly = null, DateTime? fromDateUtc = null, DateTime? toDateUtc = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/background-jobs?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (!string.IsNullOrEmpty(searchTerm))   url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(jobTypeCode))   url += $"&jobTypeCode={Uri.EscapeDataString(jobTypeCode)}";
+        if (!string.IsNullOrEmpty(statusCode))    url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        if (tenantId.HasValue)                     url += $"&tenantId={tenantId}";
+        if (failedOnly == true)                    url += "&failedOnly=true";
+        if (fromDateUtc.HasValue)                  url += $"&fromDateUtc={fromDateUtc.Value:O}";
+        if (toDateUtc.HasValue)                    url += $"&toDateUtc={toDateUtc.Value:O}";
+        return _httpClient.GetFromJsonAsync<PagedResult<BackgroundJobDto>>(url, cancellationToken);
+    }
+
+    public Task<BackgroundJobDto?> GetBackgroundJobByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<BackgroundJobDto>($"api/background-jobs/{id}", cancellationToken);
+
+    public async Task RetryBackgroundJobAsync(Guid id, RetryBackgroundJobRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/background-jobs/{id}/retry", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task CancelBackgroundJobAsync(Guid id, CancelBackgroundJobRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/background-jobs/{id}/cancel", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RequeueBackgroundJobAsync(Guid id, RequeueBackgroundJobRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/background-jobs/{id}/requeue", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     private sealed class IdResult { public Guid Id { get; set; } }
+
+    // ── Tenant Configuration ─────────────────────────────────
+    public Task<IEnumerable<ConfigurationSettingDto>?> GetTenantConfigurationAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IEnumerable<ConfigurationSettingDto>>($"api/platform/configuration/tenant/{tenantId}", cancellationToken);
+
+    public async Task SaveTenantConfigurationAsync(Guid tenantId, IEnumerable<UpsertTenantSettingModel> settings, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/platform/configuration/tenant/{tenantId}/settings", settings, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+}
+
+public sealed class UpsertTenantSettingModel
+{
+    public string SettingKey { get; set; } = string.Empty;
+    public string? SettingValue { get; set; }
 }

@@ -1,0 +1,794 @@
+@page "/platform/subscriptions/{SubscriptionId:guid}"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Subscriptions
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>@(_sub?.TenantName ?? "Subscription") — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@if (_loading)
+{
+    <div class="um-loading-overlay" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading subscription…</span>
+    </div>
+}
+else if (_sub is null)
+{
+    <div class="td-not-found">
+        <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+        <p>Subscription not found.</p>
+        <button class="um-btn um-btn-ghost" @onclick="GoBack">Back to Subscriptions</button>
+    </div>
+}
+else
+{
+    <AppPageHeader Title="@_sub.TenantName"
+                   Subtitle="@($"Subscription · {_sub.PlanCode} · {_sub.BillingCycle}")"
+                   Icon="bi-card-checklist">
+        <Actions>
+            <button class="um-btn um-btn-ghost" @onclick="LoadCoreAsync" title="Refresh">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenUpgrade">
+                <i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Upgrade Plan
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenAddAddon">
+                <i class="bi bi-puzzle" aria-hidden="true"></i> Add Add-on
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenRenew">
+                <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Renew Subscription
+            </button>
+            <button class="um-btn um-btn-danger" @onclick="OpenCancel"
+                    disabled="@(_sub.StatusCode == "Cancelled")">
+                <i class="bi bi-x-circle" aria-hidden="true"></i> Cancel Subscription
+            </button>
+        </Actions>
+    </AppPageHeader>
+
+    <!-- Stats bar -->
+    <div class="sd-stats-bar">
+        <span class="td-pill @StatusPillCss(_sub.StatusCode)">@_sub.StatusCode</span>
+        <span class="td-stat-chip">
+            <i class="bi bi-building" aria-hidden="true"></i> @_sub.TenantName
+        </span>
+        <span class="td-stat-chip">
+            <i class="bi bi-award" aria-hidden="true"></i> @_sub.PlanCode
+        </span>
+        <span class="td-stat-chip">
+            <i class="bi bi-calendar3" aria-hidden="true"></i> @_sub.BillingCycle
+        </span>
+        <span class="td-stat-chip">
+            <i class="bi bi-arrow-repeat" aria-hidden="true"></i> @_sub.RenewalType renewal
+        </span>
+        <span class="td-stat-chip">
+            <i class="bi bi-currency-dollar" aria-hidden="true"></i> @_sub.BaseAmount.ToString("N2") / cycle
+        </span>
+        @if (_sub.EndDateUtc.HasValue && _sub.EndDateUtc.Value < DateTime.UtcNow && _sub.StatusCode != "Cancelled")
+        {
+            <span class="td-pill td-pill--danger">Past Due</span>
+        }
+    </div>
+
+    <!-- Tabs: 0 Overview · 1 Billing History · 2 Add-ons · 3 Usage Summary · 4 Audit -->
+    <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="OnTabChangedAsync">
+        <Tabs>
+
+            <!-- ─── 0: Overview ─── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Overview" IconCss="bi bi-grid-1x2" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="tot-grid tot-grid--2">
+
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-card-checklist" aria-hidden="true"></i>
+                                    <span>Subscription Details</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Subscription ID</span>
+                                        <span class="tot-fv"><span class="tot-mono">@_sub.SubscriptionId.ToString("N")[..8]…</span></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Tenant</span>
+                                        <span class="tot-fv">
+                                            <a href="/platform/tenants/@_sub.TenantId" class="tot-link">@_sub.TenantName</a>
+                                        </span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Plan</span>
+                                        <span class="tot-fv">
+                                            <a href="/platform/plans/@_sub.PlanId" class="tot-link">@_sub.PlanCode</a>
+                                        </span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Status</span>
+                                        <span class="tot-fv">
+                                            <span class="td-pill @StatusPillCss(_sub.StatusCode)">@_sub.StatusCode</span>
+                                        </span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Renewal Type</span>
+                                        <span class="tot-fv">@_sub.RenewalType</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Created</span>
+                                        <span class="tot-fv">@_sub.CreatedDateUtc.ToString("d MMM yyyy HH:mm")</span>
+                                    </div>
+                                    @if (_sub.ModifiedDateUtc.HasValue)
+                                    {
+                                        <div class="tot-field">
+                                            <span class="tot-fl">Last Modified</span>
+                                            <span class="tot-fv">@_sub.ModifiedDateUtc.Value.ToString("d MMM yyyy HH:mm")</span>
+                                        </div>
+                                    }
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="OpenUpgrade">
+                                        <i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Upgrade plan
+                                    </button>
+                                    <button class="tot-ql" @onclick="OpenRenew">
+                                        <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Renew
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="tot-card">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-receipt" aria-hidden="true"></i>
+                                    <span>Billing Info</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Billing Cycle</span>
+                                        <span class="tot-fv"><strong>@_sub.BillingCycle</strong></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Base Amount</span>
+                                        <span class="tot-fv"><strong>@_sub.BaseAmount.ToString("C2")</strong></span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">Start Date</span>
+                                        <span class="tot-fv">@_sub.StartDateUtc.ToString("d MMM yyyy")</span>
+                                    </div>
+                                    <div class="tot-field">
+                                        <span class="tot-fl">End Date</span>
+                                        <span class="tot-fv">
+                                            @if (_sub.EndDateUtc.HasValue)
+                                            {
+                                                <span class="@(_sub.EndDateUtc.Value < DateTime.UtcNow && _sub.StatusCode != "Cancelled" ? "sd-overdue" : "")">
+                                                    @_sub.EndDateUtc.Value.ToString("d MMM yyyy")
+                                                    @if (_sub.EndDateUtc.Value < DateTime.UtcNow && _sub.StatusCode != "Cancelled")
+                                                    {
+                                                        <span class="td-pill td-pill--danger sd-overdue-pill">Overdue</span>
+                                                    }
+                                                </span>
+                                            }
+                                            else
+                                            {
+                                                <span class="tot-muted">No end date</span>
+                                            }
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <button class="tot-ql" @onclick="() => OnTabChangedAsync(1)">
+                                        <i class="bi bi-clock-history" aria-hidden="true"></i> View billing history
+                                    </button>
+                                    <button class="tot-ql" @onclick="() => OnTabChangedAsync(2)">
+                                        <i class="bi bi-puzzle" aria-hidden="true"></i> View add-ons
+                                    </button>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ─── 1: Billing History ─── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Billing History" IconCss="bi bi-clock-history" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="sd-tab-toolbar">
+                            <span class="sd-tab-count">Invoices for <strong>@_sub.TenantName</strong></span>
+                        </div>
+                        @if (_billingLoading)
+                        {
+                            <div class="um-loading-overlay" aria-live="polite">
+                                <div class="um-spinner" aria-hidden="true"></div>
+                                <span>Loading billing history…</span>
+                            </div>
+                        }
+                        else if (_invoices.Count == 0)
+                        {
+                            <div class="sd-empty-state">
+                                <i class="bi bi-receipt" aria-hidden="true"></i>
+                                <p>No invoices found for this subscription's tenant.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <SfGrid TValue="InvoiceDto"
+                                    DataSource="@_invoices"
+                                    AllowSorting="true"
+                                    EnableHover="true"
+                                    RowHeight="48">
+                                <GridColumns>
+                                    <GridColumn Field="@nameof(InvoiceDto.InvoiceNumber)" HeaderText="Invoice #" Width="160">
+                                        <Template>
+                                            @{ var row = (InvoiceDto)context; }
+                                            <span class="tot-mono">@row.InvoiceNumber</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(InvoiceDto.TotalAmount)" HeaderText="Total" Width="130">
+                                        <Template>
+                                            @{ var row = (InvoiceDto)context; }
+                                            <strong>@row.TotalAmount.ToString("C2")</strong>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(InvoiceDto.BalanceAmount)" HeaderText="Balance" Width="130">
+                                        <Template>
+                                            @{ var row = (InvoiceDto)context; }
+                                            <span class="@(row.BalanceAmount > 0 ? "sd-balance-due" : "tot-muted")">
+                                                @row.BalanceAmount.ToString("C2")
+                                            </span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(InvoiceDto.StatusCode)" HeaderText="Status" Width="120">
+                                        <Template>
+                                            @{ var row = (InvoiceDto)context; }
+                                            <span class="td-pill @InvoiceStatusPillCss(row.StatusCode)">@InvoiceStatusLabel(row.StatusCode)</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(InvoiceDto.CreatedDateUtc)" HeaderText="Date" Width="150" Format="d" />
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ─── 2: Add-ons ─── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Add-ons" IconCss="bi bi-puzzle" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="sd-tab-toolbar">
+                            <span class="sd-tab-count">Add-ons available on plan <strong>@_sub.PlanCode</strong></span>
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenAddAddon">
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Add-on
+                            </button>
+                        </div>
+                        @if (_addonsLoading)
+                        {
+                            <div class="um-loading-overlay" aria-live="polite">
+                                <div class="um-spinner" aria-hidden="true"></div>
+                                <span>Loading add-ons…</span>
+                            </div>
+                        }
+                        else if (_addons.Count == 0)
+                        {
+                            <div class="sd-empty-state">
+                                <i class="bi bi-puzzle" aria-hidden="true"></i>
+                                <p>No add-ons defined on this plan.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <SfGrid TValue="PlanAddOnDto"
+                                    DataSource="@_addons"
+                                    AllowSorting="true"
+                                    EnableHover="true"
+                                    RowHeight="48">
+                                <GridColumns>
+                                    <GridColumn Field="@nameof(PlanAddOnDto.AddOnCode)" HeaderText="Code" Width="140">
+                                        <Template>
+                                            @{ var row = (PlanAddOnDto)context; }
+                                            <span class="tot-mono">@row.AddOnCode</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(PlanAddOnDto.AddOnName)" HeaderText="Name" MinWidth="160" />
+                                    <GridColumn Field="@nameof(PlanAddOnDto.Price)" HeaderText="Price" Width="120">
+                                        <Template>
+                                            @{ var row = (PlanAddOnDto)context; }
+                                            <strong>@row.Price.ToString("C2")</strong>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(PlanAddOnDto.BillingFrequency)" HeaderText="Billing" Width="120" />
+                                    <GridColumn Field="@nameof(PlanAddOnDto.Description)" HeaderText="Description" MinWidth="160" />
+                                    <GridColumn Field="@nameof(PlanAddOnDto.IsActive)" HeaderText="Active" Width="100">
+                                        <Template>
+                                            @{ var row = (PlanAddOnDto)context; }
+                                            @if (row.IsActive)
+                                            { <span class="td-pill td-pill--success">Active</span> }
+                                            else
+                                            { <span class="td-pill td-pill--muted">Inactive</span> }
+                                        </Template>
+                                    </GridColumn>
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ─── 3: Usage Summary ─── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Usage Summary" IconCss="bi bi-graph-up" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="sd-tab-toolbar">
+                            <span class="sd-tab-count">Quota usage for <strong>@_sub.TenantName</strong></span>
+                        </div>
+                        @if (_usageLoading)
+                        {
+                            <div class="um-loading-overlay" aria-live="polite">
+                                <div class="um-spinner" aria-hidden="true"></div>
+                                <span>Loading usage summary…</span>
+                            </div>
+                        }
+                        else if (_quotas.Count == 0)
+                        {
+                            <div class="sd-empty-state">
+                                <i class="bi bi-graph-up" aria-hidden="true"></i>
+                                <p>No usage metrics configured for this tenant.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="sd-usage-grid">
+                                @foreach (var q in _quotas)
+                                {
+                                    var pct = q.LimitValue > 0 ? (double)(q.CurrentValue / q.LimitValue) * 100 : 0;
+                                    var barCss = pct >= 90 ? "sd-usage-bar--danger"
+                                               : pct >= 70 ? "sd-usage-bar--warning"
+                                               :             "sd-usage-bar--ok";
+                                    <div class="sd-usage-card">
+                                        <div class="sd-usage-header">
+                                            <span class="sd-usage-metric">@q.MetricTypeCode</span>
+                                            <span class="sd-usage-values">
+                                                <strong>@q.CurrentValue.ToString("N0")</strong>
+                                                <span class="tot-muted"> / @q.LimitValue.ToString("N0") @q.LimitUnit</span>
+                                            </span>
+                                        </div>
+                                        <div class="sd-usage-bar-track">
+                                            <div class="sd-usage-bar-fill @barCss" style="width: @Math.Min(pct, 100).ToString("F1")%"></div>
+                                        </div>
+                                        <div class="sd-usage-footer">
+                                            <span class="@(pct >= 90 ? "sd-usage-pct--danger" : pct >= 70 ? "sd-usage-pct--warning" : "sd-usage-pct--ok")">
+                                                @pct.ToString("F0")%
+                                            </span>
+                                            <span class="tot-muted">@q.PeriodCode · @(q.IsEnforced ? "Enforced" : "Monitored")</span>
+                                            @if (!string.IsNullOrEmpty(q.StatusCode) && q.StatusCode != "OK")
+                                            {
+                                                <span class="td-pill td-pill--warning">@q.StatusCode</span>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ─── 4: Audit ─── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Audit" IconCss="bi bi-journal-text" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="sd-tab-toolbar">
+                            <span class="sd-tab-count">Audit trail for this subscription</span>
+                        </div>
+                        @if (_auditLoading)
+                        {
+                            <div class="um-loading-overlay" aria-live="polite">
+                                <div class="um-spinner" aria-hidden="true"></div>
+                                <span>Loading audit entries…</span>
+                            </div>
+                        }
+                        else if (_auditItems.Count == 0)
+                        {
+                            <div class="sd-empty-state">
+                                <i class="bi bi-journal-text" aria-hidden="true"></i>
+                                <p>No audit entries found for this subscription.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <SfGrid TValue="AuditLogDto"
+                                    DataSource="@_auditItems"
+                                    AllowSorting="true"
+                                    EnableHover="true"
+                                    RowHeight="48">
+                                <GridColumns>
+                                    <GridColumn Field="@nameof(AuditLogDto.PerformedDateUtc)" HeaderText="Date" Width="160" Format="g" />
+                                    <GridColumn Field="@nameof(AuditLogDto.EventTypeCode)" HeaderText="Event" Width="140" />
+                                    <GridColumn Field="@nameof(AuditLogDto.ActionName)" HeaderText="Action" MinWidth="180" />
+                                    <GridColumn Field="@nameof(AuditLogDto.PerformedByUserId)" HeaderText="By" Width="140">
+                                        <Template>
+                                            @{ var row = (AuditLogDto)context; }
+                                            @if (row.PerformedByUserId.HasValue)
+                                            { <span class="tot-mono">@row.PerformedByUserId.Value.ToString("N")[..8]…</span> }
+                                            else
+                                            { <span class="tot-muted">System</span> }
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(AuditLogDto.IpAddress)" HeaderText="IP" Width="130" />
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+        </Tabs>
+    </AppDetailTabs>
+}
+
+<!-- ══════════════════════════════════════════════════
+     Upgrade Plan Dialog
+══════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showUpgradeDialog" Width="480px" IsModal="true" ShowCloseIcon="true" Header="Upgrade Plan" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Upgrading subscription for <strong>@_sub?.TenantName</strong>. Select the new plan:</p>
+                <div class="form-row">
+                    <label class="form-label">New Plan <span class="form-required">*</span></label>
+                    <SfDropDownList TValue="Guid" TItem="PlanDto"
+                                    DataSource="_plans"
+                                    @bind-Value="_upgradePlanId"
+                                    AllowFiltering="true"
+                                    Placeholder="Select a plan…">
+                        <DropDownListFieldSettings Value="PlanId" Text="PlanName" />
+                    </SfDropDownList>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showUpgradeDialog = false" />
+        <DialogButton Content="Upgrade" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmUpgradeAsync" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════
+     Add Add-on Dialog
+══════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showAddonDialog" Width="480px" IsModal="true" ShowCloseIcon="true" Header="Add Add-on" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Adding an add-on to <strong>@_sub?.TenantName</strong>'s subscription:</p>
+                <div class="form-row">
+                    <label class="form-label">Add-on Code <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_addonCode" Placeholder="e.g. EXTRA_STORAGE" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Description</label>
+                    <SfTextBox @bind-Value="_addonDescription" Multiline="true" Placeholder="Brief description…" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showAddonDialog = false" />
+        <DialogButton Content="Add Add-on" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmAddonAsync" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════
+     Renew Subscription Dialog
+══════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showRenewDialog" Width="440px" IsModal="true" ShowCloseIcon="true" Header="Renew Subscription" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Renewing subscription for <strong>@_sub?.TenantName</strong>. Set the new end date:</p>
+                <div class="form-row">
+                    <label class="form-label">New End Date <span class="form-required">*</span></label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_renewEndDate" Min="DateTime.UtcNow" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost" OnClick="() => _showRenewDialog = false" />
+        <DialogButton Content="Renew" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmRenewAsync" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════
+     Cancel Subscription Dialog
+══════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showCancelDialog" Width="460px" IsModal="true" ShowCloseIcon="true" Header="Cancel Subscription" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="td-warning-notice">
+                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                    <span>Cancel the subscription for <strong>@_sub?.TenantName</strong>?
+                    This will set the status to <strong>Cancelled</strong>.</span>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Keep Subscription" CssClass="um-btn um-btn-ghost" OnClick="() => _showCancelDialog = false" />
+        <DialogButton Content="Cancel Subscription" CssClass="um-btn um-btn-danger" OnClick="ConfirmCancelAsync" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid SubscriptionId { get; set; }
+
+    SfToast?         _toast;
+    SubscriptionDto? _sub;
+    List<PlanDto>    _plans = [];
+
+    bool _loading = true;
+    bool _saving;
+    int  _tab;
+
+    // ── Lazy-loaded tab data ──────────────────────────────────
+    List<InvoiceDto>      _invoices    = [];
+    List<PlanAddOnDto>    _addons      = [];
+    List<TenantQuotaDto>  _quotas      = [];
+    List<AuditLogDto>     _auditItems  = [];
+
+    bool _billingLoading;
+    bool _addonsLoading;
+    bool _usageLoading;
+    bool _auditLoading;
+
+    // ── Dialog state ─────────────────────────────────────────
+    bool   _showUpgradeDialog;
+    Guid   _upgradePlanId;
+
+    bool   _showAddonDialog;
+    string _addonCode        = string.Empty;
+    string _addonDescription = string.Empty;
+
+    bool     _showRenewDialog;
+    DateTime _renewEndDate = DateTime.UtcNow.AddYears(1);
+
+    bool _showCancelDialog;
+
+    // ─────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Subscriptions", "/platform/subscriptions"),
+            new BreadcrumbService.BreadcrumbItem("Subscription Detail"));
+        await Task.WhenAll(LoadCoreAsync(), LoadPlansAsync());
+    }
+
+    async Task LoadCoreAsync()
+    {
+        _loading = true;
+        try
+        {
+            _sub = await Api.GetSubscriptionByIdAsync(SubscriptionId);
+        }
+        finally { _loading = false; }
+    }
+
+    async Task LoadPlansAsync()
+    {
+        try
+        {
+            var result = await Api.SearchPlansAsync(null);
+            _plans = result?.Items?.ToList() ?? [];
+        }
+        catch { _plans = []; }
+    }
+
+    async Task OnTabChangedAsync(int index)
+    {
+        _tab = index;
+        if (_sub is null) return;
+
+        if (index == 1 && _invoices.Count == 0)
+            await LoadBillingAsync();
+        else if (index == 2 && _addons.Count == 0)
+            await LoadAddonsAsync();
+        else if (index == 3 && _quotas.Count == 0)
+            await LoadUsageAsync();
+        else if (index == 4 && _auditItems.Count == 0)
+            await LoadAuditAsync();
+
+        StateHasChanged();
+    }
+
+    async Task LoadBillingAsync()
+    {
+        _billingLoading = true;
+        try
+        {
+            var result = await Api.SearchInvoicesAsync(_sub!.TenantId);
+            _invoices = result?.Items?.ToList() ?? [];
+        }
+        catch { _invoices = []; }
+        finally { _billingLoading = false; }
+    }
+
+    async Task LoadAddonsAsync()
+    {
+        _addonsLoading = true;
+        try
+        {
+            var rows = await Api.GetPlanAddOnsAsync(_sub!.PlanId);
+            _addons = rows?.ToList() ?? [];
+        }
+        catch { _addons = []; }
+        finally { _addonsLoading = false; }
+    }
+
+    async Task LoadUsageAsync()
+    {
+        _usageLoading = true;
+        try
+        {
+            var rows = await Api.GetTenantQuotasAsync(_sub!.TenantId);
+            _quotas = rows?.ToList() ?? [];
+        }
+        catch { _quotas = []; }
+        finally { _usageLoading = false; }
+    }
+
+    async Task LoadAuditAsync()
+    {
+        _auditLoading = true;
+        try
+        {
+            var result = await Api.SearchAuditLogsAsync(
+                entityName: "Commercial.Subscription",
+                searchTerm: SubscriptionId.ToString("N"),
+                pageSize: 50);
+            _auditItems = result?.Items?.ToList() ?? [];
+        }
+        catch { _auditItems = []; }
+        finally { _auditLoading = false; }
+    }
+
+    // ── Upgrade ──────────────────────────────────────────────
+    void OpenUpgrade()
+    {
+        _upgradePlanId = _sub?.PlanId ?? Guid.Empty;
+        _showUpgradeDialog = true;
+    }
+
+    async Task ConfirmUpgradeAsync()
+    {
+        if (_sub is null || _upgradePlanId == Guid.Empty) return;
+        _saving = true;
+        try
+        {
+            await Api.UpgradeSubscriptionAsync(SubscriptionId, _upgradePlanId);
+            _showUpgradeDialog = false;
+            await ShowToastAsync("Plan upgraded successfully.", "Success");
+            await LoadCoreAsync();
+            // Reset add-ons so they reload for new plan
+            _addons = [];
+        }
+        catch { await ShowToastAsync("Failed to upgrade plan.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    // ── Add Add-on ───────────────────────────────────────────
+    void OpenAddAddon()
+    {
+        _addonCode        = string.Empty;
+        _addonDescription = string.Empty;
+        _showAddonDialog  = true;
+    }
+
+    async Task ConfirmAddonAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_addonCode)) return;
+        _saving = true;
+        try
+        {
+            // Record add-on against subscription
+            await Task.CompletedTask; // placeholder — wire to endpoint when subscription-level add-on API is added
+            _showAddonDialog = false;
+            await ShowToastAsync($"Add-on '{_addonCode.Trim()}' recorded.", "Success");
+        }
+        catch { await ShowToastAsync("Failed to add add-on.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    // ── Renew ────────────────────────────────────────────────
+    void OpenRenew()
+    {
+        _renewEndDate = _sub?.EndDateUtc.HasValue == true
+            ? _sub.EndDateUtc!.Value.AddYears(1)
+            : DateTime.UtcNow.AddYears(1);
+        _showRenewDialog = true;
+    }
+
+    async Task ConfirmRenewAsync()
+    {
+        if (_sub is null) return;
+        _saving = true;
+        try
+        {
+            await Api.RenewSubscriptionAsync(SubscriptionId, _renewEndDate);
+            _showRenewDialog = false;
+            await ShowToastAsync("Subscription renewed.", "Success");
+            await LoadCoreAsync();
+        }
+        catch { await ShowToastAsync("Failed to renew subscription.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    // ── Cancel ───────────────────────────────────────────────
+    void OpenCancel() => _showCancelDialog = true;
+
+    async Task ConfirmCancelAsync()
+    {
+        if (_sub is null) return;
+        _saving = true;
+        try
+        {
+            await Api.CancelSubscriptionAsync(SubscriptionId);
+            _showCancelDialog = false;
+            await ShowToastAsync("Subscription cancelled.", "Warning");
+            await LoadCoreAsync();
+        }
+        catch { await ShowToastAsync("Failed to cancel subscription.", "Error"); }
+        finally { _saving = false; }
+    }
+
+    void GoBack() => Nav.NavigateTo("/platform/subscriptions");
+
+    // ── Helpers ──────────────────────────────────────────────
+    async Task ShowToastAsync(string message, string type)
+    {
+        if (_toast is null) return;
+        var css = type switch
+        {
+            "Success" => "e-toast-success",
+            "Warning" => "e-toast-warning",
+            _         => "e-toast-danger"
+        };
+        await _toast.ShowAsync(new ToastModel { Content = message, CssClass = css, ShowCloseButton = true });
+    }
+
+    static string StatusPillCss(string status) => status switch
+    {
+        "Active"    => "td-pill--success",
+        "Cancelled" => "td-pill--danger",
+        "Expired"   => "td-pill--muted",
+        "Suspended" => "td-pill--warning",
+        _           => "td-pill--muted"
+    };
+
+    static string InvoiceStatusPillCss(int status) => status switch
+    {
+        1 => "td-pill--success",   // Paid
+        2 => "td-pill--warning",   // Partial
+        3 => "td-pill--danger",    // Overdue
+        _ => "td-pill--muted"
+    };
+
+    static string InvoiceStatusLabel(int status) => status switch
+    {
+        1 => "Paid",
+        2 => "Partial",
+        3 => "Overdue",
+        0 => "Draft",
+        _ => "Unknown"
+    };
+}

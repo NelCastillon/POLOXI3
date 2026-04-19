@@ -1,4 +1,5 @@
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Features.Tenants;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
@@ -27,4 +28,18 @@ public sealed class TenantBrandingController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> Search([FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
         => Ok(await _service.SearchAsync(searchTerm, pageNumber, pageSize, cancellationToken));
+
+    [HttpPut("tenant/{tenantId:guid}")]
+    public async Task<IActionResult> Update(Guid tenantId, [FromBody] UpdateTenantBrandingRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdateAsync(tenantId, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("tenant/{tenantId:guid}/reset")]
+    public async Task<IActionResult> ResetToDefaults(Guid tenantId, CancellationToken cancellationToken)
+    {
+        await _service.ResetToDefaultsAsync(tenantId, cancellationToken);
+        return NoContent();
+    }
 }

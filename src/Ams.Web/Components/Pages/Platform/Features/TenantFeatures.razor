@@ -1,0 +1,402 @@
+@page "/platform/tenants/{TenantId:guid}/features"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.TenantFeatures
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Tenant Features — @_tenantName</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Feature Flags"
+               Subtitle="@_tenantName"
+               Icon="bi-toggles">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="BackToTenant">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Tenant
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Filter features…" @onkeyup="OnSearchKeyUp" />
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="ApplyFilter">
+            <i class="bi bi-search" aria-hidden="true"></i> Filter
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading feature flags…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="TenantFeatureDto"
+            DataSource="@_filtered"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+        <GridColumns>
+
+            <GridColumn Field="@nameof(TenantFeatureDto.FeatureCode)" HeaderText="Feature" Width="220">
+                <Template>
+                    @{ var row = (TenantFeatureDto)context; }
+                    <div class="tf-feature-cell">
+                        <span class="td-monospace tf-code">@row.FeatureCode</span>
+                        <span class="tf-name">@row.FeatureName</span>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(TenantFeatureDto.Module)" HeaderText="Module" Width="140">
+                <Template>
+                    @{ var row = (TenantFeatureDto)context; }
+                    @if (!string.IsNullOrEmpty(row.Module))
+                    {
+                        <span class="td-stat-chip">
+                            <i class="bi bi-box" aria-hidden="true"></i> @row.Module
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="tot-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(TenantFeatureDto.IsEnabled)" HeaderText="Enabled" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
+                <Template>
+                    @{ var row = (TenantFeatureDto)context; }
+                    @if (row.IsEnabled)
+                    {
+                        <span class="td-pill td-pill--success">On</span>
+                    }
+                    else
+                    {
+                        <span class="td-pill td-pill--muted">Off</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(TenantFeatureDto.EffectiveStartUtc)" HeaderText="Effective Start" Width="160">
+                <Template>
+                    @{ var row = (TenantFeatureDto)context; }
+                    <span class="tf-date">@(row.EffectiveStartUtc.HasValue ? row.EffectiveStartUtc.Value.ToString("d") : "—")</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(TenantFeatureDto.EffectiveEndUtc)" HeaderText="Effective End" Width="160">
+                <Template>
+                    @{ var row = (TenantFeatureDto)context; }
+                    @if (row.EffectiveEndUtc.HasValue)
+                    {
+                        <span class="tf-date @(row.EffectiveEndUtc < DateTime.UtcNow ? "tf-date--expired" : "")">
+                            @row.EffectiveEndUtc.Value.ToString("d")
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="tot-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(TenantFeatureDto.SourceType)" HeaderText="Source Type" Width="140">
+                <Template>
+                    @{ var row = (TenantFeatureDto)context; }
+                    <span class="badge @SourceTypeBadgeClass(row.SourceType)">@row.SourceType</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText="" Width="200" AllowSorting="false">
+                <Template>
+                    @{ var row = (TenantFeatureDto)context; }
+                    <div class="td-row-actions">
+                        @if (row.IsEnabled)
+                        {
+                            <button class="um-btn um-btn-xs um-btn-warning" title="Disable" @onclick="() => SetEnabled(row, false)">
+                                <i class="bi bi-toggle-on" aria-hidden="true"></i> Disable
+                            </button>
+                        }
+                        else
+                        {
+                            <button class="um-btn um-btn-xs um-btn-primary" title="Enable" @onclick="() => SetEnabled(row, true)">
+                                <i class="bi bi-toggle-off" aria-hidden="true"></i> Enable
+                            </button>
+                        }
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Override" @onclick="() => OpenOverride(row)">
+                            <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                        </button>
+                        @if (row.SourceType != "PlanDefault")
+                        {
+                            <button class="um-btn um-btn-xs um-btn-ghost tf-reset-btn" title="Reset to plan default" @onclick="() => OpenReset(row)">
+                                <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- ── Override Dialog ──────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showOverrideDialog" Width="500px" IsModal="true" ShowCloseIcon="true" Header="Override Feature" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="form-row">
+                    <label class="form-label">Feature</label>
+                    <input class="um-input" value="@(_overrideTarget?.FeatureCode) — @(_overrideTarget?.FeatureName)" disabled />
+                </div>
+                <div class="form-row form-row--inline">
+                    <label class="form-label">Enabled</label>
+                    <SfSwitch @bind-Checked="_overrideForm.IsEnabled" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Source Type</label>
+                    <SfDropDownList TValue="string" TItem="string"
+                                    DataSource="_sourceTypeOptions"
+                                    @bind-Value="_overrideForm.SourceType" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Effective Start</label>
+                    <SfDatePicker TValue="DateTime?" @bind-Value="_overrideForm.EffectiveStartUtc" Format="dd/MM/yyyy" Placeholder="Optional" ShowClearButton="true" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Effective End</label>
+                    <SfDatePicker TValue="DateTime?" @bind-Value="_overrideForm.EffectiveEndUtc" Format="dd/MM/yyyy" Placeholder="Optional" ShowClearButton="true" />
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel"         CssClass="um-btn um-btn-ghost"   OnClick="() => _showOverrideDialog = false" />
+        <DialogButton Content="Save Override"  IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmOverride" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ── Reset Confirm Dialog ─────────────────────────────────── -->
+<SfDialog @bind-Visible="_showResetDialog" Width="420px" IsModal="true" ShowCloseIcon="true" Header="Reset to Plan Default" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Reset <strong>@_resetTarget?.FeatureCode</strong> to the plan default?</p>
+                <p class="td-hint">The tenant-specific override will be removed. The feature will inherit its value from the assigned plan or the global default.</p>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost"  OnClick="() => _showResetDialog = false" />
+        <DialogButton Content="Reset"  IsPrimary="true" CssClass="um-btn um-btn-warning" OnClick="ConfirmReset" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid TenantId { get; set; }
+
+    private SfGrid<TenantFeatureDto>? _grid;
+    private SfToast?                  _toast;
+
+    private IReadOnlyList<TenantFeatureDto> _all      = [];
+    private List<TenantFeatureDto>          _filtered = [];
+    private bool                            _loading  = true;
+    private string?                         _searchTerm;
+    private string                          _tenantName = "Tenant";
+
+    // ── Dialog state ─────────────────────────────────────────
+    private bool               _saving              = false;
+    private bool               _showOverrideDialog  = false;
+    private bool               _showResetDialog     = false;
+    private TenantFeatureDto?  _overrideTarget;
+    private TenantFeatureDto?  _resetTarget;
+    private OverrideFormModel  _overrideForm        = new();
+
+    private static readonly List<string> _sourceTypeOptions = ["Override", "Manual", "Plan", "Trial"];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform",  "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Tenants",   "/platform/tenants"),
+            new BreadcrumbService.BreadcrumbItem("Features",  $"/platform/tenants/{TenantId}/features"));
+
+        // Load tenant name for the subtitle
+        try
+        {
+            var tenant = await Api.GetTenantByIdAsync(TenantId);
+            if (tenant is not null) _tenantName = tenant.TenantName;
+        }
+        catch { /* non-critical */ }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _all = await Api.GetTenantFeaturesAsync(TenantId) ?? [];
+            ApplyFilter();
+        }
+        catch
+        {
+            _all      = [];
+            _filtered = [];
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        if (string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            _filtered = _all.ToList();
+        }
+        else
+        {
+            var q = _searchTerm.Trim();
+            _filtered = _all.Where(f =>
+                f.FeatureCode.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                f.FeatureName.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                f.Module.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+    }
+
+    private async Task OnSearchKeyUp(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") { ApplyFilter(); StateHasChanged(); }
+        await Task.CompletedTask;
+    }
+
+    // ── Enable / Disable ─────────────────────────────────────
+    private async Task SetEnabled(TenantFeatureDto row, bool enabled)
+    {
+        try
+        {
+            await Api.SetTenantFeatureEnabledAsync(TenantId, row.FeatureCode, enabled);
+            var label = enabled ? "enabled" : "disabled";
+            await ShowToast("Feature Updated", $"{row.FeatureCode} has been {label}.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToast("Error", "Could not update feature.", "e-toast-danger");
+        }
+    }
+
+    // ── Override ─────────────────────────────────────────────
+    private void OpenOverride(TenantFeatureDto row)
+    {
+        _overrideTarget = row;
+        _overrideForm   = new OverrideFormModel
+        {
+            IsEnabled         = row.IsEnabled,
+            SourceType        = row.SourceType == "PlanDefault" ? "Override" : row.SourceType,
+            EffectiveStartUtc = row.EffectiveStartUtc,
+            EffectiveEndUtc   = row.EffectiveEndUtc
+        };
+        _showOverrideDialog = true;
+    }
+
+    private async Task ConfirmOverride()
+    {
+        if (_overrideTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.OverrideTenantFeatureAsync(TenantId, new OverrideTenantFeatureRequest
+            {
+                FeatureCode       = _overrideTarget.FeatureCode,
+                IsEnabled         = _overrideForm.IsEnabled,
+                SourceType        = _overrideForm.SourceType,
+                EffectiveStartUtc = _overrideForm.EffectiveStartUtc,
+                EffectiveEndUtc   = _overrideForm.EffectiveEndUtc
+            });
+            _showOverrideDialog = false;
+            await ShowToast("Override Saved", $"{_overrideTarget.FeatureCode} override has been applied.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToast("Error", "Could not save override.", "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // ── Reset ────────────────────────────────────────────────
+    private void OpenReset(TenantFeatureDto row)
+    {
+        _resetTarget      = row;
+        _showResetDialog  = true;
+    }
+
+    private async Task ConfirmReset()
+    {
+        if (_resetTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.ResetTenantFeatureAsync(TenantId, _resetTarget.FeatureCode);
+            _showResetDialog = false;
+            await ShowToast("Reset Complete", $"{_resetTarget.FeatureCode} has been reset to plan default.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToast("Error", "Could not reset feature.", "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────
+    private void BackToTenant() => Nav.NavigateTo($"/platform/tenants/{TenantId}");
+
+    private static string SourceTypeBadgeClass(string sourceType) => sourceType switch
+    {
+        "PlanDefault" => "badge-neutral",
+        "Manual"      => "badge-blue",
+        "Plan"        => "badge-teal",
+        "Trial"       => "badge-amber",
+        _             => "badge-purple"   // Override
+    };
+
+    private async Task ShowToast(string title, string content, string cssClass)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel { Title = title, Content = content, CssClass = cssClass });
+    }
+
+    private sealed class OverrideFormModel
+    {
+        public bool      IsEnabled         { get; set; }
+        public string    SourceType        { get; set; } = "Override";
+        public DateTime? EffectiveStartUtc { get; set; }
+        public DateTime? EffectiveEndUtc   { get; set; }
+    }
+}

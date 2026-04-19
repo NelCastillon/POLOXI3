@@ -1,0 +1,320 @@
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Tenants
+
+<AppCrudDrawer @bind-Visible="_visible"
+               Title="@DrawerTitle"
+               Icon="@DrawerIcon"
+               OnConfirm="SaveAsync"
+               IsBusy="_saving">
+    <Content>
+        @if (_validationErrors.Count > 0)
+        {
+            <div class="ted-validation-summary">
+                <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                <ul>
+                    @foreach (var err in _validationErrors)
+                    {
+                        <li>@err</li>
+                    }
+                </ul>
+            </div>
+        }
+
+        <div class="form-row">
+            <label class="form-label">Tenant Code <span class="form-required">*</span></label>
+            <SfTextBox @bind-Value="_form.TenantCode"
+                       Placeholder="e.g. ACME"
+                       Enabled="@IsCreate" />
+            @if (IsCreate)
+            {
+                <span class="form-hint">Must be unique. Cannot be changed after creation.</span>
+            }
+        </div>
+        <div class="form-row">
+            <label class="form-label">Tenant Name <span class="form-required">*</span></label>
+            <SfTextBox @bind-Value="_form.TenantName" Placeholder="e.g. Acme Corporation" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Status</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_statusOptions"
+                            @bind-Value="_form.StatusCode"
+                            Placeholder="Select status"
+                            Enabled="@(!IsCreate)">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+            @if (IsCreate)
+            {
+                <span class="form-hint">Defaults to Active for new tenants.</span>
+            }
+        </div>
+        <div class="form-row">
+            <label class="form-label">Region <span class="form-required">*</span></label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_regionOptions"
+                            @bind-Value="_form.RegionCode"
+                            Placeholder="Select region">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Plan <span class="form-required">*</span></label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_planOptions"
+                            @bind-Value="_form.PlanCode"
+                            Placeholder="Select plan">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Isolation Mode <span class="form-required">*</span></label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_isolationOptions"
+                            @bind-Value="_form.IsolationMode"
+                            Placeholder="Select mode">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Default Timezone</label>
+            <SfTextBox @bind-Value="_form.TimeZoneId" Placeholder="e.g. UTC" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Default Currency</label>
+            <SfTextBox @bind-Value="_form.CurrencyCode" Placeholder="e.g. USD" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Compliance Profile</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_complianceOptions"
+                            @bind-Value="_form.ComplianceProfile"
+                            Placeholder="Select profile">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Go-Live Date</label>
+            <SfDatePicker TValue="DateTime?" @bind-Value="_form.GoLiveDateUtc" Format="dd MMM yyyy" />
+        </div>
+    </Content>
+    <Footer>
+        <button class="um-btn um-btn-ghost" @onclick="Close" disabled="@_saving">Cancel</button>
+        @if (IsCreate)
+        {
+            <button class="um-btn um-btn-ghost um-btn-accent" @onclick="SaveAndProvisionAsync" disabled="@_saving">
+                @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
+                Save &amp; Provision
+            </button>
+        }
+        <button class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">
+            @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
+            Save
+        </button>
+    </Footer>
+</AppCrudDrawer>
+
+@code {
+    private bool _visible;
+    private bool _saving;
+    private List<string> _validationErrors = [];
+
+    [Parameter]
+    public bool Visible
+    {
+        get => _visible;
+        set => _visible = value;
+    }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+
+    /// <summary>The tenant being edited, or null when creating.</summary>
+    [Parameter] public TenantDto? Tenant { get; set; }
+
+    /// <summary>Fires after a successful save. The bool indicates whether provisioning was requested.</summary>
+    [Parameter] public EventCallback<bool> OnSaved { get; set; }
+
+    [Inject] ApiClient Api { get; set; } = null!;
+
+    private bool IsCreate => Tenant is null;
+    private string DrawerTitle => IsCreate ? "New Tenant" : "Edit Tenant";
+    private string DrawerIcon  => IsCreate ? "bi-plus-circle" : "bi-pencil";
+
+    private TenantFormModel _form = new();
+
+    // ── Options ───────────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Active",     "Active"),
+        new("Suspended",  "Suspended"),
+        new("Terminated", "Terminated"),
+    ];
+
+    private static readonly List<LabelValue> _regionOptions =
+    [
+        new("US East",   "us-east-1"),
+        new("US West",   "us-west-2"),
+        new("EU West",   "eu-west-1"),
+        new("AP SE",     "ap-southeast-1"),
+    ];
+
+    private static readonly List<LabelValue> _planOptions =
+    [
+        new("Starter",    "Starter"),
+        new("Growth",     "Growth"),
+        new("Enterprise", "Enterprise"),
+    ];
+
+    private static readonly List<LabelValue> _isolationOptions =
+    [
+        new("Shared",    "Shared"),
+        new("Dedicated", "Dedicated"),
+    ];
+
+    private static readonly List<LabelValue> _complianceOptions =
+    [
+        new("Standard",   "Standard"),
+        new("GDPR",       "GDPR"),
+        new("HIPAA",      "HIPAA"),
+        new("SOC2",       "SOC2"),
+        new("ISO 27001",  "ISO27001"),
+    ];
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    protected override void OnParametersSet()
+    {
+        if (!_visible) return;
+
+        if (Tenant is not null)
+        {
+            _form = new TenantFormModel
+            {
+                TenantCode        = Tenant.TenantCode,
+                TenantName        = Tenant.TenantName,
+                StatusCode        = Tenant.StatusCode,
+                PlanCode          = Tenant.PlanCode,
+                RegionCode        = Tenant.RegionCode,
+                IsolationMode     = Tenant.IsolationMode,
+                PrimaryDomain     = Tenant.PrimaryDomain,
+                Locale            = Tenant.Locale,
+                CurrencyCode      = Tenant.CurrencyCode,
+                TimeZoneId        = Tenant.TimeZoneId,
+                GoLiveDateUtc     = Tenant.GoLiveDateUtc,
+            };
+        }
+        else if (string.IsNullOrEmpty(_form.TenantCode))
+        {
+            _form = new TenantFormModel();
+        }
+
+        _validationErrors.Clear();
+    }
+
+    // ── Validation ────────────────────────────────────────────────────────────
+    private bool Validate()
+    {
+        _validationErrors.Clear();
+
+        if (IsCreate && string.IsNullOrWhiteSpace(_form.TenantCode))
+            _validationErrors.Add("Tenant Code is required.");
+
+        if (string.IsNullOrWhiteSpace(_form.TenantName))
+            _validationErrors.Add("Tenant Name is required.");
+
+        if (string.IsNullOrWhiteSpace(_form.RegionCode))
+            _validationErrors.Add("Region is required.");
+
+        if (string.IsNullOrWhiteSpace(_form.PlanCode))
+            _validationErrors.Add("Plan is required.");
+
+        if (string.IsNullOrWhiteSpace(_form.IsolationMode))
+            _validationErrors.Add("Isolation Mode is required.");
+
+        return _validationErrors.Count == 0;
+    }
+
+    // ── Save ──────────────────────────────────────────────────────────────────
+    private async Task SaveAsync() => await SubmitAsync(provision: false);
+
+    private async Task SaveAndProvisionAsync() => await SubmitAsync(provision: true);
+
+    private async Task SubmitAsync(bool provision)
+    {
+        if (!Validate()) return;
+
+        _saving = true;
+        try
+        {
+            if (IsCreate)
+            {
+                await Api.CreateTenantAsync(new CreateTenantRequest
+                {
+                    TenantCode    = _form.TenantCode.Trim(),
+                    TenantName    = _form.TenantName.Trim(),
+                    PlanCode      = _form.PlanCode,
+                    RegionCode    = _form.RegionCode,
+                    IsolationMode = _form.IsolationMode,
+                    Locale        = _form.Locale,
+                    CurrencyCode  = _form.CurrencyCode,
+                    TimeZoneId    = _form.TimeZoneId,
+                    GoLiveDateUtc = _form.GoLiveDateUtc,
+                });
+            }
+            else
+            {
+                await Api.UpdateTenantAsync(Tenant!.TenantId, new UpdateTenantRequest
+                {
+                    TenantName    = _form.TenantName.Trim(),
+                    PlanCode      = _form.PlanCode,
+                    RegionCode    = _form.RegionCode,
+                    IsolationMode = _form.IsolationMode,
+                    PrimaryDomain = _form.PrimaryDomain,
+                    Locale        = _form.Locale,
+                    CurrencyCode  = _form.CurrencyCode,
+                    TimeZoneId    = _form.TimeZoneId,
+                    GoLiveDateUtc = _form.GoLiveDateUtc,
+                });
+            }
+
+            _visible = false;
+            await VisibleChanged.InvokeAsync(false);
+            await OnSaved.InvokeAsync(provision);
+        }
+        catch (HttpRequestException ex) when (ex.Message.Contains("409") || ex.Message.Contains("Conflict"))
+        {
+            _validationErrors.Add("Tenant Code already exists. Please choose a unique code.");
+        }
+        catch
+        {
+            _validationErrors.Add("Failed to save tenant. Please try again.");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task Close()
+    {
+        _visible = false;
+        _validationErrors.Clear();
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    // ── View models ───────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Label, string Value);
+
+    private sealed class TenantFormModel
+    {
+        public string    TenantCode        { get; set; } = string.Empty;
+        public string    TenantName        { get; set; } = string.Empty;
+        public string    StatusCode        { get; set; } = "Active";
+        public string    PlanCode          { get; set; } = string.Empty;
+        public string    RegionCode        { get; set; } = string.Empty;
+        public string    IsolationMode     { get; set; } = "Shared";
+        public string?   PrimaryDomain     { get; set; }
+        public string    Locale            { get; set; } = "en-US";
+        public string    CurrencyCode      { get; set; } = "USD";
+        public string    TimeZoneId        { get; set; } = "UTC";
+        public string    ComplianceProfile { get; set; } = "Standard";
+        public DateTime? GoLiveDateUtc     { get; set; }
+    }
+}

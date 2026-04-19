@@ -1,0 +1,171 @@
+@page "/platform/domains"
+@using Ams.Application.Features.Tenants
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Tenant Domains — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Tenant Domains"
+               Subtitle="All domains across tenants"
+               Icon="bi-globe">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Search -->
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search domains or tenants…" @onkeyup="OnSearchKeyUp" />
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading domains…</span>
+        </div>
+    }
+    <SfGrid @ref="_grid"
+            TValue="TenantDomainDto"
+            DataSource="@_domains"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row" />
+        <GridColumns>
+            <GridColumn Field="@nameof(TenantDomainDto.TenantName)" HeaderText="Tenant" Width="180">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    <a href="/platform/tenants/@row.TenantId" class="td-tenant-link">@(row.TenantName ?? "—")</a>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDomainDto.DomainName)" HeaderText="Domain Name" Width="220">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    <div class="td-domain-cell">
+                        <i class="bi bi-globe2" aria-hidden="true"></i>
+                        <span>@row.DomainName</span>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDomainDto.IsPrimary)" HeaderText="Primary" Width="100">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    @if (row.IsPrimary)
+                    {
+                        <span class="td-badge td-badge--primary"><i class="bi bi-star-fill" aria-hidden="true"></i> Primary</span>
+                    }
+                    else
+                    {
+                        <span class="td-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDomainDto.SslStatusCode)" HeaderText="SSL" Width="120">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    <span class="td-pill @SslPillClass(row.SslStatusCode)">@row.SslStatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDomainDto.VerificationStatusCode)" HeaderText="Verification" Width="130">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    <span class="td-pill @VerificationPillClass(row.VerificationStatusCode)">@row.VerificationStatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDomainDto.RedirectTarget)" HeaderText="Redirect" Width="180">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    <span>@(row.RedirectTarget ?? "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TenantDomainDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="120" />
+            <GridColumn HeaderText="" Width="100" AllowSorting="false">
+                <Template>
+                    @{ var row = (TenantDomainDto)context; }
+                    <div class="td-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-primary" title="Manage" @onclick="() => NavigateToManage(row.TenantId)">
+                            <i class="bi bi-pencil-square" aria-hidden="true"></i> Manage
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+@code {
+    private SfGrid<TenantDomainDto>? _grid;
+    private SfToast? _toast;
+
+    private bool _loading = true;
+    private string? _searchTerm;
+    private List<TenantDomainDto> _domains = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Tenant Domains")
+        );
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchAllTenantDomainsAsync(_searchTerm);
+            _domains = result?.Items?.ToList() ?? [];
+        }
+        catch
+        {
+            _domains = [];
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void NavigateToManage(Guid tenantId) => Nav.NavigateTo($"/platform/tenants/{tenantId}/domains");
+
+    private async Task OnSearchKeyUp(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await LoadAsync();
+    }
+
+    private static string SslPillClass(string status) => status switch
+    {
+        "Active" => "td-pill--success",
+        "Provisioning" => "td-pill--info",
+        "Expired" => "td-pill--danger",
+        "None" => "td-pill--muted",
+        _ => "td-pill--muted"
+    };
+
+    private static string VerificationPillClass(string status) => status switch
+    {
+        "Verified" => "td-pill--success",
+        "Pending" => "td-pill--warning",
+        "Failed" => "td-pill--danger",
+        _ => "td-pill--muted"
+    };
+}

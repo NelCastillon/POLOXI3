@@ -1,0 +1,642 @@
+@page "/platform"
+@page "/platform/dashboard"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Tenants
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Platform Dashboard</PageTitle>
+
+<AppPageHeader Title="Platform Dashboard"
+               Subtitle="Global operating view of the SaaS platform"
+               Icon="bi-speedometer2">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "pd-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportSummary">
+            <i class="bi bi-download" aria-hidden="true"></i> Export Summary
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/platform/tenants/provision")'>
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Tenant
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_error is not null)
+{
+    <div class="pd-error-banner">
+        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+        @_error
+    </div>
+}
+
+@* ── KPI Row ────────────────────────────────────────────── *@
+<div class="pd-kpi-row">
+    <AppMetricCard Label="Total Tenants"
+                   Value="@_kpi.TotalTenants.ToString()"
+                   Icon="bi-buildings"
+                   Variant="blue"
+                   Loading="@_loading"
+                   Href="/platform/tenants" />
+
+    <AppMetricCard Label="Active Tenants"
+                   Value="@_kpi.ActiveTenants.ToString()"
+                   Icon="bi-building-check"
+                   Variant="green"
+                   Delta="@_kpi.ActiveDelta"
+                   DeltaTrend="@_kpi.ActiveDeltaTrend"
+                   Loading="@_loading"
+                   Href="/platform/tenants" />
+
+    <AppMetricCard Label="Suspended Tenants"
+                   Value="@_kpi.SuspendedTenants.ToString()"
+                   Icon="bi-building-x"
+                   Variant="@(_kpi.SuspendedTenants > 0 ? "amber" : "default")"
+                   Loading="@_loading"
+                   Href="/platform/tenants" />
+
+    <AppMetricCard Label="Monthly Revenue"
+                   Value="@_kpi.MonthlyRevenue.ToString("C0")"
+                   Icon="bi-cash-coin"
+                   Variant="green"
+                   Delta="@_kpi.RevenueDelta"
+                   DeltaTrend="@_kpi.RevenueDeltaTrend"
+                   Loading="@_loading" />
+
+    <AppMetricCard Label="Active Subscriptions"
+                   Value="@_kpi.ActiveSubscriptions.ToString()"
+                   Icon="bi-card-checklist"
+                   Variant="blue"
+                   Loading="@_loading"
+                   Href="/platform/subscriptions" />
+
+    <AppMetricCard Label="Usage Today"
+                   Value="@_kpi.UsageToday"
+                   Icon="bi-bar-chart-line"
+                   Variant="default"
+                   Loading="@_loading"
+                   Href="/platform/usage" />
+
+    <AppMetricCard Label="Storage Used"
+                   Value="@_kpi.StorageUsed"
+                   Icon="bi-database"
+                   Variant="@(_kpi.StorageWarning ? "amber" : "default")"
+                   Loading="@_loading">
+        <Footer>
+            <div class="amc-progress-bar">
+                <div class="amc-progress-fill" style="width:@(_kpi.StoragePct)%"></div>
+            </div>
+        </Footer>
+    </AppMetricCard>
+
+    <AppMetricCard Label="Open Alerts"
+                   Value="@_kpi.OpenAlerts.ToString()"
+                   Icon="bi-bell-fill"
+                   Variant="@(_kpi.OpenAlerts > 0 ? "red" : "default")"
+                   Loading="@_loading"
+                   Href="/platform/monitoring" />
+</div>
+
+@* ── Main content grid ──────────────────────────────────── *@
+<div class="pd-content-grid">
+
+    @* ── Left column ─────────────────────────────────────── *@
+    <div class="pd-col-main">
+
+        @* Tenant Summary *@
+        <div class="pd-card">
+            <div class="pd-card-hd">
+                <i class="bi bi-buildings" aria-hidden="true"></i>
+                <span>Tenant Summary</span>
+                <a class="pd-card-link" href="/platform/tenants">View all</a>
+            </div>
+            <div class="pd-card-body">
+                @if (_loading)
+                {
+                    <div class="pd-skeleton-list">
+                        @for (var i = 0; i < 5; i++) { <div class="pd-skeleton-row"></div> }
+                    </div>
+                }
+                else if (_tenants.Count == 0)
+                {
+                    <p class="pd-empty">No tenants found.</p>
+                }
+                else
+                {
+                    <table class="pd-table">
+                        <thead>
+                            <tr>
+                                <th>Tenant</th>
+                                <th>Plan</th>
+                                <th>Region</th>
+                                <th>Status</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in _tenants.Take(8))
+                            {
+                                <tr>
+                                    <td class="pd-cell-name">
+                                                        <span class="pd-tenant-code">@t.TenantCode</span>
+                                                        <span class="pd-tenant-name">@t.TenantName</span>
+                                    </td>
+                                    <td>@(string.IsNullOrEmpty(t.PlanCode) ? "—" : t.PlanCode)</td>
+                                    <td>@(string.IsNullOrEmpty(t.RegionCode) ? "—" : t.RegionCode)</td>
+                                    <td><AppStatusBadge Status="@t.StatusCode" /></td>
+                                    <td>
+                                        <button class="pd-row-action"
+                                                @onclick='() => Nav.NavigateTo($"/platform/tenants/{t.TenantId}")'
+                                                title="Open tenant">
+                                            <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+
+        @* Recent Provisioning Jobs *@
+        <div class="pd-card">
+            <div class="pd-card-hd">
+                <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
+                <span>Recent Provisioning Jobs</span>
+                <a class="pd-card-link" href="/platform/jobs">View all</a>
+            </div>
+            <div class="pd-card-body">
+                @if (_loading)
+                {
+                    <div class="pd-skeleton-list">
+                        @for (var i = 0; i < 4; i++) { <div class="pd-skeleton-row"></div> }
+                    </div>
+                }
+                else if (_recentJobs.Count == 0)
+                {
+                    <p class="pd-empty">No recent jobs.</p>
+                }
+                else
+                {
+                    <table class="pd-table">
+                        <thead>
+                            <tr>
+                                <th>Tenant</th>
+                                <th>Type</th>
+                                <th>Started</th>
+                                <th>Status</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var job in _recentJobs)
+                            {
+                                <tr>
+                                    <td>@job.TenantName</td>
+                                    <td>@job.JobType</td>
+                                    <td class="pd-cell-time">@job.StartedAt.ToString("MMM d, HH:mm")</td>
+                                    <td><AppStatusBadge Status="@job.Status" /></td>
+                                    <td>
+                                        <button class="pd-row-action"
+                                                @onclick="() => NavigateToJob(job.Id)"
+                                                title="Open job">
+                                            <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+
+        @* Failed Provisioning Jobs *@
+        <div class="pd-card">
+            <div class="pd-card-hd">
+                <i class="bi bi-x-octagon pd-failed-icon" aria-hidden="true"></i>
+                <span>Failed Jobs</span>
+                <a class="pd-card-link" href="/platform/jobs">View all</a>
+            </div>
+            <div class="pd-card-body">
+                @if (_loading)
+                {
+                    <div class="pd-skeleton-list">
+                        @for (var i = 0; i < 3; i++) { <div class="pd-skeleton-row"></div> }
+                    </div>
+                }
+                else if (_failedJobs.Count == 0)
+                {
+                    <p class="pd-empty pd-empty-good">
+                        <i class="bi bi-check-circle-fill" aria-hidden="true"></i> No failed jobs
+                    </p>
+                }
+                else
+                {
+                    <table class="pd-table">
+                        <thead>
+                            <tr>
+                                <th>Tenant</th>
+                                <th>Type</th>
+                                <th>Started</th>
+                                <th>Status</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var job in _failedJobs)
+                            {
+                                <tr>
+                                    <td>@job.TenantName</td>
+                                    <td>@job.JobType</td>
+                                    <td class="pd-cell-time">@job.StartedAt.ToString("MMM d, HH:mm")</td>
+                                    <td><AppStatusBadge Status="@job.Status" /></td>
+                                    <td>
+                                        <button class="pd-row-action"
+                                                @onclick="() => NavigateToJob(job.Id)"
+                                                title="Open job">
+                                            <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+
+        @* Expiring Subscriptions *@
+        <div class="pd-card">
+            <div class="pd-card-hd">
+                <i class="bi bi-clock-history pd-expiring-icon" aria-hidden="true"></i>
+                <span>Expiring Subscriptions</span>
+                <a class="pd-card-link" href="/platform/subscriptions">View all</a>
+            </div>
+            <div class="pd-card-body">
+                @if (_loading)
+                {
+                    <div class="pd-skeleton-list">
+                        @for (var i = 0; i < 4; i++) { <div class="pd-skeleton-row"></div> }
+                    </div>
+                }
+                else if (_subChanges.Count == 0)
+                {
+                    <p class="pd-empty pd-empty-good">
+                        <i class="bi bi-check-circle-fill" aria-hidden="true"></i> No subscriptions expiring soon
+                    </p>
+                }
+                else
+                {
+                    <table class="pd-table">
+                        <thead>
+                            <tr>
+                                <th>Tenant</th>
+                                <th>Status</th>
+                                <th>Plan</th>
+                                <th>Expires</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var sc in _subChanges)
+                            {
+                                <tr>
+                                    <td>@sc.TenantName</td>
+                                    <td>
+                                        <span class="pd-change-badge pd-change-@sc.ChangeType.ToLower()">@sc.ChangeType</span>
+                                    </td>
+                                    <td>@sc.PlanCode</td>
+                                    <td class="pd-cell-time">@sc.ChangedAt.ToString("MMM d, yyyy")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+
+    </div>
+
+    @* ── Right column ─────────────────────────────────────── *@
+    <div class="pd-col-side">
+
+        @* Alerts *@
+        <div class="pd-card">
+            <div class="pd-card-hd">
+                <i class="bi bi-bell-fill pd-alerts-icon" aria-hidden="true"></i>
+                <span>Active Alerts</span>
+                <a class="pd-card-link" href="/platform/monitoring">View all</a>
+            </div>
+            <div class="pd-card-body">
+                @if (_loading)
+                {
+                    <div class="pd-skeleton-list">
+                        @for (var i = 0; i < 3; i++) { <div class="pd-skeleton-row"></div> }
+                    </div>
+                }
+                else if (_alerts.Count == 0)
+                {
+                    <p class="pd-empty pd-empty-good">
+                        <i class="bi bi-check-circle-fill" aria-hidden="true"></i> All systems operational
+                    </p>
+                }
+                else
+                {
+                    <ul class="pd-alert-list">
+                        @foreach (var alert in _alerts)
+                        {
+                            <li class="pd-alert-item pd-alert-@alert.Severity.ToLower()">
+                                <i class="bi @AlertIcon(alert.Severity)" aria-hidden="true"></i>
+                                <div class="pd-alert-body">
+                                    <span class="pd-alert-msg">@alert.Message</span>
+                                    <span class="pd-alert-meta">@alert.TenantName · @alert.RaisedAt.ToString("MMM d, HH:mm")</span>
+                                </div>
+                                <button class="pd-row-action"
+                                        @onclick="() => NavigateToAlert(alert.Id)"
+                                        title="Open alert">
+                                    <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                </button>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+
+        @* Region Summary *@
+        <div class="pd-card">
+            <div class="pd-card-hd">
+                <i class="bi bi-geo-alt" aria-hidden="true"></i>
+                <span>Region Summary</span>
+                <a class="pd-card-link" href="/platform/regions">View all</a>
+            </div>
+            <div class="pd-card-body">
+                @if (_loading)
+                {
+                    <div class="pd-skeleton-list">
+                        @for (var i = 0; i < 4; i++) { <div class="pd-skeleton-row"></div> }
+                    </div>
+                }
+                else if (_regions.Count == 0)
+                {
+                    <p class="pd-empty">No region data.</p>
+                }
+                else
+                {
+                    <table class="pd-table">
+                        <thead>
+                            <tr>
+                                <th>Region</th>
+                                <th class="pd-cell-num">Tenants</th>
+                                <th class="pd-cell-num">Usage</th>
+                                <th>Health</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in _regions)
+                            {
+                                <tr>
+                                    <td>
+                                        <span class="pd-region-code">@r.Code</span>
+                                        <span class="pd-region-name">@r.Name</span>
+                                    </td>
+                                    <td class="pd-cell-num">@r.TenantCount</td>
+                                    <td class="pd-cell-num">@r.UsagePct%</td>
+                                    <td>
+                                        <span class="pd-health pd-health-@r.Health.ToLower()">@r.Health</span>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+
+        @* Quota Violations *@
+        <div class="pd-card">
+            <div class="pd-card-hd">
+                <i class="bi bi-speedometer pd-quota-icon" aria-hidden="true"></i>
+                <span>Quota Violations</span>
+                <a class="pd-card-link" href="/platform/quotas">View all</a>
+            </div>
+            <div class="pd-card-body">
+                @if (_loading)
+                {
+                    <div class="pd-skeleton-list">
+                        @for (var i = 0; i < 3; i++) { <div class="pd-skeleton-row"></div> }
+                    </div>
+                }
+                else if (_quotaViolations.Count == 0)
+                {
+                    <p class="pd-empty pd-empty-good">
+                        <i class="bi bi-check-circle-fill" aria-hidden="true"></i> No quota violations
+                    </p>
+                }
+                else
+                {
+                    <ul class="pd-quota-list">
+                        @foreach (var qv in _quotaViolations)
+                        {
+                            <li class="pd-quota-item">
+                                <div class="pd-quota-info">
+                                    <span class="pd-quota-tenant">@qv.TenantName</span>
+                                    <span class="pd-quota-resource">@qv.Resource</span>
+                                </div>
+                                <div class="pd-quota-bar-wrap">
+                                    <div class="pd-quota-bar">
+                                        <div class="pd-quota-fill pd-quota-fill-@(qv.UsedPct >= 100 ? "over" : "warn")"
+                                             style="width:@(Math.Min(qv.UsedPct, 100))%"></div>
+                                    </div>
+                                    <span class="pd-quota-pct">@qv.UsedPct%</span>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+
+    </div>
+</div>
+
+@code {
+    // ── View models ──────────────────────────────────────────
+    private sealed record PlatformKpi(
+        int TotalTenants,
+        int ActiveTenants,
+        int SuspendedTenants,
+        decimal MonthlyRevenue,
+        int ActiveSubscriptions,
+        string UsageToday,
+        string StorageUsed,
+        int StoragePct,
+        bool StorageWarning,
+        int OpenAlerts,
+        string? ActiveDelta,
+        string? ActiveDeltaTrend,
+        string? RevenueDelta,
+        string? RevenueDeltaTrend);
+
+    private sealed record RegionRow(string Code, string Name, int TenantCount, int UsagePct, string Health);
+
+    private sealed record AlertRow(string Id, string Severity, string Message, string TenantName, DateTime RaisedAt);
+
+    private sealed record JobRow(string Id, string TenantName, string JobType, DateTime StartedAt, string Status);
+
+    private sealed record QuotaViolation(string TenantName, string Resource, int UsedPct);
+
+    private sealed record SubChangeRow(string TenantName, string ChangeType, string PlanCode, DateTime ChangedAt);
+
+    // ── State ────────────────────────────────────────────────
+    private bool _loading = true;
+    private string? _error;
+
+    private PlatformKpi _kpi = new(0, 0, 0, 0, 0, "—", "—", 0, false, 0, null, null, null, null);
+    private List<TenantDto> _tenants = [];
+    private List<RegionRow> _regions = [];
+    private List<AlertRow> _alerts = [];
+    private List<JobRow> _recentJobs = [];
+    private List<JobRow> _failedJobs = [];
+    private List<QuotaViolation> _quotaViolations = [];
+    private List<SubChangeRow> _subChanges = [];
+
+    // ── Lifecycle ────────────────────────────────────────────
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Platform", "/platform", "bi-building-gear"),
+            new("Dashboard"));
+    }
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    // ── Data loading ─────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            // Fire all API calls in parallel
+            var tenantsTask       = Api.SearchTenantsAsync(pageSize: 50);
+            var alertsTask        = Api.SearchAlertsAsync(openOnly: true, pageSize: 10);
+            var jobsTask          = Api.SearchBackgroundJobsAsync(jobTypeCode: "TenantProvisioning", pageSize: 10);
+            var failedJobsTask    = Api.SearchBackgroundJobsAsync(statusCode: "Failed", pageSize: 10);
+            var subsTask          = Api.SearchSubscriptionsAsync();
+            var violationsTask    = Api.SearchQuotaViolationsAsync(statusCode: "Open", pageSize: 10);
+
+            await Task.WhenAll(tenantsTask, alertsTask, jobsTask, failedJobsTask, subsTask, violationsTask);
+
+            var allTenants   = (tenantsTask.Result?.Items ?? []).ToList();
+            var alertItems   = (alertsTask.Result?.Items ?? []).ToList();
+            var jobItems     = (jobsTask.Result?.Items ?? []).ToList();
+            var failedJobs   = (failedJobsTask.Result?.Items ?? []).ToList();
+            var allSubs      = (subsTask.Result?.Items ?? []).ToList();
+            var violations   = (violationsTask.Result?.Items ?? []).ToList();
+
+            var total      = allTenants.Count;
+            var active     = allTenants.Count(t => t.StatusCode.Equals("Active",    StringComparison.OrdinalIgnoreCase));
+            var suspended  = allTenants.Count(t => t.StatusCode.Equals("Suspended", StringComparison.OrdinalIgnoreCase));
+
+            _tenants = [.. allTenants.OrderByDescending(t => t.CreatedDateUtc).Take(8)];
+
+            var activeSubs = allSubs.Count(s => s.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase));
+            var mrr        = allSubs.Where(s => s.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase)).Sum(s => s.BaseAmount);
+
+            _kpi = new PlatformKpi(
+                TotalTenants:       total,
+                ActiveTenants:      active,
+                SuspendedTenants:   suspended,
+                MonthlyRevenue:     mrr,
+                ActiveSubscriptions: activeSubs,
+                UsageToday:         "—",
+                StorageUsed:        "—",
+                StoragePct:         0,
+                StorageWarning:     false,
+                OpenAlerts:         alertsTask.Result?.TotalCount ?? alertItems.Count,
+                ActiveDelta:        null,
+                ActiveDeltaTrend:   null,
+                RevenueDelta:       null,
+                RevenueDeltaTrend:  null);
+
+            // Region summary derived from tenant data
+            _regions = [..
+                allTenants
+                    .Where(t => !string.IsNullOrEmpty(t.RegionCode))
+                    .GroupBy(t => t.RegionCode)
+                    .Select(g => new RegionRow(g.Key, g.Key, g.Count(), 0, "Healthy"))
+                    .OrderByDescending(r => r.TenantCount)];
+
+            // Map alerts
+            _alerts = [.. alertItems.Take(5).Select(a => new AlertRow(
+                a.AlertId.ToString(),
+                a.SeverityCode,
+                a.Message ?? a.AlertName,
+                a.TenantId.HasValue ? a.TenantId.Value.ToString("N")[..8] + "…" : a.ServiceName,
+                a.TriggeredDateUtc))];
+
+            // Map provisioning jobs
+            _recentJobs = [.. jobItems.Take(5).Select(j => new JobRow(
+                j.BackgroundJobId.ToString(),
+                j.TenantId.HasValue ? j.TenantId.Value.ToString("N")[..8] + "…" : "—",
+                j.JobTypeCode,
+                j.StartedDateUtc ?? j.CreatedDateUtc,
+                j.StatusCode))];
+
+            // Map failed jobs into _failedJobs
+            _failedJobs = [.. failedJobs.Take(5).Select(j => new JobRow(
+                j.BackgroundJobId.ToString(),
+                j.TenantId.HasValue ? j.TenantId.Value.ToString("N")[..8] + "…" : "—",
+                j.JobTypeCode,
+                j.StartedDateUtc ?? j.CreatedDateUtc,
+                j.StatusCode))];
+
+            // Map quota violations
+            _quotaViolations = [.. violations.Take(5).Select(v => new QuotaViolation(
+                v.TenantName,
+                v.MetricTypeCode,
+                v.LimitValue > 0 ? (int)(v.ActualValue / v.LimitValue * 100) : 100))];
+
+            // Expiring subscriptions (ending within 30 days)
+            var cutoff = DateTime.UtcNow.AddDays(30);
+            _subChanges = [.. allSubs
+                .Where(s => s.EndDateUtc.HasValue && s.EndDateUtc.Value <= cutoff && s.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(s => s.EndDateUtc)
+                .Take(5)
+                .Select(s => new SubChangeRow(s.TenantName, "Expiring", s.PlanCode, s.EndDateUtc!.Value))];
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to load dashboard data: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    // ── Actions ───────────────────────────────────────────────
+    private void ExportSummary()
+    {
+        // TODO: wire to export endpoint
+    }
+
+    private void NavigateToJob(string id) => Nav.NavigateTo($"/platform/jobs/{id}");
+
+    private void NavigateToAlert(string id) => Nav.NavigateTo($"/platform/alerts");
+
+    // ── Helpers ───────────────────────────────────────────────
+    private static string AlertIcon(string severity) => severity.ToLower() switch
+    {
+        "critical" => "bi-exclamation-octagon-fill",
+        "warning"  => "bi-exclamation-triangle-fill",
+        "info"     => "bi-info-circle-fill",
+        _          => "bi-bell-fill"
+    };
+}

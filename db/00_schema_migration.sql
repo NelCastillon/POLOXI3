@@ -15,7 +15,103 @@ IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'Workflow') EXEC('CREATE S
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'DMS')      EXEC('CREATE SCHEMA DMS');
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'Audit')    EXEC('CREATE SCHEMA Audit');
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'Assistant') EXEC('CREATE SCHEMA Assistant');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'Commercial') EXEC('CREATE SCHEMA Commercial');
 GO
+
+-- ============================================================
+-- COMMERCIAL: Plans
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Commercial.Plan'))
+CREATE TABLE Commercial.[Plan] (
+    PlanId                UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    PlanCode              NVARCHAR(50)     NOT NULL,
+    PlanName              NVARCHAR(200)    NOT NULL,
+    BillingFrequency      NVARCHAR(50)     NOT NULL DEFAULT 'Monthly',
+    BasePrice             DECIMAL(18,2)    NOT NULL DEFAULT 0,
+    IncludedUsers         INT              NOT NULL DEFAULT 0,
+    IncludedStorageGb     DECIMAL(10,2)    NOT NULL DEFAULT 0,
+    IncludedApiCallsPerDay INT             NOT NULL DEFAULT 0,
+    IsEnterprise          BIT              NOT NULL DEFAULT 0,
+    IsActive              BIT              NOT NULL DEFAULT 1,
+    CreatedDateUtc        DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc       DATETIME2        NULL,
+    CreatedByUserId       UNIQUEIDENTIFIER NULL,
+    IsDeleted             BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_Commercial_Plan_PlanCode UNIQUE (PlanCode)
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Commercial.Plan') AND name = 'IsEnterprise')
+    ALTER TABLE Commercial.[Plan] ADD IsEnterprise BIT NOT NULL DEFAULT 0;
+
+-- ============================================================
+-- COMMERCIAL: Plan Features, Limits, and Add-Ons
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Commercial.PlanFeature'))
+CREATE TABLE Commercial.PlanFeature (
+    PlanFeatureId   UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    PlanId          UNIQUEIDENTIFIER NOT NULL,
+    FeatureCode     NVARCHAR(100)    NOT NULL,
+    FeatureName     NVARCHAR(200)    NOT NULL,
+    IsIncluded      BIT              NOT NULL DEFAULT 1,
+    Notes           NVARCHAR(500)    NOT NULL DEFAULT '',
+    CreatedDateUtc  DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    IsDeleted       BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT FK_PlanFeature_Plan FOREIGN KEY (PlanId) REFERENCES Commercial.[Plan] (PlanId)
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Commercial.PlanLimit'))
+CREATE TABLE Commercial.PlanLimit (
+    PlanLimitId     UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    PlanId          UNIQUEIDENTIFIER NOT NULL,
+    MetricTypeCode  NVARCHAR(100)    NOT NULL,
+    LimitValue      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+    LimitUnit       NVARCHAR(50)     NOT NULL DEFAULT 'Count',
+    PeriodCode      NVARCHAR(50)     NOT NULL DEFAULT 'Monthly',
+    IsEnforced      BIT              NOT NULL DEFAULT 1,
+    Notes           NVARCHAR(500)    NOT NULL DEFAULT '',
+    CreatedDateUtc  DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    IsDeleted       BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT FK_PlanLimit_Plan FOREIGN KEY (PlanId) REFERENCES Commercial.[Plan] (PlanId)
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Commercial.PlanAddOn'))
+CREATE TABLE Commercial.PlanAddOn (
+    PlanAddOnId      UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    PlanId           UNIQUEIDENTIFIER NOT NULL,
+    AddOnCode        NVARCHAR(50)     NOT NULL,
+    AddOnName        NVARCHAR(200)    NOT NULL,
+    Price            DECIMAL(18,2)    NOT NULL DEFAULT 0,
+    BillingFrequency NVARCHAR(50)     NOT NULL DEFAULT 'Monthly',
+    Description      NVARCHAR(500)    NOT NULL DEFAULT '',
+    IsActive         BIT              NOT NULL DEFAULT 1,
+    CreatedDateUtc   DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    IsDeleted        BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT FK_PlanAddOn_Plan FOREIGN KEY (PlanId) REFERENCES Commercial.[Plan] (PlanId)
+);
+
+-- ============================================================
+-- COMMERCIAL: Subscriptions
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Commercial.Subscription'))
+CREATE TABLE Commercial.Subscription (
+    SubscriptionId    UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId          UNIQUEIDENTIFIER NOT NULL,
+    PlanId            UNIQUEIDENTIFIER NOT NULL,
+    StatusCode        NVARCHAR(50)     NOT NULL DEFAULT 'Active',
+    RenewalType       NVARCHAR(50)     NOT NULL DEFAULT 'Auto',
+    BillingCycle      NVARCHAR(50)     NOT NULL DEFAULT 'Monthly',
+    BaseAmount        DECIMAL(18,2)    NOT NULL DEFAULT 0,
+    StartDateUtc      DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    EndDateUtc        DATETIME2        NULL,
+    CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc   DATETIME2        NULL,
+    CreatedByUserId   UNIQUEIDENTIFIER NULL,
+    IsDeleted         BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT FK_Subscription_Plan FOREIGN KEY (PlanId) REFERENCES Commercial.[Plan] (PlanId)
+);
 
 -- ============================================================
 -- 2.1  PLATFORM CORE
@@ -26,12 +122,18 @@ CREATE TABLE Core.Tenant (
     TenantId          UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
     TenantCode        NVARCHAR(50)     NOT NULL,
     TenantName        NVARCHAR(200)    NOT NULL,
+    StatusCode        NVARCHAR(50)     NOT NULL DEFAULT 'Active',
     PlanCode          NVARCHAR(50)     NOT NULL DEFAULT 'Standard',
+    RegionCode        NVARCHAR(100)    NOT NULL DEFAULT '',
+    IsolationMode     NVARCHAR(50)     NOT NULL DEFAULT 'Shared',
+    PrimaryDomain     NVARCHAR(253)    NULL,
+    ActiveUsers       INT              NOT NULL DEFAULT 0,
     IsActive          BIT              NOT NULL DEFAULT 1,
-    Locale            NVARCHAR(20)     NOT NULL DEFAULT 'en-US',
-    CurrencyCode      NVARCHAR(10)     NOT NULL DEFAULT 'USD',
-    TimeZoneId        NVARCHAR(100)    NOT NULL DEFAULT 'UTC',
+    Locale                   NVARCHAR(20)     NOT NULL DEFAULT 'en-US',
+    CurrencyCode             NVARCHAR(10)     NOT NULL DEFAULT 'USD',
+    TimeZoneId               NVARCHAR(100)    NOT NULL DEFAULT 'UTC',
     CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    GoLiveDateUtc     DATETIME2        NULL,
     ModifiedDateUtc   DATETIME2        NULL,
     IsDeleted         BIT              NOT NULL DEFAULT 0
 );
@@ -51,13 +153,56 @@ CREATE TABLE Core.Branch (
     IsDeleted         BIT              NOT NULL DEFAULT 0
 );
 
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.TenantDomain'))
+CREATE TABLE Core.TenantDomain (
+    TenantDomainId    UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId          UNIQUEIDENTIFIER NOT NULL,
+    DomainName        NVARCHAR(253)    NOT NULL,
+    IsPrimary         BIT              NOT NULL DEFAULT 0,
+    SslStatusCode     NVARCHAR(50)     NOT NULL DEFAULT 'None',
+    VerificationStatusCode NVARCHAR(50) NOT NULL DEFAULT 'Pending',
+    VerificationToken NVARCHAR(500)    NULL,
+    VerifiedDateUtc   DATETIME2        NULL,
+    RedirectTarget    NVARCHAR(500)    NULL,
+    SslExpiresDateUtc DATETIME2        NULL,
+    IsActive          BIT              NOT NULL DEFAULT 1,
+    CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc   DATETIME2        NULL,
+    CreatedByUserId   UNIQUEIDENTIFIER NULL,
+    Notes             NVARCHAR(1000)   NULL,
+    IsDeleted         BIT              NOT NULL DEFAULT 0
+);
+
+IF COL_LENGTH('Core.TenantDomain', 'Notes') IS NULL
+    ALTER TABLE Core.TenantDomain ADD Notes NVARCHAR(1000) NULL;
+
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.Feature'))
 CREATE TABLE Core.Feature (
     FeatureId         UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
     FeatureCode       NVARCHAR(100)    NOT NULL,
     FeatureName       NVARCHAR(200)    NOT NULL,
-    IsEnabled         BIT              NOT NULL DEFAULT 1
+    Module            NVARCHAR(100)    NOT NULL DEFAULT '',
+    TypeCode          NVARCHAR(50)     NOT NULL DEFAULT 'Toggle',
+    DefaultEnabled    BIT              NOT NULL DEFAULT 0,
+    IsEnabled         BIT              NOT NULL DEFAULT 1,
+    CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc   DATETIME2        NULL
 );
+
+-- Add missing columns to Core.Feature if table already exists
+IF EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.Feature'))
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.Feature') AND name = 'Module')
+        ALTER TABLE Core.Feature ADD Module NVARCHAR(100) NOT NULL DEFAULT '';
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.Feature') AND name = 'TypeCode')
+        ALTER TABLE Core.Feature ADD TypeCode NVARCHAR(50) NOT NULL DEFAULT 'Toggle';
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.Feature') AND name = 'DefaultEnabled')
+        ALTER TABLE Core.Feature ADD DefaultEnabled BIT NOT NULL DEFAULT 0;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.Feature') AND name = 'CreatedDateUtc')
+        ALTER TABLE Core.Feature ADD CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME();
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.Feature') AND name = 'ModifiedDateUtc')
+        ALTER TABLE Core.Feature ADD ModifiedDateUtc DATETIME2 NULL;
+END;
 
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.TenantFeature'))
 CREATE TABLE Core.TenantFeature (
@@ -65,8 +210,26 @@ CREATE TABLE Core.TenantFeature (
     TenantId          UNIQUEIDENTIFIER NOT NULL,
     FeatureCode       NVARCHAR(100)    NOT NULL,
     IsEnabled         BIT              NOT NULL DEFAULT 1,
-    EnabledDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME()
+    EffectiveStartUtc DATETIME2        NULL,
+    EffectiveEndUtc   DATETIME2        NULL,
+    SourceType        NVARCHAR(50)     NOT NULL DEFAULT 'Override',
+    EnabledDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc   DATETIME2        NULL,
+    CONSTRAINT UQ_TenantFeature_Tenant_Code UNIQUE (TenantId, FeatureCode)
 );
+
+-- Add missing columns to Core.TenantFeature if table already exists
+IF EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.TenantFeature'))
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.TenantFeature') AND name = 'EffectiveStartUtc')
+        ALTER TABLE Core.TenantFeature ADD EffectiveStartUtc DATETIME2 NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.TenantFeature') AND name = 'EffectiveEndUtc')
+        ALTER TABLE Core.TenantFeature ADD EffectiveEndUtc DATETIME2 NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.TenantFeature') AND name = 'SourceType')
+        ALTER TABLE Core.TenantFeature ADD SourceType NVARCHAR(50) NOT NULL DEFAULT 'Override';
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.TenantFeature') AND name = 'ModifiedDateUtc')
+        ALTER TABLE Core.TenantFeature ADD ModifiedDateUtc DATETIME2 NULL;
+END;
 
 -- ============================================================
 -- 2.2  IDENTITY AND ACCESS MANAGEMENT
@@ -1089,13 +1252,15 @@ CREATE TABLE Audit.AuditLog (
     OldValues         NVARCHAR(MAX)    NULL,
     NewValues         NVARCHAR(MAX)    NULL,
     IpAddress         NVARCHAR(50)     NULL,
+    RegionCode        NVARCHAR(50)     NULL,
+    CorrelationId     NVARCHAR(200)    NULL,
     PerformedDateUtc  DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
     CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
     IsDeleted         BIT              NOT NULL DEFAULT 0
 );
 
 -- ============================================================
--- 2.13  VIRTUAL ASSISTANT  (AssistantConversation already exists)
+-- 2.13  VIRTUAL ASSISTANT
 -- ============================================================
 
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Assistant.AssistantConversation'))
@@ -1195,6 +1360,12 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Commission
 -- Audit.AuditLog
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Audit.AuditLog') AND name = 'CreatedDateUtc')
     ALTER TABLE Audit.AuditLog ADD CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME();
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Audit.AuditLog') AND name = 'RegionCode')
+    ALTER TABLE Audit.AuditLog ADD RegionCode NVARCHAR(50) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Audit.AuditLog') AND name = 'CorrelationId')
+    ALTER TABLE Audit.AuditLog ADD CorrelationId NVARCHAR(200) NULL;
 
 -- IAM.[User]
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('IAM.[User]') AND name = 'FullName')
@@ -1396,7 +1567,7 @@ GO
 -- Seed default Tenant
 -- ============================================================
 IF NOT EXISTS (SELECT 1 FROM Core.Tenant WHERE TenantId = '00000000-0000-0000-0000-000000000001')
-    INSERT INTO Core.Tenant (TenantId, TenantCode, TenantName, PlanCode, CurrencyCode, TimeZoneId)
+    INSERT INTO Core.Tenant (TenantId, TenantCode, TenantName, PlanCode, DefaultCurrencyCode, DefaultTimeZoneId)
     VALUES ('00000000-0000-0000-0000-000000000001', 'DEFAULT', 'Default Tenant', 'Enterprise', 'USD', 'UTC');
 GO
 
@@ -1638,6 +1809,30 @@ CREATE TABLE Audit.SecurityEventLog (
     IsDeleted         BIT              NOT NULL DEFAULT 0
 );
 
+-- ── Audit engine: system / operational log ───────────────────
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Audit.SystemLog'))
+CREATE TABLE Audit.SystemLog (
+    SystemLogId       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId          UNIQUEIDENTIFIER NULL,
+    LogLevel          NVARCHAR(20)     NOT NULL DEFAULT 'Information',
+    ServiceName       NVARCHAR(200)    NOT NULL,
+    Message           NVARCHAR(MAX)    NOT NULL,
+    ExceptionText     NVARCHAR(MAX)    NULL,
+    StackTrace        NVARCHAR(MAX)    NULL,
+    RegionCode        NVARCHAR(50)     NULL,
+    CorrelationId     NVARCHAR(200)    NULL,
+    SourceContext     NVARCHAR(500)    NULL,
+    MachineName       NVARCHAR(200)    NULL,
+    RequestPath       NVARCHAR(1000)   NULL,
+    HttpMethod        NVARCHAR(10)     NULL,
+    HttpStatusCode    INT              NULL,
+    DurationMs        INT              NULL,
+    UserId            UNIQUEIDENTIFIER NULL,
+    Properties        NVARCHAR(MAX)    NULL,
+    CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    IsDeleted         BIT              NOT NULL DEFAULT 0
+);
+
 -- ── Audit engine: data export log ───────────────────────────
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Audit.ExportLog'))
 CREATE TABLE Audit.ExportLog (
@@ -1822,6 +2017,112 @@ IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platf
 IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.EnableAuditFieldChanges' AND ScopeCode = 'Platform')
     INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
     VALUES ('Platform', 'Platform.EnableAuditFieldChanges', 'true', 'Boolean', 'true', 'Enable granular field-level change tracking', 'Audit');
+
+-- Tenant Defaults
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.DefaultIsolationMode' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.DefaultIsolationMode', 'Shared', 'String', 'Shared', 'Default tenant isolation mode (Shared or Dedicated)', 'Tenant');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.DefaultOnboardingEnabled' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.DefaultOnboardingEnabled', 'true', 'Boolean', 'true', 'Enable onboarding wizard for new tenants', 'Tenant');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.DefaultRetentionDays' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.DefaultRetentionDays', '2555', 'Integer', '2555', 'Default data retention period in days for new tenants', 'Tenant');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.DefaultPlanCode' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.DefaultPlanCode', 'Standard', 'String', 'Standard', 'Default plan code assigned to new tenants', 'Tenant');
+
+-- Billing Defaults
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.DefaultBillingCycle' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.DefaultBillingCycle', 'Monthly', 'String', 'Monthly', 'Default billing cycle for new subscriptions', 'Billing');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.BillingGraceDays' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.BillingGraceDays', '15', 'Integer', '15', 'Grace days before invoice becomes overdue', 'Billing');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.OverageHandling' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.OverageHandling', 'Notify', 'String', 'Notify', 'Action on quota overage (Notify, Block, or Allow)', 'Billing');
+
+-- Security Defaults
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.PasswordMinLength' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.PasswordMinLength', '8', 'Integer', '8', 'Minimum password length', 'IAM');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.PasswordRequireUppercase' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.PasswordRequireUppercase', 'true', 'Boolean', 'true', 'Require uppercase characters in passwords', 'IAM');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.PasswordRequireSpecialChar' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.PasswordRequireSpecialChar', 'true', 'Boolean', 'true', 'Require special characters in passwords', 'IAM');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.MaxFailedLoginAttempts' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.MaxFailedLoginAttempts', '5', 'Integer', '5', 'Max failed login attempts before lockout', 'IAM');
+
+-- Feature Defaults
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.EnableCrmModule' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.EnableCrmModule', 'true', 'Boolean', 'true', 'Enable CRM module by default for new tenants', 'Feature');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.EnableBillingModule' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.EnableBillingModule', 'true', 'Boolean', 'true', 'Enable Billing module by default for new tenants', 'Feature');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.EnableCommissionModule' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.EnableCommissionModule', 'false', 'Boolean', 'false', 'Enable Commission module by default for new tenants', 'Feature');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.EnableWorkflowModule' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.EnableWorkflowModule', 'true', 'Boolean', 'true', 'Enable Workflow & Approvals module by default', 'Feature');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.EnableDmsModule' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.EnableDmsModule', 'true', 'Boolean', 'true', 'Enable Document Management module by default', 'Feature');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.EnableAssistantModule' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.EnableAssistantModule', 'false', 'Boolean', 'false', 'Enable AI Assistant module by default for new tenants', 'Feature');
+
+-- Usage Defaults
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.DefaultMaxUsers' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.DefaultMaxUsers', '25', 'Integer', '25', 'Default maximum active users per tenant', 'Usage');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.DefaultStorageLimitGb' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.DefaultStorageLimitGb', '50', 'Integer', '50', 'Default storage limit in GB per tenant', 'Usage');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.DefaultApiCallsPerDay' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.DefaultApiCallsPerDay', '10000', 'Integer', '10000', 'Default daily API call limit per tenant', 'Usage');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.UsageAlertThresholdPct' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.UsageAlertThresholdPct', '80', 'Integer', '80', 'Percentage of quota usage that triggers an alert', 'Usage');
+
+-- Regional Defaults
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.DefaultRegionCode' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.DefaultRegionCode', 'US-EAST', 'String', 'US-EAST', 'Default deployment region for new tenants', 'Regional');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.DefaultEnvironmentCode' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.DefaultEnvironmentCode', 'Production', 'String', 'Production', 'Default deployment environment', 'Regional');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.EnableMultiRegion' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.EnableMultiRegion', 'false', 'Boolean', 'false', 'Enable multi-region deployment support', 'Regional');
+
+IF NOT EXISTS (SELECT 1 FROM Core.ConfigurationSetting WHERE SettingKey = 'Platform.EnableDisasterRecovery' AND ScopeCode = 'Platform')
+    INSERT INTO Core.ConfigurationSetting (ScopeCode, SettingKey, SettingValue, DataTypeCode, DefaultValue, Description, ModuleCode)
+    VALUES ('Platform', 'Platform.EnableDisasterRecovery', 'false', 'Boolean', 'false', 'Enable automatic disaster recovery failover', 'Regional');
 
 -- ============================================================
 -- 2.1  PLATFORM CORE – Seed: System Report Definitions
@@ -2551,6 +2852,123 @@ CREATE TABLE Billing.RetainerDrawdown (
 );
 
 -- ── Billing adjustments and write-offs ──────────────────────
+
+-- ============================================================
+-- PLATFORM DEPLOYMENT BINDINGS
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.DeploymentBinding'))
+CREATE TABLE Core.DeploymentBinding (
+    DeploymentBindingId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId            UNIQUEIDENTIFIER NOT NULL,
+    RegionId            UNIQUEIDENTIFIER NULL,
+    RegionCode          NVARCHAR(50)     NOT NULL,
+    EnvironmentCode     NVARCHAR(50)     NOT NULL DEFAULT 'Production',
+    StampCode           NVARCHAR(100)    NULL,
+    IsolationMode       NVARCHAR(50)     NOT NULL DEFAULT 'Shared',
+    IsPrimary           BIT              NOT NULL DEFAULT 0,
+    StatusCode          NVARCHAR(50)     NOT NULL DEFAULT 'Active',
+    Notes               NVARCHAR(500)    NULL,
+    ProvisionedDateUtc  DATETIME2        NULL,
+    DecommissionedDateUtc DATETIME2      NULL,
+    CreatedDateUtc      DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc     DATETIME2        NULL,
+    CreatedByUserId     UNIQUEIDENTIFIER NULL,
+    IsDeleted           BIT              NOT NULL DEFAULT 0
+);
+
+-- ============================================================
+-- PLATFORM REGIONS
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.Region'))
+CREATE TABLE Core.Region (
+    RegionId           UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    RegionCode         NVARCHAR(50)     NOT NULL,
+    RegionName         NVARCHAR(200)    NOT NULL,
+    CloudRegion        NVARCHAR(100)    NULL,
+    ComplianceProfile  NVARCHAR(200)    NULL,
+    PrimaryStamp       NVARCHAR(100)    NULL,
+    SecondaryStamp     NVARCHAR(100)    NULL,
+    IsActive           BIT              NOT NULL DEFAULT 1,
+    CreatedDateUtc     DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc    DATETIME2        NULL,
+    IsDeleted          BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_Core_Region_RegionCode UNIQUE (RegionCode)
+);
+
+-- ============================================================
+-- PLATFORM DEPLOYMENT STAMPS
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.DeploymentStamp'))
+CREATE TABLE Core.DeploymentStamp (
+    StampId             UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    StampCode           NVARCHAR(100)    NOT NULL,
+    StampName           NVARCHAR(200)    NOT NULL,
+    RegionId            UNIQUEIDENTIFIER NULL,
+    RegionCode          NVARCHAR(50)     NOT NULL DEFAULT '',
+    EnvironmentCode     NVARCHAR(50)     NOT NULL DEFAULT 'Production',
+    StatusCode          NVARCHAR(50)     NOT NULL DEFAULT 'Active',
+    TenantCount         INT              NOT NULL DEFAULT 0,
+    MaxTenantCapacity   INT              NOT NULL DEFAULT 0,
+    LoadPercent         DECIMAL(5,2)     NOT NULL DEFAULT 0,
+    ActiveServices      INT              NOT NULL DEFAULT 0,
+    Notes               NVARCHAR(500)    NULL,
+    IsActive            BIT              NOT NULL DEFAULT 1,
+    CreatedDateUtc      DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc     DATETIME2        NULL,
+    CreatedByUserId     UNIQUEIDENTIFIER NULL,
+    IsDeleted           BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_Core_DeploymentStamp_StampCode UNIQUE (StampCode)
+);
+
+-- ============================================================
+-- TENANT REGION & DEPLOYMENT ASSIGNMENT
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.TenantDeploymentAssignment'))
+CREATE TABLE Core.TenantDeploymentAssignment (
+    AssignmentId       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId           UNIQUEIDENTIFIER NOT NULL,
+    EnvironmentCode    NVARCHAR(50)     NOT NULL DEFAULT 'Production',
+    PrimaryRegionCode  NVARCHAR(50)     NULL,
+    DrRegionCode       NVARCHAR(50)     NULL,
+    StampCode          NVARCHAR(100)    NULL,
+    DatabaseCluster    NVARCHAR(200)    NULL,
+    StorageBinding     NVARCHAR(500)    NULL,
+    IsolationMode      NVARCHAR(50)     NOT NULL DEFAULT 'Shared',
+    StatusCode         NVARCHAR(50)     NOT NULL DEFAULT 'Active',
+    Notes              NVARCHAR(500)    NULL,
+    CreatedDateUtc     DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc    DATETIME2        NULL,
+    CreatedByUserId    UNIQUEIDENTIFIER NULL,
+    IsDeleted          BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_TenantDeploymentAssignment_TenantId UNIQUE (TenantId)
+);
+
+-- ============================================================
+-- PLATFORM USAGE EVENTS
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.UsageEvent'))
+CREATE TABLE Core.UsageEvent (
+    EventId           UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId          UNIQUEIDENTIFIER NOT NULL,
+    EventTimeUtc      DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    MetricType        NVARCHAR(100)    NOT NULL,
+    Quantity          DECIMAL(18,4)    NOT NULL DEFAULT 0,
+    SourceService     NVARCHAR(200)    NOT NULL,
+    CorrelationId     NVARCHAR(200)    NULL,
+    CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME()
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('Core.UsageEvent') AND name = 'IX_UsageEvent_TenantId')
+    CREATE INDEX IX_UsageEvent_TenantId     ON Core.UsageEvent (TenantId);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('Core.UsageEvent') AND name = 'IX_UsageEvent_EventTimeUtc')
+    CREATE INDEX IX_UsageEvent_EventTimeUtc ON Core.UsageEvent (EventTimeUtc DESC);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('Core.UsageEvent') AND name = 'IX_UsageEvent_MetricType')
+    CREATE INDEX IX_UsageEvent_MetricType   ON Core.UsageEvent (MetricType);
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Finance.BillingAdjustment'))
 CREATE TABLE Finance.BillingAdjustment (
     AdjustmentId       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
@@ -2876,5 +3294,315 @@ GO
 IF NOT EXISTS (SELECT 1 FROM Finance.Vendor WHERE VendorCode = 'VENDOR-001' AND TenantId = '00000000-0000-0000-0000-000000000001')
     INSERT INTO Finance.Vendor (TenantId, VendorCode, VendorName, PaymentTermsCode, CurrencyCode, VendorTypeCode, StatusCode)
     VALUES ('00000000-0000-0000-0000-000000000001', 'VENDOR-001', 'General Supplies Co.', 'Net30', 'USD', 'Supplier', 'Active');
+
+GO
+
+-- ============================================================
+-- QUOTAS: Plan-level rules, tenant overrides, and violations
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.QuotaRule'))
+CREATE TABLE Core.QuotaRule (
+    QuotaRuleId       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    PlanCode          NVARCHAR(50)     NOT NULL DEFAULT '',
+    MetricTypeCode    NVARCHAR(100)    NOT NULL,
+    LimitValue        DECIMAL(18,4)    NOT NULL DEFAULT 0,
+    LimitUnit         NVARCHAR(50)     NOT NULL DEFAULT 'Count',
+    PeriodCode        NVARCHAR(50)     NOT NULL DEFAULT 'Monthly',
+    IsEnforced        BIT              NOT NULL DEFAULT 1,
+    IsActive          BIT              NOT NULL DEFAULT 1,
+    Notes             NVARCHAR(500)    NULL,
+    CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc   DATETIME2        NULL,
+    CreatedByUserId   UNIQUEIDENTIFIER NULL,
+    IsDeleted         BIT              NOT NULL DEFAULT 0
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.TenantQuota'))
+CREATE TABLE Core.TenantQuota (
+    TenantQuotaId     UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId          UNIQUEIDENTIFIER NOT NULL,
+    MetricTypeCode    NVARCHAR(100)    NOT NULL,
+    LimitValue        DECIMAL(18,4)    NOT NULL DEFAULT 0,
+    CurrentValue      DECIMAL(18,4)    NOT NULL DEFAULT 0,
+    LimitUnit         NVARCHAR(50)     NOT NULL DEFAULT 'Count',
+    PeriodCode        NVARCHAR(50)     NOT NULL DEFAULT 'Monthly',
+    IsEnforced        BIT              NOT NULL DEFAULT 1,
+    StatusCode        NVARCHAR(50)     NOT NULL DEFAULT 'Active',
+    OverrideReason    NVARCHAR(500)    NULL,
+    LastResetDateUtc  DATETIME2        NULL,
+    NextResetDateUtc  DATETIME2        NULL,
+    CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc   DATETIME2        NULL,
+    CreatedByUserId   UNIQUEIDENTIFIER NULL,
+    IsDeleted         BIT              NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_TenantQuota_Tenant_Metric UNIQUE (TenantId, MetricTypeCode)
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.QuotaViolation'))
+CREATE TABLE Core.QuotaViolation (
+    ViolationId           UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    TenantId              UNIQUEIDENTIFIER NOT NULL,
+    MetricTypeCode        NVARCHAR(100)    NOT NULL,
+    ViolationDateUtc      DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    LimitValue            DECIMAL(18,4)    NOT NULL DEFAULT 0,
+    ActualValue           DECIMAL(18,4)    NOT NULL DEFAULT 0,
+    ExcessValue           DECIMAL(18,4)    NOT NULL DEFAULT 0,
+    SeverityCode          NVARCHAR(50)     NOT NULL DEFAULT 'Warning',
+    StatusCode            NVARCHAR(50)     NOT NULL DEFAULT 'Open',
+    Notes                 NVARCHAR(500)    NULL,
+    AcknowledgedByUserId  UNIQUEIDENTIFIER NULL,
+    AcknowledgedDateUtc   DATETIME2        NULL,
+    ResolvedByUserId      UNIQUEIDENTIFIER NULL,
+    ResolvedDateUtc       DATETIME2        NULL,
+    CreatedDateUtc        DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    IsDeleted             BIT              NOT NULL DEFAULT 0
+);
+
+GO
+
+-- ── Quota Rules – Seed: default plan-level rules ─────────────
+-- Add missing columns to Core.QuotaRule
+IF EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.QuotaRule'))
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.QuotaRule') AND name = 'RuleCode')
+        ALTER TABLE Core.QuotaRule ADD RuleCode NVARCHAR(100) NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.QuotaRule') AND name = 'WarningThresholdPct')
+        ALTER TABLE Core.QuotaRule ADD WarningThresholdPct DECIMAL(5,2) NOT NULL DEFAULT 80;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.QuotaRule') AND name = 'GraceThreshold')
+        ALTER TABLE Core.QuotaRule ADD GraceThreshold DECIMAL(18,4) NOT NULL DEFAULT 0;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.QuotaRule') AND name = 'OverageBillingEnabled')
+        ALTER TABLE Core.QuotaRule ADD OverageBillingEnabled BIT NOT NULL DEFAULT 0;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.QuotaRule') AND name = 'EnforcementMode')
+        ALTER TABLE Core.QuotaRule ADD EnforcementMode NVARCHAR(50) NOT NULL DEFAULT 'Hard';
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Core.QuotaRule WHERE PlanCode = 'Standard' AND MetricTypeCode = 'Users')
+    INSERT INTO Core.QuotaRule (PlanCode, MetricTypeCode, LimitValue, LimitUnit, PeriodCode, IsEnforced, Notes)
+    VALUES ('Standard', 'Users', 25, 'Count', 'Unlimited', 1, 'Maximum active users on Standard plan');
+
+IF NOT EXISTS (SELECT 1 FROM Core.QuotaRule WHERE PlanCode = 'Standard' AND MetricTypeCode = 'StorageGb')
+    INSERT INTO Core.QuotaRule (PlanCode, MetricTypeCode, LimitValue, LimitUnit, PeriodCode, IsEnforced, Notes)
+    VALUES ('Standard', 'StorageGb', 50, 'GB', 'Unlimited', 1, 'Total document storage on Standard plan');
+
+IF NOT EXISTS (SELECT 1 FROM Core.QuotaRule WHERE PlanCode = 'Standard' AND MetricTypeCode = 'ApiCallsPerDay')
+    INSERT INTO Core.QuotaRule (PlanCode, MetricTypeCode, LimitValue, LimitUnit, PeriodCode, IsEnforced, Notes)
+    VALUES ('Standard', 'ApiCallsPerDay', 10000, 'Count', 'Daily', 1, 'API calls per day on Standard plan');
+
+IF NOT EXISTS (SELECT 1 FROM Core.QuotaRule WHERE PlanCode = 'Enterprise' AND MetricTypeCode = 'Users')
+    INSERT INTO Core.QuotaRule (PlanCode, MetricTypeCode, LimitValue, LimitUnit, PeriodCode, IsEnforced, Notes)
+    VALUES ('Enterprise', 'Users', 500, 'Count', 'Unlimited', 0, 'Maximum active users on Enterprise plan');
+
+IF NOT EXISTS (SELECT 1 FROM Core.QuotaRule WHERE PlanCode = 'Enterprise' AND MetricTypeCode = 'StorageGb')
+    INSERT INTO Core.QuotaRule (PlanCode, MetricTypeCode, LimitValue, LimitUnit, PeriodCode, IsEnforced, Notes)
+    VALUES ('Enterprise', 'StorageGb', 1000, 'GB', 'Unlimited', 0, 'Total document storage on Enterprise plan');
+
+IF NOT EXISTS (SELECT 1 FROM Core.QuotaRule WHERE PlanCode = 'Enterprise' AND MetricTypeCode = 'ApiCallsPerDay')
+    INSERT INTO Core.QuotaRule (PlanCode, MetricTypeCode, LimitValue, LimitUnit, PeriodCode, IsEnforced, Notes)
+    VALUES ('Enterprise', 'ApiCallsPerDay', 500000, 'Count', 'Daily', 0, 'API calls per day on Enterprise plan');
+
+GO
+
+-- ═══════════════════════════════════════════════════════════════
+-- MONITORING
+-- ═══════════════════════════════════════════════════════════════
+
+-- ── Core.HealthCheck ─────────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.HealthCheck'))
+CREATE TABLE Core.HealthCheck (
+    HealthCheckId     UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    ServiceName       NVARCHAR(200)    NOT NULL,
+    EndpointUrl       NVARCHAR(500)    NULL,
+    StatusCode        NVARCHAR(50)     NOT NULL DEFAULT 'Unknown',
+    LatencyMs         INT              NOT NULL DEFAULT 0,
+    UptimePercent     DECIMAL(5,2)     NOT NULL DEFAULT 100.00,
+    LastCheckDateUtc  DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    Notes             NVARCHAR(500)    NULL,
+    RegionCode        NVARCHAR(50)     NULL,
+    EnvironmentCode   NVARCHAR(50)     NOT NULL DEFAULT 'Production',
+    IsActive          BIT              NOT NULL DEFAULT 1,
+    CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc   DATETIME2        NULL,
+    CreatedByUserId   UNIQUEIDENTIFIER NULL,
+    IsDeleted         BIT              NOT NULL DEFAULT 0
+);
+
+-- ── Core.Alert ───────────────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.Alert'))
+CREATE TABLE Core.Alert (
+    AlertId            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    AlertName          NVARCHAR(300)    NOT NULL,
+    ServiceName        NVARCHAR(200)    NOT NULL,
+    SeverityCode       NVARCHAR(50)     NOT NULL DEFAULT 'Info',
+    StatusCode         NVARCHAR(50)     NOT NULL DEFAULT 'Open',
+    Message            NVARCHAR(2000)   NULL,
+    TriggeredDateUtc   DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    AcknowledgedByUserId UNIQUEIDENTIFIER NULL,
+    AcknowledgedDateUtc  DATETIME2      NULL,
+    ResolvedByUserId   UNIQUEIDENTIFIER NULL,
+    ResolvedDateUtc    DATETIME2        NULL,
+    Notes              NVARCHAR(500)    NULL,
+    CreatedDateUtc     DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    IsDeleted          BIT              NOT NULL DEFAULT 0
+);
+
+-- ── Core.SlaDefinition ───────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.SlaDefinition'))
+CREATE TABLE Core.SlaDefinition (
+    SlaDefinitionId    UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    SlaName            NVARCHAR(300)    NOT NULL,
+    ServiceName        NVARCHAR(200)    NOT NULL,
+    MetricTypeCode     NVARCHAR(100)    NOT NULL,
+    TargetValue        DECIMAL(10,4)    NOT NULL DEFAULT 99.9,
+    TargetUnit         NVARCHAR(50)     NOT NULL DEFAULT 'Percent',
+    PeriodCode         NVARCHAR(50)     NOT NULL DEFAULT 'Monthly',
+    CurrentValue       DECIMAL(10,4)    NOT NULL DEFAULT 100.0,
+    ComplianceStatus   NVARCHAR(50)     NOT NULL DEFAULT 'Compliant',
+    LastEvaluatedUtc   DATETIME2        NULL,
+    IsActive           BIT              NOT NULL DEFAULT 1,
+    Notes              NVARCHAR(500)    NULL,
+    CreatedDateUtc     DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc    DATETIME2        NULL,
+    CreatedByUserId    UNIQUEIDENTIFIER NULL,
+    IsDeleted          BIT              NOT NULL DEFAULT 0
+);
+
+GO
+
+-- ── HealthCheck – Seed data ──────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM Core.HealthCheck WHERE ServiceName = 'API Gateway')
+    INSERT INTO Core.HealthCheck (ServiceName, EndpointUrl, StatusCode, LatencyMs, UptimePercent, RegionCode, EnvironmentCode, Notes)
+    VALUES ('API Gateway', 'https://api.example.com/health', 'Healthy', 42, 99.98, 'US-EAST', 'Production', 'Primary API gateway health probe');
+
+IF NOT EXISTS (SELECT 1 FROM Core.HealthCheck WHERE ServiceName = 'Identity Service')
+    INSERT INTO Core.HealthCheck (ServiceName, EndpointUrl, StatusCode, LatencyMs, UptimePercent, RegionCode, EnvironmentCode, Notes)
+    VALUES ('Identity Service', 'https://auth.example.com/health', 'Healthy', 28, 99.99, 'US-EAST', 'Production', 'OAuth / identity provider');
+
+IF NOT EXISTS (SELECT 1 FROM Core.HealthCheck WHERE ServiceName = 'Notification Service')
+    INSERT INTO Core.HealthCheck (ServiceName, EndpointUrl, StatusCode, LatencyMs, UptimePercent, RegionCode, EnvironmentCode, Notes)
+    VALUES ('Notification Service', 'https://notify.example.com/health', 'Degraded', 350, 97.50, 'EU-WEST', 'Production', 'Email and push notification service');
+
+-- ── Core.Alert – Add new columns ─────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.Alert') AND name = 'AlertTypeCode')
+    ALTER TABLE Core.Alert ADD AlertTypeCode NVARCHAR(100) NOT NULL DEFAULT 'System';
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.Alert') AND name = 'RegionCode')
+    ALTER TABLE Core.Alert ADD RegionCode NVARCHAR(50) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.Alert') AND name = 'TenantId')
+    ALTER TABLE Core.Alert ADD TenantId UNIQUEIDENTIFIER NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.Alert') AND name = 'OwnerUserId')
+    ALTER TABLE Core.Alert ADD OwnerUserId UNIQUEIDENTIFIER NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Core.Alert') AND name = 'EscalatedDateUtc')
+    ALTER TABLE Core.Alert ADD EscalatedDateUtc DATETIME2 NULL;
+
+GO
+
+-- ── Alert – Seed data ────────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM Core.Alert WHERE AlertName = 'High Latency – API Gateway')
+    INSERT INTO Core.Alert (AlertName, ServiceName, SeverityCode, StatusCode, Message, AlertTypeCode, RegionCode)
+    VALUES ('High Latency – API Gateway', 'API Gateway', 'Warning', 'Open', 'P95 latency exceeded 500ms threshold for 5 consecutive minutes', 'Performance', 'US-EAST');
+
+IF NOT EXISTS (SELECT 1 FROM Core.Alert WHERE AlertName = 'Notification Delivery Failure')
+    INSERT INTO Core.Alert (AlertName, ServiceName, SeverityCode, StatusCode, Message, AlertTypeCode, RegionCode)
+    VALUES ('Notification Delivery Failure', 'Notification Service', 'Critical', 'Open', 'Email delivery failure rate exceeded 15% in the last hour', 'Reliability', 'EU-WEST');
+
+-- ── SlaDefinition – Seed data ────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM Core.SlaDefinition WHERE SlaName = 'API Uptime SLA')
+    INSERT INTO Core.SlaDefinition (SlaName, ServiceName, MetricTypeCode, TargetValue, TargetUnit, PeriodCode, CurrentValue, ComplianceStatus, Notes)
+    VALUES ('API Uptime SLA', 'API Gateway', 'Uptime', 99.95, 'Percent', 'Monthly', 99.98, 'Compliant', 'Core API availability guarantee');
+
+IF NOT EXISTS (SELECT 1 FROM Core.SlaDefinition WHERE SlaName = 'API Latency P95')
+    INSERT INTO Core.SlaDefinition (SlaName, ServiceName, MetricTypeCode, TargetValue, TargetUnit, PeriodCode, CurrentValue, ComplianceStatus, Notes)
+    VALUES ('API Latency P95', 'API Gateway', 'LatencyMs', 500.0, 'Milliseconds', 'Monthly', 280.0, 'Compliant', 'P95 response time target');
+
+IF NOT EXISTS (SELECT 1 FROM Core.SlaDefinition WHERE SlaName = 'Notification Delivery SLA')
+    INSERT INTO Core.SlaDefinition (SlaName, ServiceName, MetricTypeCode, TargetValue, TargetUnit, PeriodCode, CurrentValue, ComplianceStatus, Notes)
+    VALUES ('Notification Delivery SLA', 'Notification Service', 'DeliveryRate', 99.00, 'Percent', 'Monthly', 97.50, 'Breached', 'Email/push delivery success rate');
+
+-- ── Platform Events ─────────────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.PlatformEvent'))
+CREATE TABLE Core.PlatformEvent (
+    PlatformEventId  UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    EventTypeCode    NVARCHAR(100)    NOT NULL,
+    TenantId         UNIQUEIDENTIFIER NULL,
+    SourceService    NVARCHAR(200)    NULL,
+    TimestampUtc     DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ProcessingStatus NVARCHAR(50)     NOT NULL DEFAULT 'Pending',
+    SubscriberCount  INT              NOT NULL DEFAULT 0,
+    CorrelationId    NVARCHAR(200)    NULL,
+    Payload          NVARCHAR(MAX)    NULL,
+    CreatedDateUtc   DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc  DATETIME2        NULL,
+    IsDeleted        BIT              NOT NULL DEFAULT 0
+);
+
+-- ── PlatformEvent – Seed data ────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM Core.PlatformEvent WHERE EventTypeCode = 'TenantProvisioned' AND SourceService = 'Provisioning Service')
+    INSERT INTO Core.PlatformEvent (EventTypeCode, SourceService, TimestampUtc, ProcessingStatus, SubscriberCount, CorrelationId)
+    VALUES ('TenantProvisioned', 'Provisioning Service', SYSUTCDATETIME(), 'Processed', 3, 'corr-001');
+
+IF NOT EXISTS (SELECT 1 FROM Core.PlatformEvent WHERE EventTypeCode = 'SubscriptionCreated' AND SourceService = 'Billing Service')
+    INSERT INTO Core.PlatformEvent (EventTypeCode, SourceService, TimestampUtc, ProcessingStatus, SubscriberCount, CorrelationId)
+    VALUES ('SubscriptionCreated', 'Billing Service', SYSUTCDATETIME(), 'Processed', 5, 'corr-002');
+
+IF NOT EXISTS (SELECT 1 FROM Core.PlatformEvent WHERE EventTypeCode = 'AlertEscalated' AND SourceService = 'Monitoring Service')
+    INSERT INTO Core.PlatformEvent (EventTypeCode, SourceService, TimestampUtc, ProcessingStatus, SubscriberCount, CorrelationId)
+    VALUES ('AlertEscalated', 'Monitoring Service', SYSUTCDATETIME(), 'Failed', 2, 'corr-003');
+
+IF NOT EXISTS (SELECT 1 FROM Core.PlatformEvent WHERE EventTypeCode = 'UserRoleChanged' AND SourceService = 'IAM Service')
+    INSERT INTO Core.PlatformEvent (EventTypeCode, SourceService, TimestampUtc, ProcessingStatus, SubscriberCount, CorrelationId)
+    VALUES ('UserRoleChanged', 'IAM Service', SYSUTCDATETIME(), 'Pending', 4, 'corr-004');
+
+GO
+
+-- ============================================================
+-- BACKGROUND JOBS
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('Core.BackgroundJob'))
+CREATE TABLE Core.BackgroundJob (
+    BackgroundJobId   UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    JobTypeCode       NVARCHAR(100)    NOT NULL,
+    TenantId          UNIQUEIDENTIFIER NULL,
+    StatusCode        NVARCHAR(50)     NOT NULL DEFAULT 'Queued',
+    CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    StartedDateUtc    DATETIME2        NULL,
+    CompletedDateUtc  DATETIME2        NULL,
+    DurationMs        INT              NOT NULL DEFAULT 0,
+    RetryCount        INT              NOT NULL DEFAULT 0,
+    CorrelationId     NVARCHAR(200)    NULL,
+    ErrorMessage      NVARCHAR(MAX)    NULL,
+    Payload           NVARCHAR(MAX)    NULL,
+    ResultSummary     NVARCHAR(MAX)    NULL,
+    ModifiedDateUtc   DATETIME2        NULL,
+    IsDeleted         BIT              NOT NULL DEFAULT 0
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('Core.BackgroundJob') AND name = 'IX_BackgroundJob_TenantId')
+    CREATE INDEX IX_BackgroundJob_TenantId ON Core.BackgroundJob (TenantId);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('Core.BackgroundJob') AND name = 'IX_BackgroundJob_StatusCode')
+    CREATE INDEX IX_BackgroundJob_StatusCode ON Core.BackgroundJob (StatusCode);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('Core.BackgroundJob') AND name = 'IX_BackgroundJob_CreatedDateUtc')
+    CREATE INDEX IX_BackgroundJob_CreatedDateUtc ON Core.BackgroundJob (CreatedDateUtc DESC);
+
+-- ── BackgroundJob – Seed data ────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM Core.BackgroundJob WHERE JobTypeCode = 'TenantProvisioning' AND CorrelationId = 'job-corr-001')
+    INSERT INTO Core.BackgroundJob (JobTypeCode, TenantId, StatusCode, CreatedDateUtc, StartedDateUtc, CompletedDateUtc, DurationMs, RetryCount, CorrelationId, ResultSummary)
+    VALUES ('TenantProvisioning', '00000000-0000-0000-0000-000000000001', 'Completed', DATEADD(HOUR, -6, SYSUTCDATETIME()), DATEADD(HOUR, -6, SYSUTCDATETIME()), DATEADD(MINUTE, -350, SYSUTCDATETIME()), 12400, 0, 'job-corr-001', 'Tenant provisioned successfully');
+
+IF NOT EXISTS (SELECT 1 FROM Core.BackgroundJob WHERE JobTypeCode = 'InvoiceGeneration' AND CorrelationId = 'job-corr-002')
+    INSERT INTO Core.BackgroundJob (JobTypeCode, TenantId, StatusCode, CreatedDateUtc, StartedDateUtc, DurationMs, RetryCount, CorrelationId, ErrorMessage)
+    VALUES ('InvoiceGeneration', '00000000-0000-0000-0000-000000000001', 'Failed', DATEADD(HOUR, -2, SYSUTCDATETIME()), DATEADD(HOUR, -2, SYSUTCDATETIME()), 3200, 3, 'job-corr-002', 'Timeout connecting to billing service after 3 retries');
+
+IF NOT EXISTS (SELECT 1 FROM Core.BackgroundJob WHERE JobTypeCode = 'ReportExecution' AND CorrelationId = 'job-corr-003')
+    INSERT INTO Core.BackgroundJob (JobTypeCode, TenantId, StatusCode, CreatedDateUtc, RetryCount, CorrelationId)
+    VALUES ('ReportExecution', '00000000-0000-0000-0000-000000000001', 'Queued', SYSUTCDATETIME(), 0, 'job-corr-003');
+
+IF NOT EXISTS (SELECT 1 FROM Core.BackgroundJob WHERE JobTypeCode = 'DataExport' AND CorrelationId = 'job-corr-004')
+    INSERT INTO Core.BackgroundJob (JobTypeCode, TenantId, StatusCode, CreatedDateUtc, StartedDateUtc, DurationMs, RetryCount, CorrelationId)
+    VALUES ('DataExport', '00000000-0000-0000-0000-000000000001', 'Running', DATEADD(MINUTE, -5, SYSUTCDATETIME()), DATEADD(MINUTE, -5, SYSUTCDATETIME()), 0, 0, 'job-corr-004');
 
 GO

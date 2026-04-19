@@ -1,0 +1,415 @@
+@page "/platform/alerts"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Alerts
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Alerts — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Alerts"
+               Subtitle="Track, acknowledge, and resolve platform alerts by service and severity"
+               Icon="bi-bell">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search by alert, service, message…" @onkeyup="OnSearchKeyUp" />
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_severityFilter"
+                        DataSource="@_severityOptions"
+                        Placeholder="All Severities"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_statusFilter"
+                        DataSource="@_statusOptions"
+                        Placeholder="All Statuses"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="FilterOption"
+                        @bind-Value="_regionFilter"
+                        DataSource="@_regionOptions"
+                        Placeholder="All Regions"
+                        CssClass="td-filter-dropdown">
+            <DropDownListFieldSettings Value="Value" Text="Text" />
+        </SfDropDownList>
+        <SfTextBox @bind-Value="_tenantFilter" Placeholder="Tenant ID…" CssClass="td-filter-tenant" />
+        <label class="td-checkbox-label">
+            <SfCheckBox @bind-Checked="_openOnly" Label="Open Only" />
+        </label>
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading alerts…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="AlertDto"
+            DataSource="@_items"
+            AllowSorting="true"
+            AllowResizing="true"
+            EnableHover="true"
+            CssClass="e-sfgrid-clean">
+        <GridColumns>
+            <GridColumn Field="@nameof(AlertDto.SeverityCode)" HeaderText="Severity" Width="110">
+                <Template>
+                    @{ var row = (AlertDto)context; }
+                    <span class="um-badge @SeverityBadgeCss(row.SeverityCode)">@row.SeverityCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AlertDto.AlertTypeCode)" HeaderText="Alert Type" Width="130" />
+            <GridColumn Field="@nameof(AlertDto.ServiceName)" HeaderText="Service" Width="150" />
+            <GridColumn Field="@nameof(AlertDto.RegionCode)" HeaderText="Region" Width="110" />
+            <GridColumn Field="@nameof(AlertDto.TenantId)" HeaderText="Tenant" Width="130">
+                <Template>
+                    @{ var row = (AlertDto)context; }
+                    @if (row.TenantId.HasValue)
+                    {
+                        <span title="@row.TenantId">@row.TenantId.Value.ToString("N")[..8]…</span>
+                    }
+                    else
+                    {
+                        <span class="text-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AlertDto.Message)" HeaderText="Message" MinWidth="200" />
+            <GridColumn Field="@nameof(AlertDto.CreatedDateUtc)" HeaderText="Created" Width="160" Format="g" />
+            <GridColumn Field="@nameof(AlertDto.StatusCode)" HeaderText="Status" Width="120">
+                <Template>
+                    @{ var row = (AlertDto)context; }
+                    <span class="um-badge @StatusBadgeCss(row.StatusCode)">@row.StatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AlertDto.OwnerUserId)" HeaderText="Owner" Width="130">
+                <Template>
+                    @{ var row = (AlertDto)context; }
+                    @if (row.OwnerUserId.HasValue)
+                    {
+                        <span title="@row.OwnerUserId">@row.OwnerUserId.Value.ToString("N")[..8]…</span>
+                    }
+                    else
+                    {
+                        <span class="text-muted">Unassigned</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="200" AllowSorting="false">
+                <Template>
+                    @{ var row = (AlertDto)context; }
+                    <div class="td-action-cell">
+                        @if (row.StatusCode == "Open")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs text-warning" @onclick="() => AcknowledgeAsync(row)" title="Acknowledge">
+                                <i class="bi bi-eye" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenAssignDialog(row)" title="Assign">
+                            <i class="bi bi-person-plus" aria-hidden="true"></i>
+                        </button>
+                        @if (row.StatusCode is "Open" or "Acknowledged")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs text-success" @onclick="() => ResolveAsync(row)" title="Resolve">
+                                <i class="bi bi-check-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (row.TenantId.HasValue)
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenRelatedResource(row)" title="Open Related Resource">
+                                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (row.StatusCode is "Open" or "Acknowledged" && row.SeverityCode != "Critical")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs text-danger" @onclick="() => OpenEscalateDialog(row)" title="Escalate">
+                                <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+
+    <div class="td-pager-bar">
+        <SfPager PageSize="@_pageSize"
+                 TotalItemsCount="@_totalCount"
+                 CurrentPage="@_pageNumber"
+                 PageChanged="OnPageChanged" />
+    </div>
+</div>
+
+<!-- ── Assign Dialog ──────────────────────────────────────── -->
+<SfDialog @bind-Visible="_assignDialogVisible"
+          Width="460px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="Assign Alert">
+    <DialogTemplates>
+        <Content>
+            <div class="um-form-grid">
+                <div class="um-field um-field--full">
+                    <label class="um-label">Owner User ID</label>
+                    <SfTextBox @bind-Value="_assignOwnerText" Placeholder="Enter user GUID…" />
+                </div>
+                <div class="um-field um-field--full">
+                    <label class="um-label">Notes</label>
+                    <SfTextBox @bind-Value="_assignNotes" Multiline="true" />
+                </div>
+            </div>
+            <div class="um-dialog-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _assignDialogVisible = false">Cancel</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick="SubmitAssignAsync">Assign</button>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Escalate Dialog ────────────────────────────────────── -->
+<SfDialog @bind-Visible="_escalateDialogVisible"
+          Width="460px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          Header="Escalate Alert">
+    <DialogTemplates>
+        <Content>
+            <div class="um-form-grid">
+                <div class="um-field um-field--full">
+                    <label class="um-label">Escalate Severity To</label>
+                    <SfDropDownList TValue="string" TItem="FilterOption"
+                                    @bind-Value="_escalateSeverity"
+                                    DataSource="@_escalateSeverityOptions">
+                        <DropDownListFieldSettings Value="Value" Text="Text" />
+                    </SfDropDownList>
+                </div>
+                <div class="um-field um-field--full">
+                    <label class="um-label">Notes</label>
+                    <SfTextBox @bind-Value="_escalateNotes" Multiline="true" />
+                </div>
+            </div>
+            <div class="um-dialog-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _escalateDialogVisible = false">Cancel</button>
+                <button type="button" class="um-btn um-btn-primary um-btn-danger" @onclick="SubmitEscalateAsync">Escalate</button>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    SfGrid<AlertDto>? _grid;
+    SfToast? _toast;
+
+    List<AlertDto> _items = [];
+    bool _loading;
+    int  _totalCount;
+    int  _pageNumber = 1;
+    int  _pageSize   = 25;
+
+    string _searchTerm     = string.Empty;
+    string _statusFilter   = string.Empty;
+    string _severityFilter = string.Empty;
+    string _regionFilter   = string.Empty;
+    string _tenantFilter   = string.Empty;
+    bool   _openOnly;
+
+    // Assign dialog
+    bool   _assignDialogVisible;
+    Guid?  _assignAlertId;
+    string _assignOwnerText = string.Empty;
+    string? _assignNotes;
+
+    // Escalate dialog
+    bool   _escalateDialogVisible;
+    Guid?  _escalateAlertId;
+    string _escalateSeverity = "Critical";
+    string? _escalateNotes;
+
+    readonly List<FilterOption> _statusOptions =
+    [
+        new("", "All Statuses"),
+        new("Open",         "Open"),
+        new("Acknowledged", "Acknowledged"),
+        new("Resolved",     "Resolved")
+    ];
+
+    readonly List<FilterOption> _severityOptions =
+    [
+        new("", "All Severities"),
+        new("Info",     "Info"),
+        new("Warning",  "Warning"),
+        new("Critical", "Critical")
+    ];
+
+    readonly List<FilterOption> _regionOptions =
+    [
+        new("", "All Regions"),
+        new("US-EAST", "US-EAST"),
+        new("US-WEST", "US-WEST"),
+        new("EU-WEST", "EU-WEST"),
+        new("EU-NORTH", "EU-NORTH"),
+        new("APAC",    "APAC")
+    ];
+
+    readonly List<FilterOption> _escalateSeverityOptions =
+    [
+        new("Warning",  "Warning"),
+        new("Critical", "Critical")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Monitoring", null),
+            new BreadcrumbService.BreadcrumbItem("Alerts", "/platform/alerts"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            Guid? tenantId = Guid.TryParse(_tenantFilter, out var tid) ? tid : null;
+            var result = await Api.SearchAlertsAsync(
+                searchTerm: _searchTerm,
+                statusCode: _statusFilter,
+                severityCode: _severityFilter,
+                regionCode: _regionFilter,
+                tenantId: tenantId,
+                openOnly: _openOnly ? true : null,
+                pageNumber: _pageNumber,
+                pageSize: _pageSize);
+            _items      = result?.Items.ToList() ?? [];
+            _totalCount = result?.TotalCount ?? 0;
+        }
+        finally { _loading = false; }
+    }
+
+    void OnSearchKeyUp(KeyboardEventArgs e) { if (e.Key == "Enter") InvokeAsync(LoadAsync); }
+
+    async Task OnPageChanged(PageChangedEventArgs e)
+    {
+        _pageNumber = e.CurrentPage;
+        await LoadAsync();
+    }
+
+    async Task AcknowledgeAsync(AlertDto row)
+    {
+        try
+        {
+            await Api.AcknowledgeAlertAsync(row.AlertId, new AcknowledgeAlertRequest());
+            await ShowToast("Alert acknowledged.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Acknowledge failed.", "Error"); }
+    }
+
+    async Task ResolveAsync(AlertDto row)
+    {
+        try
+        {
+            await Api.ResolveAlertAsync(row.AlertId, new ResolveAlertRequest());
+            await ShowToast("Alert resolved.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Resolve failed.", "Error"); }
+    }
+
+    void OpenAssignDialog(AlertDto row)
+    {
+        _assignAlertId   = row.AlertId;
+        _assignOwnerText = row.OwnerUserId?.ToString() ?? string.Empty;
+        _assignNotes     = null;
+        _assignDialogVisible = true;
+    }
+
+    async Task SubmitAssignAsync()
+    {
+        if (_assignAlertId is null) return;
+        try
+        {
+            Guid? ownerId = Guid.TryParse(_assignOwnerText, out var oid) ? oid : null;
+            await Api.AssignAlertAsync(_assignAlertId.Value, new AssignAlertRequest { OwnerUserId = ownerId, Notes = _assignNotes });
+            _assignDialogVisible = false;
+            await ShowToast("Alert assigned.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Assign failed.", "Error"); }
+    }
+
+    void OpenEscalateDialog(AlertDto row)
+    {
+        _escalateAlertId  = row.AlertId;
+        _escalateSeverity = "Critical";
+        _escalateNotes    = null;
+        _escalateDialogVisible = true;
+    }
+
+    async Task SubmitEscalateAsync()
+    {
+        if (_escalateAlertId is null) return;
+        try
+        {
+            await Api.EscalateAlertAsync(_escalateAlertId.Value, new EscalateAlertRequest { SeverityCode = _escalateSeverity, Notes = _escalateNotes });
+            _escalateDialogVisible = false;
+            await ShowToast("Alert escalated.", "Success");
+            await LoadAsync();
+        }
+        catch { await ShowToast("Escalate failed.", "Error"); }
+    }
+
+    void OpenRelatedResource(AlertDto row)
+    {
+        if (row.TenantId.HasValue)
+            Nav.NavigateTo($"/platform/tenants/{row.TenantId.Value}");
+    }
+
+    async Task ShowToast(string message, string type)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content      = message,
+            CssClass     = type == "Error" ? "e-toast-danger" : "e-toast-success",
+            ShowCloseButton = true
+        });
+    }
+
+    static string StatusBadgeCss(string status) => status switch
+    {
+        "Open"         => "um-badge--danger",
+        "Acknowledged" => "um-badge--warning",
+        "Resolved"     => "um-badge--success",
+        _              => "um-badge--neutral"
+    };
+
+    static string SeverityBadgeCss(string severity) => severity switch
+    {
+        "Critical" => "um-badge--danger",
+        "Warning"  => "um-badge--warning",
+        "Info"     => "um-badge--info",
+        _          => "um-badge--neutral"
+    };
+
+    sealed record FilterOption(string Value, string Text);
+}

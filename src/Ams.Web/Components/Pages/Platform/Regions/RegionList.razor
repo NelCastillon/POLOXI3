@@ -1,0 +1,419 @@
+@page "/platform/regions"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Regions
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Regions — Platform</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Regions"
+               Subtitle="Platform deployment regions, cloud stamps, and compliance profiles"
+               Icon="bi-geo-alt">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Region
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="um-grid-card app-datagrid">
+    <div class="td-search-bar">
+        <SfTextBox @bind-Value="_searchTerm" Placeholder="Search regions…" @onkeyup="OnSearchKeyUp" />
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="LoadAsync">
+            <i class="bi bi-search" aria-hidden="true"></i> Search
+        </button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading regions…</span>
+        </div>
+    }
+
+    <SfGrid @ref="_grid"
+            TValue="RegionDto"
+            DataSource="@_regions"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+
+            <GridColumn Field="@nameof(RegionDto.RegionCode)" HeaderText="Region Code" Width="140">
+                <Template>
+                    @{ var row = (RegionDto)context; }
+                    <span class="td-monospace">@row.RegionCode</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RegionDto.RegionName)" HeaderText="Region Name" Width="200" />
+
+            <GridColumn Field="@nameof(RegionDto.CloudRegion)" HeaderText="Cloud Region" Width="160">
+                <Template>
+                    @{ var row = (RegionDto)context; }
+                    @if (!string.IsNullOrEmpty(row.CloudRegion))
+                    {
+                        <span class="td-stat-chip">
+                            <i class="bi bi-cloud" aria-hidden="true"></i> @row.CloudRegion
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="fc-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RegionDto.ComplianceProfile)" HeaderText="Compliance Profile" Width="180">
+                <Template>
+                    @{ var row = (RegionDto)context; }
+                    @if (!string.IsNullOrEmpty(row.ComplianceProfile))
+                    {
+                        <span class="badge badge-info">@row.ComplianceProfile</span>
+                    }
+                    else
+                    {
+                        <span class="fc-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RegionDto.PrimaryStamp)" HeaderText="Primary Stamp" Width="150">
+                <Template>
+                    @{ var row = (RegionDto)context; }
+                    @if (!string.IsNullOrEmpty(row.PrimaryStamp))
+                    {
+                        <span class="td-monospace td-text-sm">@row.PrimaryStamp</span>
+                    }
+                    else
+                    {
+                        <span class="fc-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RegionDto.SecondaryStamp)" HeaderText="Secondary Stamp" Width="160">
+                <Template>
+                    @{ var row = (RegionDto)context; }
+                    @if (!string.IsNullOrEmpty(row.SecondaryStamp))
+                    {
+                        <span class="td-monospace td-text-sm">@row.SecondaryStamp</span>
+                    }
+                    else
+                    {
+                        <span class="fc-muted">—</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RegionDto.IsActive)" HeaderText="Active" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
+                <Template>
+                    @{ var row = (RegionDto)context; }
+                    @if (row.IsActive)
+                    {
+                        <span class="td-pill td-pill--success">Active</span>
+                    }
+                    else
+                    {
+                        <span class="td-pill td-pill--muted">Inactive</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText="" Width="160" AllowSorting="false">
+                <Template>
+                    @{ var row = (RegionDto)context; }
+                    <div class="td-row-actions">
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Edit" @onclick="() => OpenEdit(row)">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        @if (row.IsActive)
+                        {
+                            <button class="um-btn um-btn-xs um-btn-warning" title="Deactivate" @onclick="() => ToggleActive(row, false)">
+                                <i class="bi bi-toggle-on" aria-hidden="true"></i>
+                            </button>
+                        }
+                        else
+                        {
+                            <button class="um-btn um-btn-xs um-btn-primary" title="Activate" @onclick="() => ToggleActive(row, true)">
+                                <i class="bi bi-toggle-off" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-xs um-btn-danger" title="Delete" @onclick="() => OpenDelete(row)">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- ── Create / Edit Dialog ─────────────────────────────────── -->
+<SfDialog @bind-Visible="_showFormDialog" Width="520px" IsModal="true" ShowCloseIcon="true" Header="@_formDialogTitle" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <div class="form-row">
+                    <label class="form-label">Region Code <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_form.RegionCode" Placeholder="e.g. US-EAST" Disabled="@_isEdit" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Region Name <span class="form-required">*</span></label>
+                    <SfTextBox @bind-Value="_form.RegionName" Placeholder="e.g. US East (Virginia)" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Cloud Region</label>
+                    <SfTextBox @bind-Value="_form.CloudRegion" Placeholder="e.g. eastus" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Compliance Profile</label>
+                    <SfTextBox @bind-Value="_form.ComplianceProfile" Placeholder="e.g. HIPAA, SOC2, GDPR" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Primary Stamp</label>
+                    <SfTextBox @bind-Value="_form.PrimaryStamp" Placeholder="e.g. stamp-use-01" />
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Secondary Stamp</label>
+                    <SfTextBox @bind-Value="_form.SecondaryStamp" Placeholder="e.g. stamp-use-02" />
+                </div>
+                @if (!_isEdit)
+                {
+                    <div class="form-row form-row--inline">
+                        <label class="form-label">Active</label>
+                        <SfSwitch @bind-Checked="_form.IsActive" />
+                    </div>
+                }
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel"                              CssClass="um-btn um-btn-ghost"   OnClick="() => _showFormDialog = false" />
+        <DialogButton Content="@(_isEdit ? "Save Changes" : "Add Region")" IsPrimary="true" CssClass="um-btn um-btn-primary" OnClick="ConfirmForm" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+<!-- ── Delete Confirm Dialog ────────────────────────────────── -->
+<SfDialog @bind-Visible="_showDeleteDialog" Width="420px" IsModal="true" ShowCloseIcon="true" Header="Delete Region" CssClass="td-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="td-dialog-body">
+                <p>Are you sure you want to delete <strong>@_actionTarget?.RegionName</strong>?</p>
+                <p class="td-hint">This will permanently remove the region. Tenants currently assigned to this region code will not be affected.</p>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Cancel" CssClass="um-btn um-btn-ghost"  OnClick="() => _showDeleteDialog = false" />
+        <DialogButton Content="Delete" IsPrimary="true" CssClass="um-btn um-btn-danger" OnClick="ConfirmDelete" Disabled="_saving" />
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    // ── state ────────────────────────────────────────────────
+    private SfGrid<RegionDto>? _grid;
+    private SfToast?           _toast;
+
+    private List<RegionDto> _regions    = [];
+    private bool            _loading    = true;
+    private string?         _searchTerm;
+
+    // form
+    private bool            _showFormDialog = false;
+    private bool            _isEdit         = false;
+    private string          _formDialogTitle = "Add Region";
+    private bool            _saving          = false;
+    private Guid            _editId;
+    private FormModel       _form = new();
+
+    // delete
+    private bool       _showDeleteDialog = false;
+    private RegionDto? _actionTarget;
+
+    // ── lifecycle ────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Platform", "/platform"),
+            new("Regions", "/platform/regions")
+        );
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchRegionsAsync(_searchTerm, 1, 200);
+            _regions = result?.Items.ToList() ?? [];
+        }
+        catch
+        {
+            await ShowToast("Failed to load regions.", "Error", "e-toast-danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnSearchKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await LoadAsync();
+    }
+
+    // ── create / edit ────────────────────────────────────────
+    private void OpenCreate()
+    {
+        _isEdit          = false;
+        _formDialogTitle = "Add Region";
+        _editId          = Guid.Empty;
+        _form            = new FormModel();
+        _showFormDialog  = true;
+    }
+
+    private void OpenEdit(RegionDto row)
+    {
+        _isEdit          = true;
+        _formDialogTitle = $"Edit Region — {row.RegionCode}";
+        _editId          = row.RegionId;
+        _form = new FormModel
+        {
+            RegionCode        = row.RegionCode,
+            RegionName        = row.RegionName,
+            CloudRegion       = row.CloudRegion,
+            ComplianceProfile = row.ComplianceProfile,
+            PrimaryStamp      = row.PrimaryStamp,
+            SecondaryStamp    = row.SecondaryStamp,
+            IsActive          = row.IsActive
+        };
+        _showFormDialog = true;
+    }
+
+    private async Task ConfirmForm()
+    {
+        if (string.IsNullOrWhiteSpace(_form.RegionCode) || string.IsNullOrWhiteSpace(_form.RegionName))
+        {
+            await ShowToast("Region Code and Region Name are required.", "Validation", "e-toast-warning");
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            if (_isEdit)
+            {
+                await Api.UpdateRegionAsync(_editId, new UpdateRegionRequest
+                {
+                    RegionName        = _form.RegionName,
+                    CloudRegion       = _form.CloudRegion,
+                    ComplianceProfile = _form.ComplianceProfile,
+                    PrimaryStamp      = _form.PrimaryStamp,
+                    SecondaryStamp    = _form.SecondaryStamp
+                });
+                await ShowToast("Region updated.", "Saved", "e-toast-success");
+            }
+            else
+            {
+                await Api.CreateRegionAsync(new CreateRegionRequest
+                {
+                    RegionCode        = _form.RegionCode,
+                    RegionName        = _form.RegionName,
+                    CloudRegion       = _form.CloudRegion,
+                    ComplianceProfile = _form.ComplianceProfile,
+                    PrimaryStamp      = _form.PrimaryStamp,
+                    SecondaryStamp    = _form.SecondaryStamp,
+                    IsActive          = _form.IsActive
+                });
+                await ShowToast("Region created.", "Created", "e-toast-success");
+            }
+
+            _showFormDialog = false;
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToast("Failed to save region.", "Error", "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // ── toggle active ─────────────────────────────────────────
+    private async Task ToggleActive(RegionDto row, bool activate)
+    {
+        try
+        {
+            await Api.SetRegionActiveAsync(row.RegionId, activate);
+            await ShowToast(activate ? "Region activated." : "Region deactivated.", "Updated", "e-toast-success");
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToast("Failed to update region status.", "Error", "e-toast-danger");
+        }
+    }
+
+    // ── delete ───────────────────────────────────────────────
+    private void OpenDelete(RegionDto row)
+    {
+        _actionTarget     = row;
+        _showDeleteDialog = true;
+    }
+
+    private async Task ConfirmDelete()
+    {
+        if (_actionTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteRegionAsync(_actionTarget.RegionId);
+            await ShowToast("Region deleted.", "Deleted", "e-toast-success");
+            _showDeleteDialog = false;
+            await LoadAsync();
+        }
+        catch
+        {
+            await ShowToast("Failed to delete region.", "Error", "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // ── helpers ──────────────────────────────────────────────
+    private async Task ShowToast(string content, string title, string cssClass)
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = content, Title = title, CssClass = cssClass });
+    }
+
+    // ── inner types ──────────────────────────────────────────
+    private sealed class FormModel
+    {
+        public string  RegionCode        { get; set; } = string.Empty;
+        public string  RegionName        { get; set; } = string.Empty;
+        public string? CloudRegion       { get; set; }
+        public string? ComplianceProfile { get; set; }
+        public string? PrimaryStamp      { get; set; }
+        public string? SecondaryStamp    { get; set; }
+        public bool    IsActive          { get; set; } = true;
+    }
+}

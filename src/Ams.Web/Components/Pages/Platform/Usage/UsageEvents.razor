@@ -1,0 +1,231 @@
+@page "/platform/usage/events"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Common.Models
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Usage Events — Platform</PageTitle>
+
+<AppPageHeader Title="Usage Events"
+               Subtitle="Raw per-event metric log across all tenants"
+               Icon="bi-terminal">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="ApplyFilters" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/platform/usage")'>
+            <i class="bi bi-bar-chart-line" aria-hidden="true"></i> Back to Dashboard
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── Filters ─────────────────────────────────────────────── -->
+<div class="ue-filter-bar">
+    <div class="ue-filter-field">
+        <label class="ue-filter-label">Metric Type</label>
+        <input class="um-input ue-filter-input" placeholder="e.g. api_call"
+               @bind="_filterMetricType" @bind:event="oninput" @onkeydown="OnFilterKeyDown" />
+    </div>
+    <div class="ue-filter-field">
+        <label class="ue-filter-label">Source Service</label>
+        <input class="um-input ue-filter-input" placeholder="e.g. TenantApi"
+               @bind="_filterSourceService" @bind:event="oninput" @onkeydown="OnFilterKeyDown" />
+    </div>
+    <button class="um-btn um-btn-primary ue-filter-apply" @onclick="ApplyFilters">
+        <i class="bi bi-funnel" aria-hidden="true"></i> Filter
+    </button>
+    @if (HasActiveFilters)
+    {
+        <button class="um-btn um-btn-ghost ue-filter-clear" @onclick="ClearFilters">
+            <i class="bi bi-x-circle" aria-hidden="true"></i> Clear
+        </button>
+    }
+</div>
+
+@if (_loading)
+{
+    <div class="um-loading-overlay" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading events…</span>
+    </div>
+}
+else if (_result is null)
+{
+    <div class="tot-empty-hint">
+        <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+        <span>Could not load usage events.</span>
+    </div>
+}
+else
+{
+    <!-- ── Results summary ──────────────────────────────────── -->
+    <div class="ue-results-bar">
+        <span class="ue-result-count">
+            <strong>@_result.TotalCount.ToString("N0")</strong> event@(_result.TotalCount == 1 ? "" : "s")
+        </span>
+        @if (HasActiveFilters)
+        {
+            <span class="badge badge-blue ue-filter-badge">
+                <i class="bi bi-funnel-fill" aria-hidden="true"></i> Filtered
+            </span>
+        }
+        <span class="ue-spacer"></span>
+        <span class="ue-page-info">Page @_result.PageNumber of @TotalPages</span>
+    </div>
+
+    <!-- ── Grid ─────────────────────────────────────────────── -->
+    @if (_result.Items.Count == 0)
+    {
+        <div class="tot-empty-hint">
+            <i class="bi bi-inbox" aria-hidden="true"></i>
+            <span>No events match the current filters.</span>
+        </div>
+    }
+    else
+    {
+        <div class="ue-table-wrap">
+            <table class="ue-table">
+                <thead>
+                    <tr>
+                        <th>Event Time</th>
+                        <th>Tenant</th>
+                        <th>Metric Type</th>
+                        <th class="ue-th-num">Quantity</th>
+                        <th>Source Service</th>
+                        <th>Correlation ID</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var ev in _result.Items)
+                    {
+                        <tr>
+                            <td class="ue-td-time">
+                                <span title="@ev.EventTimeUtc.ToString("O")">
+                                    @ev.EventTimeUtc.ToString("yyyy-MM-dd HH:mm:ss")
+                                </span>
+                            </td>
+                            <td>
+                                <div class="ue-tenant-cell">
+                                    <span class="tot-mono ue-tenant-code">@ev.TenantCode</span>
+                                    <span class="ue-tenant-name">@ev.TenantName</span>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="badge badge-neutral ue-metric-badge">@ev.MetricType</span>
+                            </td>
+                            <td class="ue-td-num">@ev.Quantity.ToString("N4")</td>
+                            <td class="ue-td-service">@ev.SourceService</td>
+                            <td class="ue-td-corr tot-mono">@(ev.CorrelationId ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <!-- ── Pagination ────────────────────────────────────── -->
+        @if (TotalPages > 1)
+        {
+            <div class="ue-pagination">
+                <button class="um-btn um-btn-ghost um-btn-sm"
+                        disabled="@(_pageNumber <= 1)"
+                        @onclick="PrevPage">
+                    <i class="bi bi-chevron-left" aria-hidden="true"></i> Prev
+                </button>
+                <span class="ue-page-label">@_pageNumber / @TotalPages</span>
+                <button class="um-btn um-btn-ghost um-btn-sm"
+                        disabled="@(_pageNumber >= TotalPages)"
+                        @onclick="NextPage">
+                    Next <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                </button>
+            </div>
+        }
+    }
+}
+
+@code {
+    [Parameter, SupplyParameterFromQuery] public Guid?   TenantId      { get; set; }
+    [Parameter, SupplyParameterFromQuery] public string? MetricType    { get; set; }
+    [Parameter, SupplyParameterFromQuery] public string? SourceService { get; set; }
+
+    private PagedResult<UsageEventDto>? _result;
+    private bool   _loading           = true;
+    private int    _pageNumber        = 1;
+    private const int PageSize        = 50;
+
+    private string? _filterMetricType;
+    private string? _filterSourceService;
+
+    private bool HasActiveFilters =>
+        !string.IsNullOrEmpty(_filterMetricType) || !string.IsNullOrEmpty(_filterSourceService);
+
+    private int TotalPages =>
+        _result is null || _result.PageSize == 0
+            ? 1
+            : (int)Math.Ceiling(_result.TotalCount / (double)_result.PageSize);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Usage", "/platform/usage"),
+            new BreadcrumbService.BreadcrumbItem("Events", "/platform/usage/events"));
+
+        _filterMetricType    = MetricType;
+        _filterSourceService = SourceService;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _result = await Api.GetUsageEventsAsync(
+                tenantId:      TenantId,
+                metricType:    _filterMetricType,
+                sourceService: _filterSourceService,
+                pageNumber:    _pageNumber,
+                pageSize:      PageSize);
+        }
+        catch
+        {
+            _result = null;
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ApplyFilters()
+    {
+        _pageNumber = 1;
+        await LoadAsync();
+    }
+
+    private async Task ClearFilters()
+    {
+        _filterMetricType    = null;
+        _filterSourceService = null;
+        _pageNumber          = 1;
+        await LoadAsync();
+    }
+
+    private async Task PrevPage()
+    {
+        if (_pageNumber > 1) { _pageNumber--; await LoadAsync(); }
+    }
+
+    private async Task NextPage()
+    {
+        if (_pageNumber < TotalPages) { _pageNumber++; await LoadAsync(); }
+    }
+
+    private async Task OnFilterKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await ApplyFilters();
+    }
+}

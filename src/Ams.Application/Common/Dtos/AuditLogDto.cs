@@ -9,5 +9,11 @@ public sealed class AuditLogDto
     public string EventTypeCode { get; set; } = string.Empty;
     public string ActionName { get; set; } = string.Empty;
     public Guid? PerformedByUserId { get; set; }
+    public string? OldValues { get; set; }
+    public string? NewValues { get; set; }
+    public string? IpAddress { get; set; }
+    public string? RegionCode { get; set; }
+    public string? CorrelationId { get; set; }
     public DateTime PerformedDateUtc { get; set; }
+    public DateTime CreatedDateUtc { get; set; }
 }

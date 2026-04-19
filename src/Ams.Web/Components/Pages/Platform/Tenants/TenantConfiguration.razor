@@ -1,0 +1,302 @@
+@page "/platform/tenants/{TenantId:guid}/configuration"
+@using Ams.Application.Common.Dtos
+@using Ams.Web.Services
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Configuration — @_tenantName</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Tenant Configuration"
+               Subtitle="@_tenantName"
+               Icon="bi-sliders">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="NavigateBack">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Tenant
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">
+            <i class="bi bi-check-lg" aria-hidden="true"></i> Save Configuration
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="um-loading-overlay" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading configuration…</span>
+    </div>
+}
+else
+{
+    <SfTab CssClass="tc-tabs">
+        <TabItems>
+            <!-- ── General ────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent>
+                    <TabHeader Text="General" IconCss="bi bi-gear" />
+                </ChildContent>
+                <ContentTemplate>
+                    <div class="tc-tab-content">
+                        @RenderSettingsByModule("Core")
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ── Security ───────────────────────────────────── -->
+            <TabItem>
+                <ChildContent>
+                    <TabHeader Text="Security" IconCss="bi bi-shield-lock" />
+                </ChildContent>
+                <ContentTemplate>
+                    <div class="tc-tab-content">
+                        @RenderSettingsByModule("IAM")
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ── Regional ───────────────────────────────────── -->
+            <TabItem>
+                <ChildContent>
+                    <TabHeader Text="Regional" IconCss="bi bi-globe" />
+                </ChildContent>
+                <ContentTemplate>
+                    <div class="tc-tab-content">
+                        @RenderSettingsByModule("Regional")
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ── Operational ────────────────────────────────── -->
+            <TabItem>
+                <ChildContent>
+                    <TabHeader Text="Operational" IconCss="bi bi-tools" />
+                </ChildContent>
+                <ContentTemplate>
+                    <div class="tc-tab-content">
+                        @RenderSettingsByModule("Usage", "Tenant", "DMS")
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ── Billing ────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent>
+                    <TabHeader Text="Billing" IconCss="bi bi-credit-card" />
+                </ChildContent>
+                <ContentTemplate>
+                    <div class="tc-tab-content">
+                        @RenderSettingsByModule("Billing")
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ── Features ───────────────────────────────────── -->
+            <TabItem>
+                <ChildContent>
+                    <TabHeader Text="Features" IconCss="bi bi-toggles" />
+                </ChildContent>
+                <ContentTemplate>
+                    <div class="tc-tab-content">
+                        @RenderSettingsByModule("Feature")
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+        </TabItems>
+    </SfTab>
+}
+
+@code {
+    [Parameter] public Guid TenantId { get; set; }
+
+    private SfToast? _toast;
+    private bool _loading = true;
+    private bool _saving;
+    private string _tenantName = "";
+    private List<SettingEntry> _settings = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
+            new BreadcrumbService.BreadcrumbItem("Tenants", "/platform/tenants"),
+            new BreadcrumbService.BreadcrumbItem("Configuration")
+        );
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var tenant = await Api.GetTenantByIdAsync(TenantId);
+            _tenantName = tenant?.TenantName ?? "Unknown Tenant";
+
+            var items = await Api.GetTenantConfigurationAsync(TenantId);
+            _settings = (items ?? Enumerable.Empty<ConfigurationSettingDto>())
+                .Where(s => !s.IsEncrypted)
+                .Select(s => new SettingEntry
+                {
+                    SettingKey = s.SettingKey,
+                    SettingValue = s.SettingValue ?? s.DefaultValue ?? "",
+                    OriginalValue = s.SettingValue ?? s.DefaultValue ?? "",
+                    DataTypeCode = s.DataTypeCode,
+                    DefaultValue = s.DefaultValue,
+                    Description = s.Description,
+                    ModuleCode = s.ModuleCode ?? "",
+                    IsReadOnly = s.IsReadOnly,
+                })
+                .OrderBy(s => s.ModuleCode)
+                .ThenBy(s => s.DisplayName)
+                .ToList();
+        }
+        catch
+        {
+            _tenantName = "Error loading tenant";
+            _settings = new();
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private RenderFragment RenderSettingsByModule(params string[] moduleCodes) => __builder =>
+    {
+        var filtered = _settings.Where(s => moduleCodes.Contains(s.ModuleCode, StringComparer.OrdinalIgnoreCase)).ToList();
+        if (!filtered.Any())
+        {
+            <div class="tc-empty"><i class="bi bi-info-circle" aria-hidden="true"></i> No settings available for this category.</div>
+            return;
+        }
+
+        <div class="tc-settings-grid">
+            @foreach (var s in filtered)
+            {
+                <div class="tc-setting-row @(s.IsModified ? "tc-modified" : "")">
+                    <div class="tc-setting-info">
+                        <span class="tc-setting-label">@s.DisplayName</span>
+                        @if (!string.IsNullOrWhiteSpace(s.Description))
+                        {
+                            <span class="tc-setting-desc">@s.Description</span>
+                        }
+                        @if (s.DefaultValue is not null)
+                        {
+                            <span class="tc-setting-default">Default: @s.DefaultValue</span>
+                        }
+                    </div>
+                    <div class="tc-setting-input">
+                        @if (s.IsReadOnly)
+                        {
+                            <span class="tc-readonly-value">@s.SettingValue</span>
+                        }
+                        else if (s.DataTypeCode == "Boolean")
+                        {
+                            <SfSwitch TChecked="bool" @bind-Checked="s.BoolValue" />
+                        }
+                        else if (s.DataTypeCode == "Integer")
+                        {
+                            <SfNumericTextBox TValue="int?" @bind-Value="s.IntValue" Min="0" Format="N0" CssClass="tc-num-input" />
+                        }
+                        else if (s.DataTypeCode == "Decimal")
+                        {
+                            <SfNumericTextBox TValue="decimal?" @bind-Value="s.DecimalValue" Min="0" Format="N2" CssClass="tc-num-input" />
+                        }
+                        else
+                        {
+                            <SfTextBox @bind-Value="s.SettingValue" CssClass="tc-text-input" />
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    };
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        StateHasChanged();
+        try
+        {
+            var changed = _settings.Where(s => s.IsModified && !s.IsReadOnly).ToList();
+            if (!changed.Any())
+            {
+                if (_toast is not null)
+                    await _toast.ShowAsync(new() { Title = "Info", Content = "No changes to save.", CssClass = "e-toast-info" });
+                return;
+            }
+
+            var payload = changed.Select(s => new UpsertTenantSettingModel
+            {
+                SettingKey = s.SettingKey,
+                SettingValue = s.SettingValue,
+            });
+
+            await Api.SaveTenantConfigurationAsync(TenantId, payload);
+
+            foreach (var s in changed)
+                s.OriginalValue = s.SettingValue;
+
+            if (_toast is not null)
+                await _toast.ShowAsync(new() { Title = "Saved", Content = $"{changed.Count} setting(s) updated successfully.", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            if (_toast is not null)
+                await _toast.ShowAsync(new() { Title = "Error", Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+            StateHasChanged();
+        }
+    }
+
+    private void NavigateBack() => Nav.NavigateTo($"/platform/tenants/{TenantId}");
+
+    private sealed class SettingEntry
+    {
+        public string SettingKey { get; set; } = "";
+        public string SettingValue { get; set; } = "";
+        public string OriginalValue { get; set; } = "";
+        public string DataTypeCode { get; set; } = "String";
+        public string? DefaultValue { get; set; }
+        public string? Description { get; set; }
+        public string ModuleCode { get; set; } = "";
+        public bool IsReadOnly { get; set; }
+
+        public string DisplayName => SettingKey.StartsWith("Platform.")
+            ? SettingKey["Platform.".Length..].Replace(".", " › ")
+            : SettingKey;
+
+        public bool IsModified => SettingValue != OriginalValue;
+
+        public bool BoolValue
+        {
+            get => string.Equals(SettingValue, "true", StringComparison.OrdinalIgnoreCase);
+            set => SettingValue = value ? "true" : "false";
+        }
+
+        public int? IntValue
+        {
+            get => int.TryParse(SettingValue, out var v) ? v : null;
+            set => SettingValue = value?.ToString() ?? "";
+        }
+
+        public decimal? DecimalValue
+        {
+            get => decimal.TryParse(SettingValue, out var v) ? v : null;
+            set => SettingValue = value?.ToString() ?? "";
+        }
+    }
+}
