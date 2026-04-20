@@ -1,0 +1,247 @@
+@page "/billing/reconciliation"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Reconciliation Workbench — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Reconciliation Workbench"
+               Subtitle="Match carrier statements, reconcile agency-bill remittances, and resolve billing discrepancies"
+               Icon="bi-ui-checks-grid">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
+            <i class="bi bi-building" aria-hidden="true"></i> Accounts
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/modes")'>
+            <i class="bi bi-diagram-3" aria-hidden="true"></i> Billing Modes
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showNew = true">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> New Reconciliation
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="rec-kpi-strip">
+    <div class="rec-kpi"><i class="bi bi-ui-checks-grid rec-ki blue" aria-hidden="true"></i><div><div class="rec-kv">@_runs.Count</div><div class="rec-kl">Reconciliation Runs</div></div></div>
+    <div class="rec-kpi"><i class="bi bi-hourglass rec-ki amber" aria-hidden="true"></i><div><div class="rec-kv">@_runs.Count(x=>x.Status=="In Progress")</div><div class="rec-kl">In Progress</div></div></div>
+    <div class="rec-kpi"><i class="bi bi-exclamation-circle rec-ki red" aria-hidden="true"></i><div><div class="rec-kv">@_runs.Sum(x=>x.Exceptions)</div><div class="rec-kl">Open Exceptions</div></div></div>
+    <div class="rec-kpi"><i class="bi bi-check-circle rec-ki green" aria-hidden="true"></i><div><div class="rec-kv">@_runs.Count(x=>x.Status=="Reconciled")</div><div class="rec-kl">Reconciled</div></div></div>
+    <div class="rec-kpi"><i class="bi bi-currency-dollar rec-ki red" aria-hidden="true"></i><div><div class="rec-kv">@Fmt(_runs.Sum(x=>x.Variance))</div><div class="rec-kl">Total Variance</div></div></div>
+    <div class="rec-kpi"><i class="bi bi-bank rec-ki blue" aria-hidden="true"></i><div><div class="rec-kv">@_runs.Select(x=>x.Carrier).Distinct().Count()</div><div class="rec-kl">Carriers</div></div></div>
+</div>
+
+<!-- Sub-nav: reconciliation types -->
+<div class="rec-subnav">
+    <button class="rec-snav-btn @(_tab=="all"?"rec-snav-active":"")" @onclick='()=>_tab="all"'>
+        <i class="bi bi-grid" aria-hidden="true"></i> All
+    </button>
+    <button class="rec-snav-btn @(_tab=="carrier"?"rec-snav-active":"")" @onclick='()=>_tab="carrier"'>
+        <i class="bi bi-building-check" aria-hidden="true"></i> Carrier Statement
+    </button>
+    <button class="rec-snav-btn @(_tab=="agency"?"rec-snav-active":"")" @onclick='()=>_tab="agency"'>
+        <i class="bi bi-diagram-3" aria-hidden="true"></i> Agency Bill
+    </button>
+    <button class="rec-snav-btn @(_tab=="direct"?"rec-snav-active":"")" @onclick='()=>_tab="direct"'>
+        <i class="bi bi-building" aria-hidden="true"></i> Direct Bill
+    </button>
+    <button class="rec-snav-btn @(_tab=="exception"?"rec-snav-active":"")" @onclick='()=>_tab="exception"'>
+        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions <span class="rec-badge">@_runs.Sum(x=>x.Exceptions)</span>
+    </button>
+</div>
+
+<!-- Toolbar -->
+<div class="rec-toolbar">
+    <SfTextBox Placeholder="Search carrier, account, period…" @bind-Value="_search" Width="280px"></SfTextBox>
+    <select class="e-input rec-sel" @bind="_filterStatus">
+        <option value="">All Statuses</option>
+        <option value="In Progress">In Progress</option>
+        <option value="Pending Review">Pending Review</option>
+        <option value="Reconciled">Reconciled</option>
+        <option value="Disputed">Disputed</option>
+    </select>
+    <SfDatePicker TValue="DateTime?" @bind-Value="_filterPeriod" Placeholder="Statement date…" Width="160px"></SfDatePicker>
+</div>
+
+<!-- Main grid -->
+<div class="rec-grid-wrap">
+    <SfGrid DataSource="FilteredRuns" AllowSorting="true" AllowPaging="true" Height="400px">
+        <GridPageSettings PageSize="10"></GridPageSettings>
+        <GridColumns>
+            <GridColumn Field="@nameof(RecRun.RunDate)" HeaderText="Period" Type="ColumnType.Date" Format="MMM yyyy" Width="120"></GridColumn>
+            <GridColumn Field="@nameof(RecRun.Carrier)" HeaderText="Carrier / Account" Width="200"></GridColumn>
+            <GridColumn HeaderText="Type" Width="130">
+                <Template>
+                    @{ var r = (RecRun)context; }
+                    <span class="rec-type-chip rec-typ-@r.Type.ToLower().Replace(" ","-")">@r.Type</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(RecRun.StatementAmount)" HeaderText="Statement" Format="C2" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(RecRun.BookAmount)" HeaderText="Book" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn HeaderText="Variance" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    @{ var r2 = (RecRun)context; }
+                    <span class="@(Math.Abs(r2.Variance)<1m?"rec-var-ok":"rec-var-bad")">@r2.Variance.ToString("C2")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Exceptions" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
+                <Template>
+                    @{ var r3 = (RecRun)context; }
+                    @if (r3.Exceptions > 0)
+                    { <span class="rec-exc-badge">@r3.Exceptions</span> }
+                    else
+                    { <span style="color:#059669"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span> }
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Status" Width="130">
+                <Template>
+                    @{ var r4 = (RecRun)context; }
+                    <span class="rec-status-chip rec-st-@r4.Status.ToLower().Replace(" ","-")">@r4.Status</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Actions" Width="130">
+                <Template>
+                    @{ var r5 = (RecRun)context; }
+                    <div style="display:flex;gap:.2rem">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenRun(r5)" title="Open">
+                            <i class="bi bi-arrow-up-right-square" aria-hidden="true"></i>
+                        </button>
+                        @if (r5.Status == "Pending Review")
+                        {
+                            <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => Reconcile(r5)" title="Mark reconciled">
+                                <i class="bi bi-check-circle" aria-hidden="true"></i> Reconcile
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Exception panel -->
+@if (_tab == "exception" || _runs.Any(x=>x.Exceptions>0))
+{
+    <div class="rec-exc-panel">
+        <div class="rec-exc-title"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Open Exceptions</div>
+        @foreach (var ex in _exceptions)
+        {
+            <div class="rec-exc-row">
+                <span class="rec-exc-type rec-et-@ex.Type.ToLower()">@ex.Type</span>
+                <div class="rec-exc-detail">
+                    <div class="rec-exc-desc">@ex.Description</div>
+                    <div class="rec-exc-meta">@ex.Carrier · @ex.Period · Variance: @ex.Variance.ToString("C2")</div>
+                </div>
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ResolveException(ex)" title="Resolve">
+                    <i class="bi bi-check-circle" aria-hidden="true"></i>
+                </button>
+            </div>
+        }
+    </div>
+}
+
+<!-- New Reconciliation Dialog -->
+<SfDialog Width="520px" IsModal="true" @bind-Visible="_showNew" Header="Start Reconciliation" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Content>
+            <div class="rec-dlg-body">
+                <div class="form-group mb-2"><label class="rec-lbl">Type</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"Carrier Statement","Agency Bill","Direct Bill"}' @bind-Value="_newType" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="rec-lbl">Carrier / Account</label>
+                    <SfTextBox @bind-Value="_newCarrier" Placeholder="e.g. Travelers, Agency XYZ…"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="rec-lbl">Statement Period</label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_newPeriod" Width="100%"></SfDatePicker>
+                </div>
+                <div class="form-group mb-2"><label class="rec-lbl">Statement Amount</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_newStatementAmt" Format="C2" Width="100%"></SfNumericTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="rec-lbl">Book Amount</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_newBookAmt" Format="C2" Width="100%"></SfNumericTextBox>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Start Reconciliation" IsPrimary="true" OnClick="StartRecAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showNew = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    private SfToast _toast = default!;
+    private string _tab = "all", _search = "", _filterStatus = "";
+    private DateTime? _filterPeriod;
+    private bool _showNew;
+    private string? _newCarrier, _newType = "Carrier Statement";
+    private DateTime _newPeriod = DateTime.Today.AddMonths(-1);
+    private decimal _newStatementAmt, _newBookAmt;
+
+    private List<RecRun> _runs =
+    [
+        new(new DateTime(2025,1,31),"Travelers",         "Carrier Statement",154200m,154198m,    2m, 0, "Reconciled"),
+        new(new DateTime(2025,1,31),"Hartford",          "Carrier Statement", 89500m, 89745m, -245m, 2, "Pending Review"),
+        new(new DateTime(2025,1,31),"Agency-Bill Pool",  "Agency Bill",       32100m, 31975m,  125m, 1, "Pending Review"),
+        new(new DateTime(2025,2,28),"Travelers",         "Carrier Statement",161000m,160800m,  200m, 1, "In Progress"),
+        new(new DateTime(2025,2,28),"Nationwide",        "Direct Bill",       47800m, 47800m,    0m, 0, "Reconciled"),
+        new(new DateTime(2025,2,28),"Agency-Bill Pool",  "Agency Bill",       28900m, 29100m, -200m, 3, "Disputed"),
+        new(new DateTime(2025,3,31),"Hartford",          "Carrier Statement", 92300m,     0m,92300m, 0, "In Progress"),
+    ];
+
+    private List<RecException> _exceptions =
+    [
+        new("Missing Policy","Hartford","Jan 2025","Policy #HF-20245678 found on statement but not in AMS",-245m),
+        new("Amount Mismatch","Agency-Bill Pool","Jan 2025","Invoice INV-2025-0024 amount mismatch: $125 over",125m),
+        new("Duplicate","Agency-Bill Pool","Feb 2025","Policy #AB-90112 billed twice in remittance",-200m),
+        new("Missing Payment","Agency-Bill Pool","Feb 2025","ACH payment not posted to 3 agency accounts",-150m),
+    ];
+
+    private IEnumerable<RecRun> FilteredRuns => _runs.Where(r =>
+        (_tab == "all" || _tab == "exception" ||
+         (_tab == "carrier" && r.Type == "Carrier Statement") ||
+         (_tab == "agency"  && r.Type == "Agency Bill") ||
+         (_tab == "direct"  && r.Type == "Direct Bill")) &&
+        (string.IsNullOrEmpty(_search)       || r.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_filterStatus) || r.Status == _filterStatus) &&
+        (!_filterPeriod.HasValue || r.RunDate.Month == _filterPeriod.Value.Month && r.RunDate.Year == _filterPeriod.Value.Year));
+
+    protected override void OnInitialized() =>
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Billing","/billing/accounts"), new("Reconciliation",""));
+
+    async Task StartRecAsync()
+    {
+        _runs.Insert(0, new(_newPeriod, _newCarrier ?? "Unknown", _newType ?? "Carrier Statement", _newStatementAmt, _newBookAmt, _newStatementAmt - _newBookAmt, 0, "In Progress"));
+        _showNew = false;
+        await _toast.ShowAsync(new ToastModel { Content = "Reconciliation started.", CssClass = "e-toast-success" });
+    }
+
+    async Task Reconcile(RecRun r)
+    {
+        var idx = _runs.IndexOf(r);
+        if (idx >= 0) _runs[idx] = r with { Status = "Reconciled" };
+        await _toast.ShowAsync(new ToastModel { Content = "Marked reconciled.", CssClass = "e-toast-success" });
+    }
+
+    async Task OpenRun(RecRun r) =>
+        await _toast.ShowAsync(new ToastModel { Content = $"Viewing {r.Carrier} {r.RunDate:MMM yyyy}.", CssClass = "e-toast-info" });
+
+    async Task ResolveException(RecException ex)
+    {
+        _exceptions.Remove(ex);
+        await _toast.ShowAsync(new ToastModel { Content = "Exception resolved.", CssClass = "e-toast-success" });
+    }
+
+    static string Fmt(decimal v) => v.ToString("C0");
+
+    record RecRun(DateTime RunDate, string Carrier, string Type, decimal StatementAmount, decimal BookAmount,
+                  decimal Variance, int Exceptions, string Status)
+    {
+        public string Status { get; set; } = Status;
+    }
+    record RecException(string Type, string Carrier, string Period, string Description, decimal Variance);
+}

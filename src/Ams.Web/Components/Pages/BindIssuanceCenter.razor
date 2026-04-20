@@ -1,0 +1,397 @@
+@page "/quotes/bind"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Bind Order / Issue Center — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Bind Order / Issue Center"
+               Subtitle="Manage bind requests, issue binders, and track policy issuance"
+               Icon="bi-shield-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="NewBindOrder">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Bind Order
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI STRIP ─────────────────────────────────────────────────── -->
+<div class="bc-kpi-strip">
+    @KpiCard("bi-hourglass-split",  "Pending Bind Requests",  _orders.Count(o=>o.Status=="Pending Bind").ToString(),              "bc-kpi-pending")
+    @KpiCard("bi-shield-check",     "Issued Today",           _orders.Count(o=>o.Status=="Issued" && o.StatusDate.Date==DateTime.Today).ToString(), "bc-kpi-issued")
+    @KpiCard("bi-x-circle",         "Declined",               _orders.Count(o=>o.Status=="Declined").ToString(),                  "bc-kpi-dec")
+    @KpiCard("bi-pause-circle",     "On Hold",                _orders.Count(o=>o.Status=="On Hold").ToString(),                   "bc-kpi-hold")
+    @KpiCard("bi-currency-dollar",  "Pending Premium",        _orders.Where(o=>o.Status=="Pending Bind"||o.Status=="Quote Selected").Sum(o=>o.Premium).ToString("C0"), "bc-kpi-prem")
+    @KpiCard("bi-calendar-check",   "Effective This Month",   _orders.Count(o=>o.Status=="Issued" && o.EffDate.Month==DateTime.Today.Month && o.EffDate.Year==DateTime.Today.Year).ToString(), "bc-kpi-eff")
+</div>
+
+<!-- ── FILTER / SEARCH BAR ───────────────────────────────────────── -->
+<div class="bc-filter-bar">
+    <input class="e-input bc-search" @bind="_search" @bind:event="oninput" placeholder="Search accounts, quote #, carrier…" />
+    <div class="bc-status-pills">
+        @foreach (var s in _statusFilters)
+        {
+            <button class="bc-pill @(_statusFilter == s ? "bc-pill-active" : "")"
+                    @onclick="() => _statusFilter = s">@s</button>
+        }
+    </div>
+    <select class="e-input bc-filter-sel" @bind="_linesFilter">
+        <option value="">All Lines</option>
+        @foreach (var l in new[]{"General Liability","Commercial Auto","Commercial Property","Workers Comp","Umbrella"})
+        { <option>@l</option> }
+    </select>
+    <span class="bc-filter-count">@FilteredOrders.Count() records</span>
+</div>
+
+<!-- ── GRID ──────────────────────────────────────────────────────── -->
+<div class="bc-grid-wrap">
+    <SfGrid DataSource="@FilteredOrders.ToList()" AllowSorting="true" AllowPaging="true"
+            AllowResizing="true" RowHeight="48">
+        <GridPageSettings PageSize="20" />
+        <GridColumns>
+            <GridColumn Field="Account"      HeaderText="Account / Insured"    Width="200"
+                        Template="@(ctx => AccountCell((BindOrder)ctx))" />
+            <GridColumn Field="QuoteNo"      HeaderText="Quote #"              Width="145"
+                        Template="@(ctx => QuoteCell((BindOrder)ctx))" />
+            <GridColumn Field="Carrier"      HeaderText="Carrier"              Width="165" />
+            <GridColumn Field="Lob"          HeaderText="LOB"                  Width="155"
+                        Template="@(ctx => LobChip(((BindOrder)ctx).Lob))" />
+            <GridColumn Field="Premium"      HeaderText="Premium"              Width="110"
+                        Template="@(ctx => PremCell(((BindOrder)ctx).Premium))" />
+            <GridColumn Field="EffDate"      HeaderText="Eff. Date"            Width="105"
+                        Template="@(ctx => DateCell(((BindOrder)ctx).EffDate))" />
+            <GridColumn Field="ExpDate"      HeaderText="Exp. Date"            Width="105"
+                        Template="@(ctx => DateCell(((BindOrder)ctx).ExpDate))" />
+            <GridColumn Field="Status"       HeaderText="Status"               Width="165"
+                        Template="@(ctx => StatusChip(((BindOrder)ctx).Status))" />
+            <GridColumn Field="Producer"     HeaderText="Producer"             Width="135" />
+            <GridColumn HeaderText="Actions" Width="150"   AllowSorting="false"
+                        Template="@(ctx => GridActions((BindOrder)ctx))" />
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- ── BIND / ISSUE DRAWER ───────────────────────────────────────── -->
+@if (_activeOrder is not null)
+{
+    <div class="bc-drawer-backdrop" @onclick="CloseDrawer"></div>
+    <div class="bc-drawer">
+        <div class="bc-drawer-head">
+            <div>
+                <h2 class="bc-drawer-acct">@_activeOrder.Account</h2>
+                <span class="bc-drawer-meta">@_activeOrder.QuoteNo · @_activeOrder.Carrier</span>
+            </div>
+            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="CloseDrawer">
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+            </button>
+        </div>
+        <div class="bc-drawer-body">
+            <!-- Status badge -->
+            <div class="bc-drawer-status-row">
+                <span>Current Status</span>
+                @StatusChip(_activeOrder.Status)
+            </div>
+
+            <!-- Key details -->
+            <h3 class="bc-drawer-sec-head">Bind Details</h3>
+            @DrawRow("Account",           _activeOrder.Account)
+            @DrawRow("Quote Number",      _activeOrder.QuoteNo)
+            @DrawRow("Carrier",           _activeOrder.Carrier)
+            @DrawRow("Line of Business",  _activeOrder.Lob)
+            @DrawRow("Annual Premium",    _activeOrder.Premium.ToString("C0"))
+            @DrawRow("Effective Date",    _activeOrder.EffDate.ToString("MM/dd/yyyy"))
+            @DrawRow("Expiration Date",   _activeOrder.ExpDate.ToString("MM/dd/yyyy"))
+            @DrawRow("Producer",          _activeOrder.Producer)
+            @DrawRow("Underwriter",       _activeOrder.Underwriter)
+            @DrawRow("Submission #",      _activeOrder.SubmissionNo)
+
+            <!-- Requirements checklist -->
+            <h3 class="bc-drawer-sec-head">Binding Requirements</h3>
+            @foreach (var req in _activeOrder.Requirements)
+            {
+                <label class="bc-req-item">
+                    <SfCheckBox @bind-Checked="req.Complete" />
+                    <span class="@(!req.Complete ? "bc-req-incomplete" : "")">@req.Label</span>
+                    @if (req.Required && !req.Complete) { <span class="bc-req-required">Required</span> }
+                </label>
+            }
+
+            <!-- Notes -->
+            <h3 class="bc-drawer-sec-head">Notes</h3>
+            <textarea class="e-input bc-notes-input" rows="3"
+                      @bind="_activeOrder.Notes"
+                      placeholder="Enter bind notes or instructions…"></textarea>
+
+            <!-- Action buttons -->
+            <div class="bc-drawer-actions">
+                @if (_activeOrder.Status == "Quote Selected" || _activeOrder.Status == "Pending Bind")
+                {
+                    <button class="um-btn um-btn-primary" @onclick="IssueBinderAsync"
+                            disabled="@(!_activeOrder.Requirements.All(r=>!r.Required||r.Complete))">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i> Issue Binder
+                    </button>
+                    <button class="um-btn um-btn-ghost" @onclick='() => UpdateStatus(_activeOrder, "On Hold")'>
+                        <i class="bi bi-pause-circle" aria-hidden="true"></i> Hold
+                    </button>
+                    <button class="um-btn um-btn-ghost bc-decline-btn" @onclick='() => UpdateStatus(_activeOrder, "Declined")'>
+                        <i class="bi bi-x-circle" aria-hidden="true"></i> Decline
+                    </button>
+                }
+                else if (_activeOrder.Status == "Binder Issued")
+                {
+                    <button class="um-btn um-btn-success" @onclick="IssuePolicy">
+                        <i class="bi bi-file-earmark-check" aria-hidden="true"></i> Issue Policy
+                    </button>
+                    <button class="um-btn um-btn-ghost" @onclick='() => UpdateStatus(_activeOrder, "On Hold")'>
+                        <i class="bi bi-pause-circle" aria-hidden="true"></i> Hold
+                    </button>
+                }
+                else if (_activeOrder.Status == "On Hold")
+                {
+                    <button class="um-btn um-btn-primary" @onclick='() => UpdateStatus(_activeOrder, "Pending Bind")'>
+                        <i class="bi bi-play-circle" aria-hidden="true"></i> Resume
+                    </button>
+                    <button class="um-btn um-btn-ghost bc-decline-btn" @onclick='() => UpdateStatus(_activeOrder, "Declined")'>
+                        <i class="bi bi-x-circle" aria-hidden="true"></i> Decline
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    SfToast _toast = default!;
+
+    string  _search       = "";
+    string  _statusFilter = "All";
+    string  _linesFilter  = "";
+    BindOrder? _activeOrder = null;
+
+    readonly string[] _statusFilters = { "All","Quote Selected","Pending Bind","Binder Issued","Issued","On Hold","Declined" };
+
+    sealed class Requirement
+    {
+        public string Label    { get; set; } = "";
+        public bool   Complete { get; set; }
+        public bool   Required { get; set; }
+    }
+
+    sealed class BindOrder
+    {
+        public string   Account      { get; set; } = "";
+        public string   SubmissionNo { get; set; } = "";
+        public string   QuoteNo      { get; set; } = "";
+        public string   Carrier      { get; set; } = "";
+        public string   Lob          { get; set; } = "";
+        public decimal  Premium      { get; set; }
+        public DateTime EffDate      { get; set; }
+        public DateTime ExpDate      { get; set; }
+        public string   Status       { get; set; } = "";
+        public DateTime StatusDate   { get; set; }
+        public string   Producer     { get; set; } = "";
+        public string   Underwriter  { get; set; } = "";
+        public string   Notes        { get; set; } = "";
+        public List<Requirement> Requirements { get; set; } = new();
+    }
+
+    readonly List<BindOrder> _orders = new();
+
+    IEnumerable<BindOrder> FilteredOrders => _orders
+        .Where(o => (string.IsNullOrEmpty(_search) || o.Account.Contains(_search, StringComparison.OrdinalIgnoreCase) || o.QuoteNo.Contains(_search, StringComparison.OrdinalIgnoreCase) || o.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase))
+                 && (_statusFilter == "All" || o.Status == _statusFilter)
+                 && (string.IsNullOrEmpty(_linesFilter) || o.Lob == _linesFilter))
+        .OrderBy(o => o.Status switch { "Pending Bind"=>"0", "Quote Selected"=>"1", "On Hold"=>"2", "Binder Issued"=>"3", "Issued"=>"4", _=>"9" })
+        .ThenBy(o => o.EffDate);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Quotes","/quotes/appetite"), new("Bind Center","/quotes/bind"));
+        await Task.Delay(0);
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _orders.Clear();
+        _orders.AddRange(new[]
+        {
+            new BindOrder
+            {
+                Account="Sullivan Mfg. LLC",     SubmissionNo="SUB-2025-0042", QuoteNo="TRV-2025-88421",
+                Carrier="Travelers Indemnity",    Lob="General Liability",       Premium=17_250m,
+                EffDate=new DateTime(2025,7,1),   ExpDate=new DateTime(2026,7,1),
+                Status="Pending Bind",            StatusDate=DateTime.Today,
+                Producer="Maria Santos",          Underwriter="Lisa Chen",       Notes="",
+                Requirements=new(){ new(){Label="Signed application",Complete=true,Required=true}, new(){Label="Loss runs (5 yrs)",Complete=true,Required=true}, new(){Label="Premium payment / down payment",Complete=false,Required=true}, new(){Label="Signed Broker of Record",Complete=true,Required=false} }
+            },
+            new BindOrder
+            {
+                Account="Metro Freight Co.",      SubmissionNo="SUB-2025-0038", QuoteNo="HFD-2025-14822",
+                Carrier="Hartford Fire & Cas.",   Lob="Commercial Auto",         Premium=31_500m,
+                EffDate=new DateTime(2025,6,15),  ExpDate=new DateTime(2026,6,15),
+                Status="Binder Issued",           StatusDate=DateTime.Today.AddDays(-2),
+                Producer="James Park",            Underwriter="Mike Rosario",    Notes="Fleet schedule attached.",
+                Requirements=new(){ new(){Label="Signed application",Complete=true,Required=true}, new(){Label="Driver MVR reports",Complete=true,Required=true}, new(){Label="Vehicle schedule",Complete=true,Required=true}, new(){Label="Premium payment",Complete=true,Required=true} }
+            },
+            new BindOrder
+            {
+                Account="Bridgewater Hotels",     SubmissionNo="SUB-2025-0031", QuoteNo="LIB-2025-77210",
+                Carrier="Liberty Mutual",         Lob="General Liability",       Premium=24_800m,
+                EffDate=new DateTime(2025,8,1),   ExpDate=new DateTime(2026,8,1),
+                Status="Quote Selected",          StatusDate=DateTime.Today.AddDays(-1),
+                Producer="Maria Santos",          Underwriter="Jennifer Wu",     Notes="",
+                Requirements=new(){ new(){Label="Signed application",Complete=false,Required=true}, new(){Label="Loss runs (5 yrs)",Complete=false,Required=true}, new(){Label="Inspection report",Complete=false,Required=false} }
+            },
+            new BindOrder
+            {
+                Account="Dallas Roofing LLC",     SubmissionNo="SUB-2025-0027", QuoteNo="CNA-2025-55102",
+                Carrier="CNA Commercial",         Lob="Workers Comp",            Premium=9_400m,
+                EffDate=new DateTime(2025,7,1),   ExpDate=new DateTime(2026,7,1),
+                Status="On Hold",                 StatusDate=DateTime.Today.AddDays(-5),
+                Producer="Kevin Obi",             Underwriter="—",               Notes="Client needs to update payroll estimate. Resume after updated schedule received.",
+                Requirements=new(){ new(){Label="Updated payroll estimate",Complete=false,Required=true}, new(){Label="Signed application",Complete=true,Required=true} }
+            },
+            new BindOrder
+            {
+                Account="Greenleaf Nurseries",    SubmissionNo="SUB-2025-0019", QuoteNo="TRV-2025-62011",
+                Carrier="Travelers Indemnity",    Lob="Commercial Property",     Premium=6_750m,
+                EffDate=new DateTime(2025,6,1),   ExpDate=new DateTime(2026,6,1),
+                Status="Issued",                  StatusDate=DateTime.Today,
+                Producer="Sarah Kim",             Underwriter="Lisa Chen",       Notes="Policy issued. Certificate mailed.",
+                Requirements=new(){ new(){Label="Signed application",Complete=true,Required=true}, new(){Label="Inspection complete",Complete=true,Required=true}, new(){Label="Premium payment",Complete=true,Required=true} }
+            },
+            new BindOrder
+            {
+                Account="Apex Medical Group",     SubmissionNo="SUB-2025-0014", QuoteNo="MKL-2025-28004",
+                Carrier="Markel Corporation",     Lob="Professional Liab.",      Premium=14_200m,
+                EffDate=new DateTime(2025,7,15),  ExpDate=new DateTime(2026,7,15),
+                Status="Declined",                StatusDate=DateTime.Today.AddDays(-3),
+                Producer="Maria Santos",          Underwriter="Sarah Kim",       Notes="Client selected alternative carrier.",
+                Requirements=new(){ new(){Label="Claims history",Complete=true,Required=true} }
+            },
+        });
+    }
+
+    void Refresh() => BuildStub();
+    void NewBindOrder() { }
+    void CloseDrawer() => _activeOrder = null;
+    void OpenDrawer(BindOrder o) => _activeOrder = o;
+
+    void UpdateStatus(BindOrder o, string status)
+    {
+        o.Status     = status;
+        o.StatusDate = DateTime.Now;
+        _activeOrder = null;
+    }
+
+    void IssuePolicy()
+    {
+        if (_activeOrder is null) return;
+        _activeOrder.Status = "Issued";
+        _activeOrder.StatusDate = DateTime.Now;
+        Nav.NavigateTo("/policies");
+    }
+
+    async Task IssueBinderAsync()
+    {
+        if (_activeOrder is null) return;
+        _activeOrder.Status     = "Binder Issued";
+        _activeOrder.StatusDate = DateTime.Now;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "Binder Issued",
+            Content  = $"Binder issued for {_activeOrder.Account} — {_activeOrder.QuoteNo}.",
+            CssClass = "e-toast-success"
+        });
+        _activeOrder = null;
+    }
+
+    async Task ExportAsync()
+    {
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title="Exported", Content="Bind queue exported.",CssClass="e-toast-success"
+        });
+    }
+
+    static string StatusCss(string s) => s switch
+    {
+        "Quote Selected" => "bc-st-qs",
+        "Pending Bind"   => "bc-st-pb",
+        "Binder Issued"  => "bc-st-bi",
+        "Issued"         => "bc-st-is",
+        "On Hold"        => "bc-st-oh",
+        "Declined"       => "bc-st-dc",
+        _                => ""
+    };
+
+    static string LobCss(string lob) => lob switch
+    {
+        "General Liability"   => "gl",
+        "Commercial Auto"     => "ca",
+        "Commercial Property" => "cp",
+        "Workers Comp"        => "wc",
+        "Umbrella"            => "um",
+        "Professional Liab."  => "pl",
+        _                     => "gl"
+    };
+
+    // ── Cell renderers ─────────────────────────────────────────────
+    RenderFragment AccountCell(BindOrder o) =>
+        @<div class="bc-acct-cell">
+            <div class="bc-acct-name">@o.Account</div>
+            <div class="bc-acct-meta">@o.SubmissionNo</div>
+        </div>;
+
+    RenderFragment QuoteCell(BindOrder o) =>
+        @<div class="bc-quote-cell">
+            <div class="bc-qno">@o.QuoteNo</div>
+            <div class="bc-uw">@o.Underwriter</div>
+        </div>;
+
+    RenderFragment LobChip(string lob) =>
+        @<span class="bc-lob-chip bc-lob-@LobCss(lob)">@lob</span>;
+
+    RenderFragment PremCell(decimal p) =>
+        @<span class="bc-prem">@p.ToString("C0")</span>;
+
+    RenderFragment DateCell(DateTime d) =>
+        @<span class="bc-date">@d.ToString("MM/dd/yy")</span>;
+
+    RenderFragment StatusChip(string s) =>
+        @<span class="bc-status @StatusCss(s)">@s</span>;
+
+    RenderFragment GridActions(BindOrder o) =>
+        @<div class="bc-grid-actions">
+            <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => OpenDrawer(o)">
+                <i class="bi bi-shield-check" aria-hidden="true"></i> Action
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-xs"
+                    @onclick='() => Nav.NavigateTo($"/submissions/{Guid.NewGuid()}")'>
+                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+            </button>
+        </div>;
+
+    RenderFragment KpiCard(string icon, string label, string val, string css) =>
+        @<div class="bc-kpi-card @css">
+            <div class="bc-kpi-val">@val</div>
+            <div class="bc-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </div>;
+
+    RenderFragment DrawRow(string lbl, string val) =>
+        @<div class="bc-draw-row">
+            <span class="bc-draw-lbl">@lbl</span>
+            <span class="bc-draw-val">@val</span>
+        </div>;
+}

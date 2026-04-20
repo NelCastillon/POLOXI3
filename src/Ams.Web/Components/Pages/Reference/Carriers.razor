@@ -1,0 +1,328 @@
+@page "/admin/reference/carriers"
+@namespace Ams.Web.Components.Pages.ReferenceAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Carriers — Reference Data</PageTitle>
+
+<AppPageHeader Title="Carriers"
+               Subtitle="Appointed insurance carriers, AM Best ratings and admitted status"
+               Icon="bi-shield-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Carrier
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="cr-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0">
+        <span class="cr-kpi-icon cr-kpi-icon--total"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
+        <div><div class="cr-kpi-value">@_totalCount</div><div class="cr-kpi-label">Total Carriers</div></div>
+        @if (_kpiActive == 1) { <span class="cr-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
+        <span class="cr-kpi-icon cr-kpi-icon--admitted"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="cr-kpi-value">@_admittedCount</div><div class="cr-kpi-label">Admitted</div></div>
+        @if (_kpiActive == 2) { <span class="cr-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0">
+        <span class="cr-kpi-icon cr-kpi-icon--nonadmitted"><i class="bi bi-slash-circle" aria-hidden="true"></i></span>
+        <div><div class="cr-kpi-value">@_nonAdmittedCount</div><div class="cr-kpi-label">Non-Admitted</div></div>
+        @if (_kpiActive == 3) { <span class="cr-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="cr-kpi-card">
+        <span class="cr-kpi-icon cr-kpi-icon--arating"><i class="bi bi-star-fill" aria-hidden="true"></i></span>
+        <div><div class="cr-kpi-value">@_aRatedCount</div><div class="cr-kpi-label">A-Rated or Better</div></div>
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search carrier name or NAIC…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_admittedOptions"
+                        Placeholder="All Types"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterAdmitted"
+                        ValueChanged="@((string v) => { _filterAdmitted = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_ratingOptions"
+                        Placeholder="AM Best Rating"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterRating"
+                        ValueChanged="@((string v) => { _filterRating = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <label class="cr-toggle-label">
+            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
+            Active only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="CarrierEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(CarrierEntry.CarrierName)" HeaderText="Carrier" Width="220">
+                <Template>
+                    @{ var e = (CarrierEntry)context; }
+                    <div class="cr-carrier-cell">
+                        <span class="cr-carrier-icon" aria-hidden="true"><i class="bi bi-building"></i></span>
+                        <div>
+                            <div class="cr-carrier-name">@e.CarrierName</div>
+                            <div class="cr-carrier-naic">NAIC: <span class="cr-mono">@e.NaicCode</span></div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CarrierEntry.AmBestRating)" HeaderText="AM Best" Width="120">
+                <Template>
+                    @{ var e = (CarrierEntry)context; }
+                    <span class="@RatingBadgeClass(e.AmBestRating)">@e.AmBestRating</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CarrierEntry.IsAdmitted)" HeaderText="Type" Width="130">
+                <Template>
+                    @{ var e = (CarrierEntry)context; }
+                    <span class="@(e.IsAdmitted ? "badge badge-blue" : "badge badge-neutral")">
+                        @(e.IsAdmitted ? "Admitted" : "Non-Admitted")
+                    </span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CarrierEntry.StateCount)" HeaderText="States" Width="90" />
+            <GridColumn Field="@nameof(CarrierEntry.LobCount)" HeaderText="Lines" Width="90" />
+            <GridColumn Field="@nameof(CarrierEntry.AppointmentDate)" HeaderText="Appointed" Width="140">
+                <Template>
+                    @{ var e = (CarrierEntry)context; }
+                    <span>@(e.AppointmentDate.HasValue ? e.AppointmentDate.Value.ToString("d") : "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CarrierEntry.IsActive)" HeaderText="Status" Width="100">
+                <Template>
+                    @{ var e = (CarrierEntry)context; }
+                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (CarrierEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.CarrierId == Guid.Empty ? "Add Carrier" : "Edit Carrier")"
+               OnSave="SaveCarrierAsync"
+               OnCancel="CloseDrawer">
+    <Body>
+        <div class="cr-form">
+            <label class="cr-form-label">Carrier Name *</label>
+            <input class="um-input" @bind="_editModel.CarrierName" />
+
+            <label class="cr-form-label">NAIC Code</label>
+            <input class="um-input cr-mono" @bind="_editModel.NaicCode" />
+
+            <label class="cr-form-label">AM Best Rating</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_ratingOptions"
+                            @bind-Value="_editModel.AmBestRating"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="cr-form-label">Admitted</label>
+            <SfSwitch @bind-Checked="_editModel.IsAdmitted" />
+
+            <label class="cr-form-label">Appointment Date</label>
+            <input class="um-input" type="date" @bind="_editModel.AppointmentDate" />
+
+            <label class="cr-form-label">Active</label>
+            <SfSwitch @bind-Checked="_editModel.IsActive" />
+        </div>
+    </Body>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<CarrierEntry> _allEntries = [];
+    private List<CarrierEntry> _entries    = [];
+
+    private bool _loading    = false;
+    private bool _showDrawer = false;
+
+    private string _search          = string.Empty;
+    private string _filterAdmitted  = string.Empty;
+    private string _filterRating    = string.Empty;
+    private bool   _filterActiveOnly = false;
+    private int    _kpiActive       = 0;
+
+    private int _totalCount      = 0;
+    private int _admittedCount   = 0;
+    private int _nonAdmittedCount = 0;
+    private int _aRatedCount     = 0;
+
+    private string KpiClass1 => "cr-kpi-card" + (_kpiActive == 1 ? " cr-kpi-card--active" : "");
+    private string KpiClass2 => "cr-kpi-card" + (_kpiActive == 2 ? " cr-kpi-card--active" : "");
+    private string KpiClass3 => "cr-kpi-card" + (_kpiActive == 3 ? " cr-kpi-card--active" : "");
+
+    private static readonly List<LabelValue> _admittedOptions =
+    [
+        new("Admitted",    "Admitted"),
+        new("NonAdmitted", "Non-Admitted"),
+    ];
+
+    private static readonly List<LabelValue> _ratingOptions =
+    [
+        new("A++", "A++ (Superior)"),
+        new("A+",  "A+ (Superior)"),
+        new("A",   "A (Excellent)"),
+        new("A-",  "A- (Excellent)"),
+        new("B++", "B++ (Good)"),
+        new("B+",  "B+ (Good)"),
+        new("NR",  "NR (Not Rated)"),
+    ];
+
+    private CarrierEntry _editModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",          "/"),
+            new("Reference Data","/admin/reference/carriers"),
+            new("Carriers",      "/admin/reference/carriers"));
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace with Api.GetCarriersAsync(_tenantId)
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterAdmitted) ||
+             (_filterAdmitted == "Admitted"    &&  e.IsAdmitted) ||
+             (_filterAdmitted == "NonAdmitted" && !e.IsAdmitted)) &&
+            (string.IsNullOrEmpty(_filterRating) || e.AmBestRating == _filterRating) &&
+            (!_filterActiveOnly || e.IsActive) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.CarrierName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.NaicCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        if (_kpiActive == 2) _entries = _entries.Where(e =>  e.IsAdmitted).ToList();
+        if (_kpiActive == 3) _entries = _entries.Where(e => !e.IsAdmitted).ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive      = _kpiActive == n ? 0 : n;
+        _filterAdmitted = string.Empty;
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount       = _allEntries.Count;
+        _admittedCount    = _allEntries.Count(e => e.IsAdmitted);
+        _nonAdmittedCount = _allEntries.Count(e => !e.IsAdmitted);
+        _aRatedCount      = _allEntries.Count(e => e.AmBestRating.StartsWith("A"));
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(CarrierEntry e) { _editModel = new CarrierEntry { CarrierId = e.CarrierId, CarrierName = e.CarrierName, NaicCode = e.NaicCode, AmBestRating = e.AmBestRating, IsAdmitted = e.IsAdmitted, StateCount = e.StateCount, LobCount = e.LobCount, AppointmentDate = e.AppointmentDate, IsActive = e.IsActive }; _showDrawer = true; }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveCarrierAsync()
+    {
+        // TODO: Api.SaveCarrierAsync
+        await Task.Delay(0);
+        _showDrawer = false;
+        await LoadAsync();
+        await ShowToastAsync("Carrier saved.", "e-toast-success");
+    }
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string RatingBadgeClass(string rating) => rating switch
+    {
+        "A++" or "A+" => "cr-rating-badge cr-rating-badge--superior",
+        "A"  or "A-"  => "cr-rating-badge cr-rating-badge--excellent",
+        "B++" or "B+" => "cr-rating-badge cr-rating-badge--good",
+        _             => "cr-rating-badge cr-rating-badge--nr",
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class CarrierEntry
+    {
+        public Guid      CarrierId       { get; set; } = Guid.Empty;
+        public string    CarrierName     { get; set; } = string.Empty;
+        public string    NaicCode        { get; set; } = string.Empty;
+        public string    AmBestRating    { get; set; } = "NR";
+        public bool      IsAdmitted      { get; set; }
+        public int       StateCount      { get; set; }
+        public int       LobCount        { get; set; }
+        public DateTime? AppointmentDate { get; set; }
+        public bool      IsActive        { get; set; } = true;
+    }
+}

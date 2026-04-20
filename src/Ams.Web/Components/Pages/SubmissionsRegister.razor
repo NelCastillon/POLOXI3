@@ -1,0 +1,290 @@
+@page "/submissions"
+@namespace Ams.Web.Components.Pages
+@using Syncfusion.Blazor.QueryBuilder
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Submissions Register — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
+    <MenuFieldSettings Text="Text" IconCss="IconCss" />
+</SfContextMenu>
+
+<AppPageHeader Title="Submissions Register"
+               Subtitle="Track and manage submissions across all markets, carriers, and lines of business"
+               Icon="bi-send-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => _showQb = !_showQb'>
+            <i class="bi bi-funnel" aria-hidden="true"></i> Filter
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "sr-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/submissions/new")'>
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Submission
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="sr-kpi-strip">
+    @KpiCard("bi-send",             "Total",       _rows.Count.ToString(),                                 "sr-kpi-total")
+    @KpiCard("bi-pencil-square",    "New",         _rows.Count(r=>r.Status=="New").ToString(),             "sr-kpi-new")
+    @KpiCard("bi-hourglass-split",  "In Review",   _rows.Count(r=>r.Status=="In Review").ToString(),      "sr-kpi-review")
+    @KpiCard("bi-journal-text",     "Quoted",      _rows.Count(r=>r.Status=="Quoted").ToString(),         "sr-kpi-quoted")
+    @KpiCard("bi-shield-check",     "Bound",       _rows.Count(r=>r.Status=="Bound").ToString(),          "sr-kpi-bound")
+    @KpiCard("bi-x-circle",         "Declined",    _rows.Count(r=>r.Status=="Declined").ToString(),       "sr-kpi-declined")
+    @KpiCard("bi-cash-stack",       "Quoted Premium", _rows.Where(r=>r.QuotedPremium>0).Sum(r=>r.QuotedPremium).ToString("C0"), "sr-kpi-prem")
+</div>
+
+<!-- Advanced filter -->
+@if (_showQb)
+{
+    <div class="sr-qb-panel">
+        <SfQueryBuilder TValue="SubRow" @ref="_qb">
+            <QueryBuilderColumns>
+                <QueryBuilderColumn Field="SubmissionNo" Label="Submission #"  Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String" />
+                <QueryBuilderColumn Field="Account"      Label="Account"       Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String" />
+                <QueryBuilderColumn Field="Lob"          Label="LOB"           Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String" />
+                <QueryBuilderColumn Field="Status"       Label="Status"        Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String" />
+                <QueryBuilderColumn Field="Producer"     Label="Producer"      Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String" />
+                <QueryBuilderColumn Field="EffDate"      Label="Effective Date" Type="Syncfusion.Blazor.QueryBuilder.ColumnType.Date" />
+                <QueryBuilderColumn Field="QuotedPremium" Label="Quoted Premium" Type="Syncfusion.Blazor.QueryBuilder.ColumnType.Number" />
+            </QueryBuilderColumns>
+        </SfQueryBuilder>
+        <div class="sr-qb-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => _showQb = false'>Close</button>
+            <button class="um-btn um-btn-primary um-btn-sm" @onclick="ApplyFilter">Apply</button>
+        </div>
+    </div>
+}
+
+<!-- View tabs -->
+<div class="sr-view-tabs">
+    @foreach (var t in _tabs)
+    {
+        <button class="sr-view-tab @(_activeTab == t.Key ? "sr-view-tab--active" : "")"
+                @onclick="() => _activeTab = t.Key">
+            <i class="bi @t.Icon" aria-hidden="true"></i> @t.Label
+            <span class="sr-tab-count">@TabCount(t.Key)</span>
+        </button>
+    }
+</div>
+
+<!-- Grid -->
+<div class="sr-grid-wrap">
+    @if (_loading)
+    {
+        <div class="sr-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <SfGrid DataSource="@TabRows" AllowSorting="true" AllowPaging="true" AllowResizing="true"
+                RowHeight="42" @ref="_grid">
+            <GridPageSettings PageSize="20" />
+            <GridEvents TValue="SubRow" RowSelected="OnRowSelected" />
+            <GridColumns>
+                <GridColumn Field="SubmissionNo"   HeaderText="Submission #"  Width="155"
+                            Template="@(ctx => SubNoLink((SubRow)ctx))" />
+                <GridColumn Field="Account"        HeaderText="Account"       Width="185" />
+                <GridColumn Field="Insured"        HeaderText="Named Insured" Width="185" />
+                <GridColumn Field="Lob"            HeaderText="LOB"           Width="155"
+                            Template="@(ctx => LobChip(((SubRow)ctx).Lob))" />
+                <GridColumn Field="Status"         HeaderText="Status"        Width="120"
+                            Template="@(ctx => StatusChip(((SubRow)ctx).Status))" />
+                <GridColumn Field="Producer"       HeaderText="Producer"      Width="160" />
+                <GridColumn Field="SubmitDate"     HeaderText="Submitted"     Width="115" Format="MM/dd/yyyy" />
+                <GridColumn Field="EffDate"        HeaderText="Effective"     Width="115" Format="MM/dd/yyyy" />
+                <GridColumn Field="DueDate"        HeaderText="Due"           Width="100"
+                            Template="@(ctx => DueCell(((SubRow)ctx).DueDate))" />
+                <GridColumn Field="QuotedPremium"  HeaderText="Quoted Prem"   Width="120"
+                            Template="@(ctx => PremCell(((SubRow)ctx).QuotedPremium))" />
+                <GridColumn Field="Markets"        HeaderText="Markets"       Width="80"
+                            Template="@(ctx => MktCountCell(((SubRow)ctx).Markets))" />
+                <GridColumn Field="Csr"            HeaderText="CSR"           Width="120" />
+                <GridColumn HeaderText=""          Width="52"  AllowSorting="false"
+                            Template="@(ctx => CtxBtn((SubRow)ctx))" />
+            </GridColumns>
+        </SfGrid>
+    }
+</div>
+
+@code {
+    SfToast _toast = default!;
+    SfContextMenu<CtxItem> _ctx = default!;
+    SfGrid<SubRow> _grid = default!;
+    SfQueryBuilder<SubRow>? _qb;
+
+    bool   _loading   = false;
+    bool   _showQb    = false;
+    string _activeTab = "all";
+    SubRow _selected  = new();
+
+    sealed record CtxItem(string Text, string IconCss);
+
+    sealed class SubRow
+    {
+        public string   SubmissionNo   { get; set; } = "";
+        public Guid     SubId          { get; set; } = Guid.NewGuid();
+        public string   Account        { get; set; } = "";
+        public string   Insured        { get; set; } = "";
+        public string   Lob            { get; set; } = "";
+        public string   Status         { get; set; } = "";
+        public string   Producer       { get; set; } = "";
+        public string   Csr            { get; set; } = "";
+        public DateTime SubmitDate     { get; set; }
+        public DateTime EffDate        { get; set; }
+        public DateTime DueDate        { get; set; }
+        public decimal  QuotedPremium  { get; set; }
+        public int      Markets        { get; set; }
+    }
+
+    record TabDef(string Key, string Label, string Icon);
+
+    readonly TabDef[] _tabs = new[]
+    {
+        new TabDef("all",      "All",         "bi-stack"           ),
+        new TabDef("new",      "New",         "bi-pencil-square"   ),
+        new TabDef("review",   "In Review",   "bi-hourglass-split" ),
+        new TabDef("quoted",   "Quoted",      "bi-journal-text"    ),
+        new TabDef("bound",    "Bound",       "bi-shield-check"    ),
+        new TabDef("declined", "Declined",    "bi-x-circle"        ),
+        new TabDef("producer", "By Producer", "bi-person-workspace"),
+        new TabDef("lob",      "By LOB",      "bi-layers"          ),
+    };
+
+    IEnumerable<SubRow> TabRows => _activeTab switch
+    {
+        "new"      => _rows.Where(r => r.Status == "New"),
+        "review"   => _rows.Where(r => r.Status == "In Review"),
+        "quoted"   => _rows.Where(r => r.Status == "Quoted"),
+        "bound"    => _rows.Where(r => r.Status == "Bound"),
+        "declined" => _rows.Where(r => r.Status is "Declined" or "Withdrawn"),
+        _          => _rows,
+    };
+
+    string TabCount(string key) => key switch
+    {
+        "all"      => _rows.Count.ToString(),
+        "new"      => _rows.Count(r=>r.Status=="New").ToString(),
+        "review"   => _rows.Count(r=>r.Status=="In Review").ToString(),
+        "quoted"   => _rows.Count(r=>r.Status=="Quoted").ToString(),
+        "bound"    => _rows.Count(r=>r.Status=="Bound").ToString(),
+        "declined" => _rows.Count(r=>r.Status is "Declined" or "Withdrawn").ToString(),
+        _          => "",
+    };
+
+    List<CtxItem> _ctxItems = new()
+    {
+        new("Open",             "bi bi-box-arrow-up-right"),
+        new("Submit to Market", "bi bi-send"              ),
+        new("Request Quote",    "bi bi-journal-text"      ),
+        new("Bind",             "bi bi-shield-check"      ),
+        new("Copy",             "bi bi-copy"              ),
+        new("Create Policy",    "bi bi-shield-plus"       ),
+        new("Decline",          "bi bi-x-circle"          ),
+    };
+
+    readonly List<SubRow> _rows = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Submissions","/submissions"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(0);
+        if (_rows.Count == 0) BuildStub();
+        _loading = false;
+    }
+
+    void ApplyFilter() { _showQb = false; }
+
+    void BuildStub()
+    {
+        var rng      = new Random(19);
+        var lobs     = new[]{"General Liability","Commercial Property","Commercial Auto","Workers Comp","Umbrella / Excess","Professional Liab.","Home / Dwelling","Personal Auto"};
+        var statuses = new[]{"New","New","In Review","In Review","Quoted","Quoted","Quoted","Bound","Bound","Declined","Withdrawn"};
+        var accounts = new[]{"Sullivan Mfg. LLC","Bridgewater Hotels","Metro Freight Co.","PineCrest Builders","Omega Tech Corp.","BlueSky Aviation","Harbor Fresh Foods","Summit Properties LLC","Nguyen, Minh T.","James & Lisa Carter"};
+        var producers= new[]{"Thornton & Associates","Pacific Bridge Insurance","Allied Risk Group","Midwest Coverage Partners"};
+        var csrs     = new[]{"Maria Santos","James Patel","Chen Li","Aisha Williams"};
+
+        for (int i = 1; i <= 65; i++)
+        {
+            var eff = DateTime.Today.AddDays(rng.Next(30,180));
+            var sub = DateTime.Today.AddDays(-rng.Next(0,60));
+            _rows.Add(new SubRow
+            {
+                SubmissionNo  = $"SUB-2025-{i:D4}",
+                Account       = accounts[rng.Next(accounts.Length)],
+                Insured       = accounts[rng.Next(accounts.Length)],
+                Lob           = lobs[rng.Next(lobs.Length)],
+                Status        = statuses[rng.Next(statuses.Length)],
+                Producer      = producers[rng.Next(producers.Length)],
+                Csr           = csrs[rng.Next(csrs.Length)],
+                SubmitDate    = sub,
+                EffDate       = eff,
+                DueDate       = sub.AddDays(rng.Next(7,21)),
+                QuotedPremium = rng.Next(3)==0 ? 0 : (decimal)rng.Next(5000,80000),
+                Markets       = rng.Next(2,6),
+            });
+        }
+    }
+
+    void OnRowSelected(RowSelectEventArgs<SubRow> args) =>
+        Nav.NavigateTo($"/submissions/{args.Data.SubId}");
+
+    void OnCtxSelected(MenuEventArgs<CtxItem> args)
+    {
+        if (args.Item.Text == "Open")          Nav.NavigateTo($"/submissions/{_selected.SubId}");
+        if (args.Item.Text == "Create Policy") Nav.NavigateTo("/policies/new");
+    }
+
+    RenderFragment SubNoLink(SubRow r) =>
+        @<button class="sr-sub-link um-btn um-btn-ghost um-btn-xs"
+                 @onclick='() => Nav.NavigateTo($"/submissions/{r.SubId}")'>
+            @r.SubmissionNo
+        </button>;
+
+    RenderFragment LobChip(string lob) =>
+        @<span class="sr-lob-chip">@lob</span>;
+
+    RenderFragment StatusChip(string s) =>
+        @<span class="sr-status sr-status-@s.ToLower().Replace(" ","-")">@s</span>;
+
+    RenderFragment DueCell(DateTime d)
+    {
+        var days = (d - DateTime.Today).TotalDays;
+        var css  = days < 0 ? "sr-due-late" : days <= 3 ? "sr-due-soon" : "";
+        return @<span class="@css">@d.ToString("MM/dd/yyyy")</span>;
+    }
+
+    RenderFragment PremCell(decimal v) =>
+        v == 0
+            ? @<span class="sr-prem-none">—</span>
+            : @<span class="sr-prem">@v.ToString("C0")</span>;
+
+    RenderFragment MktCountCell(int n) =>
+        @<span class="sr-mkt-cnt">@n</span>;
+
+    RenderFragment CtxBtn(SubRow row) =>
+        @<button class="um-btn um-btn-ghost um-btn-xs sr-ctx-btn"
+                 @onclick:stopPropagation="true"
+                 @onclick="(e) => { _selected = row; _ctx.Open(e.ClientX, e.ClientY); }">
+            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+        </button>;
+
+    RenderFragment KpiCard(string icon, string label, string val, string css) =>
+        @<div class="sr-kpi-card @css">
+            <div class="sr-kpi-val">@val</div>
+            <div class="sr-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </div>;
+}

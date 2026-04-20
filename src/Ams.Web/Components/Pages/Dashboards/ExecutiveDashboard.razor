@@ -1,0 +1,701 @@
+@page "/dashboard/executive"
+@namespace Ams.Web.Components.Pages.Dashboards
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Executive Dashboard</PageTitle>
+
+<AppPageHeader Title="Executive Dashboard"
+               Subtitle="Agency-wide performance snapshot — premium, retention, growth, claims and producer activity"
+               Icon="bi-speedometer2">
+    <Actions>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_periodOptions"
+                        Value="_period"
+                        ValueChanged="OnPeriodChangedAsync"
+                        Width="150px">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ed-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="ed-loading-banner" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading executive data…</span>
+    </div>
+}
+
+<!-- ── KPI Strip ─────────────────────────────────────────────────────────── -->
+<div class="ed-kpi-strip">
+    <div class="ed-kpi-card ed-kpi-card--premium">
+        <span class="ed-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+        <div class="ed-kpi-body">
+            <div class="ed-kpi-value">@_kpi.WrittenPremium.ToString("C0")</div>
+            <div class="ed-kpi-label">Written Premium</div>
+            <div class="@DeltaClass(_kpi.WrittenPremiumDelta)">
+                <i class="bi @DeltaIcon(_kpi.WrittenPremiumDelta)" aria-hidden="true"></i>
+                @Math.Abs(_kpi.WrittenPremiumDelta).ToString("F1")% vs prior period
+            </div>
+        </div>
+    </div>
+    <div class="ed-kpi-card ed-kpi-card--retention">
+        <span class="ed-kpi-icon"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span>
+        <div class="ed-kpi-body">
+            <div class="ed-kpi-value">@_kpi.RetentionRate.ToString("F1")%</div>
+            <div class="ed-kpi-label">Retention Rate</div>
+            <div class="@DeltaClass(_kpi.RetentionDelta)">
+                <i class="bi @DeltaIcon(_kpi.RetentionDelta)" aria-hidden="true"></i>
+                @Math.Abs(_kpi.RetentionDelta).ToString("F1")% vs prior period
+            </div>
+        </div>
+    </div>
+    <div class="ed-kpi-card ed-kpi-card--newbiz">
+        <span class="ed-kpi-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
+        <div class="ed-kpi-body">
+            <div class="ed-kpi-value">@_kpi.NewBusinessPremium.ToString("C0")</div>
+            <div class="ed-kpi-label">New Business</div>
+            <div class="@DeltaClass(_kpi.NewBusinessDelta)">
+                <i class="bi @DeltaIcon(_kpi.NewBusinessDelta)" aria-hidden="true"></i>
+                @Math.Abs(_kpi.NewBusinessDelta).ToString("F1")% vs prior period
+            </div>
+        </div>
+    </div>
+    <div class="ed-kpi-card ed-kpi-card--atrisk">
+        <span class="ed-kpi-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span>
+        <div class="ed-kpi-body">
+            <div class="ed-kpi-value">@_kpi.RenewalAtRiskCount</div>
+            <div class="ed-kpi-label">Renewals at Risk</div>
+            <div class="ed-kpi-sub">@_kpi.RenewalAtRiskPremium.ToString("C0") at stake</div>
+        </div>
+    </div>
+    <div class="ed-kpi-card ed-kpi-card--claims">
+        <span class="ed-kpi-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span>
+        <div class="ed-kpi-body">
+            <div class="ed-kpi-value">@_kpi.OpenClaimsCount</div>
+            <div class="ed-kpi-label">Open Claims</div>
+            <div class="ed-kpi-sub">@_kpi.TotalIncurredLoss.ToString("C0") incurred</div>
+        </div>
+    </div>
+    <div class="ed-kpi-card ed-kpi-card--recv">
+        <span class="ed-kpi-icon"><i class="bi bi-calendar2-week" aria-hidden="true"></i></span>
+        <div class="ed-kpi-body">
+            <div class="ed-kpi-value">@_kpi.OverdueReceivables.ToString("C0")</div>
+            <div class="ed-kpi-label">Overdue Receivables</div>
+            <div class="ed-kpi-sub @(_kpi.OverduePct > 15 ? "ed-delta--bad" : "ed-delta--ok")">
+                @_kpi.OverduePct.ToString("F1")% of total AR
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Dashboard Layout ──────────────────────────────────────────────────── -->
+<SfDashboardLayout CellSpacing="@_cellSpacing" Columns="12" CellAspectRatio="1.4f" AllowResizing="true" AllowDragging="true">
+    <DashboardLayoutPanels>
+
+        <!-- ① Written Premium trend – col-span 6 -->
+        <DashboardLayoutPanel Id="written-premium" Column="0" Row="0" SizeX="6" SizeY="2">
+            <HeaderTemplate>
+                <div class="ed-panel-hdr">
+                    <i class="bi bi-cash-coin" aria-hidden="true"></i>
+                    <span>Written Premium Trend</span>
+                    <span class="ed-panel-period">@_periodLabel</span>
+                </div>
+            </HeaderTemplate>
+            <ContentTemplate>
+                <div class="ed-panel-body">
+                    @if (_premiumTrend.Count > 0)
+                    {
+                        <SfChart Width="100%" Height="100%"
+                                 Background="transparent">
+                            <ChartPrimaryXAxis ValueType="Syncfusion.Blazor.Charts.ValueType.Category"
+                                               LabelRotation="-30">
+                                <ChartAxisMajorGridLines Width="0" />
+                            </ChartPrimaryXAxis>
+                            <ChartPrimaryYAxis LabelFormat="C0">
+                                <ChartAxisMajorGridLines DashArray="4,4" Color="var(--ed-grid-line)" />
+                            </ChartPrimaryYAxis>
+                            <ChartTooltipSettings Enable="true" Format="${point.x} : ${point.y}" />
+                            <ChartSeriesCollection>
+                                <ChartSeries DataSource="@_premiumTrend"
+                                             XName="Label" YName="Value"
+                                             Name="Written Premium"
+                                             Type="ChartSeriesType.Area"
+                                             Fill="rgba(59,130,246,0.18)"
+                                             Opacity="1">
+                                    <ChartMarker Visible="false" />
+                                </ChartSeries>
+                                <ChartSeries DataSource="@_premiumTrend"
+                                             XName="Label" YName="PriorValue"
+                                             Name="Prior Period"
+                                             Type="ChartSeriesType.Line"
+                                             Fill="#94a3b8"
+                                             Opacity="0.6">
+                                    <ChartSeriesBorder Width="1.5" Color="#94a3b8" />
+                                    <ChartMarker Visible="false" />
+                                </ChartSeries>
+                            </ChartSeriesCollection>
+                            <ChartLegendSettings Visible="true" Position="LegendPosition.Bottom" />
+                        </SfChart>
+                    }
+                    else
+                    {
+                        <div class="ed-empty-panel"><i class="bi bi-bar-chart" aria-hidden="true"></i> No data</div>
+                    }
+                </div>
+            </ContentTemplate>
+        </DashboardLayoutPanel>
+
+        <!-- ② New Business Growth – col-span 6 -->
+        <DashboardLayoutPanel Id="new-biz-growth" Column="6" Row="0" SizeX="6" SizeY="2">
+            <HeaderTemplate>
+                <div class="ed-panel-hdr">
+                    <i class="bi bi-graph-up-arrow" aria-hidden="true"></i>
+                    <span>New Business vs Renewal Premium</span>
+                    <span class="ed-panel-period">@_periodLabel</span>
+                </div>
+            </HeaderTemplate>
+            <ContentTemplate>
+                <div class="ed-panel-body">
+                    @if (_newBizTrend.Count > 0)
+                    {
+                        <SfChart Width="100%" Height="100%" Background="transparent">
+                            <ChartPrimaryXAxis ValueType="Syncfusion.Blazor.Charts.ValueType.Category"
+                                               LabelRotation="-30">
+                                <ChartAxisMajorGridLines Width="0" />
+                            </ChartPrimaryXAxis>
+                            <ChartPrimaryYAxis LabelFormat="C0">
+                                <ChartAxisMajorGridLines DashArray="4,4" Color="var(--ed-grid-line)" />
+                            </ChartPrimaryYAxis>
+                            <ChartTooltipSettings Enable="true" />
+                            <ChartSeriesCollection>
+                                <ChartSeries DataSource="@_newBizTrend"
+                                             XName="Label" YName="NewBiz"
+                                             Name="New Business"
+                                             Type="ChartSeriesType.StackingColumn"
+                                             Fill="#22c55e">
+                                </ChartSeries>
+                                <ChartSeries DataSource="@_newBizTrend"
+                                             XName="Label" YName="Renewal"
+                                             Name="Renewal"
+                                             Type="ChartSeriesType.StackingColumn"
+                                             Fill="#3b82f6">
+                                </ChartSeries>
+                            </ChartSeriesCollection>
+                            <ChartLegendSettings Visible="true" Position="LegendPosition.Bottom" />
+                        </SfChart>
+                    }
+                    else
+                    {
+                        <div class="ed-empty-panel"><i class="bi bi-bar-chart-stacked" aria-hidden="true"></i> No data</div>
+                    }
+                </div>
+            </ContentTemplate>
+        </DashboardLayoutPanel>
+
+        <!-- ③ Retention funnel – col-span 4 -->
+        <DashboardLayoutPanel Id="retention" Column="0" Row="2" SizeX="4" SizeY="2">
+            <HeaderTemplate>
+                <div class="ed-panel-hdr">
+                    <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                    <span>Retention Analysis</span>
+                </div>
+            </HeaderTemplate>
+            <ContentTemplate>
+                <div class="ed-panel-body">
+                    @if (_retentionSegments.Count > 0)
+                    {
+                        <SfAccumulationChart Width="100%" Height="100%" Background="transparent">
+                            <AccumulationChartSeriesCollection>
+                                <AccumulationChartSeries DataSource="@_retentionSegments"
+                                                         XName="Label" YName="Value"
+                                                         Name="Retention"
+                                                         InnerRadius="50%"
+                                                         Radius="80%"
+                                                         Explode="false">
+                                    <AccumulationDataLabelSettings Visible="true" Name="Label"
+                                                                   Position="AccumulationLabelPosition.Outside" />
+                                </AccumulationChartSeries>
+                            </AccumulationChartSeriesCollection>
+                            <AccumulationChartTooltipSettings Enable="true" Format="${point.x} : ${point.y}%" />
+                            <AccumulationChartLegendSettings Visible="true" Position="LegendPosition.Bottom" />
+                        </SfAccumulationChart>
+                    }
+                    else
+                    {
+                        <div class="ed-empty-panel"><i class="bi bi-pie-chart" aria-hidden="true"></i> No data</div>
+                    }
+                </div>
+            </ContentTemplate>
+        </DashboardLayoutPanel>
+
+        <!-- ④ Renewals at Risk – col-span 4 -->
+        <DashboardLayoutPanel Id="renewal-risk" Column="4" Row="2" SizeX="4" SizeY="2">
+            <HeaderTemplate>
+                <div class="ed-panel-hdr">
+                    <i class="bi bi-exclamation-triangle-fill ed-icon--warn" aria-hidden="true"></i>
+                    <span>Renewal at Risk</span>
+                    <span class="ed-panel-badge ed-panel-badge--warn">@_renewalsAtRisk.Count</span>
+                </div>
+            </HeaderTemplate>
+            <ContentTemplate>
+                <div class="ed-panel-body ed-panel-body--scroll">
+                    @if (_renewalsAtRisk.Count > 0)
+                    {
+                        <div class="ed-risk-list">
+                            @foreach (var r in _renewalsAtRisk)
+                            {
+                                <div class="ed-risk-row">
+                                    <div class="ed-risk-left">
+                                        <span class="ed-risk-name">@r.AccountName</span>
+                                        <span class="ed-risk-meta">@r.LobCode · exp @r.ExpiryDate.ToString("d")</span>
+                                    </div>
+                                    <div class="ed-risk-right">
+                                        <span class="ed-risk-premium">@r.Premium.ToString("C0")</span>
+                                        <span class="@RiskBadgeClass(r.RiskLevel)">@r.RiskLevel</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="ed-empty-panel"><i class="bi bi-check-circle" aria-hidden="true"></i> No at-risk renewals</div>
+                    }
+                </div>
+            </ContentTemplate>
+        </DashboardLayoutPanel>
+
+        <!-- ⑤ Claims by Severity – col-span 4 -->
+        <DashboardLayoutPanel Id="claims-severity" Column="8" Row="2" SizeX="4" SizeY="2">
+            <HeaderTemplate>
+                <div class="ed-panel-hdr">
+                    <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+                    <span>Claims by Severity</span>
+                </div>
+            </HeaderTemplate>
+            <ContentTemplate>
+                <div class="ed-panel-body">
+                    @if (_claimsBySeverity.Count > 0)
+                    {
+                        <SfAccumulationChart Width="100%" Height="100%" Background="transparent">
+                            <AccumulationChartSeriesCollection>
+                                <AccumulationChartSeries DataSource="@_claimsBySeverity"
+                                                         XName="Label" YName="Value"
+                                                         Name="Claims"
+                                                         Radius="85%"
+                                                         Explode="true"
+                                                         ExplodeIndex="0">
+                                    <AccumulationDataLabelSettings Visible="true" Name="Label"
+                                                                   Position="AccumulationLabelPosition.Outside" />
+                                </AccumulationChartSeries>
+                            </AccumulationChartSeriesCollection>
+                            <AccumulationChartPalettes Palettes="@_claimsPalette" />
+                            <AccumulationChartTooltipSettings Enable="true" Format="${point.x} : ${point.y}" />
+                            <AccumulationChartLegendSettings Visible="true" Position="LegendPosition.Bottom" />
+                        </SfAccumulationChart>
+                    }
+                    else
+                    {
+                        <div class="ed-empty-panel"><i class="bi bi-shield" aria-hidden="true"></i> No claims data</div>
+                    }
+                </div>
+            </ContentTemplate>
+        </DashboardLayoutPanel>
+
+        <!-- ⑥ Receivables Aging – col-span 6 -->
+        <DashboardLayoutPanel Id="receivables" Column="0" Row="4" SizeX="6" SizeY="2">
+            <HeaderTemplate>
+                <div class="ed-panel-hdr">
+                    <i class="bi bi-calendar2-week" aria-hidden="true"></i>
+                    <span>Receivables Aging</span>
+                </div>
+            </HeaderTemplate>
+            <ContentTemplate>
+                <div class="ed-panel-body">
+                    @if (_receivablesAging.Count > 0)
+                    {
+                        <SfChart Width="100%" Height="100%" Background="transparent">
+                            <ChartPrimaryXAxis ValueType="Syncfusion.Blazor.Charts.ValueType.Category">
+                                <ChartAxisMajorGridLines Width="0" />
+                            </ChartPrimaryXAxis>
+                            <ChartPrimaryYAxis LabelFormat="C0">
+                                <ChartAxisMajorGridLines DashArray="4,4" Color="var(--ed-grid-line)" />
+                            </ChartPrimaryYAxis>
+                            <ChartTooltipSettings Enable="true" Format="${point.x} : ${point.y}" />
+                            <ChartSeriesCollection>
+                                <ChartSeries DataSource="@_receivablesAging"
+                                             XName="Label" YName="Value"
+                                             Name="Amount"
+                                             Type="ChartSeriesType.Column"
+                                             ColumnWidth="0.55">
+                                    <ChartSeriesAnimation Enable="true" Duration="600" />
+                                </ChartSeries>
+                            </ChartSeriesCollection>
+                            <ChartPalettes Palettes="@_agingPalette" />
+                            <ChartLegendSettings Visible="false" />
+                        </SfChart>
+                    }
+                    else
+                    {
+                        <div class="ed-empty-panel"><i class="bi bi-calendar2" aria-hidden="true"></i> No AR data</div>
+                    }
+                </div>
+            </ContentTemplate>
+        </DashboardLayoutPanel>
+
+        <!-- ⑦ Campaign Conversion – col-span 6 -->
+        <DashboardLayoutPanel Id="campaign-conversion" Column="6" Row="4" SizeX="6" SizeY="2">
+            <HeaderTemplate>
+                <div class="ed-panel-hdr">
+                    <i class="bi bi-megaphone-fill" aria-hidden="true"></i>
+                    <span>Campaign Conversion</span>
+                    <a class="ed-panel-link" href="/marketing/campaigns">View all</a>
+                </div>
+            </HeaderTemplate>
+            <ContentTemplate>
+                <div class="ed-panel-body ed-panel-body--scroll">
+                    @if (_campaigns.Count > 0)
+                    {
+                        <SfGrid TValue="CampaignRow"
+                                DataSource="_campaigns"
+                                AllowSorting="true"
+                                EnableHover="true"
+                                Height="100%">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(CampaignRow.Name)" HeaderText="Campaign" Width="180" />
+                                <GridColumn Field="@nameof(CampaignRow.Leads)" HeaderText="Leads" Width="80" TextAlign="TextAlign.Right" />
+                                <GridColumn Field="@nameof(CampaignRow.Quoted)" HeaderText="Quoted" Width="80" TextAlign="TextAlign.Right" />
+                                <GridColumn Field="@nameof(CampaignRow.Bound)" HeaderText="Bound" Width="80" TextAlign="TextAlign.Right" />
+                                <GridColumn Field="@nameof(CampaignRow.ConversionPct)" HeaderText="Conv %" Width="90" TextAlign="TextAlign.Right">
+                                    <Template>
+                                        @{ var c = (CampaignRow)context; }
+                                        <span class="@ConvClass(c.ConversionPct)">@c.ConversionPct.ToString("F1")%</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CampaignRow.Premium)" HeaderText="Bound Premium" Width="130" TextAlign="TextAlign.Right">
+                                    <Template>
+                                        @{ var c = (CampaignRow)context; }
+                                        <span class="ed-mono">@c.Premium.ToString("C0")</span>
+                                    </Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    }
+                    else
+                    {
+                        <div class="ed-empty-panel"><i class="bi bi-megaphone" aria-hidden="true"></i> No campaign data</div>
+                    }
+                </div>
+            </ContentTemplate>
+        </DashboardLayoutPanel>
+
+        <!-- ⑧ Producer Leaderboard – col-span 12 -->
+        <DashboardLayoutPanel Id="producer-leaderboard" Column="0" Row="6" SizeX="12" SizeY="2">
+            <HeaderTemplate>
+                <div class="ed-panel-hdr">
+                    <i class="bi bi-trophy-fill ed-icon--gold" aria-hidden="true"></i>
+                    <span>Producer Leaderboard</span>
+                    <span class="ed-panel-period">@_periodLabel</span>
+                    <a class="ed-panel-link" href="/admin/agency/staff">View all producers</a>
+                </div>
+            </HeaderTemplate>
+            <ContentTemplate>
+                <div class="ed-panel-body">
+                    @if (_producers.Count > 0)
+                    {
+                        <SfGrid TValue="ProducerRow"
+                                DataSource="_producers"
+                                AllowSorting="true"
+                                AllowPaging="true"
+                                EnableHover="true"
+                                Height="100%">
+                            <GridPageSettings PageSize="10" />
+                            <GridColumns>
+                                <GridColumn HeaderText="#" Width="55">
+                                    <Template>
+                                        @{ var idx = _producers.IndexOf((ProducerRow)context) + 1; }
+                                        <span class="@RankBadge(idx)">@idx</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(ProducerRow.ProducerName)" HeaderText="Producer" Width="200">
+                                    <Template>
+                                        @{ var p = (ProducerRow)context; }
+                                        <div class="ed-producer-cell">
+                                            <span class="ed-avatar" style="@AvatarStyle(p.ProducerName)" aria-hidden="true">
+                                                @Initials(p.ProducerName)
+                                            </span>
+                                            <div>
+                                                <div class="ed-producer-name">@p.ProducerName</div>
+                                                <div class="ed-producer-branch">@p.Branch</div>
+                                            </div>
+                                        </div>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(ProducerRow.WrittenPremium)" HeaderText="Written Premium" Width="160" TextAlign="TextAlign.Right">
+                                    <Template>
+                                        @{ var p = (ProducerRow)context; }
+                                        <span class="ed-mono ed-bold">@p.WrittenPremium.ToString("C0")</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(ProducerRow.PoliciesWritten)" HeaderText="Policies" Width="100" TextAlign="TextAlign.Right" />
+                                <GridColumn Field="@nameof(ProducerRow.NewBusiness)" HeaderText="New Biz" Width="130" TextAlign="TextAlign.Right">
+                                    <Template>
+                                        @{ var p = (ProducerRow)context; }
+                                        <span class="ed-mono">@p.NewBusiness.ToString("C0")</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(ProducerRow.RetentionRate)" HeaderText="Retention %" Width="115" TextAlign="TextAlign.Right">
+                                    <Template>
+                                        @{ var p = (ProducerRow)context; }
+                                        <span class="@RetentionClass(p.RetentionRate)">@p.RetentionRate.ToString("F1")%</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn HeaderText="Goal %" Width="130">
+                                    <Template>
+                                        @{ var p = (ProducerRow)context; var pct = Math.Min(p.GoalPct, 100); }
+                                        <div class="ed-goal-bar-wrap" title="@p.GoalPct.ToString("F0")% of goal">
+                                            <div class="ed-goal-bar" style="width:@pct.ToString("F0",System.Globalization.CultureInfo.InvariantCulture)%;background:@GoalBarColor(p.GoalPct)"></div>
+                                            <span class="ed-goal-label">@p.GoalPct.ToString("F0")%</span>
+                                        </div>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(ProducerRow.Lob)" HeaderText="Top LoB" Width="100" />
+                            </GridColumns>
+                        </SfGrid>
+                    }
+                    else
+                    {
+                        <div class="ed-empty-panel"><i class="bi bi-people" aria-hidden="true"></i> No producer data</div>
+                    }
+                </div>
+            </ContentTemplate>
+        </DashboardLayoutPanel>
+
+    </DashboardLayoutPanels>
+</SfDashboardLayout>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private bool   _loading  = false;
+    private string _period   = "YTD";
+    private string _periodLabel => _periodOptions.FirstOrDefault(p => p.Value == _period)?.Label ?? _period;
+
+    private readonly double[] _cellSpacing = [8, 8];
+
+    // ── KPI ───────────────────────────────────────────────────────────────────────
+    private ExecKpi _kpi = new();
+
+    // ── Chart / widget data ───────────────────────────────────────────────────────
+    private List<PremiumPoint>   _premiumTrend      = [];
+    private List<NewBizPoint>    _newBizTrend        = [];
+    private List<PiePoint>       _retentionSegments  = [];
+    private List<RenewalRisk>    _renewalsAtRisk     = [];
+    private List<PiePoint>       _claimsBySeverity   = [];
+    private List<PiePoint>       _receivablesAging   = [];
+    private List<CampaignRow>    _campaigns          = [];
+    private List<ProducerRow>    _producers          = [];
+
+    private readonly string[] _claimsPalette = ["#dc2626", "#f97316", "#eab308", "#22c55e", "#94a3b8"];
+    private readonly string[] _agingPalette  = ["#22c55e", "#eab308", "#f97316", "#dc2626", "#7f1d1d"];
+
+    private static readonly List<LabelValue> _periodOptions =
+    [
+        new("MTD",     "Month to Date"),
+        new("QTD",     "Quarter to Date"),
+        new("YTD",     "Year to Date"),
+        new("L12M",    "Last 12 Months"),
+        new("Custom",  "Custom Range"),
+    ];
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",                 "/"),
+            new("Executive Dashboard",  "/dashboard/executive"));
+        await LoadAsync();
+    }
+
+    // ── Data loading ──────────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace stubs with Api.GetExecutiveDashboardAsync(_tenantId, _period)
+            await Task.Delay(0);
+
+            _kpi = new ExecKpi
+            {
+                WrittenPremium       = 0,
+                WrittenPremiumDelta  = 0,
+                RetentionRate        = 0,
+                RetentionDelta       = 0,
+                NewBusinessPremium   = 0,
+                NewBusinessDelta     = 0,
+                RenewalAtRiskCount   = 0,
+                RenewalAtRiskPremium = 0,
+                OpenClaimsCount      = 0,
+                TotalIncurredLoss    = 0,
+                OverdueReceivables   = 0,
+                OverduePct           = 0,
+            };
+
+            _premiumTrend     = [];
+            _newBizTrend      = [];
+            _retentionSegments = [];
+            _renewalsAtRisk   = [];
+            _claimsBySeverity = [];
+            _receivablesAging = [];
+            _campaigns        = [];
+            _producers        = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnPeriodChangedAsync(string v)
+    {
+        _period = v;
+        await LoadAsync();
+    }
+
+    private async Task ExportAsync() =>
+        await ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────────
+    private static string DeltaClass(double d)  => d >= 0 ? "ed-delta ed-delta--ok"  : "ed-delta ed-delta--bad";
+    private static string DeltaIcon(double d)   => d >= 0 ? "bi-arrow-up-short"      : "bi-arrow-down-short";
+
+    private static string RiskBadgeClass(string level) => level switch
+    {
+        "High"   => "ed-risk-badge ed-risk-badge--high",
+        "Medium" => "ed-risk-badge ed-risk-badge--medium",
+        _        => "ed-risk-badge ed-risk-badge--low",
+    };
+
+    private static string ConvClass(double pct) =>
+        pct >= 30 ? "ed-conv-good" : pct >= 15 ? "ed-conv-avg" : "ed-conv-poor";
+
+    private static string RetentionClass(double r) =>
+        r >= 85 ? "ed-ret-good" : r >= 70 ? "ed-ret-avg" : "ed-ret-poor";
+
+    private static string GoalBarColor(double pct) =>
+        pct >= 100 ? "#22c55e" : pct >= 75 ? "#3b82f6" : pct >= 50 ? "#eab308" : "#f97316";
+
+    private static string RankBadge(int rank) => rank switch
+    {
+        1 => "ed-rank ed-rank--gold",
+        2 => "ed-rank ed-rank--silver",
+        3 => "ed-rank ed-rank--bronze",
+        _ => "ed-rank",
+    };
+
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}"
+            : name.Length >= 1 ? name[..1] : "?";
+    }
+
+    private static string AvatarStyle(string name)
+    {
+        var hue = Math.Abs(name.GetHashCode()) % 360;
+        return $"background:hsl({hue},50%,40%);color:#fff;";
+    }
+
+    // ── Models ────────────────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class ExecKpi
+    {
+        public decimal WrittenPremium       { get; set; }
+        public double  WrittenPremiumDelta  { get; set; }
+        public double  RetentionRate        { get; set; }
+        public double  RetentionDelta       { get; set; }
+        public decimal NewBusinessPremium   { get; set; }
+        public double  NewBusinessDelta     { get; set; }
+        public int     RenewalAtRiskCount   { get; set; }
+        public decimal RenewalAtRiskPremium { get; set; }
+        public int     OpenClaimsCount      { get; set; }
+        public decimal TotalIncurredLoss    { get; set; }
+        public decimal OverdueReceivables   { get; set; }
+        public double  OverduePct           { get; set; }
+    }
+
+    private sealed class PremiumPoint
+    {
+        public string  Label      { get; set; } = string.Empty;
+        public decimal Value      { get; set; }
+        public decimal PriorValue { get; set; }
+    }
+
+    private sealed class NewBizPoint
+    {
+        public string  Label   { get; set; } = string.Empty;
+        public decimal NewBiz  { get; set; }
+        public decimal Renewal { get; set; }
+    }
+
+    private sealed class PiePoint
+    {
+        public string Label { get; set; } = string.Empty;
+        public double Value { get; set; }
+    }
+
+    private sealed class RenewalRisk
+    {
+        public string   AccountName { get; set; } = string.Empty;
+        public string   LobCode     { get; set; } = string.Empty;
+        public DateTime ExpiryDate  { get; set; }
+        public decimal  Premium     { get; set; }
+        public string   RiskLevel   { get; set; } = "Low";   // High | Medium | Low
+    }
+
+    private sealed class CampaignRow
+    {
+        public string  Name          { get; set; } = string.Empty;
+        public int     Leads         { get; set; }
+        public int     Quoted        { get; set; }
+        public int     Bound         { get; set; }
+        public double  ConversionPct { get; set; }
+        public decimal Premium       { get; set; }
+    }
+
+    private sealed class ProducerRow
+    {
+        public string  ProducerName   { get; set; } = string.Empty;
+        public string  Branch         { get; set; } = string.Empty;
+        public decimal WrittenPremium { get; set; }
+        public int     PoliciesWritten { get; set; }
+        public decimal NewBusiness    { get; set; }
+        public double  RetentionRate  { get; set; }
+        public double  GoalPct        { get; set; }
+        public string  Lob            { get; set; } = string.Empty;
+    }
+}

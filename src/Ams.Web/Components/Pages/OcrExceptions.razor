@@ -1,0 +1,251 @@
+@page "/documents/exceptions"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>OCR / Indexing Exceptions — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── MANUAL CLASSIFY DIALOG ─────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showClassify" Width="560px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="oe-dlg-hdr"><i class="bi bi-tag" aria-hidden="true"></i> Manually Classify Document</div></Header>
+        <Content>
+            <div class="oe-dlg-body">
+                @if (_classifyTarget is not null)
+                {
+                    <div class="oe-classify-file">
+                        <i class="bi bi-file-earmark oe-cf-icon" aria-hidden="true"></i>
+                        <div>
+                            <div class="oe-cf-name">@_classifyTarget.FileName</div>
+                            <div class="oe-cf-reason">OCR Issue: @_classifyTarget.ExceptionReason</div>
+                        </div>
+                    </div>
+                    <div class="oe-ai-suggestion">
+                        <i class="bi bi-stars" aria-hidden="true"></i>
+                        <div>
+                            <div class="oe-ai-title">AI Suggestion</div>
+                            <div class="oe-ai-body">Based on file name and partial text extraction, this document is likely a
+                                <strong>@_classifyTarget.AiSuggestion</strong> with <strong>@_classifyTarget.AiConfidence%</strong> confidence.</div>
+                        </div>
+                        <button class="um-btn um-btn-ghost um-btn-sm oe-apply-ai" @onclick="ApplyAiSuggestion">Apply</button>
+                    </div>
+                    <div class="form-group mb-2"><label class="oe-lbl">Category</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="_categories" @bind-Value="_classCategory" Width="100%"></SfDropDownList>
+                    </div>
+                    <div class="form-group mb-2"><label class="oe-lbl">Document Type</label>
+                        <SfTextBox @bind-Value="_classDocType" Placeholder="e.g. ACORD 25, Dec Page, Endorsement…"></SfTextBox>
+                    </div>
+                    <div class="form-group mb-2"><label class="oe-lbl">Linked Entity / Policy</label>
+                        <SfTextBox @bind-Value="_classEntity" Placeholder="e.g. POL-2025-00142"></SfTextBox>
+                    </div>
+                    <div class="form-group mb-2"><label class="oe-lbl">Tags</label>
+                        <SfTextBox @bind-Value="_classTags" Placeholder="Comma-separated tags…"></SfTextBox>
+                    </div>
+                    <div class="form-group mb-2"><label class="oe-lbl">Notes</label>
+                        <SfTextBox @bind-Value="_classNotes" Multiline="true" Placeholder="Optional indexing notes…"></SfTextBox>
+                    </div>
+                }
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Save Classification" IsPrimary="true" OnClick="SaveClassificationAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showClassify = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<AppPageHeader Title="OCR / Indexing Exceptions"
+               Subtitle="Review documents that failed automated classification or optical character recognition — resolve manually or with AI assistance"
+               Icon="bi-exclamation-triangle">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Documents
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="RunBatchAiAsync">
+            <i class="bi bi-stars" aria-hidden="true"></i> AI Batch Classify
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="ReprocessAll">
+            <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Reprocess All
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="oe-kpi-strip">
+    <div class="oe-kpi"><i class="bi bi-exclamation-triangle oe-ki red" aria-hidden="true"></i><div><div class="oe-kv">@_items.Count</div><div class="oe-kl">Total Exceptions</div></div></div>
+    <div class="oe-kpi"><i class="bi bi-file-earmark-x oe-ki red" aria-hidden="true"></i><div><div class="oe-kv">@_items.Count(x=>x.ExceptionType=="OCR Failure")</div><div class="oe-kl">OCR Failures</div></div></div>
+    <div class="oe-kpi"><i class="bi bi-question-circle oe-ki amber" aria-hidden="true"></i><div><div class="oe-kv">@_items.Count(x=>x.ExceptionType=="Unclassified")</div><div class="oe-kl">Unclassified</div></div></div>
+    <div class="oe-kpi"><i class="bi bi-link-45deg oe-ki amber" aria-hidden="true"></i><div><div class="oe-kv">@_items.Count(x=>x.ExceptionType=="No Entity Match")</div><div class="oe-kl">No Entity Match</div></div></div>
+    <div class="oe-kpi"><i class="bi bi-stars oe-ki purple" aria-hidden="true"></i><div><div class="oe-kv">@_items.Count(x=>x.AiConfidence>=80)</div><div class="oe-kl">AI Confident</div></div></div>
+    <div class="oe-kpi"><i class="bi bi-check-circle oe-ki green" aria-hidden="true"></i><div><div class="oe-kv">@_resolved</div><div class="oe-kl">Resolved Today</div></div></div>
+</div>
+
+<!-- Toolbar -->
+<div class="oe-toolbar">
+    <SfTextBox Placeholder="Search by file name, reason…" @bind-Value="_search" Width="270px"></SfTextBox>
+    <select class="e-input oe-sel" @bind="_filterType">
+        <option value="">All Exception Types</option>
+        <option value="OCR Failure">OCR Failure</option>
+        <option value="Unclassified">Unclassified</option>
+        <option value="No Entity Match">No Entity Match</option>
+        <option value="Low Confidence">Low Confidence</option>
+        <option value="Duplicate Detected">Duplicate Detected</option>
+    </select>
+    <select class="e-input oe-sel" @bind="_filterConfidence">
+        <option value="">All Confidence Levels</option>
+        <option value="high">High (&gt;=80%)</option>
+        <option value="medium">Medium (50–79%)</option>
+        <option value="low">Low (&lt;50%)</option>
+    </select>
+</div>
+
+<!-- Exceptions grid -->
+<div class="oe-grid-wrap">
+    <SfGrid DataSource="FilteredItems" AllowSorting="true" AllowPaging="true" Height="520px">
+        <GridPageSettings PageSize="12"></GridPageSettings>
+        <GridColumns>
+            <GridColumn HeaderText="File" Width="230">
+                <Template>
+                    @{ var r = (ExceptionRow)context; }
+                    <div class="oe-file-cell">
+                        <i class="bi bi-file-earmark oe-file-icon" aria-hidden="true"></i>
+                        <div>
+                            <div class="oe-file-name">@r.FileName</div>
+                            <div class="oe-file-sub">@r.FileSizeFormatted · @r.ContentType</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(ExceptionRow.ExceptionType)" HeaderText="Exception Type" Width="150">
+                <Template>
+                    @{ var r2 = (ExceptionRow)context; }
+                    <span class="oe-exc-chip oe-ex-@r2.ExceptionType.ToLower().Replace(" ","-")">@r2.ExceptionType</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(ExceptionRow.ExceptionReason)" HeaderText="Reason" Width="200"></GridColumn>
+            <GridColumn HeaderText="AI Suggestion" Width="170">
+                <Template>
+                    @{ var r3 = (ExceptionRow)context; }
+                    <div class="oe-ai-cell">
+                        <span class="oe-ai-sug">@r3.AiSuggestion</span>
+                        <span class="oe-ai-conf @(r3.AiConfidence >= 80 ? "oe-conf-high" : r3.AiConfidence >= 50 ? "oe-conf-med" : "oe-conf-low")">
+                            @r3.AiConfidence%
+                        </span>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(ExceptionRow.ReceivedDate)" HeaderText="Received" Type="ColumnType.DateTime" Format="g" Width="140"></GridColumn>
+            <GridColumn Field="@nameof(ExceptionRow.AssignedTo)" HeaderText="Assigned To" Width="130"></GridColumn>
+            <GridColumn HeaderText="Actions" Width="140">
+                <Template>
+                    @{ var r4 = (ExceptionRow)context; }
+                    <div style="display:flex;gap:.2rem;flex-wrap:wrap">
+                        <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => OpenClassify(r4)" title="Classify manually">
+                            <i class="bi bi-tag" aria-hidden="true"></i> Classify
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Reprocess(r4)" title="Reprocess OCR">
+                            <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Dismiss(r4)" title="Dismiss exception">
+                            <i class="bi bi-x" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+@code {
+    private SfToast _toast = default!;
+    private string _search = "", _filterType = "", _filterConfidence = "";
+    private bool _showClassify;
+    private ExceptionRow? _classifyTarget;
+    private string? _classCategory, _classDocType, _classEntity, _classTags, _classNotes;
+    private int _resolved = 4;
+
+    private readonly List<string> _categories = ["Policy / Dec Page","ACORD Form","Certificate","Endorsement","Claim Document","Billing","Proposal","Correspondence","Other"];
+
+    private List<ExceptionRow> _items =
+    [
+        new(Guid.NewGuid(), "scanned_doc_0047.pdf",   "application/pdf",  102400,  "OCR Failure",      "Low resolution scan — text unreadable",            "ACORD 25",          52, DateTime.Now.AddHours(-1), "Lisa Meyers"),
+        new(Guid.NewGuid(), "upload_20250118_A.pdf",  "application/pdf",  248900,  "Unclassified",     "No matching document type pattern found",           "Policy Dec Page",   81, DateTime.Now.AddHours(-2), "Auto"),
+        new(Guid.NewGuid(), "img_scan_final.tiff",    "image/tiff",       512000,  "OCR Failure",      "TIFF compression not supported",                   "Certificate of Ins",43, DateTime.Now.AddHours(-3), "Tom Haig"),
+        new(Guid.NewGuid(), "endorsement_draft.docx", "application/docx", 89000,   "No Entity Match",  "Policy number POL-9999 not found in system",        "Endorsement",       74, DateTime.Now.AddDays(-1),  "Auto"),
+        new(Guid.NewGuid(), "claim_photos.zip",       "application/zip",  3145728, "Low Confidence",   "Extracted text confidence below threshold (42%)",   "Claim Document",    42, DateTime.Now.AddDays(-1),  "Auto"),
+        new(Guid.NewGuid(), "renewal_pkg_v2.pdf",     "application/pdf",  445120,  "Duplicate Detected","Checksum matches document ID DOC-2024-10042",      "Renewal Package",   95, DateTime.Now.AddDays(-2),  "Lisa Meyers"),
+        new(Guid.NewGuid(), "acord25_scan.pdf",       "application/pdf",  178000,  "No Entity Match",  "Insured name 'Global Corp LLC' not matched",        "ACORD 25",          86, DateTime.Now.AddDays(-2),  "Auto"),
+        new(Guid.NewGuid(), "fax_received_001.pdf",   "application/pdf",  55000,   "OCR Failure",      "Fax quality too low for character recognition",      "Unknown",           28, DateTime.Now.AddDays(-3),  "Tom Haig"),
+    ];
+
+    private IEnumerable<ExceptionRow> FilteredItems => _items.Where(r =>
+        (string.IsNullOrEmpty(_search) || r.FileName.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.ExceptionReason.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_filterType) || r.ExceptionType == _filterType) &&
+        (_filterConfidence switch
+        {
+            "high"   => r.AiConfidence >= 80,
+            "medium" => r.AiConfidence is >= 50 and < 80,
+            "low"    => r.AiConfidence < 50,
+            _        => true
+        }));
+
+    protected override void OnInitialized() =>
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Documents","/documents"), new("OCR Exceptions",""));
+
+    void OpenClassify(ExceptionRow r)
+    {
+        _classifyTarget = r;
+        _classCategory  = r.AiSuggestion.Contains("ACORD") ? "ACORD Form" : null;
+        _classDocType   = r.AiSuggestion;
+        _classEntity    = null; _classTags = null; _classNotes = null;
+        _showClassify   = true;
+    }
+
+    void ApplyAiSuggestion() { _classDocType = _classifyTarget?.AiSuggestion; }
+
+    async Task SaveClassificationAsync()
+    {
+        if (_classifyTarget is null) return;
+        _items.Remove(_classifyTarget);
+        _resolved++;
+        _showClassify = false;
+        await _toast.ShowAsync(new ToastModel { Content = $"\"{_classifyTarget.FileName}\" classified and indexed.", CssClass = "e-toast-success" });
+        _classifyTarget = null;
+    }
+
+    async Task Reprocess(ExceptionRow r) =>
+        await _toast.ShowAsync(new ToastModel { Content = $"Reprocessing \"{r.FileName}\"…", CssClass = "e-toast-info" });
+
+    async Task Dismiss(ExceptionRow r)
+    {
+        _items.Remove(r);
+        await _toast.ShowAsync(new ToastModel { Content = "Exception dismissed.", CssClass = "e-toast-warning" });
+    }
+
+    async Task RunBatchAiAsync()
+    {
+        var resolved = _items.Where(x => x.AiConfidence >= 80).ToList();
+        foreach (var r in resolved) _items.Remove(r);
+        _resolved += resolved.Count;
+        await _toast.ShowAsync(new ToastModel { Content = $"AI classified {resolved.Count} documents automatically.", CssClass = "e-toast-success" });
+    }
+
+    async Task ReprocessAll() =>
+        await _toast.ShowAsync(new ToastModel { Content = $"Reprocessing {_items.Count} documents…", CssClass = "e-toast-info" });
+
+    record ExceptionRow(Guid Id, string FileName, string ContentType, long FileSizeBytes, string ExceptionType,
+                        string ExceptionReason, string AiSuggestion, int AiConfidence, DateTime ReceivedDate, string AssignedTo)
+    {
+        public string FileSizeFormatted => FileSizeBytes switch
+        {
+            < 1024       => $"{FileSizeBytes} B",
+            < 1048576    => $"{FileSizeBytes / 1024.0:F1} KB",
+            < 1073741824 => $"{FileSizeBytes / 1048576.0:F1} MB",
+            _            => $"{FileSizeBytes / 1073741824.0:F2} GB"
+        };
+    }
+}

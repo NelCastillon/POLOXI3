@@ -1,0 +1,267 @@
+@page "/policies/proof"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>ID Cards &amp; Proof of Insurance — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
+    <MenuFieldSettings Text="Text" IconCss="IconCss" />
+</SfContextMenu>
+
+<AppPageHeader Title="ID Cards &amp; Proof of Insurance"
+               Subtitle="Generate, distribute and manage digital and physical proof of insurance documents"
+               Icon="bi-card-checklist">
+    <Actions>
+        <div class="ip-filter-row">
+            <select class="e-input ip-filter-sel" @bind="_filterLob">
+                <option value="">All LOBs</option>
+                <option>Personal Auto</option>
+                <option>Commercial Auto</option>
+                <option>Workers Comp</option>
+                <option>General Liability</option>
+            </select>
+            <select class="e-input ip-filter-sel" @bind="_filterFormat">
+                <option value="">All Formats</option>
+                <option>Digital</option>
+                <option>Physical</option>
+            </select>
+        </div>
+        <button class="um-btn um-btn-ghost" @onclick="GenerateBulk">
+            <i class="bi bi-layer-forward" aria-hidden="true"></i> Bulk Generate
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => _showNew = true'>
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New ID Card
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="ip-kpi-strip">
+    @KpiCard("bi-card-checklist", "Total Issued",  _rows.Count.ToString(),                                 "ip-kpi-total")
+    @KpiCard("bi-phone",          "Digital",       _rows.Count(r=>r.Format=="Digital").ToString(),         "ip-kpi-dig")
+    @KpiCard("bi-printer",        "Physical",      _rows.Count(r=>r.Format=="Physical").ToString(),        "ip-kpi-phys")
+    @KpiCard("bi-clock",          "Expiring 30d",  _rows.Count(r=>(r.ExpDate-DateTime.Today).TotalDays<=30 && r.ExpDate>=DateTime.Today).ToString(), "ip-kpi-exp")
+    @KpiCard("bi-x-circle",       "Expired",       _rows.Count(r=>r.ExpDate<DateTime.Today).ToString(),   "ip-kpi-xp")
+</div>
+
+<div class="ip-grid-wrap">
+    <SfGrid DataSource="@Filtered" AllowSorting="true" AllowPaging="true" AllowResizing="true" RowHeight="40">
+        <GridPageSettings PageSize="25" />
+        <GridColumns>
+            <GridColumn Field="CardNo"        HeaderText="Card #"          Width="130" />
+            <GridColumn Field="PolicyNo"      HeaderText="Policy #"        Width="140" />
+            <GridColumn Field="Account"       HeaderText="Account"         Width="180" />
+            <GridColumn Field="Insured"       HeaderText="Insured"         Width="180" />
+            <GridColumn Field="Description"   HeaderText="Vehicle / Risk"  Width="200" />
+            <GridColumn Field="Lob"           HeaderText="LOB"             Width="140" />
+            <GridColumn Field="EffDate"       HeaderText="Effective"       Width="110" Format="MM/dd/yyyy" />
+            <GridColumn Field="ExpDate"       HeaderText="Expiry"          Width="110"
+                        Template="@(ctx => ExpCell(((ProofRow)ctx).ExpDate))" />
+            <GridColumn Field="Format"        HeaderText="Format"          Width="100"
+                        Template="@(ctx => FormatBadge(((ProofRow)ctx).Format))" />
+            <GridColumn Field="SentTo"        HeaderText="Sent To"         Width="150" />
+            <GridColumn HeaderText="" Width="50" AllowSorting="false"
+                        Template="@(ctx => CtxBtn((ProofRow)ctx))" />
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- New ID card dialog -->
+<SfDialog @bind-Visible="_showNew" Width="540px" IsModal="true" ShowCloseIcon="true" Header="Generate ID Card / Proof of Insurance">
+    <DialogTemplates>
+        <Content>
+            <div class="ip-dlg-fields">
+                <div class="ip-dlg-field">
+                    <label class="ip-dlg-lbl">Policy Number <span class="ip-req">*</span></label>
+                    <input class="e-input" @bind="_newForm.PolicyNo" placeholder="POL-2025-…" />
+                </div>
+                <div class="ip-dlg-field">
+                    <label class="ip-dlg-lbl">LOB <span class="ip-req">*</span></label>
+                    <SfDropDownList TItem="string" TValue="string"
+                        DataSource="@_lobOpts" @bind-Value="_newForm.Lob" Placeholder="Select…" />
+                </div>
+                <div class="ip-dlg-field ip-dlg-full">
+                    <label class="ip-dlg-lbl">Insured Name</label>
+                    <input class="e-input" @bind="_newForm.Insured" />
+                </div>
+                <div class="ip-dlg-field ip-dlg-full">
+                    <label class="ip-dlg-lbl">Vehicle / Risk Description</label>
+                    <input class="e-input" @bind="_newForm.Description" placeholder="e.g. 2023 Ford F-150 VIN:…" />
+                </div>
+                <div class="ip-dlg-field">
+                    <label class="ip-dlg-lbl">Effective Date</label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_newForm.EffDate" Format="MM/dd/yyyy" />
+                </div>
+                <div class="ip-dlg-field">
+                    <label class="ip-dlg-lbl">Expiry Date</label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_newForm.ExpDate" Format="MM/dd/yyyy" />
+                </div>
+                <div class="ip-dlg-field">
+                    <label class="ip-dlg-lbl">Format</label>
+                    <SfDropDownList TItem="string" TValue="string"
+                        DataSource="@_formatOpts" @bind-Value="_newForm.Format" />
+                </div>
+                <div class="ip-dlg-field">
+                    <label class="ip-dlg-lbl">Send To (email)</label>
+                    <input class="e-input" @bind="_newForm.SentTo" placeholder="insured@example.com" />
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <button class="um-btn um-btn-ghost" @onclick='() => _showNew = false'>Cancel</button>
+            <button class="um-btn um-btn-primary" @onclick="Generate">Generate &amp; Send</button>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    SfToast _toast = default!;
+    SfContextMenu<CtxItem> _ctx = default!;
+
+    string   _filterLob    = "";
+    string   _filterFormat = "";
+    bool     _showNew      = false;
+    ProofRow _selected     = new();
+
+    IEnumerable<ProofRow> Filtered => _rows
+        .Where(r => (string.IsNullOrEmpty(_filterLob)    || r.Lob    == _filterLob)
+                 && (string.IsNullOrEmpty(_filterFormat) || r.Format == _filterFormat));
+
+    readonly string[] _lobOpts    = new[]{ "Personal Auto","Commercial Auto","Workers Comp","General Liability" };
+    readonly string[] _formatOpts = new[]{ "Digital","Physical" };
+
+    NewForm _newForm = new();
+    sealed class NewForm
+    {
+        public string   PolicyNo    { get; set; } = "";
+        public string   Lob         { get; set; } = "Personal Auto";
+        public string   Insured     { get; set; } = "";
+        public string   Description { get; set; } = "";
+        public DateTime EffDate     { get; set; } = DateTime.Today;
+        public DateTime ExpDate     { get; set; } = DateTime.Today.AddYears(1);
+        public string   Format      { get; set; } = "Digital";
+        public string   SentTo      { get; set; } = "";
+    }
+
+    sealed class ProofRow
+    {
+        public string   CardNo      { get; set; } = "";
+        public string   PolicyNo    { get; set; } = "";
+        public string   Account     { get; set; } = "";
+        public string   Insured     { get; set; } = "";
+        public string   Description { get; set; } = "";
+        public string   Lob         { get; set; } = "";
+        public DateTime EffDate     { get; set; }
+        public DateTime ExpDate     { get; set; }
+        public string   Format      { get; set; } = "";
+        public string   SentTo      { get; set; } = "";
+    }
+
+    sealed record CtxItem(string Text, string IconCss);
+
+    List<CtxItem> _ctxItems = new()
+    {
+        new("Download",    "bi bi-download"        ),
+        new("Email",       "bi bi-envelope"        ),
+        new("Print",       "bi bi-printer"         ),
+        new("View Policy", "bi bi-shield"          ),
+        new("Regenerate",  "bi bi-arrow-clockwise" ),
+    };
+
+    readonly List<ProofRow> _rows = new();
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Policies","/policies"), new("Proof of Insurance","/policies/proof"));
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        var rng      = new Random(17);
+        var lobs     = _lobOpts;
+        var fmts     = _formatOpts;
+        var accounts = new[]{"Sullivan Mfg. LLC","Bridgewater Hotels","Metro Freight Co.","James & Lisa Carter","Nguyen, Minh T."};
+        var vehicles = new[]
+        {
+            "2023 Ford F-150 VIN:1FT8W3BT0PEC12345",
+            "2022 Chevy Silverado VIN:1GCRYDED3NZ123456",
+            "2024 Toyota Camry VIN:4T1G11AK0NU123456",
+            "Fleet Unit #4 — Box Truck",
+            "Premises — 1234 Industrial Blvd",
+        };
+
+        for (int i = 1; i <= 60; i++)
+        {
+            var eff = DateTime.Today.AddDays(-rng.Next(0,400));
+            _rows.Add(new ProofRow
+            {
+                CardNo      = $"IDC-2025-{i:D4}",
+                PolicyNo    = $"POL-2025-{rng.Next(10000,99999)}",
+                Account     = accounts[rng.Next(accounts.Length)],
+                Insured     = accounts[rng.Next(accounts.Length)],
+                Description = vehicles[rng.Next(vehicles.Length)],
+                Lob         = lobs[rng.Next(lobs.Length)],
+                EffDate     = eff,
+                ExpDate     = eff.AddYears(1),
+                Format      = fmts[rng.Next(fmts.Length)],
+                SentTo      = $"user{rng.Next(1,99)}@example.com",
+            });
+        }
+    }
+
+    void GenerateBulk() { /* stub */ }
+    void Generate()
+    {
+        _rows.Insert(0, new ProofRow
+        {
+            CardNo      = $"IDC-2025-{_rows.Count+1:D4}",
+            PolicyNo    = _newForm.PolicyNo,
+            Account     = "—",
+            Insured     = _newForm.Insured,
+            Description = _newForm.Description,
+            Lob         = _newForm.Lob,
+            EffDate     = _newForm.EffDate,
+            ExpDate     = _newForm.ExpDate,
+            Format      = _newForm.Format,
+            SentTo      = _newForm.SentTo,
+        });
+        _showNew = false;
+        _newForm = new();
+    }
+
+    void OnCtxSelected(MenuEventArgs<CtxItem> args)
+    {
+        if (args.Item.Text == "View Policy") Nav.NavigateTo($"/policies/{Guid.NewGuid()}");
+    }
+
+    RenderFragment ExpCell(DateTime d)
+    {
+        var days = (d - DateTime.Today).TotalDays;
+        var css  = days < 0 ? "ip-exp-past" : days <= 30 ? "ip-exp-soon" : "";
+        return @<span class="@css">@d.ToString("MM/dd/yyyy")</span>;
+    }
+
+    RenderFragment FormatBadge(string f) =>
+        f == "Digital"
+            ? @<span class="ip-fmt ip-fmt-dig"><i class="bi bi-phone" aria-hidden="true"></i> Digital</span>
+            : @<span class="ip-fmt ip-fmt-phys"><i class="bi bi-printer" aria-hidden="true"></i> Physical</span>;
+
+    RenderFragment CtxBtn(ProofRow row) =>
+        @<button class="um-btn um-btn-ghost um-btn-xs"
+                 @onclick:stopPropagation="true"
+                 @onclick="(e) => { _selected = row; _ctx.Open(e.ClientX, e.ClientY); }">
+            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+        </button>;
+
+    RenderFragment KpiCard(string icon, string label, string val, string css) =>
+        @<div class="ip-kpi-card @css">
+            <div class="ip-kpi-val">@val</div>
+            <div class="ip-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </div>;
+}

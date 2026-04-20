@@ -1,51 +1,252 @@
 @page "/accounts"
+@namespace Ams.Web.Components.Pages
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Accounts</PageTitle>
 
-<h1>Accounts</h1>
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
 
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+<AppPageHeader Title="Accounts"
+               Subtitle="All client and prospect accounts"
+               Icon="bi-building">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "acl-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showCreate = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Account
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="acl-kpi-strip">
+    <div class="acl-kpi-card">
+        <span class="acl-ki acl-ki1"><i class="bi bi-building" aria-hidden="true"></i></span>
+        <div><div class="acl-kv">@_kpi.Total</div><div class="acl-kl">Total Accounts</div></div>
+    </div>
+    <div class="acl-kpi-card">
+        <span class="acl-ki acl-ki2"><i class="bi bi-check2-circle" aria-hidden="true"></i></span>
+        <div><div class="acl-kv">@_kpi.Active</div><div class="acl-kl">Active</div></div>
+    </div>
+    <div class="acl-kpi-card">
+        <span class="acl-ki acl-ki3"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+        <div><div class="acl-kv">@_kpi.TotalRevenue.ToString("C0")</div><div class="acl-kl">Total Rev.</div></div>
+    </div>
+    <div class="acl-kpi-card">
+        <span class="acl-ki acl-ki4"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span>
+        <div><div class="acl-kv">@_kpi.Renewals</div><div class="acl-kl">Renewing Soon</div></div>
+    </div>
 </div>
 
-@if (_items is null)
+<!-- Filter bar -->
+<div class="acl-filter-bar">
+    <div class="acl-search-wrap">
+        <i class="bi bi-search acl-si" aria-hidden="true"></i>
+        <input class="acl-search" type="search" placeholder="Search accounts…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="All Statuses" ShowClearButton="true" Width="140px"
+                    Value="_filterStatus" ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_typeOpts" Placeholder="All Types" ShowClearButton="true" Width="130px"
+                    Value="_filterType" ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_segOpts" Placeholder="All Segments" ShowClearButton="true" Width="140px"
+                    Value="_filterSeg" ValueChanged="@((string v) => { _filterSeg = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+</div>
+
+@if (_loading)
 {
-    <p>Loading...</p>
+    <div class="acl-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading accounts…</span></div>
 }
 else
 {
-    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridPageSettings PageSize="10"></GridPageSettings>
-        <GridColumns>
-            <GridColumn Field="@nameof(AccountDto.AccountNumber)"     HeaderText="Account #"      Width="130"></GridColumn>
-            <GridColumn Field="@nameof(AccountDto.AccountName)"       HeaderText="Account Name"   Width="220"></GridColumn>
-            <GridColumn Field="@nameof(AccountDto.AccountTypeCode)"   HeaderText="Type"           Width="110"></GridColumn>
-            <GridColumn Field="@nameof(AccountDto.StatusCode)"        HeaderText="Status"         Width="100"></GridColumn>
-            <GridColumn Field="@nameof(AccountDto.LifecycleStageCode)" HeaderText="Lifecycle"     Width="120"></GridColumn>
-            <GridColumn Field="@nameof(AccountDto.SegmentCode)"       HeaderText="Segment"        Width="110"></GridColumn>
-            <GridColumn Field="@nameof(AccountDto.Industry)"          HeaderText="Industry"       Width="140"></GridColumn>
-            <GridColumn Field="@nameof(AccountDto.MainEmail)"         HeaderText="Email"          Width="200"></GridColumn>
-            <GridColumn Field="@nameof(AccountDto.MainPhone)"         HeaderText="Phone"          Width="140"></GridColumn>
-            <GridColumn Field="@nameof(AccountDto.AnnualRevenue)"     HeaderText="Annual Revenue" Width="140" Format="C2"></GridColumn>
-        </GridColumns>
-    </SfGrid>
+    <div class="acl-grid-card app-datagrid">
+        <SfGrid @ref="_grid" TValue="AccountDto" DataSource="_filtered"
+                AllowPaging="true" AllowSorting="true" AllowFiltering="true"
+                EnableHover="true" RowHeight="56">
+            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+            <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
+            <GridColumns>
+                <GridColumn HeaderText="Account" MinWidth="220" Field="@nameof(AccountDto.AccountName)">
+                    <Template>
+                        @{ var a = (AccountDto)context; }
+                        <div class="acl-name-cell">
+                            <div class="acl-acct-icon @AvatarColor(a.AccountName)">@Initials(a.AccountName)</div>
+                            <div>
+                                <div class="acl-item-name">@a.AccountName</div>
+                                <div class="acl-item-sub">@a.AccountNumber @(a.Industry != null ? $"· {a.Industry}" : "")</div>
+                            </div>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(AccountDto.AccountTypeCode)" HeaderText="Type"      Width="120">
+                    <Template>@{ var a = (AccountDto)context; }<span class="@TypeBadge(a.AccountTypeCode)">@a.AccountTypeCode</span></Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(AccountDto.StatusCode)"      HeaderText="Status"    Width="110">
+                    <Template>@{ var a = (AccountDto)context; }<span class="@StatusBadge(a.StatusCode)">@a.StatusCode</span></Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(AccountDto.SegmentCode)"     HeaderText="Segment"   Width="110">
+                    <Template>@{ var a = (AccountDto)context; }<span class="@SegBadge(a.SegmentCode)">@(a.SegmentCode ?? "—")</span></Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(AccountDto.AnnualRevenue)"   HeaderText="Ann. Rev." Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>@{ var a = (AccountDto)context; }<span class="acl-mono acl-bold">@(a.AnnualRevenue.HasValue ? a.AnnualRevenue.Value.ToString("C0") : "—")</span></Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(AccountDto.MainEmail)"        HeaderText="Email"     Width="200" />
+                <GridColumn Field="@nameof(AccountDto.MainPhone)"        HeaderText="Phone"     Width="140" />
+                <GridColumn Field="@nameof(AccountDto.LifecycleStageCode)" HeaderText="Lifecycle" Width="120" />
+                <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>
+                        @{ var a = (AccountDto)context; }
+                        <button class="um-btn um-btn-ghost um-btn-sm"
+                                @onclick='() => Nav.NavigateTo($"/accounts/{a.AccountId}")'>
+                            <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                        </button>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
 }
+
+<!-- Create Account dialog -->
+<SfDialog @bind-Visible="_showCreate" Width="520px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="acl-dlg-hdr"><i class="bi bi-building-add" aria-hidden="true"></i> New Account</span></Header>
+        <Content>
+            <div class="acl-dlg-body">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+                    <div style="grid-column:span 2">
+                        <SfTextBox Placeholder="Account name *" @bind-Value="_newAcct.AccountName" />
+                    </div>
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_typeOpts"   Placeholder="Type *"    Width="100%" @bind-Value="_newAcct.AccountTypeCode"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="Status"    Width="100%" @bind-Value="_newAcct.StatusCode">      <DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
+                    <SfTextBox Placeholder="Email"   @bind-Value="_newAcct.MainEmail" />
+                    <SfTextBox Placeholder="Phone"   @bind-Value="_newAcct.MainPhone" />
+                    <SfTextBox Placeholder="Industry" @bind-Value="_newAcct.Industry" />
+                    <SfTextBox Placeholder="Website" @bind-Value="_newAcct.Website" />
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="acl-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showCreate = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="CommitCreateAsync" disabled="@(string.IsNullOrEmpty(_newAcct.AccountName)||string.IsNullOrEmpty(_newAcct.AccountTypeCode))">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Create
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private string? _searchTerm;
+    private SfToast?          _toast;
+    private SfGrid<AccountDto>? _grid;
+    private bool              _loading    = false;
+    private bool              _showCreate = false;
+
+    private string _search       = string.Empty;
+    private string _filterStatus = string.Empty;
+    private string _filterType   = string.Empty;
+    private string _filterSeg    = string.Empty;
+
     private List<AccountDto>? _items;
+    private List<AccountDto>  _filtered = [];
+    private AccountKpi        _kpi      = new();
+    private AccountDto        _newAcct  = new();
+
+    private static readonly List<LV> _statusOpts = [new("Active","Active"),new("Inactive","Inactive"),new("Prospect","Prospect"),new("Suspended","Suspended")];
+    private static readonly List<LV> _typeOpts   = [new("Commercial","Commercial"),new("Personal","Personal"),new("Non-Profit","Non-Profit"),new("Government","Government")];
+    private static readonly List<LV> _segOpts    = [new("Enterprise","Enterprise"),new("Mid-Market","Mid-Market"),new("SMB","SMB"),new("Key Account","Key Account")];
 
     protected override async Task OnInitializedAsync()
     {
+        Breadcrumbs.SetCrumbs(new("Home","/"),new("Accounts","/accounts"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        var result = await Api.SearchAccountsAsync(_tenantId, _searchTerm);
+        _loading = true; StateHasChanged();
+        var result = await Api.SearchAccountsAsync(_tenantId, _search);
         _items = result?.Items.ToList() ?? [];
+        _kpi = new AccountKpi
+        {
+            Total        = _items.Count,
+            Active       = _items.Count(x => x.StatusCode == "Active"),
+            TotalRevenue = _items.Sum(x => x.AnnualRevenue ?? 0),
+            Renewals     = 0, // TODO
+        };
+        ApplyFilters();
+        _loading = false;
     }
+
+    private void ApplyFilters()
+    {
+        if (_items is null) { _filtered = []; return; }
+        _filtered = _items.Where(a =>
+            (string.IsNullOrEmpty(_filterStatus) || a.StatusCode == _filterStatus) &&
+            (string.IsNullOrEmpty(_filterType)   || a.AccountTypeCode == _filterType) &&
+            (string.IsNullOrEmpty(_filterSeg)    || a.SegmentCode == _filterSeg) &&
+            (string.IsNullOrEmpty(_search) ||
+             a.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             a.AccountNumber.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+    }
+
+    private async Task CommitCreateAsync()
+    {
+        // TODO: Api.CreateAccountAsync(_tenantId, _newAcct)
+        await Task.Delay(0);
+        _showCreate = false; _newAcct = new();
+        await _toast!.ShowAsync(new ToastModel { Content = "Account created.", CssClass = "e-toast-success" });
+        await LoadAsync();
+    }
+
+    private static string Initials(string name)
+    {
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?";
+    }
+    private static string AvatarColor(string name)
+    {
+        var colors = new[] {"acl-av1","acl-av2","acl-av3","acl-av4","acl-av5","acl-av6"};
+        return colors[Math.Abs(name.GetHashCode()) % colors.Length];
+    }
+    private static string TypeBadge(string t) => t switch
+    {
+        "Commercial" => "acl-type acl-type--comm",
+        "Personal"   => "acl-type acl-type--pers",
+        "Non-Profit" => "acl-type acl-type--np",
+        _            => "acl-type",
+    };
+    private static string StatusBadge(string s) => s switch
+    {
+        "Active"    => "acl-status acl-status--active",
+        "Inactive"  => "acl-status acl-status--inactive",
+        "Prospect"  => "acl-status acl-status--prospect",
+        "Suspended" => "acl-status acl-status--suspended",
+        _           => "acl-status",
+    };
+    private static string SegBadge(string? s) => s switch
+    {
+        "Enterprise"  => "acl-seg acl-seg--ent",
+        "Key Account" => "acl-seg acl-seg--key",
+        _             => "acl-seg",
+    };
+
+    private sealed class AccountKpi { public int Total { get; set; } public int Active { get; set; } public decimal TotalRevenue { get; set; } public int Renewals { get; set; } }
+    private sealed record LV(string Value, string Label);
 }
+

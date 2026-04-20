@@ -1,0 +1,409 @@
+@page "/admin/reference/templates"
+@namespace Ams.Web.Components.Pages.ReferenceAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Templates Library — Reference Data</PageTitle>
+
+<AppPageHeader Title="Templates Library"
+               Subtitle="Document, email and form templates used across policies, renewals, endorsements and communications"
+               Icon="bi-file-earmark-text">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="PreviewAsync">
+            <i class="bi bi-eye" aria-hidden="true"></i> Preview
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Template
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="tl-kpi-strip">
+    <div class="tl-kpi-card">
+        <span class="tl-kpi-icon tl-kpi-icon--total"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></span>
+        <div><div class="tl-kpi-value">@_totalCount</div><div class="tl-kpi-label">Total Templates</div></div>
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
+        <span class="tl-kpi-icon tl-kpi-icon--docs"><i class="bi bi-file-earmark-richtext" aria-hidden="true"></i></span>
+        <div><div class="tl-kpi-value">@_docCount</div><div class="tl-kpi-label">Documents</div></div>
+        @if (_kpiActive == 2) { <span class="tl-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0">
+        <span class="tl-kpi-icon tl-kpi-icon--email"><i class="bi bi-envelope-fill" aria-hidden="true"></i></span>
+        <div><div class="tl-kpi-value">@_emailCount</div><div class="tl-kpi-label">Email Templates</div></div>
+        @if (_kpiActive == 3) { <span class="tl-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass4" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0">
+        <span class="tl-kpi-icon tl-kpi-icon--forms"><i class="bi bi-ui-checks" aria-hidden="true"></i></span>
+        <div><div class="tl-kpi-value">@_formCount</div><div class="tl-kpi-label">Forms</div></div>
+        @if (_kpiActive == 4) { <span class="tl-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search template name or tag…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_templateTypeOptions"
+                        Placeholder="All Types"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterType"
+                        ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_categoryOptions"
+                        Placeholder="All Categories"
+                        ShowClearButton="true"
+                        Width="180px"
+                        Value="_filterCategory"
+                        ValueChanged="@((string v) => { _filterCategory = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <label class="tl-toggle-label">
+            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
+            Active only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="TemplateEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(TemplateEntry.TemplateName)" HeaderText="Template" Width="240">
+                <Template>
+                    @{ var e = (TemplateEntry)context; }
+                    <div class="tl-name-cell">
+                        <span class="tl-template-icon @TypeIconBg(e.TemplateType)" aria-hidden="true">
+                            <i class="@TypeIcon(e.TemplateType)"></i>
+                        </span>
+                        <div>
+                            <div class="tl-template-name">@e.TemplateName</div>
+                            <div class="tl-template-tags">
+                                @foreach (var tag in e.Tags.Take(3))
+                                {
+                                    <span class="tl-tag">@tag</span>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TemplateEntry.TemplateType)" HeaderText="Type" Width="130">
+                <Template>
+                    @{ var e = (TemplateEntry)context; }
+                    <span class="@TypeBadgeClass(e.TemplateType)">@e.TemplateType</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TemplateEntry.Category)" HeaderText="Category" Width="150" />
+            <GridColumn Field="@nameof(TemplateEntry.Language)" HeaderText="Language" Width="110" />
+            <GridColumn Field="@nameof(TemplateEntry.Version)" HeaderText="Version" Width="90">
+                <Template>
+                    @{ var e = (TemplateEntry)context; }
+                    <span class="tl-version tl-mono">v@e.Version</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TemplateEntry.LastModifiedDate)" HeaderText="Last Modified" Width="140">
+                <Template>
+                    @{ var e = (TemplateEntry)context; }
+                    <span>@(e.LastModifiedDate.HasValue ? e.LastModifiedDate.Value.ToString("d") : "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TemplateEntry.IsActive)" HeaderText="Status" Width="100">
+                <Template>
+                    @{ var e = (TemplateEntry)context; }
+                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (TemplateEntry)context; }
+                    <div class="tl-row-actions">
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviewAsync" title="Preview">
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.TemplateId == Guid.Empty ? "Add Template" : "Edit Template")"
+               OnSave="SaveAsync"
+               OnCancel="CloseDrawer">
+    <Body>
+        <div class="tl-form">
+            <label class="tl-form-label">Template Name *</label>
+            <input class="um-input" @bind="_editModel.TemplateName" />
+
+            <label class="tl-form-label">Template Type</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_templateTypeOptions"
+                            @bind-Value="_editModel.TemplateType"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="tl-form-label">Category</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_categoryOptions"
+                            @bind-Value="_editModel.Category"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="tl-form-label">Language</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_languageOptions"
+                            @bind-Value="_editModel.Language"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="tl-form-label">Version</label>
+            <input class="um-input tl-mono" @bind="_editModel.Version" placeholder="e.g. 1.0" />
+
+            <label class="tl-form-label">Subject Line (email templates)</label>
+            <input class="um-input" @bind="_editModel.SubjectLine" />
+
+            <label class="tl-form-label">Description</label>
+            <textarea class="um-input" rows="3" @bind="_editModel.Description"></textarea>
+
+            <label class="tl-form-label">Active</label>
+            <SfSwitch @bind-Checked="_editModel.IsActive" />
+        </div>
+    </Body>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<TemplateEntry> _allEntries = [];
+    private List<TemplateEntry> _entries    = [];
+
+    private bool _loading    = false;
+    private bool _showDrawer = false;
+
+    private string _search           = string.Empty;
+    private string _filterType       = string.Empty;
+    private string _filterCategory   = string.Empty;
+    private bool   _filterActiveOnly = false;
+    private int    _kpiActive        = 0;
+
+    private int _totalCount = 0;
+    private int _docCount   = 0;
+    private int _emailCount = 0;
+    private int _formCount  = 0;
+
+    private string KpiClass2 => "tl-kpi-card" + (_kpiActive == 2 ? " tl-kpi-card--active" : "");
+    private string KpiClass3 => "tl-kpi-card" + (_kpiActive == 3 ? " tl-kpi-card--active" : "");
+    private string KpiClass4 => "tl-kpi-card" + (_kpiActive == 4 ? " tl-kpi-card--active" : "");
+
+    private static readonly List<LabelValue> _templateTypeOptions =
+    [
+        new("Document", "Document"),
+        new("Email",    "Email"),
+        new("Form",     "Form"),
+        new("SMS",      "SMS"),
+        new("Letter",   "Letter"),
+    ];
+
+    private static readonly List<LabelValue> _categoryOptions =
+    [
+        new("Policy",       "Policy"),
+        new("Renewal",      "Renewal"),
+        new("Endorsement",  "Endorsement"),
+        new("Cancellation", "Cancellation"),
+        new("Claims",       "Claims"),
+        new("Billing",      "Billing"),
+        new("Welcome",      "Welcome"),
+        new("Marketing",    "Marketing"),
+    ];
+
+    private static readonly List<LabelValue> _languageOptions =
+    [
+        new("en-US", "English (US)"),
+        new("es-US", "Spanish (US)"),
+        new("fr-CA", "French (CA)"),
+    ];
+
+    private TemplateEntry _editModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",              "/"),
+            new("Reference Data",    "/admin/reference/carriers"),
+            new("Templates Library", "/admin/reference/templates"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: Api.GetTemplatesAsync(_tenantId)
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterType)     || e.TemplateType == _filterType) &&
+            (string.IsNullOrEmpty(_filterCategory) || e.Category == _filterCategory) &&
+            (!_filterActiveOnly || e.IsActive) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.TemplateName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.Tags.Any(t => t.Contains(_search, StringComparison.OrdinalIgnoreCase)))
+        ).ToList();
+
+        if (_kpiActive == 2) _entries = _entries.Where(e => e.TemplateType == "Document").ToList();
+        if (_kpiActive == 3) _entries = _entries.Where(e => e.TemplateType == "Email").ToList();
+        if (_kpiActive == 4) _entries = _entries.Where(e => e.TemplateType == "Form").ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive   = _kpiActive == n ? 0 : n;
+        _filterType  = string.Empty;
+        _filterActiveOnly = false;
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount = _allEntries.Count;
+        _docCount   = _allEntries.Count(e => e.TemplateType == "Document");
+        _emailCount = _allEntries.Count(e => e.TemplateType == "Email");
+        _formCount  = _allEntries.Count(e => e.TemplateType == "Form");
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(TemplateEntry e)
+    {
+        _editModel = new TemplateEntry
+        {
+            TemplateId       = e.TemplateId,
+            TemplateName     = e.TemplateName,
+            TemplateType     = e.TemplateType,
+            Category         = e.Category,
+            Language         = e.Language,
+            Version          = e.Version,
+            SubjectLine      = e.SubjectLine,
+            Description      = e.Description,
+            Tags             = [..e.Tags],
+            IsActive         = e.IsActive,
+        };
+        _showDrawer = true;
+    }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveAsync()
+    {
+        await Task.Delay(0);
+        _showDrawer = false;
+        await LoadAsync();
+        await ShowToastAsync("Template saved.", "e-toast-success");
+    }
+
+    private async Task PreviewAsync() =>
+        await ShowToastAsync("Template preview: not yet implemented.", "e-toast-info");
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string TypeBadgeClass(string t) => t switch
+    {
+        "Document" => "tl-type-badge tl-type-badge--document",
+        "Email"    => "tl-type-badge tl-type-badge--email",
+        "Form"     => "tl-type-badge tl-type-badge--form",
+        "SMS"      => "tl-type-badge tl-type-badge--sms",
+        "Letter"   => "tl-type-badge tl-type-badge--letter",
+        _          => "tl-type-badge",
+    };
+
+    private static string TypeIcon(string t) => t switch
+    {
+        "Document" => "bi bi-file-earmark-richtext",
+        "Email"    => "bi bi-envelope-fill",
+        "Form"     => "bi bi-ui-checks",
+        "SMS"      => "bi bi-chat-dots-fill",
+        "Letter"   => "bi bi-file-earmark-text",
+        _          => "bi bi-file-earmark",
+    };
+
+    private static string TypeIconBg(string t) => t switch
+    {
+        "Document" => "tl-template-icon--document",
+        "Email"    => "tl-template-icon--email",
+        "Form"     => "tl-template-icon--form",
+        "SMS"      => "tl-template-icon--sms",
+        "Letter"   => "tl-template-icon--letter",
+        _          => "",
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class TemplateEntry
+    {
+        public Guid         TemplateId       { get; set; } = Guid.Empty;
+        public string       TemplateName     { get; set; } = string.Empty;
+        public string       TemplateType     { get; set; } = "Document";
+        public string       Category         { get; set; } = "Policy";
+        public string       Language         { get; set; } = "en-US";
+        public string       Version          { get; set; } = "1.0";
+        public string?      SubjectLine      { get; set; }
+        public string?      Description      { get; set; }
+        public List<string> Tags             { get; set; } = [];
+        public DateTime?    LastModifiedDate { get; set; }
+        public bool         IsActive         { get; set; } = true;
+    }
+}

@@ -1,46 +1,219 @@
 @page "/commissions/disputes"
+@page "/commissions/exceptions"
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Commission Disputes</PageTitle>
+<PageTitle>Commission Exceptions &amp; Disputes — AMS</PageTitle>
 
-<h1>Commission Disputes</h1>
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
 
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+<!-- New Dispute Dialog -->
+<SfDialog @bind-Visible="_showNew" Width="560px" ShowCloseIcon="true" IsModal="true" Header="Raise Exception / Dispute">
+    <DialogTemplates>
+        <Content>
+            <div class="ce-dlg-body">
+                <div class="form-group mb-2"><label class="ce-lbl">Exception Type</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_exTypes" @bind-Value="_newType" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="ce-lbl">Producer / Payee</label>
+                    <SfTextBox @bind-Value="_newPayee" Placeholder="Producer name…"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="ce-lbl">Disputed Amount</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_newAmount" Format="C2" Width="100%"></SfNumericTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="ce-lbl">Description</label>
+                    <SfTextBox @bind-Value="_newDesc" Multiline="true" Placeholder="Describe the exception or dispute…"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="ce-lbl">Policy / Statement Reference</label>
+                    <SfTextBox @bind-Value="_newRef" Placeholder="Policy # or Statement ID…"></SfTextBox>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Submit" IsPrimary="true" OnClick="SubmitExceptionAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showNew = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<AppPageHeader Title="Commission Exceptions &amp; Disputes"
+               Subtitle="Track, investigate, and resolve commission calculation errors, missing payments, and producer disputes"
+               Icon="bi-exclamation-circle">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/statements")'>
+            <i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'>
+            <i class="bi bi-journal-text" aria-hidden="true"></i> Producer Ledger
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showNew = true">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> Raise Exception
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="ce-kpi-strip">
+    @CeKpi("bi-exclamation-circle","Open",          _rows.Count(x=>x.Status=="Open").ToString(),           "ce-ki-red")
+    @CeKpi("bi-hourglass",         "In Review",     _rows.Count(x=>x.Status=="In Review").ToString(),       "ce-ki-amber")
+    @CeKpi("bi-check-circle",      "Resolved",      _rows.Count(x=>x.Status=="Resolved").ToString(),       "ce-ki-green")
+    @CeKpi("bi-x-circle",          "Denied",        _rows.Count(x=>x.Status=="Denied").ToString(),         "ce-ki-gray")
+    @CeKpi("bi-currency-dollar",   "$ Disputed",    Fmt(_rows.Sum(x=>x.DisputedAmount)),                    "ce-ki-red")
+    @CeKpi("bi-currency-dollar",   "$ Recovered",   Fmt(_rows.Where(x=>x.Status=="Resolved").Sum(x=>x.DisputedAmount)), "ce-ki-green")
+    @CeKpi("bi-calendar-x",        "Avg Days Open",  _rows.Where(x=>x.Status=="Open").Any() ? ((int)_rows.Where(x=>x.Status=="Open").Average(x=>(DateTime.Today-x.RaisedDate).TotalDays)).ToString()+" d" : "—", "ce-ki-amber")
+    @CeKpi("bi-people",            "Producers",     _rows.Select(x=>x.Producer).Distinct().Count().ToString(),"ce-ki-blue")
 </div>
 
-@if (_items is null)
+<!-- Sub-nav -->
+<div class="ce-subnav">
+    <button class="ce-snav-btn ce-snav-active"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions &amp; Disputes</button>
+    <button class="ce-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
+    <button class="ce-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><i class="bi bi-journal-text" aria-hidden="true"></i> Producer Ledger</button>
+    <button class="ce-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/splits")'><i class="bi bi-scissors" aria-hidden="true"></i> Splits</button>
+    <button class="ce-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/clawbacks")'><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Clawbacks</button>
+    <button class="ce-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/forecast")'><i class="bi bi-graph-up" aria-hidden="true"></i> Forecast</button>
+</div>
+
+<!-- Toolbar -->
+<div class="ce-toolbar">
+    <SfTextBox Placeholder="Search producer, policy, description…" @bind-Value="_searchTerm" Width="280px"></SfTextBox>
+    <select class="e-input ce-sel" @bind="_filterType">
+        <option value="">All Types</option>
+        @foreach (var t in _exTypes) { <option value="@t">@t</option> }
+    </select>
+    <select class="e-input ce-sel" @bind="_filterStatus">
+        <option value="">All Statuses</option>
+        <option value="Open">Open</option>
+        <option value="In Review">In Review</option>
+        <option value="Resolved">Resolved</option>
+        <option value="Denied">Denied</option>
+    </select>
+</div>
+
+@if (_rows is null)
 {
-    <p>Loading...</p>
+    <div style="padding:2rem"><SfSpinner Visible="true" /></div>
 }
 else
 {
-    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridPageSettings PageSize="10"></GridPageSettings>
+<div class="ce-grid-wrap">
+    <SfGrid DataSource="FilteredRows" AllowSorting="true" AllowPaging="true" Height="520px">
+        <GridPageSettings PageSize="15"></GridPageSettings>
         <GridColumns>
-            <GridColumn Field="@nameof(CommissionDisputeDto.DisputeDate)" HeaderText="Dispute Date" Type="ColumnType.Date" Format="d" Width="150"></GridColumn>
-            <GridColumn Field="@nameof(CommissionDisputeDto.DisputedAmount)" HeaderText="Disputed Amount" Format="C2" Width="160"></GridColumn>
-            <GridColumn Field="@nameof(CommissionDisputeDto.StatusCode)" HeaderText="Status" Width="120"></GridColumn>
-            <GridColumn Field="@nameof(CommissionDisputeDto.ResolvedDateUtc)" HeaderText="Resolved Date" Type="ColumnType.DateTime" Format="g" Width="180"></GridColumn>
-            <GridColumn Field="@nameof(CommissionDisputeDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="180"></GridColumn>
+            <GridColumn Field="@nameof(ExRow.RaisedDate)" HeaderText="Raised" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+            <GridColumn Field="@nameof(ExRow.Producer)" HeaderText="Producer" Width="160"></GridColumn>
+            <GridColumn HeaderText="Type" Width="160">
+                <Template>
+                    @{ var r = (ExRow)context; }
+                    <span class="ce-type-chip ce-t-@r.Type.ToLower().Replace(" ","-")">@r.Type</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(ExRow.DisputedAmount)" HeaderText="Disputed" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(ExRow.Reference)" HeaderText="Reference" Width="150"></GridColumn>
+            <GridColumn Field="@nameof(ExRow.Description)" HeaderText="Description" Width="240"></GridColumn>
+            <GridColumn HeaderText="Status" Width="110">
+                <Template>
+                    @{ var r2 = (ExRow)context; }
+                    <span class="ce-status-chip ce-st-@r2.Status.ToLower().Replace(" ","-")">@r2.Status</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(ExRow.ResolvedDate)" HeaderText="Resolved" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+            <GridColumn HeaderText="Actions" Width="150">
+                <Template>
+                    @{ var r3 = (ExRow)context; }
+                    <div class="ce-row-acts">
+                        @if (r3.Status == "Open")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Review(r3)" title="Mark In Review">
+                                <i class="bi bi-eye" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => Resolve(r3)" title="Resolve">
+                                <i class="bi bi-check-circle" aria-hidden="true"></i> Resolve
+                            </button>
+                        }
+                        @if (r3.Status == "In Review")
+                        {
+                            <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => Resolve(r3)" title="Resolve">
+                                <i class="bi bi-check-circle" aria-hidden="true"></i> Resolve
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Deny(r3)" title="Deny">
+                                <i class="bi bi-x-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
         </GridColumns>
     </SfGrid>
+</div>
 }
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string? _searchTerm;
-    private List<CommissionDisputeDto>? _items;
+    private string _filterType = "", _filterStatus = "";
+    private bool _showNew;
+    private string? _newPayee, _newDesc, _newRef, _newType = "Missing Payment";
+    private decimal _newAmount;
+    private SfToast _toast = default!;
 
-    protected override async Task OnInitializedAsync()
+    private readonly List<string> _exTypes = ["Missing Payment","Rate Mismatch","Split Error","Clawback Dispute","Override Error","House Account Dispute","Calculation Error","Other"];
+
+    private List<ExRow> _rows =
+    [
+        new(Guid.NewGuid(),"Sarah Chen",     "Missing Payment",   1250m, "STM-2025-0041",  "Commission not posted for Jan invoice",     "Open",     DateTime.Today.AddDays(-3),  null),
+        new(Guid.NewGuid(),"Marcus Webb",    "Rate Mismatch",      380m, "POL-2025-00182", "Applied 8% instead of 10% new biz rate",    "In Review",DateTime.Today.AddDays(-8),  null),
+        new(Guid.NewGuid(),"Linda Torres",   "Split Error",        620m, "STM-2025-0038",  "50/50 split applied instead of 60/40",       "Open",     DateTime.Today.AddDays(-2),  null),
+        new(Guid.NewGuid(),"James Holloway", "Clawback Dispute",  1800m, "CLW-2025-0009",  "Policy reinstated — clawback should reverse", "In Review",DateTime.Today.AddDays(-14), null),
+        new(Guid.NewGuid(),"Priya Patel",    "Calculation Error",  210m, "POL-2024-09912", "Incorrect premium base used for Q4 2024",    "Resolved", DateTime.Today.AddDays(-30), DateTime.Today.AddDays(-20)),
+        new(Guid.NewGuid(),"Tom Harris",     "Override Error",     150m, "STM-2025-0029",  "Branch override not applied per plan terms", "Denied",   DateTime.Today.AddDays(-45), DateTime.Today.AddDays(-35)),
+        new(Guid.NewGuid(),"Naomi Price",    "Missing Payment",    940m, "STM-2025-0043",  "Feb statement missing renewal commission",   "Open",     DateTime.Today.AddDays(-1),  null),
+    ];
+
+    private IEnumerable<ExRow> FilteredRows => _rows.Where(r =>
+        (string.IsNullOrEmpty(_searchTerm)   || r.Producer.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase) || r.Description.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_filterType)   || r.Type == _filterType) &&
+        (string.IsNullOrEmpty(_filterStatus) || r.Status == _filterStatus));
+
+    protected override void OnInitialized() =>
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Exceptions",""));
+
+    async Task SubmitExceptionAsync()
     {
-        await LoadAsync();
+        if (string.IsNullOrWhiteSpace(_newPayee) || _newAmount <= 0) return;
+        _rows.Insert(0, new(Guid.NewGuid(), _newPayee, _newType!, _newAmount, _newRef ?? "", _newDesc ?? "", "Open", DateTime.Today, null));
+        _showNew = false;
+        _newPayee = _newDesc = _newRef = null; _newAmount = 0;
+        await _toast.ShowAsync(new ToastModel { Content = "Exception submitted.", CssClass = "e-toast-success" });
     }
 
-    private async Task LoadAsync()
+    async Task Review(ExRow r)  { Upd(r, "In Review"); await _toast.ShowAsync(new ToastModel { Content = "Marked In Review.", CssClass = "e-toast-info" }); }
+    async Task Resolve(ExRow r) { Upd(r, "Resolved",  DateTime.Today); await _toast.ShowAsync(new ToastModel { Content = "Exception resolved.", CssClass = "e-toast-success" }); }
+    async Task Deny(ExRow r)    { Upd(r, "Denied",    DateTime.Today); await _toast.ShowAsync(new ToastModel { Content = "Exception denied.", CssClass = "e-toast-warning" }); }
+
+    void Upd(ExRow r, string s, DateTime? d = null)
     {
-        var result = await Api.SearchCommissionDisputesAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? new List<CommissionDisputeDto>();
+        var i = _rows.IndexOf(r);
+        if (i >= 0) _rows[i] = r with { Status = s, ResolvedDate = d };
+    }
+
+    static string Fmt(decimal v) => v.ToString("C0");
+
+    RenderFragment CeKpi(string icon, string label, string val, string color) => __builder =>
+    {
+        <div class="ce-kpi-card @color">
+            <i class="bi @icon ce-kpi-icon" aria-hidden="true"></i>
+            <div><div class="ce-kpi-val">@val</div><div class="ce-kpi-lbl">@label</div></div>
+        </div>
+    };
+
+    record ExRow(Guid Id, string Producer, string Type, decimal DisputedAmount, string Reference,
+                 string Description, string Status, DateTime RaisedDate, DateTime? ResolvedDate)
+    {
+        public string Status { get; set; } = Status;
+        public DateTime? ResolvedDate { get; set; } = ResolvedDate;
     }
 }

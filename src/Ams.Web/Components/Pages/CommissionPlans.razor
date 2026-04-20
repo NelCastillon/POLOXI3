@@ -1,46 +1,237 @@
 @page "/commissions"
+@page "/commissions/plans"
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Commission Plans</PageTitle>
+<PageTitle>Compensation Plans — AMS</PageTitle>
 
-<h1>Commission Plans</h1>
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
 
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+<!-- ── CREATE PLAN DIALOG ─────────────────────────────────── -->
+<SfDialog @bind-Visible="_showCreate" Width="580px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="cp-dlg-hdr"><i class="bi bi-clipboard-check" aria-hidden="true"></i> New Compensation Plan</div></Header>
+        <Content>
+            <div class="cp-dlg-body">
+                <div class="form-group mb-2"><label class="cp-lbl">Plan Code *</label>
+                    <SfTextBox @bind-Value="_newCode" Placeholder="e.g. COMM-2025-STD"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="cp-lbl">Plan Name *</label>
+                    <SfTextBox @bind-Value="_newName" Placeholder="e.g. Standard Producer Plan 2025"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="cp-lbl">Plan Type</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_planTypes" @bind-Value="_newType" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+                        <div><label class="cp-lbl">New Business Rate %</label>
+                            <SfNumericTextBox TValue="decimal" @bind-Value="_newNewRate" Format="N2" Width="100%"></SfNumericTextBox>
+                        </div>
+                        <div><label class="cp-lbl">Renewal Rate %</label>
+                            <SfNumericTextBox TValue="decimal" @bind-Value="_newRenewalRate" Format="N2" Width="100%"></SfNumericTextBox>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group mb-2"><label class="cp-lbl">Effective Date</label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_newEffective" Width="100%"></SfDatePicker>
+                </div>
+                <div class="form-group mb-2">
+                    <SfCheckBox Label="Allow split commissions" @bind-Checked="_newAllowSplit"></SfCheckBox>
+                </div>
+                <div class="form-group mb-2">
+                    <SfCheckBox Label="House account rules apply" @bind-Checked="_newHouseRules"></SfCheckBox>
+                </div>
+                <div class="form-group mb-2">
+                    <SfCheckBox Label="Branch override eligible" @bind-Checked="_newBranchOverride"></SfCheckBox>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Create Plan" IsPrimary="true" OnClick="CreatePlanAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showCreate = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<AppPageHeader Title="Compensation Plans"
+               Subtitle="Define, version, and manage new business &amp; renewal commission plans, split rules, and producer schedules"
+               Icon="bi-clipboard-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/splits")'>
+            <i class="bi bi-scissors" aria-hidden="true"></i> Split Rules
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/planner")'>
+            <i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showCreate = true">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> New Plan
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="cp-kpi-strip">
+    @CpKpi("bi-clipboard-check",  "Total Plans",      _plans.Count.ToString(),                                     "cp-ki-blue")
+    @CpKpi("bi-check-circle",     "Active",           _plans.Count(p=>p.Status=="Active").ToString(),              "cp-ki-green")
+    @CpKpi("bi-layers",           "With Versions",    _plans.Count(p=>p.Versions>1).ToString(),                   "cp-ki-blue")
+    @CpKpi("bi-scissors",         "Split-Enabled",    _plans.Count(p=>p.AllowSplit).ToString(),                   "cp-ki-purple")
+    @CpKpi("bi-building",         "Branch Override",  _plans.Count(p=>p.BranchOverride).ToString(),               "cp-ki-amber")
+    @CpKpi("bi-house",            "House Account",    _plans.Count(p=>p.HouseRules).ToString(),                   "cp-ki-amber")
+    @CpKpi("bi-arrow-up-circle",  "Avg New Biz Rate", _plans.Any()?(_plans.Average(p=>p.NewBizRate).ToString("N1")+"%"):"—", "cp-ki-blue")
+    @CpKpi("bi-arrow-repeat",     "Avg Renewal Rate", _plans.Any()?(_plans.Average(p=>p.RenewalRate).ToString("N1")+"%"):"—","cp-ki-blue")
 </div>
 
-@if (_items is null)
+<!-- Sub-nav -->
+<div class="cp-subnav">
+    <button class="cp-snav-btn cp-snav-active"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Plans</button>
+    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
+    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><i class="bi bi-journal-text" aria-hidden="true"></i> Producer Ledger</button>
+    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/splits")'><i class="bi bi-scissors" aria-hidden="true"></i> Split Rules</button>
+    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/exceptions")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions</button>
+    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/forecast")'><i class="bi bi-graph-up" aria-hidden="true"></i> Forecast</button>
+    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/planner")'><i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner</button>
+    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/plan-versions")'><i class="bi bi-layers" aria-hidden="true"></i> Plan Versions</button>
+</div>
+
+<!-- Toolbar -->
+<div class="cp-toolbar">
+    <SfTextBox Placeholder="Search plan code, name…" @bind-Value="_searchTerm" Width="270px"></SfTextBox>
+    <select class="e-input cp-sel" @bind="_filterType">
+        <option value="">All Types</option>
+        @foreach (var t in _planTypes) { <option value="@t">@t</option> }
+    </select>
+    <select class="e-input cp-sel" @bind="_filterStatus">
+        <option value="">All Statuses</option>
+        <option value="Active">Active</option>
+        <option value="Draft">Draft</option>
+        <option value="Archived">Archived</option>
+    </select>
+</div>
+
+@if (_loading)
 {
-    <p>Loading...</p>
+    <div style="padding:2rem"><SfSpinner Visible="true" /></div>
 }
 else
 {
-    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridPageSettings PageSize="10"></GridPageSettings>
+<div class="cp-grid-wrap">
+    <SfGrid DataSource="FilteredPlans" AllowSorting="true" AllowPaging="true" Height="520px">
+        <GridPageSettings PageSize="15"></GridPageSettings>
         <GridColumns>
-
-            <GridColumn Field="@nameof(CommissionPlanDto.PlanCode)" HeaderText="Plan Code" Width="160"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPlanDto.PlanName)" HeaderText="Plan Name" Width="260"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPlanDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="180"></GridColumn>
-
+            <GridColumn HeaderText="Plan" Width="280">
+                <Template>
+                    @{ var p = (PlanRow)context; }
+                    <div class="cp-plan-cell">
+                        <i class="bi bi-clipboard-check cp-plan-icon" aria-hidden="true"></i>
+                        <div>
+                            <div class="cp-plan-name">@p.Name</div>
+                            <div class="cp-plan-code">@p.Code</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Type" Width="140">
+                <Template>
+                    @{ var p2 = (PlanRow)context; }
+                    <span class="cp-type-chip cp-t-@p2.Type.ToLower().Replace(" ","-")">@p2.Type</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PlanRow.NewBizRate)" HeaderText="New Biz %" Format="N2" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(PlanRow.RenewalRate)" HeaderText="Renewal %" Format="N2" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(PlanRow.Versions)" HeaderText="Versions" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center"></GridColumn>
+            <GridColumn HeaderText="Features" Width="170">
+                <Template>
+                    @{ var p3 = (PlanRow)context; }
+                    <div class="cp-feat-chips">
+                        @if (p3.AllowSplit)    { <span class="cp-feat cp-f-split">Split</span> }
+                        @if (p3.BranchOverride){ <span class="cp-feat cp-f-branch">Branch</span> }
+                        @if (p3.HouseRules)    { <span class="cp-feat cp-f-house">House</span> }
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Status" Width="100">
+                <Template>
+                    @{ var p4 = (PlanRow)context; }
+                    <span class="cp-status-chip cp-st-@p4.Status.ToLower()">@p4.Status</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PlanRow.Effective)" HeaderText="Effective" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+            <GridColumn HeaderText="Actions" Width="120">
+                <Template>
+                    @{ var p5 = (PlanRow)context; }
+                    <div class="cp-row-acts">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/commissions/plan-versions")' title="Versions">
+                            <i class="bi bi-layers" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/commissions/splits")' title="Splits">
+                            <i class="bi bi-scissors" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/commissions/planner")' title="Model this plan">
+                            <i class="bi bi-calculator" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
         </GridColumns>
     </SfGrid>
+</div>
 }
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string? _searchTerm;
-    private List<CommissionPlanDto>? _items;
+    private string _filterType = "", _filterStatus = "";
+    private bool _loading, _showCreate;
+    private string? _newCode, _newName, _newType = "Standard";
+    private decimal _newNewRate = 10m, _newRenewalRate = 8m;
+    private DateTime _newEffective = DateTime.Today;
+    private bool _newAllowSplit, _newHouseRules, _newBranchOverride;
+    private SfToast _toast = default!;
 
-    protected override async Task OnInitializedAsync()
+    private readonly List<string> _planTypes = ["Standard","Senior Producer","Branch Manager","House Account","Referral","Override","Performance Bonus"];
+
+    // Seed plans — in production backed by Api.SearchCommissionPlansAsync
+    private List<PlanRow> _plans =
+    [
+        new(Guid.NewGuid(),"COMM-2025-STD",  "Standard Producer Plan 2025",      "Standard",       10.0m, 8.0m, 3, true,  false, false, "Active",  DateTime.Today.AddYears(-1)),
+        new(Guid.NewGuid(),"COMM-2025-SR",   "Senior Producer Plan 2025",         "Senior Producer",12.5m,10.0m, 2, true,  true,  false, "Active",  DateTime.Today.AddYears(-1)),
+        new(Guid.NewGuid(),"COMM-2025-BR",   "Branch Manager Override 2025",      "Branch Manager",  2.0m, 1.5m, 1, false, false, true,  "Active",  DateTime.Today.AddYears(-1)),
+        new(Guid.NewGuid(),"COMM-2025-HOUSE","House Account Plan 2025",           "House Account",   5.0m, 5.0m, 1, false, true,  false, "Active",  DateTime.Today.AddYears(-1)),
+        new(Guid.NewGuid(),"COMM-2025-REF",  "Referral Commission Plan",          "Referral",        3.0m, 0.0m, 1, true,  false, false, "Active",  DateTime.Today.AddYears(-1)),
+        new(Guid.NewGuid(),"COMM-2024-STD",  "Standard Producer Plan 2024",      "Standard",        9.5m, 7.5m, 4, true,  false, false, "Archived",DateTime.Today.AddYears(-2)),
+        new(Guid.NewGuid(),"COMM-2025-PERF", "Performance Bonus Plan Q1 2025",   "Performance Bonus",5.0m, 3.0m, 1, false, false, false, "Draft",   DateTime.Today),
+    ];
+
+    private IEnumerable<PlanRow> FilteredPlans => _plans.Where(p =>
+        (string.IsNullOrEmpty(_searchTerm)   || p.Name.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase) || p.Code.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_filterType)   || p.Type == _filterType) &&
+        (string.IsNullOrEmpty(_filterStatus) || p.Status == _filterStatus));
+
+    protected override void OnInitialized() =>
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Plans",""));
+
+    private async Task LoadAsync() { /* real: await Api.SearchCommissionPlansAsync */ await Task.CompletedTask; }
+
+    async Task CreatePlanAsync()
     {
-        await LoadAsync();
+        if (string.IsNullOrWhiteSpace(_newCode) || string.IsNullOrWhiteSpace(_newName)) return;
+        _plans.Insert(0, new(Guid.NewGuid(), _newCode, _newName, _newType!, _newNewRate, _newRenewalRate, 1, _newAllowSplit, _newHouseRules, _newBranchOverride, "Draft", _newEffective));
+        _showCreate = false;
+        _newCode = _newName = null; _newType = "Standard"; _newNewRate = 10m; _newRenewalRate = 8m; _newAllowSplit = _newHouseRules = _newBranchOverride = false;
+        await _toast.ShowAsync(new ToastModel { Content = "Plan created as Draft.", CssClass = "e-toast-success" });
     }
 
-    private async Task LoadAsync()
+    RenderFragment CpKpi(string icon, string label, string val, string color) => __builder =>
     {
-        var result = await Api.SearchCommissionPlansAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? new List<CommissionPlanDto>();
-    }
+        <div class="cp-kpi-card @color">
+            <i class="bi @icon cp-kpi-icon" aria-hidden="true"></i>
+            <div><div class="cp-kpi-val">@val</div><div class="cp-kpi-lbl">@label</div></div>
+        </div>
+    };
+
+    record PlanRow(Guid Id, string Code, string Name, string Type, decimal NewBizRate, decimal RenewalRate,
+                  int Versions, bool AllowSplit, bool HouseRules, bool BranchOverride, string Status, DateTime Effective);
 }

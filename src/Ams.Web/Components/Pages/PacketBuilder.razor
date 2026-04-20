@@ -1,0 +1,415 @@
+@page "/documents/packets"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Merge / Packet Builder — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── NEW PACKET DIALOG ──────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showNewPacket" Width="580px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pb-dlg-hdr"><i class="bi bi-collection-plus" aria-hidden="true"></i> Create New Packet</div></Header>
+        <Content>
+            <div class="pb-dlg-body">
+                <div class="form-group mb-2"><label class="pb-lbl">Packet Name *</label>
+                    <SfTextBox @bind-Value="_newName" Placeholder="e.g. Renewal Package — Acme Corp 2025"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="pb-lbl">Type</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_packetTypes" @bind-Value="_newType" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="pb-lbl">Linked Policy</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_policies" @bind-Value="_newPolicy" Placeholder="Select policy…" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="pb-lbl">Description</label>
+                    <SfTextBox @bind-Value="_newDesc" Multiline="true" Placeholder="Optional packet description…"></SfTextBox>
+                </div>
+                <div class="pb-ai-banner">
+                    <i class="bi bi-stars" aria-hidden="true"></i>
+                    <span>Enable AI to automatically suggest and order required documents for the selected policy type.</span>
+                    <SfCheckBox @bind-Checked="_newAiAssist" Label="AI Document Assist"></SfCheckBox>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Create Packet" IsPrimary="true" OnClick="CreatePacketAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showNewPacket = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<!-- ── ADD DOCUMENTS DIALOG ──────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showAddDocs" Width="620px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pb-dlg-hdr"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add Documents to Packet</div></Header>
+        <Content>
+            <div class="pb-dlg-body">
+                @if (_activePacket is not null)
+                {
+                    <div class="pb-add-policy">
+                        Adding to: <strong>@_activePacket.Name</strong>
+                    </div>
+                    @if (_activePacket.AiAssisted)
+                    {
+                        <div class="pb-ai-suggest-block">
+                            <div class="pb-ais-header"><i class="bi bi-stars" aria-hidden="true"></i> AI Policy-Aware Suggestions</div>
+                            <div class="pb-ais-sub">Based on the linked policy type and coverage, the following documents are recommended for this packet:</div>
+                            <div class="pb-ais-list">
+                                @foreach (var s in _aiSuggestions)
+                                {
+                                    <div class="pb-ais-row">
+                                        <SfCheckBox @bind-Checked="s.Selected"></SfCheckBox>
+                                        <div>
+                                            <div class="pb-ais-name">@s.Name</div>
+                                            <div class="pb-ais-why">@s.Reason</div>
+                                        </div>
+                                        <span class="pb-ais-req @(s.Required ? "pb-req" : "pb-opt")">@(s.Required ? "Required" : "Optional")</span>
+                                    </div>
+                                }
+                            </div>
+                            <button class="um-btn um-btn-ghost um-btn-sm pb-add-sel-btn" @onclick="AddAiSuggestionsAsync">
+                                <i class="bi bi-check-all" aria-hidden="true"></i> Add Selected
+                            </button>
+                        </div>
+                    }
+                    <hr class="pb-hr" />
+                    <div class="form-group mb-2"><label class="pb-lbl">Or manually enter document name</label>
+                        <div style="display:flex;gap:.4rem">
+                            <SfTextBox @bind-Value="_addDocName" Placeholder="Document name or file…" Width="100%"></SfTextBox>
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="AddManualDocAsync">Add</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Done" IsPrimary="true" OnClick="() => _showAddDocs = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<!-- ── SEND DIALOG ────────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showSend" Width="500px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pb-dlg-hdr"><i class="bi bi-send" aria-hidden="true"></i> Send Packet</div></Header>
+        <Content>
+            <div class="pb-dlg-body">
+                <div class="form-group mb-2"><label class="pb-lbl">Recipient Email *</label>
+                    <SfTextBox @bind-Value="_sendEmail" Placeholder="recipient@example.com"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="pb-lbl">Delivery Method</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"Email","Secure Portal","E-Sign Workflow"}' @bind-Value="_sendMethod" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="pb-lbl">Message</label>
+                    <SfTextBox @bind-Value="_sendMessage" Multiline="true" Placeholder="Optional cover message…"></SfTextBox>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Send" IsPrimary="true" OnClick="SendPacketAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showSend = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<AppPageHeader Title="Merge / Packet Builder"
+               Subtitle="Assemble, order and deliver policy-aware document packets — AI suggests required forms automatically"
+               Icon="bi-collection">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Documents
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showNewPacket = true">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> New Packet
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="pb-kpi-strip">
+    <div class="pb-kpi"><i class="bi bi-collection pb-ki blue" aria-hidden="true"></i><div><div class="pb-kv">@_packets.Count</div><div class="pb-kl">Total Packets</div></div></div>
+    <div class="pb-kpi"><i class="bi bi-pencil-square pb-ki amber" aria-hidden="true"></i><div><div class="pb-kv">@_packets.Count(p=>p.Status=="Draft")</div><div class="pb-kl">Draft</div></div></div>
+    <div class="pb-kpi"><i class="bi bi-check-circle pb-ki green" aria-hidden="true"></i><div><div class="pb-kv">@_packets.Count(p=>p.Status=="Complete")</div><div class="pb-kl">Complete</div></div></div>
+    <div class="pb-kpi"><i class="bi bi-send pb-ki blue" aria-hidden="true"></i><div><div class="pb-kv">@_packets.Count(p=>p.Status=="Sent")</div><div class="pb-kl">Sent</div></div></div>
+    <div class="pb-kpi"><i class="bi bi-stars pb-ki purple" aria-hidden="true"></i><div><div class="pb-kv">@_packets.Count(p=>p.AiAssisted)</div><div class="pb-kl">AI-Assisted</div></div></div>
+    <div class="pb-kpi"><i class="bi bi-file-earmark-text pb-ki gray" aria-hidden="true"></i><div><div class="pb-kv">@_packets.Sum(p=>p.DocumentCount)</div><div class="pb-kl">Total Docs</div></div></div>
+</div>
+
+<div class="pb-layout">
+    <!-- Left panel — packet list -->
+    <div class="pb-list-panel">
+        <div class="pb-list-header">Packets</div>
+        <div class="pb-list-search">
+            <SfTextBox Placeholder="Filter packets…" @bind-Value="_packetSearch" Width="100%"></SfTextBox>
+        </div>
+        <div class="pb-packet-list">
+            @foreach (var p in FilteredPackets)
+            {
+                <div class="pb-packet-item @(p == _activePacket ? "pb-pi-active" : "")" @onclick="() => SelectPacket(p)">
+                    <div class="pb-pi-top">
+                        <span class="pb-pi-name">@p.Name</span>
+                        @if (p.AiAssisted) { <span class="pb-ai-badge"><i class="bi bi-stars" aria-hidden="true"></i></span> }
+                    </div>
+                    <div class="pb-pi-meta">@p.Type · @p.DocumentCount docs</div>
+                    <div class="pb-pi-footer">
+                        <span class="pb-status-chip pb-st-@p.Status.ToLower()">@p.Status</span>
+                        <span class="pb-pi-date">@p.CreatedDate.ToString("MMM d")</span>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- Right panel — active packet detail -->
+    <div class="pb-detail-panel">
+        @if (_activePacket is null)
+        {
+            <div class="pb-empty">
+                <i class="bi bi-collection pb-empty-icon" aria-hidden="true"></i>
+                <p>Select a packet to view and edit its contents, or create a new one.</p>
+                <button class="um-btn um-btn-primary" @onclick="() => _showNewPacket = true">
+                    <i class="bi bi-plus-circle" aria-hidden="true"></i> New Packet
+                </button>
+            </div>
+        }
+        else
+        {
+            <div class="pb-detail-header">
+                <div>
+                    <div class="pb-dh-name">@_activePacket.Name</div>
+                    <div class="pb-dh-meta">
+                        <span>@_activePacket.Type</span>
+                        @if (!string.IsNullOrEmpty(_activePacket.PolicyNumber)) { <span>· @_activePacket.PolicyNumber</span> }
+                        <span>· @_activePacket.DocumentCount documents</span>
+                        @if (_activePacket.AiAssisted) { <span class="pb-ai-badge"><i class="bi bi-stars" aria-hidden="true"></i> AI-Assisted</span> }
+                    </div>
+                </div>
+                <div class="pb-dh-actions">
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showAddDocs = true">
+                        <i class="bi bi-plus-circle" aria-hidden="true"></i> Add Docs
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="MergePacketAsync" title="Merge to single PDF">
+                        <i class="bi bi-file-earmark-arrow-down" aria-hidden="true"></i> Merge PDF
+                    </button>
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenSend">
+                        <i class="bi bi-send" aria-hidden="true"></i> Send
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DeletePacket(_activePacket)">
+                        <i class="bi bi-trash" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Document order list -->
+            <div class="pb-doc-list">
+                <div class="pb-doc-list-header">
+                    <span>Document</span><span>Type</span><span>Required</span><span>Status</span><span></span>
+                </div>
+                @foreach (var (doc, idx) in _activePacket.Documents.Select((d,i) => (d,i)))
+                {
+                    <div class="pb-doc-row @(doc.Required ? "pb-dr-required" : "")">
+                        <div class="pb-dr-order">
+                            <button class="pb-order-btn" @onclick="() => MoveUp(idx)" disabled="@(idx == 0)">
+                                <i class="bi bi-chevron-up" aria-hidden="true"></i>
+                            </button>
+                            <span class="pb-dr-idx">@(idx+1)</span>
+                            <button class="pb-order-btn" @onclick="() => MoveDown(idx)" disabled="@(idx == _activePacket.Documents.Count - 1)">
+                                <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                        <div class="pb-dr-name">
+                            <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
+                            @doc.Name
+                        </div>
+                        <div class="pb-dr-type">@doc.Type</div>
+                        <div>
+                            @if (doc.Required) { <span class="pb-req-badge">Required</span> }
+                            else               { <span class="pb-opt-badge">Optional</span> }
+                        </div>
+                        <div>
+                            <span class="pb-doc-status pb-ds-@doc.Status.ToLower()">@doc.Status</span>
+                        </div>
+                        <div>
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => RemoveDoc(doc)" title="Remove from packet">
+                                <i class="bi bi-x" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
+
+            @if (!string.IsNullOrEmpty(_activePacket.Description))
+            {
+                <div class="pb-desc-block">@_activePacket.Description</div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private SfToast _toast = default!;
+    private string _packetSearch = "", _addDocName = "";
+    private bool _showNewPacket, _showAddDocs, _showSend;
+    private string? _newName, _newType = "Renewal", _newPolicy, _newDesc, _sendEmail, _sendMethod = "Email", _sendMessage;
+    private bool _newAiAssist = true;
+    private PacketRow? _activePacket;
+
+    private readonly List<string> _packetTypes = ["Renewal","New Business","Endorsement","Claim","Cancellation","Certificate","Audit","Other"];
+    private readonly List<string> _policies     = ["POL-2025-00142","POL-2025-00089","POL-2024-99310","POL-2024-88204","POL-2025-00217"];
+
+    // AI document suggestions for active packet
+    private List<AiSuggestion> _aiSuggestions = [];
+
+    private List<PacketRow> _packets =
+    [
+        new(Guid.NewGuid(), "Renewal Package — Acme Corp 2025",     "Renewal",    "POL-2025-00142", "Complete", true,  DateTime.Now.AddDays(-3),
+            "Complete renewal packet including dec page, endorsements and certificate.",
+            [new("Dec Page 2025",                 "Policy / Dec Page",  true,  "Ready"),
+             new("ACORD 25 — Certificate",        "ACORD Form",         true,  "Ready"),
+             new("ACORD 126 — GL Section",        "ACORD Form",         true,  "Ready"),
+             new("Renewal Cover Letter",           "Correspondence",     false, "Ready"),
+             new("Endorsement — BI Limit Change", "Endorsement",        false, "Ready")]),
+        new(Guid.NewGuid(), "New Submission — Green Valley LLC",    "New Business","POL-2025-00217", "Draft",    true,  DateTime.Now.AddDays(-1),
+            "Initial submission packet for new commercial lines account.",
+            [new("ACORD 75 — Commercial App",     "ACORD Form",         true,  "Ready"),
+             new("ACORD 126 — GL Section",        "ACORD Form",         true,  "Pending"),
+             new("Loss Run — 5 Year",             "Loss History",       true,  "Missing"),
+             new("Risk Photos",                   "Supporting",         false, "Pending")]),
+        new(Guid.NewGuid(), "Claim Settlement Packet",             "Claim",       "POL-2024-88204", "Sent",     false, DateTime.Now.AddDays(-5),
+            null,
+            [new("FNOL Report",                   "Claim Document",     true,  "Ready"),
+             new("Adjuster Report",               "Claim Document",     true,  "Ready"),
+             new("Settlement Agreement",          "Legal",              true,  "Ready")]),
+        new(Guid.NewGuid(), "Audit Evidence — Q4 2024",            "Audit",       "",               "Draft",    false, DateTime.Now.AddDays(-2),
+            null,
+            [new("Premium Audit Form",            "Audit",              true,  "Ready"),
+             new("Payroll Summary",               "Supporting",         true,  "Pending")]),
+    ];
+
+    private IEnumerable<PacketRow> FilteredPackets => _packets.Where(p =>
+        string.IsNullOrEmpty(_packetSearch) || p.Name.Contains(_packetSearch, StringComparison.OrdinalIgnoreCase));
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Documents","/documents"), new("Packet Builder",""));
+        _activePacket = _packets.FirstOrDefault();
+    }
+
+    void SelectPacket(PacketRow p)
+    {
+        _activePacket = p;
+        _aiSuggestions = BuildAiSuggestions(p);
+    }
+
+    List<AiSuggestion> BuildAiSuggestions(PacketRow p) => p.Type switch
+    {
+        "Renewal"     => [new("Renewal Cover Letter", "Standard renewal communication",       false, false),
+                          new("Updated Dec Page",     "Required for all renewals",            true,  false),
+                          new("ACORD 25 — COI",       "Required for certificate holders",     true,  false),
+                          new("Endorsement Summary",  "Summary of mid-term endorsements",     false, false)],
+        "New Business"=> [new("ACORD 75 Application","Required for new commercial accounts",  true,  false),
+                          new("ACORD 126 GL Section", "Required for CGL coverage",            true,  false),
+                          new("5-Year Loss Runs",     "Carrier underwriting requirement",      true,  false),
+                          new("Signed Proposal",      "Client-signed coverage proposal",       false, false)],
+        "Claim"       => [new("FNOL Report",          "Required first notice document",        true,  false),
+                          new("Adjuster Assignment",  "Auto-generated on claim creation",      true,  false),
+                          new("Reservation of Rights","May be required depending on coverage", false, false)],
+        _             => [new("Cover Letter",         "Standard packet cover communication",   false, false),
+                          new("Policy Summary",       "Policy highlights and key dates",       false, false)]
+    };
+
+    async Task CreatePacketAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newName)) return;
+        var p = new PacketRow(Guid.NewGuid(), _newName, _newType ?? "Other", _newPolicy ?? "", "Draft",
+            _newAiAssist, DateTime.Now, _newDesc, []);
+        _packets.Insert(0, p);
+        _activePacket = p;
+        if (_newAiAssist) _aiSuggestions = BuildAiSuggestions(p);
+        _showNewPacket = false;
+        _newName = _newDesc = _newPolicy = null; _newType = "Renewal"; _newAiAssist = true;
+        await _toast.ShowAsync(new ToastModel { Content = "Packet created.", CssClass = "e-toast-success" });
+        if (_newAiAssist) _showAddDocs = true;
+    }
+
+    async Task AddAiSuggestionsAsync()
+    {
+        if (_activePacket is null) return;
+        var toAdd = _aiSuggestions.Where(s => s.Selected).ToList();
+        foreach (var s in toAdd)
+            _activePacket.Documents.Add(new(s.Name, "AI Suggested", s.Required, "Pending"));
+        var idx = _packets.IndexOf(_activePacket);
+        if (idx >= 0) _packets[idx] = _activePacket with { DocumentCount = _activePacket.Documents.Count };
+        _aiSuggestions.ForEach(s => s.Selected = false);
+        await _toast.ShowAsync(new ToastModel { Content = $"{toAdd.Count} AI-suggested documents added.", CssClass = "e-toast-success" });
+    }
+
+    async Task AddManualDocAsync()
+    {
+        if (_activePacket is null || string.IsNullOrWhiteSpace(_addDocName)) return;
+        _activePacket.Documents.Add(new(_addDocName, "Manual", false, "Pending"));
+        var idx = _packets.IndexOf(_activePacket);
+        if (idx >= 0) _packets[idx] = _activePacket with { DocumentCount = _activePacket.Documents.Count };
+        _addDocName = "";
+        await _toast.ShowAsync(new ToastModel { Content = "Document added to packet.", CssClass = "e-toast-success" });
+    }
+
+    void RemoveDoc(PacketDoc d) { _activePacket?.Documents.Remove(d); }
+
+    void MoveUp(int idx)
+    {
+        if (_activePacket is null || idx <= 0) return;
+        (_activePacket.Documents[idx - 1], _activePacket.Documents[idx]) = (_activePacket.Documents[idx], _activePacket.Documents[idx - 1]);
+    }
+
+    void MoveDown(int idx)
+    {
+        if (_activePacket is null || idx >= _activePacket.Documents.Count - 1) return;
+        (_activePacket.Documents[idx + 1], _activePacket.Documents[idx]) = (_activePacket.Documents[idx], _activePacket.Documents[idx + 1]);
+    }
+
+    async Task MergePacketAsync()
+    {
+        if (_activePacket is null) return;
+        await _toast.ShowAsync(new ToastModel { Content = $"Merging {_activePacket.DocumentCount} documents into a single PDF…", CssClass = "e-toast-info" });
+    }
+
+    void OpenSend() => _showSend = true;
+
+    async Task SendPacketAsync()
+    {
+        if (_activePacket is null) return;
+        var idx = _packets.IndexOf(_activePacket);
+        if (idx >= 0) { _activePacket = _activePacket with { Status = "Sent" }; _packets[idx] = _activePacket; }
+        _showSend = false;
+        await _toast.ShowAsync(new ToastModel { Content = $"Packet sent to {_sendEmail} via {_sendMethod}.", CssClass = "e-toast-success" });
+        _sendEmail = _sendMessage = null; _sendMethod = "Email";
+    }
+
+    async Task DeletePacket(PacketRow p)
+    {
+        _packets.Remove(p);
+        _activePacket = _packets.FirstOrDefault();
+        await _toast.ShowAsync(new ToastModel { Content = "Packet deleted.", CssClass = "e-toast-warning" });
+    }
+
+    // ── Model types ────────────────────────────────────────────────
+    record PacketRow(Guid Id, string Name, string Type, string PolicyNumber, string Status, bool AiAssisted,
+                     DateTime CreatedDate, string? Description, List<PacketDoc> Documents)
+    {
+        public int DocumentCount { get; init; } = Documents.Count;
+    }
+
+    record PacketDoc(string Name, string Type, bool Required, string Status);
+
+    class AiSuggestion(string name, string reason, bool required, bool selected)
+    {
+        public string Name     { get; } = name;
+        public string Reason   { get; } = reason;
+        public bool   Required { get; } = required;
+        public bool   Selected { get; set; } = selected;
+    }
+}

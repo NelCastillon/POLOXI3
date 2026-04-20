@@ -1,0 +1,414 @@
+@page "/quotes/appetite"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Carrier Appetite Finder — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Carrier Appetite Finder"
+               Subtitle="Identify best-fit carriers by line of business, class, state, and risk profile"
+               Icon="bi-search-heart">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => _view = (_view=="cards" ? "matrix" : "cards")'>
+            <i class="bi @(_view=="cards" ? "bi-table" : "bi-grid") " aria-hidden="true"></i>
+            @(_view=="cards" ? "Matrix View" : "Card View")
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ClearSearch">
+            <i class="bi bi-x" aria-hidden="true"></i> Clear
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── SEARCH & FILTER PANEL ─────────────────────────────────────── -->
+<div class="af-filter-panel">
+    <div class="af-filter-row">
+        <div class="af-filter-group">
+            <label class="af-filter-lbl">Line of Business</label>
+            <select class="e-input af-sel" @bind="_filterLob">
+                <option value="">All Lines</option>
+                @foreach (var l in _lobs) { <option>@l</option> }
+            </select>
+        </div>
+        <div class="af-filter-group">
+            <label class="af-filter-lbl">State</label>
+            <select class="e-input af-sel" @bind="_filterState">
+                <option value="">All States</option>
+                @foreach (var s in _states) { <option>@s</option> }
+            </select>
+        </div>
+        <div class="af-filter-group">
+            <label class="af-filter-lbl">Risk Class / SIC</label>
+            <input class="e-input af-sel" @bind="_filterClass" @bind:event="oninput" placeholder="e.g. Manufacturing, Retail…" />
+        </div>
+        <div class="af-filter-group">
+            <label class="af-filter-lbl">Annual Revenue</label>
+            <select class="e-input af-sel" @bind="_filterRevenue">
+                <option value="">Any Revenue</option>
+                <option>&lt; $1M</option>
+                <option>$1M – $5M</option>
+                <option>$5M – $15M</option>
+                <option>$15M – $50M</option>
+                <option>&gt; $50M</option>
+            </select>
+        </div>
+        <div class="af-filter-group">
+            <label class="af-filter-lbl">Min Appetite Score</label>
+            <input type="range" class="af-slider" min="0" max="100" step="10"
+                   @bind="_minScore" @bind:event="oninput" />
+            <span class="af-slider-val">@_minScore+</span>
+        </div>
+        <div class="af-filter-group af-filter-search">
+            <label class="af-filter-lbl">Search Carriers</label>
+            <input class="e-input" @bind="_search" @bind:event="oninput" placeholder="Carrier name…" />
+        </div>
+    </div>
+    <div class="af-filter-meta">
+        <span class="af-result-count"><strong>@FilteredCarriers.Count()</strong> carriers match your criteria</span>
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="FindMarkets" disabled="@(!FilteredCarriers.Any())">
+            <i class="bi bi-send" aria-hidden="true"></i> Add to Submission
+        </button>
+    </div>
+</div>
+
+@if (_view == "cards")
+{
+    <!-- ── CARD VIEW ──────────────────────────────────────────────── -->
+    <div class="af-cards-wrap">
+        @foreach (var c in FilteredCarriers)
+        {
+            <div class="af-carrier-card af-score-@ScoreBand(c.OverallScore)">
+                <div class="af-card-head">
+                    <div class="af-card-left">
+                        <div class="af-score-badge af-sb-@ScoreBand(c.OverallScore)">
+                            <span class="af-sb-num">@c.OverallScore</span>
+                            <span class="af-sb-lbl">Score</span>
+                        </div>
+                        <div>
+                            <div class="af-carrier-name">@c.Carrier</div>
+                            <div class="af-carrier-rating">@c.AmBest · @c.Naic</div>
+                        </div>
+                    </div>
+                    <div class="af-card-flags">
+                        @if (c.IsPreferred) { <span class="af-flag af-flag-pref"><i class="bi bi-star-fill" aria-hidden="true"></i> Preferred</span> }
+                        @if (c.IsEandS)     { <span class="af-flag af-flag-es">E&amp;S</span> }
+                        @if (c.IsAdmitted)  { <span class="af-flag af-flag-adm">Admitted</span> }
+                    </div>
+                </div>
+
+                <!-- LOB appetite grid -->
+                <div class="af-lob-grid">
+                    @foreach (var lob in c.LobAppetites)
+                    {
+                        <div class="af-lob-chip af-lob-@LobAptCss(lob.Value)" title="@lob.Key: @lob.Value">
+                            <span class="af-lob-name">@LobShort(lob.Key)</span>
+                            <span class="af-lob-dot">@(lob.Value == "Yes" ? "●" : lob.Value == "Conditional" ? "◑" : "○")</span>
+                        </div>
+                    }
+                </div>
+
+                <!-- Strategy metrics row -->
+                <div class="af-metrics-row">
+                    @AptMetric("bi-clock",       "SLA",      c.TurnaroundDays + "d",            c.TurnaroundDays <= 5)
+                    @AptMetric("bi-bullseye",    "Hit",      c.HitRatioPct + "%",               c.HitRatioPct >= 60)
+                    @AptMetric("bi-percent",     "Comm",     c.CommissionPct.ToString("F1")+"%", c.CommissionPct >= 15)
+                    @AptMetric("bi-shield-check","Bind",     c.BindRatioPct + "%",               c.BindRatioPct >= 50)
+                </div>
+
+                <!-- State footprint -->
+                <div class="af-state-row">
+                    <span class="af-state-lbl">States:</span>
+                    <span class="af-state-val">@c.States</span>
+                </div>
+
+                <!-- Class specifics -->
+                @if (c.ClassNotes.Any())
+                {
+                    <div class="af-class-notes">
+                        @foreach (var n in c.ClassNotes)
+                        {
+                            <div class="af-class-note @(n.Value ? "af-cn-yes" : "af-cn-no")">
+                                <i class="bi @(n.Value ? "bi-check" : "bi-x")" aria-hidden="true"></i> @n.Key
+                            </div>
+                        }
+                    </div>
+                }
+
+                <div class="af-card-actions">
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => AddToSubmission(c)">
+                        <i class="bi bi-plus-lg" aria-hidden="true"></i> Add to Submission
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _detailCarrier = c">
+                        <i class="bi bi-info-circle" aria-hidden="true"></i> Details
+                    </button>
+                </div>
+            </div>
+        }
+        @if (!FilteredCarriers.Any())
+        {
+            <div class="af-empty">
+                <i class="bi bi-search af-empty-icon" aria-hidden="true"></i>
+                <h3>No carriers match your criteria</h3>
+                <p>Adjust your filters or lower the minimum appetite score.</p>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <!-- ── MATRIX VIEW ────────────────────────────────────────────── -->
+    <div class="af-matrix-wrap">
+        <SfGrid DataSource="@FilteredCarriers.ToList()" AllowSorting="true" AllowPaging="true"
+                AllowResizing="true" RowHeight="44">
+            <GridPageSettings PageSize="20" />
+            <GridColumns>
+                <GridColumn Field="Carrier"       HeaderText="Carrier"         Width="180" />
+                <GridColumn Field="OverallScore"  HeaderText="Appetite"        Width="100"
+                            Template="@(ctx => ScoreCell(((CarrierRow)ctx).OverallScore))" />
+                <GridColumn Field="AmBest"        HeaderText="AM Best"         Width="90" />
+                <GridColumn Field="TurnaroundDays" HeaderText="SLA (d)"        Width="80"
+                            Template="@(ctx => SlaCell(((CarrierRow)ctx).TurnaroundDays))" />
+                <GridColumn Field="HitRatioPct"   HeaderText="Hit %"           Width="80"
+                            Template="@(ctx => PctCell(((CarrierRow)ctx).HitRatioPct))" />
+                <GridColumn Field="BindRatioPct"  HeaderText="Bind %"          Width="80"
+                            Template="@(ctx => PctCell(((CarrierRow)ctx).BindRatioPct))" />
+                <GridColumn Field="CommissionPct" HeaderText="Comm %"          Width="90"
+                            Template="@(ctx => CommCell(((CarrierRow)ctx).CommissionPct))" />
+                <GridColumn Field="States"        HeaderText="States"          Width="140" />
+                <GridColumn Field="IsPreferred"   HeaderText="Preferred"       Width="90"
+                            Template="@(ctx => FlagCell(((CarrierRow)ctx).IsPreferred))" />
+                <GridColumn Field="IsAdmitted"    HeaderText="Admitted"        Width="90"
+                            Template="@(ctx => FlagCell(((CarrierRow)ctx).IsAdmitted))" />
+                <GridColumn HeaderText=""         Width="80"   AllowSorting="false"
+                            Template="@(ctx => AddBtn((CarrierRow)ctx))" />
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- ── CARRIER DETAIL DRAWER ─────────────────────────────────────── -->
+@if (_detailCarrier is not null)
+{
+    <div class="af-drawer-backdrop" @onclick="() => _detailCarrier = null"></div>
+    <div class="af-drawer">
+        <div class="af-drawer-head">
+            <div>
+                <h2 class="af-drawer-name">@_detailCarrier.Carrier</h2>
+                <span class="af-drawer-meta">@_detailCarrier.AmBest · @_detailCarrier.Naic</span>
+            </div>
+            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _detailCarrier = null">
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+            </button>
+        </div>
+        <div class="af-drawer-body">
+            <div class="af-big-score af-bs-@ScoreBand(_detailCarrier.OverallScore)">
+                <div class="af-bs-val">@_detailCarrier.OverallScore</div>
+                <div class="af-bs-lbl">Appetite Score</div>
+            </div>
+            <h3 class="af-drawer-sec-head">LOB Appetite Matrix</h3>
+            @foreach (var lob in _detailCarrier.LobAppetites)
+            {
+                <div class="af-apt-row">
+                    <span class="af-apt-lob">@lob.Key</span>
+                    <span class="af-apt-val @LobAptCss(lob.Value)">
+                        <i class="bi @(lob.Value=="Yes" ? "bi-check-circle-fill" : lob.Value=="Conditional" ? "bi-exclamation-circle" : "bi-x-circle")" aria-hidden="true"></i>
+                        @lob.Value
+                    </span>
+                </div>
+            }
+            <h3 class="af-drawer-sec-head">Strategy Metrics</h3>
+            @DrawMetric("Turnaround SLA",      _detailCarrier.TurnaroundDays + " business days")
+            @DrawMetric("Expected Hit Ratio",  _detailCarrier.HitRatioPct + "%")
+            @DrawMetric("Historical Bind %",   _detailCarrier.BindRatioPct + "%")
+            @DrawMetric("Commission Rate",     _detailCarrier.CommissionPct.ToString("F1") + "%")
+            @DrawMetric("States",              _detailCarrier.States)
+            @DrawMetric("E&S Market",          _detailCarrier.IsEandS ? "Yes" : "No")
+            @DrawMetric("Admitted",            _detailCarrier.IsAdmitted ? "Yes" : "No")
+            <div class="af-drawer-actions">
+                <button class="um-btn um-btn-primary" @onclick="() => { AddToSubmission(_detailCarrier); _detailCarrier = null; }">
+                    <i class="bi bi-plus-lg" aria-hidden="true"></i> Add to Submission
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    SfToast _toast = default!;
+
+    bool   _loading     = false;
+    string _view        = "cards";
+    string _filterLob   = "";
+    string _filterState = "";
+    string _filterClass = "";
+    string _filterRevenue = "";
+    string _search      = "";
+    int    _minScore    = 0;
+
+    CarrierRow? _detailCarrier = null;
+
+    readonly string[] _lobs = { "General Liability", "Commercial Property", "Commercial Auto", "Workers Comp", "Umbrella / Excess", "Professional Liab.", "Home / Dwelling", "Personal Auto" };
+    readonly string[] _states = { "TX", "CA", "FL", "NY", "IL", "OH", "PA", "GA", "NC", "WA" };
+
+    sealed class CarrierRow
+    {
+        public string  Carrier       { get; set; } = "";
+        public string  AmBest        { get; set; } = "";
+        public string  Naic          { get; set; } = "";
+        public int     OverallScore  { get; set; }
+        public int     TurnaroundDays{ get; set; }
+        public int     HitRatioPct   { get; set; }
+        public int     BindRatioPct  { get; set; }
+        public decimal CommissionPct { get; set; }
+        public string  States        { get; set; } = "";
+        public bool    IsPreferred   { get; set; }
+        public bool    IsEandS       { get; set; }
+        public bool    IsAdmitted    { get; set; }
+        public Dictionary<string,string> LobAppetites { get; set; } = new();
+        public List<KeyValuePair<string,bool>> ClassNotes { get; set; } = new();
+    }
+
+    IEnumerable<CarrierRow> FilteredCarriers => _carriers
+        .Where(c => (string.IsNullOrEmpty(_filterLob) || c.LobAppetites.ContainsKey(_filterLob) && c.LobAppetites[_filterLob] != "No")
+                 && (string.IsNullOrEmpty(_filterState) || c.States.Contains(_filterState))
+                 && (string.IsNullOrEmpty(_search) || c.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase))
+                 && (string.IsNullOrEmpty(_filterClass) || c.ClassNotes.Any(n => n.Key.Contains(_filterClass, StringComparison.OrdinalIgnoreCase)))
+                 && c.OverallScore >= _minScore)
+        .OrderByDescending(c => c.OverallScore);
+
+    readonly List<CarrierRow> _carriers = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Quotes","/quotes/appetite"), new("Appetite Finder","/quotes/appetite"));
+        await Task.Delay(0);
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _carriers.AddRange(new[]
+        {
+            new CarrierRow
+            {
+                Carrier="Travelers Indemnity", AmBest="A+ (XV)", Naic="25658", OverallScore=92,
+                TurnaroundDays=5, HitRatioPct=78, BindRatioPct=64, CommissionPct=16.5m,
+                States="TX, LA, OK, AR, NM, CO — All states", IsPreferred=true, IsAdmitted=true,
+                LobAppetites=new(){ {"General Liability","Yes"},{"Commercial Property","Yes"},{"Commercial Auto","Yes"},{"Workers Comp","Conditional"},{"Umbrella / Excess","Yes"},{"Professional Liab.","Conditional"} },
+                ClassNotes=new(){ new("Manufacturing GL",true), new("Products / Completed Ops",true), new("Wholesale / Distribution",true), new("Restaurants / Food Svc",true) }
+            },
+            new CarrierRow
+            {
+                Carrier="Hartford Fire & Cas.", AmBest="A+ (XV)", Naic="19682", OverallScore=85,
+                TurnaroundDays=7, HitRatioPct=65, BindRatioPct=52, CommissionPct=15.0m,
+                States="All States", IsPreferred=true, IsAdmitted=true,
+                LobAppetites=new(){ {"General Liability","Yes"},{"Commercial Property","Yes"},{"Commercial Auto","Yes"},{"Workers Comp","Yes"},{"Umbrella / Excess","Yes"},{"Professional Liab.","Yes"} },
+                ClassNotes=new(){ new("Manufacturing GL",true), new("Products / Completed Ops",true), new("Contractors",true), new("Hospitality",true) }
+            },
+            new CarrierRow
+            {
+                Carrier="Liberty Mutual", AmBest="A (XV)", Naic="23043", OverallScore=78,
+                TurnaroundDays=10, HitRatioPct=58, BindRatioPct=41, CommissionPct=14.5m,
+                States="All States", IsPreferred=false, IsAdmitted=true,
+                LobAppetites=new(){ {"General Liability","Yes"},{"Commercial Property","Yes"},{"Commercial Auto","Yes"},{"Workers Comp","Conditional"},{"Umbrella / Excess","Yes"},{"Professional Liab.","Conditional"} },
+                ClassNotes=new(){ new("Manufacturing GL",true), new("Large Accounts > $50M",true), new("Contractors",true), new("Hospitality",false) }
+            },
+            new CarrierRow
+            {
+                Carrier="CNA Commercial", AmBest="A (XV)", Naic="20443", OverallScore=70,
+                TurnaroundDays=12, HitRatioPct=50, BindRatioPct=38, CommissionPct=14.0m,
+                States="TX, CA, FL, NY, IL, OH", IsPreferred=false, IsAdmitted=true,
+                LobAppetites=new(){ {"General Liability","Yes"},{"Commercial Property","Conditional"},{"Commercial Auto","Conditional"},{"Workers Comp","No"},{"Professional Liab.","Yes"},{"Umbrella / Excess","Conditional"} },
+                ClassNotes=new(){ new("Manufacturing GL",true), new("Professional Services",true), new("Healthcare",true), new("Contractors",false) }
+            },
+            new CarrierRow
+            {
+                Carrier="Markel Corporation", AmBest="A (XV)", Naic="38970", OverallScore=66,
+                TurnaroundDays=14, HitRatioPct=44, BindRatioPct=33, CommissionPct=13.5m,
+                States="All States — E&S", IsEandS=true, IsAdmitted=false,
+                LobAppetites=new(){ {"General Liability","Yes"},{"Professional Liab.","Yes"},{"Commercial Property","Conditional"},{"Commercial Auto","Conditional"},{"Workers Comp","No"},{"Umbrella / Excess","Yes"} },
+                ClassNotes=new(){ new("Hard-to-place classes",true), new("Manufacturing GL",true), new("Prior declines accepted",true), new("Non-standard risks",true) }
+            },
+            new CarrierRow
+            {
+                Carrier="Cincinnati Financial", AmBest="A+ (XV)", Naic="20286", OverallScore=58,
+                TurnaroundDays=9, HitRatioPct=48, BindRatioPct=36, CommissionPct=15.5m,
+                States="TX, OH, IN, KY, TN, GA, NC, SC", IsPreferred=false, IsAdmitted=true,
+                LobAppetites=new(){ {"General Liability","Yes"},{"Commercial Property","Yes"},{"Commercial Auto","Yes"},{"Workers Comp","Conditional"},{"Umbrella / Excess","Conditional"},{"Professional Liab.","No"} },
+                ClassNotes=new(){ new("Small-to-mid commercial",true), new("Retail / Wholesale",true), new("Contractors",true), new("Large Manufacturing",false) }
+            },
+            new CarrierRow
+            {
+                Carrier="Zurich American", AmBest="A+ (XV)", Naic="16535", OverallScore=55,
+                TurnaroundDays=8, HitRatioPct=38, BindRatioPct=28, CommissionPct=12.5m,
+                States="All States", IsPreferred=false, IsAdmitted=true,
+                LobAppetites=new(){ {"General Liability","Conditional"},{"Commercial Property","Yes"},{"Commercial Auto","Yes"},{"Workers Comp","Yes"},{"Umbrella / Excess","Yes"},{"Professional Liab.","Conditional"} },
+                ClassNotes=new(){ new("Large commercial accounts",true), new("Products/CO — limited appetite",false), new("Construction",true), new("Manufacturing < $8M revenue",true) }
+            },
+        });
+    }
+
+    void ClearSearch() { _search=""; _filterLob=""; _filterState=""; _filterClass=""; _filterRevenue=""; _minScore=0; }
+
+    void FindMarkets() { }
+
+    async Task AddToSubmission(CarrierRow c)
+    {
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title   = "Added",
+            Content = $"{c.Carrier} added to submission market list.",
+            CssClass= "e-toast-success"
+        });
+    }
+
+    static string ScoreBand(int s) => s >= 80 ? "high" : s >= 60 ? "ok" : s >= 40 ? "low" : "poor";
+    static string LobAptCss(string v) => v == "Yes" ? "apt-yes" : v == "Conditional" ? "apt-cond" : "apt-no";
+    static string LobShort(string lob) => lob switch
+    {
+        "General Liability"   => "GL",
+        "Commercial Property" => "Prop",
+        "Commercial Auto"     => "Auto",
+        "Workers Comp"        => "WC",
+        "Umbrella / Excess"   => "Umb",
+        "Professional Liab."  => "PL",
+        _                     => lob[..Math.Min(4,lob.Length)]
+    };
+
+    RenderFragment AptMetric(string icon, string lbl, string val, bool good) =>
+        @<div class="af-apt-metric @(good ? "af-apm-good" : "af-apm-ok")">
+            <i class="bi @icon" aria-hidden="true"></i>
+            <span class="af-apm-lbl">@lbl</span>
+            <span class="af-apm-val">@val</span>
+        </div>;
+
+    RenderFragment ScoreCell(int s) =>
+        @<span class="af-score-cell af-score-@ScoreBand(s)">@s</span>;
+
+    RenderFragment SlaCell(int d) =>
+        @<span class="@(d<=5?"af-sla-fast":d<=10?"":"af-sla-slow")">@d d</span>;
+
+    RenderFragment PctCell(int p) =>
+        @<span class="@(p>=60?"af-pct-hi":p>=35?"":"af-pct-lo")">@p%</span>;
+
+    RenderFragment CommCell(decimal p) =>
+        @<span class="@(p>=15?"af-comm-hi":p<12?"af-comm-lo":"")">@p.ToString("F1")%</span>;
+
+    RenderFragment FlagCell(bool v) =>
+        v ? @<i class="bi bi-check-circle-fill af-flag-on" aria-hidden="true"></i>
+          : @<i class="bi bi-x-circle af-flag-off" aria-hidden="true"></i>;
+
+    RenderFragment AddBtn(CarrierRow c) =>
+        @<button class="um-btn um-btn-primary um-btn-xs" @onclick="() => AddToSubmission(c)">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add
+        </button>;
+
+    RenderFragment DrawMetric(string lbl, string val) =>
+        @<div class="af-dmr">
+            <span class="af-dmr-lbl">@lbl</span>
+            <span class="af-dmr-val">@val</span>
+        </div>;
+}

@@ -1,0 +1,285 @@
+@page "/admin/reference/markets"
+@namespace Ams.Web.Components.Pages.ReferenceAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>MGAs / Markets — Reference Data</PageTitle>
+
+<AppPageHeader Title="MGAs / Wholesalers / Markets"
+               Subtitle="Managing general agents, surplus lines wholesalers and specialty market relationships"
+               Icon="bi-shop">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Market
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="mk-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0">
+        <span class="mk-kpi-icon mk-kpi-icon--total"><i class="bi bi-shop" aria-hidden="true"></i></span>
+        <div><div class="mk-kpi-value">@_totalCount</div><div class="mk-kpi-label">Total Markets</div></div>
+        @if (_kpiActive == 1) { <span class="mk-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
+        <span class="mk-kpi-icon mk-kpi-icon--mga"><i class="bi bi-building-check" aria-hidden="true"></i></span>
+        <div><div class="mk-kpi-value">@_mgaCount</div><div class="mk-kpi-label">MGAs</div></div>
+        @if (_kpiActive == 2) { <span class="mk-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0">
+        <span class="mk-kpi-icon mk-kpi-icon--wholesale"><i class="bi bi-box-seam" aria-hidden="true"></i></span>
+        <div><div class="mk-kpi-value">@_wholesalerCount</div><div class="mk-kpi-label">Wholesalers</div></div>
+        @if (_kpiActive == 3) { <span class="mk-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="mk-kpi-card">
+        <span class="mk-kpi-icon mk-kpi-icon--surplus"><i class="bi bi-lightning-fill" aria-hidden="true"></i></span>
+        <div><div class="mk-kpi-value">@_surplusCount</div><div class="mk-kpi-label">Surplus Lines</div></div>
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search market name or contact…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_typeOptions"
+                        Placeholder="All Types"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterType"
+                        ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <label class="mk-toggle-label">
+            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
+            Active only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="MarketEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(MarketEntry.MarketName)" HeaderText="Market" Width="220">
+                <Template>
+                    @{ var e = (MarketEntry)context; }
+                    <div class="mk-name-cell">
+                        <span class="mk-market-icon" aria-hidden="true"><i class="bi bi-shop"></i></span>
+                        <div>
+                            <div class="mk-market-name">@e.MarketName</div>
+                            <div class="mk-market-contact">@e.PrimaryContact</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(MarketEntry.MarketType)" HeaderText="Type" Width="130">
+                <Template>
+                    @{ var e = (MarketEntry)context; }
+                    <span class="@TypeBadgeClass(e.MarketType)">@e.MarketType</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(MarketEntry.AppetiteSummary)" HeaderText="Appetite" Width="200" />
+            <GridColumn Field="@nameof(MarketEntry.LobCount)" HeaderText="Lines" Width="90" />
+            <GridColumn Field="@nameof(MarketEntry.IsActive)" HeaderText="Status" Width="100">
+                <Template>
+                    @{ var e = (MarketEntry)context; }
+                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (MarketEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.MarketId == Guid.Empty ? "Add Market" : "Edit Market")"
+               OnSave="SaveMarketAsync"
+               OnCancel="CloseDrawer">
+    <Body>
+        <div class="mk-form">
+            <label class="mk-form-label">Market Name *</label>
+            <input class="um-input" @bind="_editModel.MarketName" />
+
+            <label class="mk-form-label">Market Type</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_typeOptions"
+                            @bind-Value="_editModel.MarketType"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="mk-form-label">Primary Contact</label>
+            <input class="um-input" @bind="_editModel.PrimaryContact" />
+
+            <label class="mk-form-label">Appetite Summary</label>
+            <textarea class="um-input" rows="3" @bind="_editModel.AppetiteSummary" placeholder="Brief description of market appetite…"></textarea>
+
+            <label class="mk-form-label">Active</label>
+            <SfSwitch @bind-Checked="_editModel.IsActive" />
+        </div>
+    </Body>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<MarketEntry> _allEntries = [];
+    private List<MarketEntry> _entries    = [];
+
+    private bool _loading    = false;
+    private bool _showDrawer = false;
+
+    private string _search          = string.Empty;
+    private string _filterType      = string.Empty;
+    private bool   _filterActiveOnly = false;
+    private int    _kpiActive       = 0;
+
+    private int _totalCount      = 0;
+    private int _mgaCount        = 0;
+    private int _wholesalerCount = 0;
+    private int _surplusCount    = 0;
+
+    private string KpiClass1 => "mk-kpi-card" + (_kpiActive == 1 ? " mk-kpi-card--active" : "");
+    private string KpiClass2 => "mk-kpi-card" + (_kpiActive == 2 ? " mk-kpi-card--active" : "");
+    private string KpiClass3 => "mk-kpi-card" + (_kpiActive == 3 ? " mk-kpi-card--active" : "");
+
+    private static readonly List<LabelValue> _typeOptions =
+    [
+        new("MGA",           "MGA"),
+        new("Wholesaler",    "Wholesaler"),
+        new("SurplusLines",  "Surplus Lines"),
+        new("ProgramAdmin",  "Program Admin"),
+    ];
+
+    private MarketEntry _editModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",          "/"),
+            new("Reference Data","/admin/reference/carriers"),
+            new("Markets",       "/admin/reference/markets"));
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterType) || e.MarketType == _filterType) &&
+            (!_filterActiveOnly || e.IsActive) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.MarketName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.PrimaryContact.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        if (_kpiActive == 2) _entries = _entries.Where(e => e.MarketType == "MGA").ToList();
+        if (_kpiActive == 3) _entries = _entries.Where(e => e.MarketType == "Wholesaler").ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive  = _kpiActive == n ? 0 : n;
+        _filterType = string.Empty;
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount      = _allEntries.Count;
+        _mgaCount        = _allEntries.Count(e => e.MarketType == "MGA");
+        _wholesalerCount = _allEntries.Count(e => e.MarketType == "Wholesaler");
+        _surplusCount    = _allEntries.Count(e => e.MarketType == "SurplusLines");
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(MarketEntry e) { _editModel = new MarketEntry { MarketId = e.MarketId, MarketName = e.MarketName, MarketType = e.MarketType, PrimaryContact = e.PrimaryContact, AppetiteSummary = e.AppetiteSummary, LobCount = e.LobCount, IsActive = e.IsActive }; _showDrawer = true; }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveMarketAsync()
+    {
+        await Task.Delay(0);
+        _showDrawer = false;
+        await LoadAsync();
+        await ShowToastAsync("Market saved.", "e-toast-success");
+    }
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string TypeBadgeClass(string type) => type switch
+    {
+        "MGA"          => "mk-type-badge mk-type-badge--mga",
+        "Wholesaler"   => "mk-type-badge mk-type-badge--wholesale",
+        "SurplusLines" => "mk-type-badge mk-type-badge--surplus",
+        "ProgramAdmin" => "mk-type-badge mk-type-badge--program",
+        _              => "mk-type-badge",
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class MarketEntry
+    {
+        public Guid   MarketId        { get; set; } = Guid.Empty;
+        public string MarketName      { get; set; } = string.Empty;
+        public string MarketType      { get; set; } = "MGA";
+        public string PrimaryContact  { get; set; } = string.Empty;
+        public string AppetiteSummary { get; set; } = string.Empty;
+        public int    LobCount        { get; set; }
+        public bool   IsActive        { get; set; } = true;
+    }
+}

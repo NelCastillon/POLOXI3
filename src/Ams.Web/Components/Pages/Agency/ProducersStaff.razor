@@ -1,0 +1,361 @@
+@page "/admin/agency/staff"
+@namespace Ams.Web.Components.Pages.AgencyAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Producers / CSRs — Agency Setup</PageTitle>
+
+<AppPageHeader Title="Producers / CSRs"
+               Subtitle="Licensed producers, customer service representatives and their appointments"
+               Icon="bi-person-badge">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Staff
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="ps-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0">
+        <span class="ps-kpi-icon ps-kpi-icon--total"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+        <div><div class="ps-kpi-value">@_totalCount</div><div class="ps-kpi-label">Total Staff</div></div>
+        @if (_kpiActive == 1) { <span class="ps-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
+        <span class="ps-kpi-icon ps-kpi-icon--producers"><i class="bi bi-person-badge" aria-hidden="true"></i></span>
+        <div><div class="ps-kpi-value">@_producerCount</div><div class="ps-kpi-label">Producers</div></div>
+        @if (_kpiActive == 2) { <span class="ps-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0">
+        <span class="ps-kpi-icon ps-kpi-icon--csrs"><i class="bi bi-headset" aria-hidden="true"></i></span>
+        <div><div class="ps-kpi-value">@_csrCount</div><div class="ps-kpi-label">CSRs</div></div>
+        @if (_kpiActive == 3) { <span class="ps-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass4" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0">
+        <span class="ps-kpi-icon ps-kpi-icon--expiring"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span>
+        <div><div class="ps-kpi-value">@_licenseExpiringCount</div><div class="ps-kpi-label">License Expiring</div></div>
+        @if (_kpiActive == 4) { <span class="ps-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search name, NPN or email…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_roleOptions"
+                        Placeholder="All Roles"
+                        ShowClearButton="true"
+                        Width="150px"
+                        Value="_filterRole"
+                        ValueChanged="@((string v) => { _filterRole = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_licenseStatusOptions"
+                        Placeholder="License Status"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterLicenseStatus"
+                        ValueChanged="@((string v) => { _filterLicenseStatus = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <label class="ps-toggle-label">
+            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
+            Active only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="StaffEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(StaffEntry.FullName)" HeaderText="Name" Width="200">
+                <Template>
+                    @{ var e = (StaffEntry)context; }
+                    <div class="ps-name-cell">
+                        <span class="ps-avatar" style="@AvatarStyle(e)" aria-hidden="true">@Initials(e)</span>
+                        <div>
+                            <div class="ps-full-name">@e.FullName</div>
+                            <div class="ps-email">@e.Email</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(StaffEntry.Role)" HeaderText="Role" Width="120">
+                <Template>
+                    @{ var e = (StaffEntry)context; }
+                    <span class="@RoleBadgeClass(e.Role)">@e.Role</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(StaffEntry.Npn)" HeaderText="NPN" Width="130">
+                <Template>
+                    @{ var e = (StaffEntry)context; }
+                    <span class="ps-mono">@e.Npn</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(StaffEntry.LicenseState)" HeaderText="Lic. State" Width="100" />
+            <GridColumn Field="@nameof(StaffEntry.LicenseExpiry)" HeaderText="Lic. Expiry" Width="130">
+                <Template>
+                    @{ var e = (StaffEntry)context; }
+                    <span class="@LicenseExpiryClass(e)">
+                        @(e.LicenseExpiry.HasValue ? e.LicenseExpiry.Value.ToString("d") : "—")
+                    </span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(StaffEntry.AppointmentCount)" HeaderText="Appointments" Width="130" />
+            <GridColumn Field="@nameof(StaffEntry.IsActive)" HeaderText="Status" Width="100">
+                <Template>
+                    @{ var e = (StaffEntry)context; }
+                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (StaffEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.StaffId == Guid.Empty ? "Add Staff" : "Edit Staff")"
+               OnSave="SaveStaffAsync"
+               OnCancel="CloseDrawer">
+    <Body>
+        <div class="ps-form">
+            <label class="ps-form-label">First Name *</label>
+            <input class="um-input" @bind="_editModel.FirstName" />
+
+            <label class="ps-form-label">Last Name *</label>
+            <input class="um-input" @bind="_editModel.LastName" />
+
+            <label class="ps-form-label">Email *</label>
+            <input class="um-input" type="email" @bind="_editModel.Email" />
+
+            <label class="ps-form-label">Role</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_roleOptions"
+                            @bind-Value="_editModel.Role"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="ps-form-label">NPN</label>
+            <input class="um-input ps-mono" @bind="_editModel.Npn" />
+
+            <label class="ps-form-label">License State</label>
+            <input class="um-input" @bind="_editModel.LicenseState" />
+
+            <label class="ps-form-label">License Expiry</label>
+            <input class="um-input" type="date" @bind="_editModel.LicenseExpiry" />
+
+            <label class="ps-form-label">Active</label>
+            <SfSwitch @bind-Checked="_editModel.IsActive" />
+        </div>
+    </Body>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<StaffEntry> _allEntries = [];
+    private List<StaffEntry> _entries    = [];
+
+    private bool _loading    = false;
+    private bool _showDrawer = false;
+
+    private string _search               = string.Empty;
+    private string _filterRole           = string.Empty;
+    private string _filterLicenseStatus  = string.Empty;
+    private bool   _filterActiveOnly     = false;
+    private int    _kpiActive            = 0;
+
+    private int _totalCount          = 0;
+    private int _producerCount       = 0;
+    private int _csrCount            = 0;
+    private int _licenseExpiringCount = 0;
+
+    private string KpiClass1 => "ps-kpi-card" + (_kpiActive == 1 ? " ps-kpi-card--active" : "");
+    private string KpiClass2 => "ps-kpi-card" + (_kpiActive == 2 ? " ps-kpi-card--active" : "");
+    private string KpiClass3 => "ps-kpi-card" + (_kpiActive == 3 ? " ps-kpi-card--active" : "");
+    private string KpiClass4 => "ps-kpi-card" + (_kpiActive == 4 ? " ps-kpi-card--active" : "");
+
+    private static readonly List<LabelValue> _roleOptions =
+    [
+        new("Producer", "Producer"),
+        new("CSR",      "CSR"),
+        new("Manager",  "Manager"),
+    ];
+
+    private static readonly List<LabelValue> _licenseStatusOptions =
+    [
+        new("Active",   "Active"),
+        new("Expiring", "Expiring (90 days)"),
+        new("Expired",  "Expired"),
+    ];
+
+    private StaffEntry _editModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",          "/"),
+            new("Agency Setup",  "/admin/agency/profile"),
+            new("Producers / CSRs", "/admin/agency/staff"));
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace with Api.GetStaffAsync(_tenantId)
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        var cutoffExpiry = DateTime.Today.AddDays(90);
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterRole) || e.Role == _filterRole) &&
+            (!_filterActiveOnly || e.IsActive) &&
+            (string.IsNullOrEmpty(_filterLicenseStatus) ||
+             (_filterLicenseStatus == "Active"   && e.LicenseExpiry > cutoffExpiry) ||
+             (_filterLicenseStatus == "Expiring" && e.LicenseExpiry.HasValue && e.LicenseExpiry.Value <= cutoffExpiry && e.LicenseExpiry.Value >= DateTime.Today) ||
+             (_filterLicenseStatus == "Expired"  && e.LicenseExpiry < DateTime.Today)) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.FullName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.Email.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.Npn.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        if (_kpiActive == 2) _entries = _entries.Where(e => e.Role == "Producer").ToList();
+        if (_kpiActive == 3) _entries = _entries.Where(e => e.Role == "CSR").ToList();
+        if (_kpiActive == 4) _entries = _entries.Where(e => e.LicenseExpiry.HasValue && e.LicenseExpiry.Value <= cutoffExpiry && e.LicenseExpiry.Value >= DateTime.Today).ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive      = _kpiActive == n ? 0 : n;
+        _filterRole     = string.Empty;
+        _filterActiveOnly = false;
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        var cutoff = DateTime.Today.AddDays(90);
+        _totalCount          = _allEntries.Count;
+        _producerCount       = _allEntries.Count(e => e.Role == "Producer");
+        _csrCount            = _allEntries.Count(e => e.Role == "CSR");
+        _licenseExpiringCount = _allEntries.Count(e => e.LicenseExpiry.HasValue && e.LicenseExpiry.Value <= cutoff && e.LicenseExpiry.Value >= DateTime.Today);
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(StaffEntry e) { _editModel = new StaffEntry { StaffId = e.StaffId, FirstName = e.FirstName, LastName = e.LastName, Email = e.Email, Role = e.Role, Npn = e.Npn, LicenseState = e.LicenseState, LicenseExpiry = e.LicenseExpiry, AppointmentCount = e.AppointmentCount, IsActive = e.IsActive }; _showDrawer = true; }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveStaffAsync()
+    {
+        // TODO: Api.SaveStaffAsync
+        await Task.Delay(0);
+        _showDrawer = false;
+        await LoadAsync();
+        await ShowToastAsync("Staff record saved.", "e-toast-success");
+    }
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string Initials(StaffEntry e)
+    {
+        var parts = e.FullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : e.FullName.Length >= 1 ? e.FullName[..1] : "?";
+    }
+
+    private static string AvatarStyle(StaffEntry e)
+    {
+        var hue = Math.Abs(e.Email.GetHashCode()) % 360;
+        return $"background:hsl({hue},50%,42%);color:#fff;";
+    }
+
+    private static string RoleBadgeClass(string role) => role switch
+    {
+        "Producer" => "ps-role-badge ps-role-badge--producer",
+        "CSR"      => "ps-role-badge ps-role-badge--csr",
+        "Manager"  => "ps-role-badge ps-role-badge--manager",
+        _          => "ps-role-badge",
+    };
+
+    private static string LicenseExpiryClass(StaffEntry e)
+    {
+        if (!e.LicenseExpiry.HasValue) return "";
+        if (e.LicenseExpiry.Value < DateTime.Today)     return "ps-expiry ps-expiry--expired";
+        if (e.LicenseExpiry.Value < DateTime.Today.AddDays(90)) return "ps-expiry ps-expiry--expiring";
+        return "ps-expiry";
+    }
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class StaffEntry
+    {
+        public Guid      StaffId          { get; set; } = Guid.Empty;
+        public string    FirstName        { get; set; } = string.Empty;
+        public string    LastName         { get; set; } = string.Empty;
+        public string    FullName         => $"{FirstName} {LastName}".Trim();
+        public string    Email            { get; set; } = string.Empty;
+        public string    Role             { get; set; } = "Producer";
+        public string    Npn              { get; set; } = string.Empty;
+        public string    LicenseState     { get; set; } = string.Empty;
+        public DateTime? LicenseExpiry    { get; set; }
+        public int       AppointmentCount { get; set; }
+        public bool      IsActive         { get; set; } = true;
+    }
+}

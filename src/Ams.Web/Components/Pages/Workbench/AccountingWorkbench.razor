@@ -1,0 +1,449 @@
+@page "/workbench/accounting"
+@namespace Ams.Web.Components.Pages.Workbench
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Accounting Workbench</PageTitle>
+
+<WorkbenchShell Title="Accounting Workbench"
+                Subtitle="Premium reconciliation, AR aging, unapplied payments, commission adjustments, direct-bill exceptions and month-end tasks"
+                Icon="bi-calculator-fill"
+                @bind-Scope="_scope"
+                BranchId="@_branchId"
+                BranchIdChanged="OnBranchChangedAsync"
+                TeamId="@_teamId"
+                TeamIdChanged="OnTeamChangedAsync"
+                SavedViews="_savedViews"
+                OnSaveView="SaveViewAsync"
+                OnLoadView="LoadViewAsync"
+                OnDeleteView="DeleteViewAsync"
+                SlaItems="_slaItems"
+                AiSummary="_aiSummary"
+                AiSummaryLoading="_aiLoading"
+                AiSummaryGeneratedAt="_aiGeneratedAt"
+                OnGenerateAiSummary="GenerateAiSummaryAsync"
+                OnRefresh="LoadAsync"
+                Loading="_loading">
+    <ExtraActions>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+    </ExtraActions>
+    <Queues>
+
+        <!-- ── KPI strip ─────────────────────────────────────────────────── -->
+        <div class="wb-kpi-strip">
+            <div class="@KpiClass(1)" @onclick='() => FocusQueue(1, "reconciliation")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i1"><i class="bi bi-arrow-left-right" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val @(_c.ReconciliationItems > 0 ? "wb-kpi-val--warn" : "")">@_c.ReconciliationItems</div>
+                    <div class="wb-kpi-lbl">Reconciliation</div>
+                    <div class="wb-kpi-sub">@_c.ReconciliationAmount.ToString("C0") variance</div>
+                </div>
+                @KpiDot(1)
+            </div>
+            <div class="@KpiClass(2)" @onclick='() => FocusQueue(2, "ar-aging")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i5"><i class="bi bi-hourglass-split" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val @(_c.ArOverdue > 0 ? "wb-kpi-val--alert" : "")">@_c.ArOverdue</div>
+                    <div class="wb-kpi-lbl">AR Overdue</div>
+                    <div class="wb-kpi-sub">@_c.ArAmount.ToString("C0")</div>
+                </div>
+                @KpiDot(2)
+            </div>
+            <div class="@KpiClass(3)" @onclick='() => FocusQueue(3, "unapplied-payments")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i4"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val @(_c.UnappliedPayments > 0 ? "wb-kpi-val--warn" : "")">@_c.UnappliedPayments</div>
+                    <div class="wb-kpi-lbl">Unapplied Payments</div>
+                    <div class="wb-kpi-sub">@_c.UnappliedAmount.ToString("C0")</div>
+                </div>
+                @KpiDot(3)
+            </div>
+            <div class="@KpiClass(4)" @onclick='() => FocusQueue(4, "commission-adj")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i2"><i class="bi bi-percent" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val">@_c.CommissionAdj</div>
+                    <div class="wb-kpi-lbl">Comm. Adjustments</div>
+                </div>
+                @KpiDot(4)
+            </div>
+            <div class="@KpiClass(5)" @onclick='() => FocusQueue(5, "direct-bill")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i5"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val @(_c.DirectBillExceptions > 0 ? "wb-kpi-val--alert" : "")">@_c.DirectBillExceptions</div>
+                    <div class="wb-kpi-lbl">Direct-Bill Exceptions</div>
+                </div>
+                @KpiDot(5)
+            </div>
+            <div class="@KpiClass(6)" @onclick='() => FocusQueue(6, "month-end")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i3"><i class="bi bi-calendar-check-fill" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val">@_c.MonthEndOpen</div>
+                    <div class="wb-kpi-lbl">Month-end Tasks</div>
+                    <div class="wb-kpi-sub">@_c.MonthEndComplete complete</div>
+                </div>
+                @KpiDot(6)
+            </div>
+        </div>
+
+        @QueueTabs()
+        @FilterRow()
+
+        @if (!_loading)
+        {
+            @if (_activeQueue == "reconciliation")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="AcctItem" DataSource="@Filtered(_reconciliation)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(AcctItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.Title)"       HeaderText="Item"      Width="240"><Template>@{ var i=(AcctItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.AccountName)" HeaderText="Account"   Width="180" />
+                            <GridColumn Field="@nameof(AcctItem.CarrierName)" HeaderText="Carrier"   Width="160" />
+                            <GridColumn Field="@nameof(AcctItem.Variance)"    HeaderText="Variance"  Width="130" TextAlign="TextAlign.Right"><Template>@{ var i=(AcctItem)context; }<span class="@AmtClass(i.Variance)">@i.Variance.ToString("C0")</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.AssignedTo)"  HeaderText="Assignee"  Width="140" />
+                            <GridColumn Field="@nameof(AcctItem.DueDate)"     HeaderText="Due"       Width="110"><Template>@{ var i=(AcctItem)context; }<span class="@(i.DueDate<DateTime.Today?"wb-overdue":"")">@i.DueDate.ToString("d")</span></Template></GridColumn>
+                            <GridColumn HeaderText="SLA" Width="120"><Template>@{ var i=(AcctItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(AcctItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            @if (_activeQueue == "ar-aging")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="AcctItem" DataSource="@Filtered(_arAging)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn Field="@nameof(AcctItem.AccountName)" HeaderText="Account"    Width="200" />
+                            <GridColumn Field="@nameof(AcctItem.PolicyNumber)" HeaderText="Policy #"  Width="140"><Template>@{ var i=(AcctItem)context; }<span class="wb-mono">@i.PolicyNumber</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.Amount)"      HeaderText="Balance"    Width="130" TextAlign="TextAlign.Right"><Template>@{ var i=(AcctItem)context; }<span class="wb-bold wb-mono">@i.Amount.ToString("C0")</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.AgeDays)"     HeaderText="Days Past Due" Width="130" TextAlign="TextAlign.Right"><Template>@{ var i=(AcctItem)context; }<span class="@AgeBadge(i.AgeDays)">@i.AgeDays d</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.AgingBucket)" HeaderText="Bucket"     Width="120"><Template>@{ var i=(AcctItem)context; }<span class="@BucketBadge(i.AgingBucket)">@i.AgingBucket</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.AssignedTo)"  HeaderText="Assignee"   Width="140" />
+                            <GridColumn Field="@nameof(AcctItem.DueDate)"     HeaderText="Last Stmt"  Width="120"><Template>@{ var i=(AcctItem)context; }<span>@i.DueDate.ToString("d")</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(AcctItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            @if (_activeQueue == "unapplied-payments")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="AcctItem" DataSource="@Filtered(_unappliedPayments)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn Field="@nameof(AcctItem.RefNumber)"   HeaderText="Payment Ref" Width="140"><Template>@{ var i=(AcctItem)context; }<span class="wb-mono">@i.RefNumber</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.AccountName)" HeaderText="Account"     Width="200" />
+                            <GridColumn Field="@nameof(AcctItem.Amount)"      HeaderText="Amount"      Width="130" TextAlign="TextAlign.Right"><Template>@{ var i=(AcctItem)context; }<span class="wb-bold wb-mono wb-amount-pos">@i.Amount.ToString("C0")</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.PaymentMethod)" HeaderText="Method"    Width="120" />
+                            <GridColumn Field="@nameof(AcctItem.ReceivedDate)"  HeaderText="Received"  Width="130"><Template>@{ var i=(AcctItem)context; }<span>@i.ReceivedDate?.ToString("d")</span></Template></GridColumn>
+                            <GridColumn HeaderText="Age" Width="80"><Template>@{ var i=(AcctItem)context; }<span class="@AgeBadge(i.AgeDays)">@i.AgeDays d</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.AssignedTo)"  HeaderText="Assignee"    Width="140" />
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(AcctItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            @if (_activeQueue == "commission-adj")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="AcctItem" DataSource="@Filtered(_commissionAdj)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn Field="@nameof(AcctItem.RefNumber)"   HeaderText="Adj. #"      Width="130"><Template>@{ var i=(AcctItem)context; }<span class="wb-mono">@i.RefNumber</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.ProducerName)" HeaderText="Producer"   Width="180" />
+                            <GridColumn Field="@nameof(AcctItem.PolicyNumber)" HeaderText="Policy #"   Width="140"><Template>@{ var i=(AcctItem)context; }<span class="wb-mono">@i.PolicyNumber</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.Amount)"       HeaderText="Adj. Amount" Width="140" TextAlign="TextAlign.Right"><Template>@{ var i=(AcctItem)context; }<span class="@AmtClass(i.Amount)">@i.Amount.ToString("C0")</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.Reason)"       HeaderText="Reason"     Width="200" />
+                            <GridColumn Field="@nameof(AcctItem.AssignedTo)"   HeaderText="Assignee"   Width="140" />
+                            <GridColumn Field="@nameof(AcctItem.DueDate)"      HeaderText="By"         Width="110"><Template>@{ var i=(AcctItem)context; }<span class="@(i.DueDate<DateTime.Today?"wb-overdue":"")">@i.DueDate.ToString("d")</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(AcctItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            @if (_activeQueue == "direct-bill")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="AcctItem" DataSource="@Filtered(_directBill)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(AcctItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.Title)"       HeaderText="Exception"  Width="240"><Template>@{ var i=(AcctItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.AccountName)" HeaderText="Account"    Width="180" />
+                            <GridColumn Field="@nameof(AcctItem.CarrierName)" HeaderText="Carrier"    Width="160" />
+                            <GridColumn Field="@nameof(AcctItem.Amount)"      HeaderText="Amount"     Width="130" TextAlign="TextAlign.Right"><Template>@{ var i=(AcctItem)context; }<span class="wb-mono wb-bold">@i.Amount.ToString("C0")</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.AssignedTo)"  HeaderText="Assignee"   Width="140" />
+                            <GridColumn HeaderText="SLA" Width="120"><Template>@{ var i=(AcctItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(AcctItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            @if (_activeQueue == "month-end")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="AcctItem" DataSource="@Filtered(_monthEnd)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Status" Width="120"><Template>@{ var i=(AcctItem)context; }<span class="@StatusBadge(i.Status)">@i.Status</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.Title)"      HeaderText="Task"       Width="260"><Template>@{ var i=(AcctItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub">@i.Category</div></div></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.AssignedTo)" HeaderText="Assignee"   Width="150" />
+                            <GridColumn Field="@nameof(AcctItem.DueDate)"    HeaderText="Due"        Width="110"><Template>@{ var i=(AcctItem)context; }<span class="@(i.DueDate<DateTime.Today && i.Status!="Complete"?"wb-overdue":"")">@i.DueDate.ToString("d")</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(AcctItem.CompletedAt)" HeaderText="Completed" Width="130"><Template>@{ var i=(AcctItem)context; }<span>@(i.CompletedAt.HasValue ? i.CompletedAt.Value.ToString("d") : "—")</span></Template></GridColumn>
+                            <GridColumn HeaderText="Age" Width="80"><Template>@{ var i=(AcctItem)context; }<span class="@AgeBadge(i.AgeDays)">@i.AgeDays d</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(AcctItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="wb-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+        }
+
+        @DetailPanel()
+
+    </Queues>
+</WorkbenchShell>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private bool   _loading  = false;
+    private string _scope    = "me";
+    private string _branchId = string.Empty;
+    private string _teamId   = string.Empty;
+    private string _activeQueue = "reconciliation";
+    private int    _kpiFocus    = 0;
+    private AcctItem? _selected = null;
+
+    private string _search         = string.Empty;
+    private string _filterPriority = string.Empty;
+    private string _filterSla      = string.Empty;
+
+    private string?   _aiSummary     = null;
+    private bool      _aiLoading     = false;
+    private DateTime? _aiGeneratedAt = null;
+
+    private List<WorkbenchShell.SavedView>   _savedViews = [];
+    private List<WorkbenchShell.SlaHeatItem> _slaItems   = [];
+
+    private AcctCounts _c = new();
+
+    private List<AcctItem> _reconciliation   = [];
+    private List<AcctItem> _arAging          = [];
+    private List<AcctItem> _unappliedPayments= [];
+    private List<AcctItem> _commissionAdj    = [];
+    private List<AcctItem> _directBill       = [];
+    private List<AcctItem> _monthEnd         = [];
+
+    private record QDef(string Id, string Label, string Icon, int Badge, bool IsAlert);
+    private List<QDef> Queues => [
+        new("reconciliation",    "Reconciliation",      "bi bi-arrow-left-right",        _c.ReconciliationItems,  _c.ReconciliationItems > 0),
+        new("ar-aging",          "AR Aging",            "bi bi-hourglass-split",         _c.ArOverdue,            _c.ArOverdue > 0),
+        new("unapplied-payments","Unapplied Payments",  "bi bi-cash-coin",               _c.UnappliedPayments,    _c.UnappliedPayments > 0),
+        new("commission-adj",    "Comm. Adjustments",   "bi bi-percent",                 _c.CommissionAdj,        false),
+        new("direct-bill",       "Direct-Bill Exceptions","bi bi-exclamation-triangle-fill",_c.DirectBillExceptions,_c.DirectBillExceptions > 0),
+        new("month-end",         "Month-end Tasks",     "bi bi-calendar-check-fill",     _c.MonthEndOpen,         false),
+    ];
+
+    private static readonly List<WorkbenchShell.LabelValue> _priorityOptions =
+    [
+        new("Critical","Critical"),new("Urgent","Urgent"),
+        new("High","High"),new("Normal","Normal"),new("Low","Low"),
+    ];
+    private static readonly List<WorkbenchShell.LabelValue> _slaOptions =
+    [
+        new("On Track","On Track"),new("At Risk","At Risk"),new("Breached","Breached"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Accounting Workbench","/workbench/accounting"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; StateHasChanged();
+        try
+        {
+            await Task.Delay(0);
+            _reconciliation    = []; _arAging           = [];
+            _unappliedPayments = []; _commissionAdj     = [];
+            _directBill        = []; _monthEnd          = [];
+            _c = new();
+            RebuildSla();
+        }
+        finally { _loading = false; }
+    }
+
+    private void RebuildSla() => _slaItems =
+    [
+        new() { QueueName="Reconciliation",    InSla=_c.ReconciliationItems,   Breached=0 },
+        new() { QueueName="AR Aging",          InSla=_c.ArOverdue,             Breached=0 },
+        new() { QueueName="Unapplied Payments",InSla=_c.UnappliedPayments,     Breached=0 },
+        new() { QueueName="Direct-Bill Exc.",  InSla=_c.DirectBillExceptions,  Breached=0 },
+    ];
+
+    private async Task OnBranchChangedAsync(string v) { _branchId = v; await LoadAsync(); }
+    private async Task OnTeamChangedAsync(string v)   { _teamId   = v; await LoadAsync(); }
+
+    private async Task GenerateAiSummaryAsync()
+    {
+        _aiLoading = true; StateHasChanged();
+        await Task.Delay(0);
+        _aiSummary     = "No AI summary available yet. Wire up Api.GetWorkbenchAiSummaryAsync() to populate this field.";
+        _aiGeneratedAt = DateTime.Now;
+        _aiLoading     = false;
+    }
+
+    private async Task ExportAsync() => await ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+
+    private Task SaveViewAsync(WorkbenchShell.SavedView v)
+    {
+        v.QueueId = _activeQueue; v.Scope = _scope; v.BranchId = _branchId; v.TeamId = _teamId;
+        _savedViews.RemoveAll(x => x.Name == v.Name); _savedViews.Add(v);
+        return ShowToastAsync($"View \"{v.Name}\" saved.", "e-toast-success");
+    }
+    private Task LoadViewAsync(string name) { var v = _savedViews.FirstOrDefault(x => x.Name == name); if (v is not null) { _activeQueue = v.QueueId; _scope = v.Scope; _branchId = v.BranchId; _teamId = v.TeamId; StateHasChanged(); } return Task.CompletedTask; }
+    private Task DeleteViewAsync(string name) { _savedViews.RemoveAll(x => x.Name == name); return Task.CompletedTask; }
+
+    private List<AcctItem> Filtered(List<AcctItem> src) => src.Where(i =>
+        (string.IsNullOrEmpty(_filterPriority) || i.Priority == _filterPriority) &&
+        (string.IsNullOrEmpty(_filterSla)      || i.SlaStatus == _filterSla) &&
+        (string.IsNullOrEmpty(_search)         ||
+         i.Title.Contains(_search,       StringComparison.OrdinalIgnoreCase) ||
+         i.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         i.RefNumber.Contains(_search,   StringComparison.OrdinalIgnoreCase))
+    ).ToList();
+
+    private void FocusQueue(int n, string id) { _kpiFocus = _kpiFocus == n ? 0 : n; _activeQueue = id; _selected = null; }
+    private string KpiClass(int n) => "wb-kpi-card" + (_kpiFocus == n ? " wb-kpi-card--active" : "");
+    private RenderFragment KpiDot(int n) => _kpiFocus == n ? @<span class="wb-kpi-dot" aria-hidden="true"></span> : _ => { };
+    private void OpenDetail(AcctItem i) => _selected = i;
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private RenderFragment QueueTabs() => __builder =>
+    {
+        <div class="wb-queue-tabs" role="tablist">
+        @foreach (var q in Queues)
+        {
+            <button class="wb-queue-tab @(q.Id == _activeQueue ? "wb-queue-tab--active" : "")"
+                    role="tab" @onclick="() => { _activeQueue = q.Id; _selected = null; }">
+                <i class="@q.Icon" aria-hidden="true"></i> @q.Label
+                @if (q.Badge > 0) { <span class="wb-tab-badge @(q.IsAlert?"wb-tab-badge--alert":"")">@q.Badge</span> }
+            </button>
+        }
+        </div>;
+    };
+
+    private RenderFragment FilterRow() => __builder =>
+    {
+        <div class="wb-filter-row">
+            <div class="wb-search-box">
+                <i class="bi bi-search wb-search-icon" aria-hidden="true"></i>
+                <input class="wb-search-input" type="text" placeholder="Search…"
+                       value="@_search" @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; StateHasChanged(); })" />
+            </div>
+            <SfDropDownList TValue="string" TItem="WorkbenchShell.LabelValue" DataSource="_priorityOptions" Placeholder="All Priorities" ShowClearButton="true" Width="155px" Value="_filterPriority" ValueChanged="@((string v) => { _filterPriority = v; StateHasChanged(); })">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+            <SfDropDownList TValue="string" TItem="WorkbenchShell.LabelValue" DataSource="_slaOptions" Placeholder="All SLA" ShowClearButton="true" Width="140px" Value="_filterSla" ValueChanged="@((string v) => { _filterSla = v; StateHasChanged(); })">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>;
+    };
+
+    private RenderFragment DetailPanel() => __builder =>
+    {
+        @if (_selected is not null)
+        {
+            <div class="wb-overlay" @onclick="() => _selected = null" role="button" tabindex="-1" aria-label="Close"></div>
+            <div class="wb-detail-panel" role="complementary">
+                <div class="wb-detail-hdr">
+                    <span class="@PriBadge(_selected.Priority)">@_selected.Priority</span>
+                    <span class="@SlaBadge(_selected.SlaStatus)">@_selected.SlaStatus</span>
+                    <button class="um-btn um-btn-ghost um-btn-sm" style="margin-left:auto" @onclick="() => _selected = null"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <h2 class="wb-detail-title">@_selected.Title</h2>
+                <div class="wb-detail-body">
+                    <div class="wb-detail-row"><span class="wb-detail-lbl">Ref</span><span class="wb-mono">@_selected.RefNumber</span></div>
+                    <div class="wb-detail-row"><span class="wb-detail-lbl">Account</span><span>@_selected.AccountName</span></div>
+                    @if (!string.IsNullOrEmpty(_selected.PolicyNumber)) { <div class="wb-detail-row"><span class="wb-detail-lbl">Policy #</span><span class="wb-mono">@_selected.PolicyNumber</span></div> }
+                    @if (_selected.Amount != 0) { <div class="wb-detail-row"><span class="wb-detail-lbl">Amount</span><span class="@AmtClass(_selected.Amount)">@_selected.Amount.ToString("C0")</span></div> }
+                    @if (_selected.Variance != 0) { <div class="wb-detail-row"><span class="wb-detail-lbl">Variance</span><span class="@AmtClass(_selected.Variance)">@_selected.Variance.ToString("C0")</span></div> }
+                    <div class="wb-detail-row"><span class="wb-detail-lbl">Assignee</span><span>@_selected.AssignedTo</span></div>
+                    <div class="wb-detail-row"><span class="wb-detail-lbl">Due</span><span class="@(_selected.DueDate < DateTime.Today ? "wb-overdue" : "")">@_selected.DueDate.ToString("d")</span></div>
+                    @if (!string.IsNullOrEmpty(_selected.Notes)) { <div class="wb-detail-row"><span class="wb-detail-lbl">Notes</span><p class="wb-detail-notes">@_selected.Notes</p></div> }
+                </div>
+                <div class="wb-detail-footer">
+                    <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selected.DetailUrl)">Open Record <i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+        }
+    };
+
+    private static string PriBadge(string p) => p switch { "Critical"=>"wb-pri wb-pri--critical","Urgent"=>"wb-pri wb-pri--urgent","High"=>"wb-pri wb-pri--high","Normal"=>"wb-pri wb-pri--normal",_=>"wb-pri wb-pri--low" };
+    private static string SlaBadge(string s) => s switch { "On Track"=>"wb-sla wb-sla--ok","At Risk"=>"wb-sla wb-sla--warn",_=>"wb-sla wb-sla--breach" };
+    private static string AgeBadge(int d) => d > 7 ? "wb-age wb-age--old" : d > 3 ? "wb-age wb-age--mid" : "wb-age wb-age--ok";
+    private static string StatusBadge(string s) => s switch { "Complete"=>"wb-status wb-status--approved","In Progress"=>"wb-status wb-status--review","Pending"=>"wb-status wb-status--pending","Blocked"=>"wb-status wb-status--rejected",_=>"wb-status wb-status--open" };
+    private static string AmtClass(decimal v) => v < 0 ? "wb-amount-neg wb-mono" : "wb-amount-pos wb-mono";
+    private static string BucketBadge(string b) => b switch { "Current"=>"wb-sla wb-sla--ok","1-30"=>"wb-sla wb-sla--warn","31-60"=>"wb-sla wb-sla--breach","61-90"=>"wb-pri wb-pri--urgent","90+"=>"wb-pri wb-pri--critical",_=>"wb-sla" };
+
+    private sealed class AcctCounts
+    {
+        public int     ReconciliationItems  { get; set; }
+        public decimal ReconciliationAmount { get; set; }
+        public int     ArOverdue            { get; set; }
+        public decimal ArAmount             { get; set; }
+        public int     UnappliedPayments    { get; set; }
+        public decimal UnappliedAmount      { get; set; }
+        public int     CommissionAdj        { get; set; }
+        public int     DirectBillExceptions { get; set; }
+        public int     MonthEndOpen         { get; set; }
+        public int     MonthEndComplete     { get; set; }
+    }
+
+    private sealed class AcctItem
+    {
+        public Guid      ItemId        { get; set; } = Guid.NewGuid();
+        public string    Title         { get; set; } = string.Empty;
+        public string    RefNumber     { get; set; } = string.Empty;
+        public string    AccountName   { get; set; } = string.Empty;
+        public string    PolicyNumber  { get; set; } = string.Empty;
+        public string    CarrierName   { get; set; } = string.Empty;
+        public string    ProducerName  { get; set; } = string.Empty;
+        public string    Category      { get; set; } = string.Empty;
+        public string    AssignedTo    { get; set; } = string.Empty;
+        public string    Priority      { get; set; } = "Normal";
+        public string    SlaStatus     { get; set; } = "On Track";
+        public string    Status        { get; set; } = "Open";
+        public string    AgingBucket   { get; set; } = "Current";
+        public string    PaymentMethod { get; set; } = string.Empty;
+        public string    Reason        { get; set; } = string.Empty;
+        public decimal   Amount        { get; set; }
+        public decimal   Variance      { get; set; }
+        public DateTime  DueDate       { get; set; } = DateTime.Today;
+        public DateTime? ReceivedDate  { get; set; }
+        public DateTime? CompletedAt   { get; set; }
+        public int       AgeDays       { get; set; }
+        public string?   Notes         { get; set; }
+        public string    DetailUrl     { get; set; } = "/workbench/accounting";
+    }
+}

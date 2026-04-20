@@ -1,48 +1,171 @@
 @page "/commissions/payout-statements"
+@page "/commissions/statements"
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Commission Payout Statements</PageTitle>
+<PageTitle>Commission Statements — AMS</PageTitle>
 
-<h1>Commission Payout Statements</h1>
+<AppPageHeader Title="Commission Statements"
+               Subtitle="Review, approve, and distribute producer commission payout statements by period and payee"
+               Icon="bi-file-earmark-text">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'>
+            <i class="bi bi-journal-text" aria-hidden="true"></i> Producer Ledger
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/payout-batches")'>
+            <i class="bi bi-box-seam" aria-hidden="true"></i> Payout Batches
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showGenerate = true">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> Generate Statements
+        </button>
+    </Actions>
+</AppPageHeader>
 
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+<!-- KPI strip -->
+<div class="cs-kpi-strip">
+    <div class="cs-kpi-card cs-ki-blue"><i class="bi bi-file-earmark-text cs-kpi-icon" aria-hidden="true"></i><div><div class="cs-kpi-val">@(_items?.Count ?? 0)</div><div class="cs-kpi-lbl">Statements</div></div></div>
+    <div class="cs-kpi-card cs-ki-blue"><i class="bi bi-currency-dollar cs-kpi-icon" aria-hidden="true"></i><div><div class="cs-kpi-val">@Fmt(_items?.Sum(x=>x.GrossEarnings))</div><div class="cs-kpi-lbl">Gross Earnings</div></div></div>
+    <div class="cs-kpi-card cs-ki-red"><i class="bi bi-arrow-return-left cs-kpi-icon" aria-hidden="true"></i><div><div class="cs-kpi-val">@Fmt(_items?.Sum(x=>x.TotalClawbacks))</div><div class="cs-kpi-lbl">Clawbacks</div></div></div>
+    <div class="cs-kpi-card cs-ki-green"><i class="bi bi-cash-stack cs-kpi-icon" aria-hidden="true"></i><div><div class="cs-kpi-val">@Fmt(_items?.Sum(x=>x.NetPayout))</div><div class="cs-kpi-lbl">Net Payout</div></div></div>
+    <div class="cs-kpi-card cs-ki-amber"><i class="bi bi-hourglass cs-kpi-icon" aria-hidden="true"></i><div><div class="cs-kpi-val">@(_items?.Count(x=>x.StatusCode=="Pending") ?? 0)</div><div class="cs-kpi-lbl">Pending</div></div></div>
+    <div class="cs-kpi-card cs-ki-green"><i class="bi bi-check-circle cs-kpi-icon" aria-hidden="true"></i><div><div class="cs-kpi-val">@(_items?.Count(x=>x.StatusCode=="Issued") ?? 0)</div><div class="cs-kpi-lbl">Issued</div></div></div>
+    <div class="cs-kpi-card cs-ki-blue"><i class="bi bi-people cs-kpi-icon" aria-hidden="true"></i><div><div class="cs-kpi-val">@(_items?.Select(x=>x.PayeeId).Distinct().Count() ?? 0)</div><div class="cs-kpi-lbl">Payees</div></div></div>
+    <div class="cs-kpi-card cs-ki-green"><i class="bi bi-calendar-range cs-kpi-icon" aria-hidden="true"></i><div><div class="cs-kpi-val">@Fmt(_items?.Where(x=>x.StatementDate>=DateOnly.FromDateTime(DateTime.Today.AddDays(-30))).Sum(x=>x.NetPayout))</div><div class="cs-kpi-lbl">This Period</div></div></div>
+</div>
+
+<!-- Sub-nav -->
+<div class="cs-subnav">
+    <button class="cs-snav-btn cs-snav-active"><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
+    <button class="cs-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><i class="bi bi-journal-text" aria-hidden="true"></i> Producer Ledger</button>
+    <button class="cs-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/splits")'><i class="bi bi-scissors" aria-hidden="true"></i> Split Rules</button>
+    <button class="cs-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/plans")'><i class="bi bi-clipboard-check" aria-hidden="true"></i> Comp Plans</button>
+    <button class="cs-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/exceptions")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions</button>
+    <button class="cs-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/forecast")'><i class="bi bi-graph-up" aria-hidden="true"></i> Forecast</button>
+    <button class="cs-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/planner")'><i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner</button>
+</div>
+
+<!-- Toolbar -->
+<div class="cs-toolbar">
+    <SfTextBox Placeholder="Search payee, period…" @bind-Value="_searchTerm" Width="270px"></SfTextBox>
+    <select class="e-input cs-sel" @bind="_filterStatus">
+        <option value="">All Statuses</option>
+        <option value="Draft">Draft</option>
+        <option value="Pending">Pending Approval</option>
+        <option value="Approved">Approved</option>
+        <option value="Issued">Issued</option>
+        <option value="Voided">Voided</option>
+    </select>
+    <SfDatePicker TValue="DateTime?" @bind-Value="_filterFrom" Placeholder="From…" Width="150px"></SfDatePicker>
+    <SfDatePicker TValue="DateTime?" @bind-Value="_filterTo"   Placeholder="To…"   Width="150px"></SfDatePicker>
+    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync">
+        <i class="bi bi-search" aria-hidden="true"></i>
+    </button>
 </div>
 
 @if (_items is null)
 {
-    <p>Loading...</p>
+    <div style="padding:2rem"><SfSpinner Visible="true" /></div>
 }
 else
 {
-    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridPageSettings PageSize="10"></GridPageSettings>
+<div class="cs-grid-wrap">
+    <SfGrid DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="520px">
+        <GridPageSettings PageSize="15"></GridPageSettings>
         <GridColumns>
-            <GridColumn Field="@nameof(CommissionPayoutStatementDto.StatementDate)" HeaderText="Statement Date" Type="ColumnType.Date" Format="d" Width="150"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPayoutStatementDto.GrossEarnings)" HeaderText="Gross Earnings" Format="C2" Width="160"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPayoutStatementDto.TotalClawbacks)" HeaderText="Clawbacks" Format="C2" Width="130"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPayoutStatementDto.NetPayout)" HeaderText="Net Payout" Format="C2" Width="130"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPayoutStatementDto.CurrencyCode)" HeaderText="Currency" Width="100"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPayoutStatementDto.StatusCode)" HeaderText="Status" Width="120"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPayoutStatementDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="180"></GridColumn>
+            <GridColumn Field="@nameof(CommissionPayoutStatementDto.StatementDate)" HeaderText="Period" Type="ColumnType.Date" Format="MMM yyyy" Width="120"></GridColumn>
+            <GridColumn Field="@nameof(CommissionPayoutStatementDto.GrossEarnings)" HeaderText="Gross" Format="C2" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn HeaderText="Clawbacks" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    @{ var s = (CommissionPayoutStatementDto)context; }
+                    <span class="@(s.TotalClawbacks>0?"cs-clawback":"")">@s.TotalClawbacks.ToString("C2")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CommissionPayoutStatementDto.NetPayout)" HeaderText="Net Payout" Format="C2" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(CommissionPayoutStatementDto.CurrencyCode)" HeaderText="Ccy" Width="70"></GridColumn>
+            <GridColumn HeaderText="Status" Width="120">
+                <Template>
+                    @{ var s2 = (CommissionPayoutStatementDto)context; }
+                    <span class="cs-status-chip cs-st-@s2.StatusCode.ToLower()">@s2.StatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CommissionPayoutStatementDto.IssuedDateUtc)" HeaderText="Issued" Type="ColumnType.DateTime" Format="d" Width="110"></GridColumn>
+            <GridColumn HeaderText="Actions" Width="130">
+                <Template>
+                    @{ var s3 = (CommissionPayoutStatementDto)context; }
+                    <div class="cs-row-acts">
+                        <button class="um-btn um-btn-ghost um-btn-xs"
+                                @onclick="() => NavToDetail(s3)"
+                                title="Open statement">
+                            <i class="bi bi-arrow-up-right-square" aria-hidden="true"></i>
+                        </button>
+                        @if (s3.StatusCode == "Pending")
+                        {
+                            <button class="um-btn um-btn-primary um-btn-xs" title="Approve">
+                                <i class="bi bi-check-circle" aria-hidden="true"></i> Approve
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
         </GridColumns>
     </SfGrid>
+</div>
 }
+
+<!-- Generate Statements Dialog -->
+<SfDialog Width="480px" IsModal="true" @bind-Visible="_showGenerate" Header="Generate Commission Statements" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Content>
+            <div class="cs-dlg-body">
+                <div class="form-group mb-2"><label class="cs-lbl">Pay Period</label>
+                    <SfDateRangePicker TValue="DateTime?" @bind-StartDate="_genFrom" @bind-EndDate="_genTo" Width="100%"></SfDateRangePicker>
+                </div>
+                <div class="form-group mb-2"><label class="cs-lbl">Payee Filter (optional)</label>
+                    <SfTextBox @bind-Value="_genPayee" Placeholder="Leave blank for all payees…"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="cs-lbl">Include Clawbacks</label>
+                    <SfCheckBox Label="Apply pending clawbacks" @bind-Checked="_genClawbacks"></SfCheckBox>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Generate" IsPrimary="true" OnClick="() => _showGenerate = false"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showGenerate = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string? _searchTerm;
+    private string _filterStatus = "";
+    private DateTime? _filterFrom, _filterTo;
+    private bool _showGenerate;
+    private string? _genPayee;
+    private DateTime? _genFrom, _genTo;
+    private bool _genClawbacks = true;
     private List<CommissionPayoutStatementDto>? _items;
+
+    private IEnumerable<CommissionPayoutStatementDto> FilteredItems => (_items ?? []).Where(x =>
+        (string.IsNullOrEmpty(_filterStatus) || x.StatusCode == _filterStatus) &&
+        (!_filterFrom.HasValue || x.StatementDate >= DateOnly.FromDateTime(_filterFrom.Value)) &&
+        (!_filterTo.HasValue   || x.StatementDate <= DateOnly.FromDateTime(_filterTo.Value)));
 
     protected override async Task OnInitializedAsync()
     {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Statements",""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         var result = await Api.SearchCommissionPayoutStatementsAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? new List<CommissionPayoutStatementDto>();
+        _items = result?.Items.ToList() ?? [];
     }
+
+    static string Fmt(decimal? v) => v.HasValue ? v.Value.ToString("C0") : "$0";
+
+    void NavToDetail(CommissionPayoutStatementDto s) =>
+        Nav.NavigateTo("/commissions/statements/" + s.StatementId);
 }

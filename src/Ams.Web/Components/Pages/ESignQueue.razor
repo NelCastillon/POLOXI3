@@ -1,0 +1,260 @@
+@page "/documents/esign"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>E-Signature Queue — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── REQUEST E-SIGN DIALOG ──────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showRequest" Width="620px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="eq-dlg-hdr"><i class="bi bi-pen" aria-hidden="true"></i> Request E-Signature</div></Header>
+        <Content>
+            <div class="eq-dlg-body">
+                <div class="form-group mb-2"><label class="eq-lbl">Document</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_docOptions" @bind-Value="_reqDoc" Placeholder="Select document…" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="eq-lbl">Signer Name</label>
+                    <SfTextBox @bind-Value="_reqSigner" Placeholder="Full name…"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="eq-lbl">Signer Email</label>
+                    <SfTextBox @bind-Value="_reqEmail" Placeholder="email@example.com"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="eq-lbl">Due Date</label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_reqDue" Width="100%"></SfDatePicker>
+                </div>
+                <div class="form-group mb-2"><label class="eq-lbl">Priority</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"Normal","High","Urgent"}' @bind-Value="_reqPriority" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="eq-lbl">Message to Signer</label>
+                    <SfTextBox @bind-Value="_reqMessage" Multiline="true" Placeholder="Optional message…"></SfTextBox>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Send Request" IsPrimary="true" OnClick="SendRequestAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showRequest = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<!-- ── VOID DIALOG ─────────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showVoid" Width="440px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="eq-dlg-hdr"><i class="bi bi-x-circle" aria-hidden="true"></i> Void Request</div></Header>
+        <Content>
+            <p class="eq-void-warn">Are you sure you want to void <strong>@_voidTarget?.Document</strong>? The signer will be notified.</p>
+            <div class="form-group mb-2"><label class="eq-lbl">Reason</label>
+                <SfTextBox @bind-Value="_voidReason" Multiline="true" Placeholder="Reason for voiding…"></SfTextBox>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Void Request" IsPrimary="true" OnClick="ConfirmVoidAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showVoid = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<AppPageHeader Title="E-Signature Queue"
+               Subtitle="Track, send, and manage electronic signature requests across policies and ACORD forms"
+               Icon="bi-pen">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Documents
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showRequest = true">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> Request Signature
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="eq-kpi-strip">
+    <div class="eq-kpi"><i class="bi bi-send eq-ki blue" aria-hidden="true"></i><div><div class="eq-kv">@_items.Count</div><div class="eq-kl">Total Requests</div></div></div>
+    <div class="eq-kpi"><i class="bi bi-hourglass-split eq-ki amber" aria-hidden="true"></i><div><div class="eq-kv">@_items.Count(x=>x.Status=="Sent")</div><div class="eq-kl">Awaiting Signature</div></div></div>
+    <div class="eq-kpi"><i class="bi bi-eye eq-ki blue" aria-hidden="true"></i><div><div class="eq-kv">@_items.Count(x=>x.Status=="Viewed")</div><div class="eq-kl">Viewed</div></div></div>
+    <div class="eq-kpi"><i class="bi bi-check-circle eq-ki green" aria-hidden="true"></i><div><div class="eq-kv">@_items.Count(x=>x.Status=="Signed")</div><div class="eq-kl">Signed</div></div></div>
+    <div class="eq-kpi"><i class="bi bi-clock-history eq-ki red" aria-hidden="true"></i><div><div class="eq-kv">@_items.Count(x=>x.IsOverdue)</div><div class="eq-kl">Overdue</div></div></div>
+    <div class="eq-kpi"><i class="bi bi-x-circle eq-ki gray" aria-hidden="true"></i><div><div class="eq-kv">@_items.Count(x=>x.Status=="Voided")</div><div class="eq-kl">Voided</div></div></div>
+</div>
+
+<!-- Toolbar -->
+<div class="eq-toolbar">
+    <SfTextBox Placeholder="Search by document, signer, policy…" @bind-Value="_search" Width="280px"></SfTextBox>
+    <select class="e-input eq-sel" @bind="_filterStatus">
+        <option value="">All Statuses</option>
+        <option value="Sent">Sent</option>
+        <option value="Viewed">Viewed</option>
+        <option value="Signed">Signed</option>
+        <option value="Declined">Declined</option>
+        <option value="Voided">Voided</option>
+        <option value="Expired">Expired</option>
+    </select>
+    <select class="e-input eq-sel" @bind="_filterPriority">
+        <option value="">All Priorities</option>
+        <option value="Urgent">Urgent</option>
+        <option value="High">High</option>
+        <option value="Normal">Normal</option>
+    </select>
+    <div style="margin-left:auto;display:flex;gap:.35rem;">
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="RemindAll" title="Remind all pending">
+            <i class="bi bi-bell" aria-hidden="true"></i> Remind All
+        </button>
+    </div>
+</div>
+
+<!-- Queue grid -->
+<div class="eq-grid-wrap">
+    <SfGrid DataSource="FilteredItems" AllowSorting="true" AllowPaging="true" Height="520px">
+        <GridPageSettings PageSize="12"></GridPageSettings>
+        <GridColumns>
+            <GridColumn HeaderText="Document" Width="230">
+                <Template>
+                    @{ var r = (ESignRow)context; }
+                    <div class="eq-doc-cell">
+                        <i class="bi bi-file-earmark-text eq-doc-icon" aria-hidden="true"></i>
+                        <div>
+                            <div class="eq-doc-name">@r.Document</div>
+                            <div class="eq-doc-sub">@r.PolicyNumber</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Signer" Width="180">
+                <Template>
+                    @{ var r2 = (ESignRow)context; }
+                    <div class="eq-signer-cell">
+                        <div class="eq-signer-name">@r2.SignerName</div>
+                        <div class="eq-signer-email">@r2.SignerEmail</div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Priority" Width="90">
+                <Template>
+                    @{ var r3 = (ESignRow)context; }
+                    <span class="eq-pri-chip eq-pri-@r3.Priority.ToLower()">@r3.Priority</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Status" Width="120">
+                <Template>
+                    @{ var r4 = (ESignRow)context; }
+                    <div>
+                        <span class="eq-status-chip eq-st-@r4.Status.ToLower()">@r4.Status</span>
+                        @if (r4.IsOverdue) { <span class="eq-overdue-badge">OVERDUE</span> }
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(ESignRow.SentDate)" HeaderText="Sent" Type="ColumnType.DateTime" Format="g" Width="140"></GridColumn>
+            <GridColumn Field="@nameof(ESignRow.DueDate)" HeaderText="Due" Type="ColumnType.DateTime" Format="d" Width="100"></GridColumn>
+            <GridColumn Field="@nameof(ESignRow.CompletedDate)" HeaderText="Completed" Type="ColumnType.DateTime" Format="g" Width="140"></GridColumn>
+            <GridColumn HeaderText="Actions" Width="130">
+                <Template>
+                    @{ var r5 = (ESignRow)context; }
+                    <div style="display:flex;gap:.2rem">
+                        @if (r5.Status is "Sent" or "Viewed")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Remind(r5)" title="Send reminder">
+                                <i class="bi bi-bell" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenVoid(r5)" title="Void">
+                                <i class="bi bi-x-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (r5.Status == "Signed")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs" title="Download signed document">
+                                <i class="bi bi-download" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo($"/documents/{r5.DocumentId}")'
+                                title="View document">
+                            <i class="bi bi-arrow-up-right-square" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+@code {
+    private SfToast _toast = default!;
+    private string _search = "", _filterStatus = "", _filterPriority = "";
+    private bool _showRequest, _showVoid;
+    private string? _reqDoc, _reqSigner, _reqEmail, _reqPriority = "Normal", _reqMessage;
+    private DateTime _reqDue = DateTime.Today.AddDays(5);
+    private ESignRow? _voidTarget;
+    private string? _voidReason;
+
+    private readonly List<string> _docOptions = [
+        "ACORD 25 — Certificate of Liability",
+        "ACORD 126 — Commercial GL Section",
+        "Policy Endorsement — POL-2025-00142",
+        "Renewal Agreement — POL-2024-99310",
+        "Cancellation Notice — POL-2024-88204"
+    ];
+
+    private List<ESignRow> _items =
+    [
+        new(Guid.NewGuid(), "ACORD 25 — Certificate of Liability",  "POL-2025-00142", "Sarah Chen",      "schen@email.com",    "Urgent", "Sent",     false, DateTime.Now.AddDays(-3), DateTime.Today.AddDays(-1), null),
+        new(Guid.NewGuid(), "Policy Endorsement — BI Limit Change", "POL-2025-00089", "Marcus Johnson",  "mjohnson@email.com", "High",   "Viewed",   false, DateTime.Now.AddDays(-2), DateTime.Today.AddDays(2),  null),
+        new(Guid.NewGuid(), "Renewal Agreement FY2025",             "POL-2024-99310", "Aiko Tanaka",     "atanaka@corp.com",   "Normal", "Signed",   false, DateTime.Now.AddDays(-5), DateTime.Today.AddDays(-2), DateTime.Now.AddDays(-3)),
+        new(Guid.NewGuid(), "ACORD 126 — GL Section",               "POL-2025-00142", "David Park",      "dpark@email.com",    "High",   "Sent",     false, DateTime.Now.AddDays(-1), DateTime.Today.AddDays(4),  null),
+        new(Guid.NewGuid(), "Cancellation Notice",                  "POL-2024-88204", "Linda Okafor",    "lokafor@email.com",  "Urgent", "Declined", false, DateTime.Now.AddDays(-4), DateTime.Today.AddDays(-2), null),
+        new(Guid.NewGuid(), "Commercial Property Application",      "POL-2025-00217", "Robert Kim",      "rkim@biz.com",       "Normal", "Signed",   false, DateTime.Now.AddDays(-8), DateTime.Today.AddDays(-5), DateTime.Now.AddDays(-7)),
+        new(Guid.NewGuid(), "Umbrella Policy Agreement",            "POL-2024-88555", "Maria Torres",    "mtorres@email.com",  "High",   "Expired",  false, DateTime.Now.AddDays(-15),DateTime.Today.AddDays(-8), null),
+        new(Guid.NewGuid(), "ACORD 36 — Binder",                   "POL-2025-00319", "James Wilson",    "jwilson@email.com",  "Urgent", "Sent",     false, DateTime.Now.AddHours(-5),DateTime.Today,             null),
+        new(Guid.NewGuid(), "Workers Comp Application",             "POL-2024-88204", "Priya Sharma",    "psharma@email.com",  "Normal", "Voided",   false, DateTime.Now.AddDays(-6), DateTime.Today.AddDays(-4), null),
+        new(Guid.NewGuid(), "Homeowner Renewal Packet",             "POL-2025-00089", "Carlos Rivera",   "crivera@email.com",  "Normal", "Signed",   false, DateTime.Now.AddDays(-3), DateTime.Today.AddDays(1),  DateTime.Now.AddDays(-1)),
+    ];
+
+    // Mark overdue rows
+    private List<ESignRow> Items => _items.Select(r =>
+        r.IsOverdue == false && r.DueDate < DateTime.Today && r.Status is "Sent" or "Viewed"
+            ? r with { IsOverdue = true }
+            : r).ToList();
+
+    private IEnumerable<ESignRow> FilteredItems => Items.Where(r =>
+        (string.IsNullOrEmpty(_search) || r.Document.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.SignerName.Contains(_search, StringComparison.OrdinalIgnoreCase) || (r.PolicyNumber?.Contains(_search) ?? false)) &&
+        (string.IsNullOrEmpty(_filterStatus)   || r.Status   == _filterStatus) &&
+        (string.IsNullOrEmpty(_filterPriority) || r.Priority == _filterPriority));
+
+    protected override void OnInitialized() =>
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Documents","/documents"), new("E-Sign Queue",""));
+
+    async Task SendRequestAsync()
+    {
+        _items.Add(new(Guid.NewGuid(), _reqDoc ?? "New Document", "—", _reqSigner ?? "—", _reqEmail ?? "—",
+            _reqPriority ?? "Normal", "Sent", false, DateTime.Now, _reqDue, null));
+        _showRequest = false;
+        _reqDoc = _reqSigner = _reqEmail = _reqMessage = null; _reqPriority = "Normal";
+        await _toast.ShowAsync(new ToastModel { Content = "Signature request sent.", CssClass = "e-toast-success" });
+    }
+
+    void OpenVoid(ESignRow r) { _voidTarget = r; _voidReason = null; _showVoid = true; }
+
+    async Task ConfirmVoidAsync()
+    {
+        if (_voidTarget is null) return;
+        var idx = _items.IndexOf(_voidTarget);
+        if (idx >= 0) _items[idx] = _voidTarget with { Status = "Voided" };
+        _showVoid = false;
+        await _toast.ShowAsync(new ToastModel { Content = "Request voided.", CssClass = "e-toast-warning" });
+    }
+
+    async Task Remind(ESignRow r) =>
+        await _toast.ShowAsync(new ToastModel { Content = $"Reminder sent to {r.SignerName}.", CssClass = "e-toast-success" });
+
+    async Task RemindAll()
+    {
+        var n = Items.Count(r => r.Status is "Sent" or "Viewed");
+        await _toast.ShowAsync(new ToastModel { Content = $"Reminders sent to {n} pending signers.", CssClass = "e-toast-success" });
+    }
+
+    record ESignRow(Guid DocumentId, string Document, string? PolicyNumber, string SignerName, string SignerEmail,
+                    string Priority, string Status, bool IsOverdue, DateTime SentDate, DateTime DueDate, DateTime? CompletedDate);
+}

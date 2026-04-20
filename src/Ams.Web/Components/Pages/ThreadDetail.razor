@@ -1,0 +1,539 @@
+@page "/communications/thread/{ThreadId}"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Thread Detail — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── ASSIGN DIALOG ─────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showAssignDlg" Width="380px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-person-check" aria-hidden="true"></i> Assign Conversation</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="pd-dlg-grid-1">
+                    <div><label class="cd-dlg-lbl">Assign To *</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@_agents" @bind-Value="_assignTo" Placeholder="Select agent or CSR" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Note</label>
+                        <SfTextBox @bind-Value="_assignNote" Placeholder="Optional handoff note…" Multiline="true" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showAssignDlg = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ConfirmAssign">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Assign
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── ESCALATE DIALOG ───────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showEscalateDlg" Width="400px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Escalate</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="pd-dlg-grid-1">
+                    <div><label class="cd-dlg-lbl">Escalate To *</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@_supervisors" @bind-Value="_escalateTo" Placeholder="Select supervisor" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Reason *</label>
+                        <SfDropDownList TValue="string" TItem="string"
+                                        DataSource="@(new[]{"Complaint","Coverage Dispute","Legal Threat","Regulatory Issue","VIP Client","Complex Situation","Other"})"
+                                        @bind-Value="_escalateReason" Placeholder="Select reason" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Notes</label>
+                        <SfTextBox @bind-Value="_escalateNote" Placeholder="Escalation context…" Multiline="true" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showEscalateDlg = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ConfirmEscalate">
+                    <i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Escalate
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<AppPageHeader Title="Thread Detail"
+               Subtitle="@(_thread?.Subject ?? "Loading…")"
+               Icon="bi-chat-left-text">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/inbox")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Inbox
+        </button>
+        @if (_thread is not null)
+        {
+            <button class="um-btn um-btn-ghost" @onclick="() => _showAssignDlg = true">
+                <i class="bi bi-person-check" aria-hidden="true"></i> Assign
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="() => _showEscalateDlg = true">
+                <i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Escalate
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="ResolveConversation">
+                <i class="bi bi-check-circle" aria-hidden="true"></i> Resolve
+            </button>
+        }
+    </Actions>
+</AppPageHeader>
+
+@if (_thread is null)
+{
+    <div class="td-not-found">
+        <i class="bi bi-chat-square-x td-nf-icon" aria-hidden="true"></i>
+        <h3>Thread not found</h3>
+        <p>Thread ID <code>@ThreadId</code> could not be located. It may have been resolved or archived.</p>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/communications/inbox")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Return to Inbox
+        </button>
+    </div>
+}
+else
+{
+    <div class="td-layout">
+
+        <!-- ── LEFT — THREAD METADATA PANEL ─────────────────────── -->
+        <aside class="td-meta-panel">
+
+            <!-- Account card -->
+            <div class="td-card">
+                <div class="td-card-hdr"><i class="bi bi-building" aria-hidden="true"></i> Account</div>
+                <div class="td-card-body">
+                    <div class="td-meta-val td-meta-bold">@_thread.AccountName</div>
+                    <div class="td-meta-val"><i class="bi bi-person" aria-hidden="true"></i> @_thread.ContactName</div>
+                    <div class="td-meta-val"><i class="bi bi-envelope" aria-hidden="true"></i> @_thread.ContactEmail</div>
+                    <div class="td-meta-val"><i class="bi bi-phone" aria-hidden="true"></i> @_thread.ContactPhone</div>
+                    @if (_thread.OptedOut)
+                    {
+                        <div class="td-optout-row">
+                            <i class="bi bi-slash-circle" aria-hidden="true"></i>
+                            Opted Out — Do Not Contact Directly
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- Thread info card -->
+            <div class="td-card">
+                <div class="td-card-hdr"><i class="bi bi-info-circle" aria-hidden="true"></i> Thread Info</div>
+                <div class="td-card-body">
+                    <div class="td-meta-row"><span class="td-lbl">Channel</span>
+                        <span class="ci-ch-icon ci-ch-@ChannelCss(_thread.Channel)" style="width:1.4rem;height:1.4rem;font-size:.75rem;">
+                            <i class="bi @ChannelIcon(_thread.Channel)" aria-hidden="true"></i>
+                        </span>
+                        <span>@_thread.Channel</span>
+                    </div>
+                    <div class="td-meta-row"><span class="td-lbl">Status</span>
+                        <span class="ci-status-badge ci-st-@_thread.Status.ToLower().Replace(" ","-")">@_thread.Status</span>
+                    </div>
+                    <div class="td-meta-row"><span class="td-lbl">Priority</span>
+                        <span class="ci-pri-badge ci-pri-@_thread.Priority.ToLower()">@_thread.Priority</span>
+                    </div>
+                    <div class="td-meta-row"><span class="td-lbl">Sentiment</span>
+                        <span class="ci-sentiment ci-sent-@_thread.Sentiment.ToLower()">@SentimentIcon(_thread.Sentiment) @_thread.Sentiment</span>
+                    </div>
+                    @{ var ageH = GetUnansweredHours(_thread); }
+                    @if (ageH >= 4)
+                    {
+                        <div class="td-meta-row"><span class="td-lbl">Unanswered</span>
+                            <span class="ci-aging-badge @(ageH >= 24 ? "ci-aging-hot" : ageH >= 8 ? "ci-aging-warm" : "ci-aging-cool")">
+                                <i class="bi bi-hourglass-split" aria-hidden="true"></i>@ageH&#8203;h
+                            </span>
+                        </div>
+                    }
+                    <div class="td-meta-row"><span class="td-lbl">Messages</span><span>@_thread.MessageCount</span></div>
+                    <div class="td-meta-row"><span class="td-lbl">Last Activity</span><span>@FormatTime(_thread.LastActivityAt)</span></div>
+                    @if (_thread.IsEscalated)
+                    {
+                        <div class="td-escalated-row"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Escalated</div>
+                    }
+                </div>
+            </div>
+
+            <!-- Ownership card -->
+            <div class="td-card">
+                <div class="td-card-hdr"><i class="bi bi-people" aria-hidden="true"></i> Ownership</div>
+                <div class="td-card-body">
+                    <div class="td-meta-row"><span class="td-lbl">Assigned To</span>
+                        @if (!string.IsNullOrEmpty(_thread.AssignedTo))
+                        { <span class="ci-meta-chip ci-mc-agent"><i class="bi bi-person" aria-hidden="true"></i>@_thread.AssignedTo</span> }
+                        else { <span class="ci-meta-chip ci-mc-unassigned">Unassigned</span> }
+                    </div>
+                    <div class="td-meta-row"><span class="td-lbl">CSR Owner</span>
+                        @if (!string.IsNullOrEmpty(_thread.CsrOwner))
+                        { <span class="ci-meta-chip ci-mc-csr"><i class="bi bi-headset" aria-hidden="true"></i>@_thread.CsrOwner</span> }
+                        else { <span class="td-none">—</span> }
+                    </div>
+                    <div class="td-meta-row"><span class="td-lbl">Producer</span>
+                        @if (!string.IsNullOrEmpty(_thread.Producer))
+                        { <span class="ci-meta-chip"><i class="bi bi-person-badge" aria-hidden="true"></i>@_thread.Producer</span> }
+                        else { <span class="td-none">—</span> }
+                    </div>
+                    <div class="td-meta-row"><span class="td-lbl">Branch</span>
+                        @if (!string.IsNullOrEmpty(_thread.Branch))
+                        { <span class="ci-meta-chip"><i class="bi bi-diagram-2" aria-hidden="true"></i>@_thread.Branch</span> }
+                        else { <span class="td-none">—</span> }
+                    </div>
+                </div>
+            </div>
+
+            <!-- AI Summary -->
+            @if (!string.IsNullOrEmpty(_thread.AiSummary))
+            {
+                <div class="td-card td-ai-card">
+                    <div class="td-card-hdr"><i class="bi bi-stars" aria-hidden="true"></i> AI Summary <span class="ci-ai-badge">Auto</span></div>
+                    <div class="td-card-body">
+                        <p class="td-ai-body">@_thread.AiSummary</p>
+                    </div>
+                </div>
+            }
+
+            <!-- Compliance -->
+            <div class="td-card">
+                <div class="td-card-hdr"><i class="bi bi-shield-check" aria-hidden="true"></i> Compliance</div>
+                <div class="td-card-body">
+                    <div class="td-meta-row"><span class="td-lbl">Opt-Out</span>
+                        @if (_thread.OptedOut)
+                        { <span class="ci-optout-chip"><i class="bi bi-slash-circle" aria-hidden="true"></i>Opted Out</span> }
+                        else { <span class="td-comp-ok"><i class="bi bi-check-circle" aria-hidden="true"></i>Active</span> }
+                    </div>
+                    <div class="td-meta-row"><span class="td-lbl">TCPA</span><span class="td-comp-ok"><i class="bi bi-check-circle" aria-hidden="true"></i>Compliant</span></div>
+                    <div class="td-meta-row"><span class="td-lbl">CAN-SPAM</span><span class="td-comp-ok"><i class="bi bi-check-circle" aria-hidden="true"></i>Compliant</span></div>
+                    <div class="td-meta-row"><span class="td-lbl">Consent</span><span class="td-comp-ok"><i class="bi bi-check-circle" aria-hidden="true"></i>On File</span></div>
+                </div>
+            </div>
+
+            <!-- Related links -->
+            <div class="td-card">
+                <div class="td-card-hdr"><i class="bi bi-link-45deg" aria-hidden="true"></i> Account Links</div>
+                <div class="td-card-body td-links">
+                    <button class="um-btn um-btn-ghost um-btn-xs td-link-btn">
+                        <i class="bi bi-file-earmark-text" aria-hidden="true"></i> View Policy
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-xs td-link-btn">
+                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> View Claims
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-xs td-link-btn">
+                        <i class="bi bi-calendar-event" aria-hidden="true"></i> Schedule Appointment
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-xs td-link-btn">
+                        <i class="bi bi-building" aria-hidden="true"></i> Account Profile
+                    </button>
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- ── RIGHT — FULL THREAD ───────────────────────────────── -->
+        <div class="td-thread-pane">
+
+            <!-- Opt-out warning -->
+            @if (_thread.OptedOut)
+            {
+                <div class="ci-optout-warning">
+                    <i class="bi bi-slash-circle" aria-hidden="true"></i>
+                    <strong>Opt-Out / Do Not Contact</strong> — This contact has opted out of direct @_thread.Channel communication.
+                    Route all outreach through the designated representative or legal counsel.
+                </div>
+            }
+
+            <!-- Thread messages -->
+            <div class="td-thread-scroll">
+                @foreach (var msg in _thread.Thread.OrderBy(t => t.SentAt))
+                {
+                    var isOut = msg.Direction == "Outbound";
+                    <div class="ci-bubble-wrap @(isOut ? "ci-bubble-out" : "ci-bubble-in")">
+                        <div class="ci-bubble @(isOut ? "ci-bubble-outbound" : "ci-bubble-inbound") ci-bbl-@ChannelCss(msg.Channel)">
+                            <div class="ci-bubble-header">
+                                <span class="ci-bubble-sender">@msg.SenderName</span>
+                                <span class="ci-bubble-ch"><i class="bi @ChannelIcon(msg.Channel)" aria-hidden="true"></i>@msg.Channel</span>
+                                <span class="ci-bubble-time">@msg.SentAt.ToString("MM/dd/yyyy h:mm tt")</span>
+                                @if (msg.IsAutomated)
+                                {
+                                    <span class="ci-auto-badge"><i class="bi bi-robot" aria-hidden="true"></i>Auto</span>
+                                }
+                                <span class="td-dir-badge @(isOut ? "td-dir-out" : "td-dir-in")">@msg.Direction</span>
+                            </div>
+                            <div class="ci-bubble-body">@msg.Body</div>
+                            @if (msg.Attachments.Any())
+                            {
+                                <div class="ci-bubble-attachments">
+                                    @foreach (var a in msg.Attachments)
+                                    {
+                                        <span class="ci-attach-chip-sm"><i class="bi bi-paperclip" aria-hidden="true"></i>@a</span>
+                                    }
+                                </div>
+                            }
+                            @if (msg.DeliveryStatus != "Delivered")
+                            {
+                                <div class="ci-bubble-status ci-ds-@msg.DeliveryStatus.ToLower()">
+                                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @msg.DeliveryStatus
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <!-- Reply box -->
+            <div class="ci-reply-box">
+                <div class="ci-reply-toolbar">
+                    <div class="ci-reply-ch-row">
+                        @foreach (var ch in _channels)
+                        {
+                            <button class="ci-ch-pill ci-ch-pill-sm @(_reply.Channel == ch ? "ci-ch-active" : "")"
+                                    @onclick="() => _reply.Channel = ch"
+                                    disabled="@(_thread.OptedOut && ch != "Internal Note")">
+                                <i class="bi @ChannelIcon(ch)" aria-hidden="true"></i>
+                                @(ch == "Internal Note" ? "Note" : ch)
+                            </button>
+                        }
+                    </div>
+                    <div class="ci-reply-tools">
+                        <select class="e-input ci-tpl-sel" @bind="_reply.Template" @bind:after="ApplyTemplate">
+                            <option value="">Use template…</option>
+                            @foreach (var t in _templates) { <option>@t</option> }
+                        </select>
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Attach">
+                            <i class="bi bi-paperclip" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+
+                @if (_reply.Channel == "Email")
+                {
+                    <input class="e-input ci-reply-subject" @bind="_reply.Subject" placeholder="Subject…" />
+                }
+
+                <SfTextBox @bind-Value="_reply.Body"
+                           Multiline="true"
+                           Placeholder="@(_reply.Channel == "SMS" ? "Type a text message…" : _reply.Channel == "Internal Note" ? "Internal note — not visible to client…" : _reply.Channel == "Portal Message" ? "Portal message…" : "Write your reply…")"
+                           HtmlAttributes='@(new() {{"rows","5"}, {"class","ci-reply-textarea"}})' />
+
+                <div class="ci-reply-footer">
+                    <div class="ci-reply-footer-left">
+                        @if (_reply.Channel == "SMS")
+                        {
+                            <span class="ci-char-count @(_reply.Body.Length > 160 ? "ci-char-warn" : "")">
+                                @_reply.Body.Length / 160 chars
+                            </span>
+                        }
+                        @if (_reply.Channel == "Internal Note")
+                        {
+                            <span class="ci-internal-note-hint">
+                                <i class="bi bi-eye-slash" aria-hidden="true"></i> Internal only
+                            </span>
+                        }
+                    </div>
+                    <div class="ci-reply-footer-right">
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _reply = new()">Discard</button>
+                        <button class="um-btn um-btn-primary um-btn-sm" @onclick="SendReply"
+                                disabled="@(string.IsNullOrWhiteSpace(_reply.Body))">
+                            <i class="bi @(_reply.Channel == "Internal Note" ? "bi-sticky" : "bi-send")" aria-hidden="true"></i>
+                            @(_reply.Channel == "Internal Note" ? "Add Note" : "Send Reply")
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string ThreadId { get; set; } = "";
+
+    SfToast _toast = default!;
+    bool _showAssignDlg   = false;
+    bool _showEscalateDlg = false;
+    string _assignTo      = "";
+    string _assignNote    = "";
+    string _escalateTo    = "";
+    string _escalateReason= "";
+    string _escalateNote  = "";
+
+    readonly string[] _channels    = { "Email", "SMS", "Internal Note", "Portal Message" };
+    readonly string[] _agents      = { "Sarah Kim", "James Park", "Kevin Obi", "Maria Santos", "Lisa Chen" };
+    readonly string[] _supervisors = { "Diana Perez", "Robert Yamamoto" };
+    readonly string[] _templates   = { "Policy Renewal Reminder", "Claim Acknowledgement", "Coverage Review Invitation", "Payment Due Reminder", "CAT Event Check-In", "Certificate Request Confirmation", "Welcome — New Client" };
+
+    StubThread? _thread;
+    ReplyForm   _reply = new();
+    const string _currentUser = "Sarah Kim";
+
+    // ── Stub models (mirrors inbox — in a real app, share via service) ──
+    sealed class StubThread
+    {
+        public Guid     Id              { get; set; }
+        public string   AccountName     { get; set; } = "";
+        public string   ContactName     { get; set; } = "";
+        public string   ContactEmail    { get; set; } = "";
+        public string   ContactPhone    { get; set; } = "";
+        public string   Channel         { get; set; } = "";
+        public string   Subject         { get; set; } = "";
+        public string   Status          { get; set; } = "";
+        public string   Priority        { get; set; } = "Normal";
+        public string   Sentiment       { get; set; } = "Neutral";
+        public string   AssignedTo      { get; set; } = "";
+        public string   CsrOwner        { get; set; } = "";
+        public string   Producer        { get; set; } = "";
+        public string   Branch          { get; set; } = "";
+        public string   AiSummary       { get; set; } = "";
+        public bool     IsEscalated     { get; set; }
+        public bool     OptedOut        { get; set; }
+        public int      MessageCount    { get; set; }
+        public DateTime LastActivityAt  { get; set; }
+        public List<StubMessage> Thread { get; set; } = new();
+    }
+
+    sealed class StubMessage
+    {
+        public string   SenderName     { get; set; } = "";
+        public string   Channel        { get; set; } = "";
+        public string   Direction      { get; set; } = "Inbound";
+        public string   Body           { get; set; } = "";
+        public DateTime SentAt         { get; set; }
+        public string   DeliveryStatus { get; set; } = "Delivered";
+        public bool     IsAutomated    { get; set; }
+        public List<string> Attachments { get; set; } = new();
+    }
+
+    sealed class ReplyForm
+    {
+        public string Channel  { get; set; } = "Email";
+        public string Subject  { get; set; } = "";
+        public string Template { get; set; } = "";
+        public string Body     { get; set; } = "";
+    }
+
+    protected override void OnParametersSet()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Communications","/communications/inbox"), new("Inbox","/communications/inbox"), new("Thread",""));
+        BuildThread();
+    }
+
+    void BuildThread()
+    {
+        // Stub — in production, load from a shared communication service by ThreadId
+        _thread = new StubThread
+        {
+            Id             = Guid.TryParse(ThreadId, out var g) ? g : Guid.NewGuid(),
+            AccountName    = "Sullivan Mfg. LLC",
+            ContactName    = "Robert Sullivan",
+            ContactEmail   = "rjsullivan@email.com",
+            ContactPhone   = "(713) 555-0101",
+            Channel        = "Email",
+            Subject        = "RE: Policy Renewal — GL 2025",
+            Status         = "Open",
+            Priority       = "High",
+            Sentiment      = "Negative",
+            AssignedTo     = "Sarah Kim",
+            CsrOwner       = "Sarah Kim",
+            Producer       = "Maria Santos",
+            Branch         = "Gulf Coast",
+            IsEscalated    = false,
+            OptedOut       = false,
+            MessageCount   = 3,
+            LastActivityAt = DateTime.Now.AddHours(-1.2),
+            AiSummary      = "Client has questions about GL aggregate structure following a prior claim. The CFO is requesting a split-limit structure. Renewal proposal was sent; awaiting revised quote approval. Client sentiment is negative regarding the current premium.",
+            Thread = new()
+            {
+                M("Robert Sullivan", "Email", "Inbound",  "Thanks for the renewal proposal. Could you clarify the aggregate limit under the GL policy? We had a claim last year and want to make sure we're properly covered going forward.", DateTime.Now.AddDays(-2).AddHours(-3)),
+                M("Sarah Kim",       "Email", "Outbound", "Hi Robert — great question. The current aggregate is $2M with a $5K deductible per occurrence. Given last year's claim, I'd actually recommend we look at bumping the aggregate to $3M. I'll send a revised quote by end of day.", DateTime.Now.AddDays(-2).AddHours(-1)),
+                M("Robert Sullivan", "Email", "Inbound",  "Thank you for sending that over. I had a quick question about the aggregate limit — is it possible to get a split limit structure? Our CFO is asking.", DateTime.Now.AddHours(-1.2)),
+            }
+        };
+    }
+
+    static StubMessage M(string sender, string channel, string dir, string body, DateTime at,
+        bool auto = false, string[] atts = null!, string status = "Delivered") => new()
+    {
+        SenderName    = sender, Channel = channel, Direction = dir,
+        Body          = body,   SentAt  = at, IsAutomated = auto,
+        Attachments   = (atts ?? Array.Empty<string>()).ToList(),
+        DeliveryStatus= status
+    };
+
+    async Task SendReply()
+    {
+        if (_thread is null || string.IsNullOrWhiteSpace(_reply.Body)) return;
+        _thread.Thread.Add(M(_currentUser, _reply.Channel, "Outbound", _reply.Body, DateTime.Now));
+        _thread.MessageCount++;
+        _thread.LastActivityAt = DateTime.Now;
+        _thread.Status = "Pending";
+        _reply = new ReplyForm { Channel = _thread.Channel };
+        await _toast.ShowAsync(new ToastModel { Title = "Reply Sent", Content = "Reply sent successfully.", CssClass = "e-toast-success" });
+    }
+
+    async Task ConfirmAssign()
+    {
+        if (_thread is null || string.IsNullOrEmpty(_assignTo)) return;
+        _thread.AssignedTo = _assignTo;
+        _thread.Thread.Add(M("System", "Internal Note", "Outbound", $"Assigned to {_assignTo}.{(string.IsNullOrEmpty(_assignNote) ? "" : " Note: " + _assignNote)}", DateTime.Now));
+        _thread.MessageCount++;
+        _showAssignDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title = "Assigned", Content = $"Thread assigned to {_assignTo}.", CssClass = "e-toast-success" });
+    }
+
+    async Task ConfirmEscalate()
+    {
+        if (_thread is null) return;
+        _thread.IsEscalated = true;
+        _thread.Priority    = "Urgent";
+        _thread.AssignedTo  = _escalateTo;
+        _thread.Thread.Add(M("System", "Internal Note", "Outbound", $"Escalated to {_escalateTo}. Reason: {_escalateReason}.{(string.IsNullOrEmpty(_escalateNote) ? "" : " " + _escalateNote)}", DateTime.Now));
+        _thread.MessageCount++;
+        _showEscalateDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title = "Escalated", Content = $"Thread escalated to {_escalateTo}.", CssClass = "e-toast-warning" });
+    }
+
+    async Task ResolveConversation()
+    {
+        if (_thread is null) return;
+        _thread.Status = "Resolved";
+        await _toast.ShowAsync(new ToastModel { Title = "Resolved", Content = "Thread marked as resolved.", CssClass = "e-toast-success" });
+    }
+
+    void ApplyTemplate()
+    {
+        if (string.IsNullOrEmpty(_reply.Template)) return;
+        _reply.Body = _reply.Template switch
+        {
+            "Claim Acknowledgement" => "Dear [Client Name],\n\nWe have received your claim and assigned it to our claims team. Your claim number is [Claim #]. A handler will be in touch within 1 business day.\n\nBest regards,\n[Agent Name] | AMS Insurance",
+            "Policy Renewal Reminder" => "Dear [Client Name],\n\nYour policy is approaching its renewal date. Please review the attached renewal proposal and contact us with any questions.\n\nBest regards,\n[Agent Name] | AMS Insurance",
+            _ => _reply.Body
+        };
+    }
+
+    static int GetUnansweredHours(StubThread t)
+    {
+        var lastIn = t.Thread.Where(m => m.Direction == "Inbound").MaxBy(m => m.SentAt);
+        if (lastIn is null) return 0;
+        var hasOutAfter = t.Thread.Any(m => m.Direction == "Outbound" && m.SentAt > lastIn.SentAt);
+        return hasOutAfter ? 0 : (int)(DateTime.Now - lastIn.SentAt).TotalHours;
+    }
+
+    static string SentimentIcon(string s) => s switch { "Positive" => "👍", "Negative" => "👎", "Urgent" => "⚠️", _ => "🟡" };
+    static string ChannelIcon(string ch)  => ch switch { "Email" => "bi-envelope", "SMS" => "bi-phone", "Internal Note" => "bi-sticky", "Portal Message" => "bi-globe", _ => "bi-chat-dots" };
+    static string ChannelCss(string ch)   => ch switch { "Email" => "email", "SMS" => "sms", "Internal Note" => "note", "Portal Message" => "portal", _ => "gen" };
+    static string FormatTime(DateTime dt)
+    {
+        var d = DateTime.Now - dt;
+        if (d.TotalMinutes < 60) return $"{(int)d.TotalMinutes}m ago";
+        if (d.TotalHours < 24)   return $"{(int)d.TotalHours}h ago";
+        return dt.ToString("MM/dd/yyyy");
+    }
+}

@@ -1,0 +1,625 @@
+@page "/renewals/campaigns"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Renewal Campaigns — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── CREATE / EDIT CAMPAIGN DIALOG ────────────────────────────── -->
+<SfDialog @bind-Visible="_showCampaignDialog" Width="560px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header>
+            <div class="pd-dlg-hdr">
+                <i class="bi bi-megaphone" aria-hidden="true"></i>
+                @(_editCampaign?.Id == Guid.Empty ? "Create Campaign" : "Edit Campaign")
+            </div>
+        </Header>
+        <Content>
+            @if (_editCampaign is not null)
+            {
+                <div class="pd-dlg-body">
+                    <div class="pd-dlg-grid">
+                        <div style="grid-column:1/-1">
+                            <label class="rcm-dlg-lbl">Campaign Name *</label>
+                            <SfTextBox @bind-Value="_editCampaign.Name" Placeholder="e.g. Q3 2025 Commercial Renewal Blast" />
+                        </div>
+                        <div>
+                            <label class="rcm-dlg-lbl">Type *</label>
+                            <SfDropDownList @bind-Value="_editCampaign.Type"
+                                            DataSource="@_campaignTypes"
+                                            Placeholder="Select type" />
+                        </div>
+                        <div>
+                            <label class="rcm-dlg-lbl">Channel</label>
+                            <SfDropDownList @bind-Value="_editCampaign.Channel"
+                                            DataSource="@(new[]{"Email","SMS","Email + SMS","Portal","Letter"})"
+                                            Placeholder="Select channel" />
+                        </div>
+                        <div>
+                            <label class="rcm-dlg-lbl">Line of Business</label>
+                            <SfDropDownList @bind-Value="_editCampaign.LobFilter"
+                                            DataSource="@_campaignLobOpts"
+                                            Placeholder="All Lines" />
+                        </div>
+                        <div>
+                            <label class="rcm-dlg-lbl">Risk Tier</label>
+                            <SfDropDownList @bind-Value="_editCampaign.RiskTier"
+                                            DataSource="@(new[]{"All","High (≥70)","Medium (40–69)","Low (<40)"})"
+                                            Placeholder="All tiers" />
+                        </div>
+                        <div>
+                            <label class="rcm-dlg-lbl">Expiry Window (days)</label>
+                            <SfDropDownList TValue="string" TItem="string" @bind-Value="_editCampaign.ExpiryWindowLabel"
+                                            DataSource="@(new[]{"All","≤ 30 days","≤ 60 days","≤ 90 days","31–60 days","61–90 days"})"
+                                            Placeholder="All" />
+                        </div>
+                        <div>
+                            <label class="rcm-dlg-lbl">Producer</label>
+                            <SfDropDownList @bind-Value="_editCampaign.ProducerFilter"
+                                            DataSource="@_producers"
+                                            Placeholder="All producers" />
+                        </div>
+                        <div>
+                            <label class="rcm-dlg-lbl">Schedule Date</label>
+                            <SfDatePicker TValue="DateTime?" @bind-Value="_editCampaign.ScheduledDate" Placeholder="MM/DD/YYYY" />
+                        </div>
+                        <div>
+                            <label class="rcm-dlg-lbl">Status</label>
+                            <SfDropDownList @bind-Value="_editCampaign.Status"
+                                            DataSource="@(new[]{"Draft","Scheduled","Active","Paused","Completed"})"
+                                            Placeholder="Draft" />
+                        </div>
+                        <div style="grid-column:1/-1">
+                            <label class="rcm-dlg-lbl">Subject / Message Headline *</label>
+                            <SfTextBox @bind-Value="_editCampaign.Subject" Placeholder="Email subject or message headline…" />
+                        </div>
+                        <div style="grid-column:1/-1">
+                            <label class="rcm-dlg-lbl">Body Preview</label>
+                            <SfTextBox @bind-Value="_editCampaign.BodyPreview" Placeholder="Campaign message body / template overview…" Multiline="true" />
+                        </div>
+                    </div>
+                </div>
+            }
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showCampaignDialog = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveCampaign">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i>
+                    @(_editCampaign?.Id == Guid.Empty ? "Create" : "Save")
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── CAMPAIGN DETAIL / LOG DIALOG ─────────────────────────────── -->
+<SfDialog @bind-Visible="_showDetailDialog" Width="640px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-megaphone" aria-hidden="true"></i> @_detailCampaign?.Name</div></Header>
+        <Content>
+            @if (_detailCampaign is not null)
+            {
+                <div class="pd-dlg-body">
+                    <!-- Metrics strip -->
+                    <div class="rcm-detail-metrics">
+                        <div class="rcm-dm-card">
+                            <div class="rcm-dm-val">@_detailCampaign.Sent</div>
+                            <div class="rcm-dm-lbl"><i class="bi bi-send" aria-hidden="true"></i> Sent</div>
+                        </div>
+                        <div class="rcm-dm-card rcm-dm-opened">
+                            <div class="rcm-dm-val">@_detailCampaign.Opened</div>
+                            <div class="rcm-dm-lbl"><i class="bi bi-envelope-open" aria-hidden="true"></i> Opened (@(_detailCampaign.Sent > 0 ? (_detailCampaign.Opened * 100 / _detailCampaign.Sent) : 0)%)</div>
+                        </div>
+                        <div class="rcm-dm-card rcm-dm-responded">
+                            <div class="rcm-dm-val">@_detailCampaign.Responded</div>
+                            <div class="rcm-dm-lbl"><i class="bi bi-reply" aria-hidden="true"></i> Responded (@(_detailCampaign.Sent > 0 ? (_detailCampaign.Responded * 100 / _detailCampaign.Sent) : 0)%)</div>
+                        </div>
+                        <div class="rcm-dm-card rcm-dm-renewed">
+                            <div class="rcm-dm-val">@_detailCampaign.Renewed</div>
+                            <div class="rcm-dm-lbl"><i class="bi bi-check-circle" aria-hidden="true"></i> Renewed (@(_detailCampaign.Responded > 0 ? (_detailCampaign.Renewed * 100 / _detailCampaign.Responded) : 0)%)</div>
+                        </div>
+                    </div>
+                    <!-- Execution log -->
+                    <div class="rcm-log-hdr">Execution Log</div>
+                    <div class="rcm-log">
+                        @foreach (var entry in _detailCampaign.Log)
+                        {
+                            <div class="rcm-log-row">
+                                <span class="rcm-log-ts">@entry.Timestamp.ToString("MM/dd/yyyy h:mm tt")</span>
+                                <span class="rcm-log-icon @LogIconCss(entry.EventType)">
+                                    <i class="bi @LogIcon(entry.EventType)" aria-hidden="true"></i>
+                                </span>
+                                <span class="rcm-log-msg">@entry.Message</span>
+                                @if (!string.IsNullOrEmpty(entry.Recipient))
+                                {
+                                    <span class="rcm-log-recip">→ @entry.Recipient</span>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showDetailDialog = false">Close</button>
+                <button class="um-btn um-btn-ghost" @onclick="() => { _showDetailDialog=false; OpenEdit(_detailCampaign!); }">
+                    <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<AppPageHeader Title="Renewal Campaigns"
+               Subtitle="Create and manage renewal outreach campaigns — notices, quote delivery, follow-up, and bind reminders"
+               Icon="bi-megaphone">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Campaign
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── AGGREGATE KPI STRIP ───────────────────────────────────────── -->
+<div class="rcm-kpi-strip">
+    <div class="rcm-kpi-card rcm-kpi-active">
+        <i class="bi bi-megaphone rcm-kpi-icon" aria-hidden="true"></i>
+        <div>
+            <div class="rcm-kpi-val">@_campaigns.Count(c => c.Status == "Active")</div>
+            <div class="rcm-kpi-lbl">Active Campaigns</div>
+        </div>
+    </div>
+    <div class="rcm-kpi-card">
+        <i class="bi bi-people rcm-kpi-icon" aria-hidden="true"></i>
+        <div>
+            <div class="rcm-kpi-val">@_campaigns.Sum(c => c.Sent)</div>
+            <div class="rcm-kpi-lbl">Total Recipients</div>
+        </div>
+    </div>
+    <div class="rcm-kpi-card rcm-kpi-open">
+        <i class="bi bi-envelope-open rcm-kpi-icon" aria-hidden="true"></i>
+        <div>
+            <div class="rcm-kpi-val">@AvgOpenRate%</div>
+            <div class="rcm-kpi-lbl">Avg Open Rate</div>
+        </div>
+    </div>
+    <div class="rcm-kpi-card">
+        <i class="bi bi-reply rcm-kpi-icon" aria-hidden="true"></i>
+        <div>
+            <div class="rcm-kpi-val">@AvgResponseRate%</div>
+            <div class="rcm-kpi-lbl">Avg Response Rate</div>
+        </div>
+    </div>
+    <div class="rcm-kpi-card rcm-kpi-renewed">
+        <i class="bi bi-check-circle rcm-kpi-icon" aria-hidden="true"></i>
+        <div>
+            <div class="rcm-kpi-val">@_campaigns.Sum(c => c.Renewed)</div>
+            <div class="rcm-kpi-lbl">Renewals Attributed</div>
+        </div>
+    </div>
+    <div class="rcm-kpi-card">
+        <i class="bi bi-calendar-range rcm-kpi-icon" aria-hidden="true"></i>
+        <div>
+            <div class="rcm-kpi-val">@_campaigns.Count(c => c.Status == "Scheduled")</div>
+            <div class="rcm-kpi-lbl">Scheduled</div>
+        </div>
+    </div>
+</div>
+
+<!-- ── FILTER + VIEW TOGGLE ──────────────────────────────────────── -->
+<div class="rcm-filter-bar">
+    <input class="e-input rcm-search" @bind="_search" @bind:event="oninput"
+           placeholder="Search campaign name, type, channel…" />
+    <div class="rcm-type-pills">
+        <button class="rcm-pill @(_typeFilter == "" ? "rcm-pill-active" : "")" @onclick='() => _typeFilter = ""'>All</button>
+        @foreach (var t in _campaignTypes)
+        {
+            <button class="rcm-pill @(_typeFilter == t ? "rcm-pill-active" : "")" @onclick="() => _typeFilter = t">@t</button>
+        }
+    </div>
+    <div class="rcm-status-pills">
+        @foreach (var s in new[]{ "","Active","Draft","Scheduled","Completed" })
+        {
+            <button class="rcm-spill @(_statusFilter == s ? "rcm-spill-active" : "")"
+                    @onclick="() => _statusFilter = s">@(s == "" ? "All Status" : s)</button>
+        }
+    </div>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+        <i class="bi bi-x" aria-hidden="true"></i> Reset
+    </button>
+    <span class="rcm-filter-count">@Filtered.Count() campaign(s)</span>
+
+    <div style="margin-left:auto; display:flex; gap:.35rem;">
+        <button class="um-btn um-btn-ghost um-btn-sm @(_viewMode == "card" ? "rcm-view-active" : "")"
+                @onclick='() => _viewMode = "card"' title="Card view">
+            <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost um-btn-sm @(_viewMode == "list" ? "rcm-view-active" : "")"
+                @onclick='() => _viewMode = "list"' title="Table view">
+            <i class="bi bi-table" aria-hidden="true"></i>
+        </button>
+    </div>
+</div>
+
+@if (_viewMode == "card")
+{
+    <!-- ── CARD GRID ──────────────────────────────────────────────── -->
+    <div class="rcm-card-grid">
+        @foreach (var c in Filtered.OrderByDescending(x => x.ScheduledDate))
+        {
+            <div class="rcm-campaign-card rcm-cstat-border-@StatusCss(c.Status)">
+                <!-- Card header -->
+                <div class="rcm-card-hdr">
+                    <div class="rcm-type-icon rcm-type-@TypeCss(c.Type)">
+                        <i class="bi @TypeIcon(c.Type)" aria-hidden="true"></i>
+                    </div>
+                    <div class="rcm-card-title-block">
+                        <button class="rcm-card-name" @onclick="() => OpenDetail(c)">@c.Name</button>
+                        <div class="rcm-card-meta-chips">
+                            <span class="rcm-type-chip rcm-typec-@TypeCss(c.Type)">@c.Type</span>
+                            <span class="rcm-chan-chip">
+                                <i class="bi @ChannelIcon(c.Channel)" aria-hidden="true"></i>@c.Channel
+                            </span>
+                        </div>
+                    </div>
+                    <span class="rcm-status-badge rcm-cstat-@StatusCss(c.Status)">@c.Status</span>
+                </div>
+
+                <!-- Audience chips -->
+                <div class="rcm-card-audience">
+                    @if (!string.IsNullOrEmpty(c.LobFilter) && c.LobFilter != "All Lines")
+                    {
+                        <span class="rcm-aud-chip"><i class="bi bi-shield" aria-hidden="true"></i>@c.LobFilter</span>
+                    }
+                    @if (!string.IsNullOrEmpty(c.RiskTier) && c.RiskTier != "All")
+                    {
+                        <span class="rcm-aud-chip rcm-aud-risk"><i class="bi bi-shield-exclamation" aria-hidden="true"></i>@c.RiskTier</span>
+                    }
+                    @if (!string.IsNullOrEmpty(c.ExpiryWindowLabel) && c.ExpiryWindowLabel != "All")
+                    {
+                        <span class="rcm-aud-chip rcm-aud-exp"><i class="bi bi-clock" aria-hidden="true"></i>@c.ExpiryWindowLabel</span>
+                    }
+                    @if (!string.IsNullOrEmpty(c.ProducerFilter))
+                    {
+                        <span class="rcm-aud-chip"><i class="bi bi-person-badge" aria-hidden="true"></i>@c.ProducerFilter</span>
+                    }
+                </div>
+
+                <!-- Metrics bar -->
+                <div class="rcm-card-metrics">
+                    <div class="rcm-metric">
+                        <div class="rcm-m-val">@c.Recipients</div>
+                        <div class="rcm-m-lbl">Recipients</div>
+                    </div>
+                    <div class="rcm-metric">
+                        <div class="rcm-m-val">@c.Sent</div>
+                        <div class="rcm-m-lbl">Sent</div>
+                    </div>
+                    <div class="rcm-metric">
+                        <div class="rcm-m-val @(OpenRate(c) >= 30 ? "rcm-m-green" : OpenRate(c) >= 15 ? "rcm-m-amber" : "")">
+                            @OpenRate(c)%
+                        </div>
+                        <div class="rcm-m-lbl">Opened</div>
+                    </div>
+                    <div class="rcm-metric">
+                        <div class="rcm-m-val @(ResponseRate(c) >= 20 ? "rcm-m-green" : "")">
+                            @ResponseRate(c)%
+                        </div>
+                        <div class="rcm-m-lbl">Responded</div>
+                    </div>
+                    <div class="rcm-metric rcm-m-highlight">
+                        <div class="rcm-m-val rcm-m-green">@c.Renewed</div>
+                        <div class="rcm-m-lbl">Renewed</div>
+                    </div>
+                </div>
+
+                <!-- Engagement funnel bar -->
+                <div class="rcm-funnel">
+                    <div class="rcm-funnel-bar" style="width:100%"></div>
+                    @if (c.Recipients > 0)
+                    {
+                        <div class="rcm-funnel-sent" style="width:@(c.Sent * 100 / c.Recipients)%"></div>
+                        @if (c.Sent > 0)
+                        {
+                            <div class="rcm-funnel-opened" style="width:@(c.Opened * 100 / c.Recipients)%"></div>
+                            <div class="rcm-funnel-renewed" style="width:@(c.Renewed * 100 / c.Recipients)%"></div>
+                        }
+                    }
+                </div>
+
+                <!-- Scheduled date + actions -->
+                <div class="rcm-card-footer">
+                    <span class="rcm-sched-chip">
+                        <i class="bi bi-calendar3" aria-hidden="true"></i>
+                        @(c.ScheduledDate.HasValue ? c.ScheduledDate.Value.ToString("MM/dd/yyyy") : "No date set")
+                    </span>
+                    <div class="rcm-card-actions">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenDetail(c)" title="View log">
+                            <i class="bi bi-list-ul" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(c)" title="Edit">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        @if (c.Status == "Draft" || c.Status == "Scheduled")
+                        {
+                            <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => ActivateCampaign(c)">
+                                <i class="bi bi-play-fill" aria-hidden="true"></i> Send
+                            </button>
+                        }
+                        @if (c.Status == "Active")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => PauseCampaign(c)">
+                                <i class="bi bi-pause-fill" aria-hidden="true"></i> Pause
+                            </button>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <!-- ── TABLE VIEW ─────────────────────────────────────────────── -->
+    <div class="rcm-list-wrap">
+        <SfGrid TValue="Campaign" DataSource="@Filtered.OrderByDescending(x => x.ScheduledDate).ToList()"
+                AllowSorting="true" AllowPaging="true" AllowResizing="true"
+                AllowFiltering="true" EnableHover="true" RowHeight="52">
+            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+            <GridPageSettings PageSize="25" />
+            <GridColumns>
+                <GridColumn Field="@nameof(Campaign.Name)" HeaderText="Campaign" MinWidth="200">
+                    <Template>
+                        @{ var c = (Campaign)context; }
+                        <button class="rcm-tbl-name" @onclick="() => OpenDetail(c)">@c.Name</button>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(Campaign.Type)" HeaderText="Type" Width="160">
+                    <Template>
+                        @{ var c = (Campaign)context; }
+                        <span class="rcm-type-chip rcm-typec-@TypeCss(c.Type)">@c.Type</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(Campaign.Channel)" HeaderText="Channel" Width="130" />
+                <GridColumn Field="@nameof(Campaign.Status)" HeaderText="Status" Width="120">
+                    <Template>
+                        @{ var c = (Campaign)context; }
+                        <span class="rcm-status-badge rcm-cstat-@StatusCss(c.Status)">@c.Status</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(Campaign.Recipients)" HeaderText="Recipients" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                <GridColumn Field="@nameof(Campaign.Sent)"       HeaderText="Sent"       Width="80"  TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                <GridColumn HeaderText="Opened" Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>@{ var c = (Campaign)context; }<span>@OpenRate(c)%</span></Template>
+                </GridColumn>
+                <GridColumn HeaderText="Responded" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>@{ var c = (Campaign)context; }<span>@ResponseRate(c)%</span></Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(Campaign.Renewed)" HeaderText="Renewed" Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>@{ var c = (Campaign)context; }<span class="@(c.Renewed > 0 ? "rcm-m-green" : "")">@c.Renewed</span></Template>
+                </GridColumn>
+                <GridColumn HeaderText="Scheduled" Width="120">
+                    <Template>@{ var c = (Campaign)context; }<span class="pd-mono">@(c.ScheduledDate?.ToString("MM/dd/yyyy") ?? "—")</span></Template>
+                </GridColumn>
+                <GridColumn HeaderText="Actions" Width="130" AllowSorting="false" AllowFiltering="false">
+                    <Template>
+                        @{ var c = (Campaign)context; }
+                        <div class="rdb-row-actions">
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenDetail(c)"><i class="bi bi-list-ul" aria-hidden="true"></i></button>
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(c)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                            @if (c.Status is "Draft" or "Scheduled")
+                            {
+                                <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => ActivateCampaign(c)">
+                                    <i class="bi bi-play-fill" aria-hidden="true"></i>
+                                </button>
+                            }
+                        </div>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+@code {
+    SfToast _toast = default!;
+
+    string _search       = "";
+    string _typeFilter   = "";
+    string _statusFilter = "";
+    string _viewMode     = "card";
+
+    bool      _showCampaignDialog = false;
+    bool      _showDetailDialog   = false;
+    Campaign? _editCampaign       = null;
+    Campaign? _detailCampaign     = null;
+
+    readonly string[] _campaignTypes   = { "Renewal Notice","Quote Delivery","Follow-up","Bind Reminder","Win-back","Coverage Review" };
+    readonly string[] _producers       = { "All Producers","Maria Santos","James Park","Kevin Obi","Sarah Kim","Lisa Chen" };
+    readonly string[] _campaignLobOpts = { "All Lines","General Liability","Commercial Auto","Commercial Property","Workers Comp","Umbrella","Professional Liab." };
+
+    sealed class LogEntry
+    {
+        public DateTime Timestamp  { get; set; }
+        public string   EventType  { get; set; } = "";
+        public string   Message    { get; set; } = "";
+        public string   Recipient  { get; set; } = "";
+    }
+
+    sealed class Campaign
+    {
+        public Guid      Id               { get; set; }
+        public string    Name             { get; set; } = "";
+        public string    Type             { get; set; } = "";
+        public string    Channel          { get; set; } = "";
+        public string    Status           { get; set; } = "";
+        public string    LobFilter        { get; set; } = "";
+        public string    RiskTier         { get; set; } = "";
+        public string    ExpiryWindowLabel{ get; set; } = "";
+        public string    ProducerFilter   { get; set; } = "";
+        public string    Subject          { get; set; } = "";
+        public string    BodyPreview      { get; set; } = "";
+        public DateTime? ScheduledDate    { get; set; }
+        public int       Recipients       { get; set; }
+        public int       Sent             { get; set; }
+        public int       Opened           { get; set; }
+        public int       Responded        { get; set; }
+        public int       Renewed          { get; set; }
+        public List<LogEntry> Log         { get; set; } = new();
+    }
+
+    readonly List<Campaign> _campaigns = new();
+
+    int AvgOpenRate     => _campaigns.Where(c => c.Sent > 0).Select(c => OpenRate(c)).DefaultIfEmpty(0).Sum() / Math.Max(1, _campaigns.Count(c => c.Sent > 0));
+    int AvgResponseRate => _campaigns.Where(c => c.Sent > 0).Select(c => ResponseRate(c)).DefaultIfEmpty(0).Sum() / Math.Max(1, _campaigns.Count(c => c.Sent > 0));
+    static int OpenRate(Campaign c)     => c.Sent > 0 ? c.Opened     * 100 / c.Sent : 0;
+    static int ResponseRate(Campaign c) => c.Sent > 0 ? c.Responded  * 100 / c.Sent : 0;
+
+    IEnumerable<Campaign> Filtered => _campaigns.Where(c =>
+        (string.IsNullOrEmpty(_search) ||
+         c.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         c.Type.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         c.Channel.Contains(_search, StringComparison.OrdinalIgnoreCase))
+     && (string.IsNullOrEmpty(_typeFilter)   || c.Type   == _typeFilter)
+     && (string.IsNullOrEmpty(_statusFilter) || c.Status == _statusFilter));
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Renewals","/renewals"), new("Campaigns","/renewals/campaigns"));
+        await Task.Delay(0);
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _campaigns.Clear();
+        _campaigns.AddRange(new[]
+        {
+            MakeCampaign("Q2 2025 — Commercial GL Renewal Notices",     "Renewal Notice",  "Email",       "Active",    "General Liability","High (≥70)",   "≤ 60 days", "Maria Santos", "Your GL Policy Renewal is Approaching",        160, 160, 72, 28, 18, DateTime.Today.AddDays(-14)),
+            MakeCampaign("Q2 2025 — Commercial Auto Quote Delivery",    "Quote Delivery",  "Email",       "Active",    "Commercial Auto",  "All",          "≤ 30 days", "",             "Your Renewal Quote is Ready — Review Now",     44,  44,  18, 9,  6,  DateTime.Today.AddDays(-7)),
+            MakeCampaign("High-Risk Follow-up — Spring 2025",           "Follow-up",       "Email + SMS", "Active",    "",                 "High (≥70)",   "≤ 90 days", "",             "We haven't heard from you — let's connect",    85,  85,  38, 22, 14, DateTime.Today.AddDays(-10)),
+            MakeCampaign("30-Day Bind Reminder — All Lines",            "Bind Reminder",   "Email",       "Scheduled", "",                 "All",          "≤ 30 days", "",             "Action Required: Bind Your Renewal by [Date]", 200, 0,  0,  0,  0,  DateTime.Today.AddDays(3)),
+            MakeCampaign("Win-back — Lost 2024 Q4 Accounts",            "Win-back",        "Email",       "Draft",     "",                 "All",          "All",       "",             "We'd love to earn your business back",         55,  0,  0,  0,  0,  null),
+            MakeCampaign("Workers Comp Renewal Notice — Q3 2025",       "Renewal Notice",  "Email",       "Draft",     "Workers Comp",     "All",          "≤ 90 days", "",             "Your Workers Comp Policy is Up for Renewal",   38,  0,  0,  0,  0,  DateTime.Today.AddDays(14)),
+            MakeCampaign("Mid-Year Coverage Review — Umbrella",         "Coverage Review", "Email",       "Completed", "Umbrella",         "All",          "All",       "",             "Is Your Umbrella Coverage Still Right for You?",20, 20,  14, 8,  5,  DateTime.Today.AddDays(-45)),
+            MakeCampaign("Unanswered Outreach Escalation — June 2025",  "Follow-up",       "SMS",         "Active",    "",                 "High (≥70)",   "≤ 30 days", "",             "Hi [First Name], following up on your renewal",28, 28,  22, 12, 8,  DateTime.Today.AddDays(-3)),
+        });
+    }
+
+    static Campaign MakeCampaign(string name, string type, string channel, string status,
+        string lob, string risk, string expiry, string producer, string subject,
+        int recip, int sent, int opened, int responded, int renewed, DateTime? scheduled)
+    {
+        var log = sent > 0 ? new List<LogEntry>
+        {
+            new(){ Timestamp=scheduled?.AddHours(-1) ?? DateTime.Today.AddDays(-2), EventType="scheduled", Message="Campaign scheduled and audience locked.", Recipient="" },
+            new(){ Timestamp=scheduled ?? DateTime.Today.AddDays(-1),               EventType="sent",      Message=$"{sent} messages dispatched via {channel}.", Recipient="" },
+            new(){ Timestamp=scheduled?.AddHours(2) ?? DateTime.Today,              EventType="open",      Message=$"{opened} recipients opened the message.",  Recipient="" },
+            new(){ Timestamp=scheduled?.AddHours(8) ?? DateTime.Today.AddHours(6),  EventType="response",  Message=$"{responded} recipients responded.",          Recipient="" },
+            new(){ Timestamp=scheduled?.AddDays(1)  ?? DateTime.Today.AddDays(1),   EventType="renewed",   Message=$"{renewed} policies attributed to this campaign.", Recipient="" },
+        } : new List<LogEntry>
+        {
+            new(){ Timestamp=DateTime.Today.AddDays(-1), EventType="created", Message="Campaign created as draft.", Recipient="" },
+        };
+        return new Campaign
+        {
+            Id=Guid.NewGuid(), Name=name, Type=type, Channel=channel, Status=status,
+            LobFilter=lob, RiskTier=risk, ExpiryWindowLabel=expiry, ProducerFilter=producer,
+            Subject=subject, ScheduledDate=scheduled, Recipients=recip, Sent=sent,
+            Opened=opened, Responded=responded, Renewed=renewed, Log=log
+        };
+    }
+
+    void OpenCreate()
+    {
+        _editCampaign = new Campaign { Id=Guid.Empty, Status="Draft", Channel="Email", Type="Renewal Notice" };
+        _showCampaignDialog = true;
+    }
+
+    void OpenEdit(Campaign c)
+    {
+        _editCampaign = new Campaign
+        {
+            Id=c.Id, Name=c.Name, Type=c.Type, Channel=c.Channel, Status=c.Status,
+            LobFilter=c.LobFilter, RiskTier=c.RiskTier, ExpiryWindowLabel=c.ExpiryWindowLabel,
+            ProducerFilter=c.ProducerFilter, Subject=c.Subject, BodyPreview=c.BodyPreview,
+            ScheduledDate=c.ScheduledDate, Recipients=c.Recipients, Sent=c.Sent,
+            Opened=c.Opened, Responded=c.Responded, Renewed=c.Renewed, Log=c.Log
+        };
+        _showCampaignDialog = true;
+    }
+
+    async Task SaveCampaign()
+    {
+        if (_editCampaign is null || string.IsNullOrWhiteSpace(_editCampaign.Name)) return;
+        if (_editCampaign.Id == Guid.Empty)
+        {
+            _editCampaign.Id = Guid.NewGuid();
+            _campaigns.Add(_editCampaign);
+        }
+        else
+        {
+            var idx = _campaigns.FindIndex(c => c.Id == _editCampaign.Id);
+            if (idx >= 0) _campaigns[idx] = _editCampaign;
+        }
+        _showCampaignDialog = false;
+        await _toast.ShowAsync(new ToastModel { Title="Campaign Saved", Content=$"\"{_editCampaign.Name}\" saved.", CssClass="e-toast-success" });
+    }
+
+    void OpenDetail(Campaign c) { _detailCampaign = c; _showDetailDialog = true; }
+
+    async Task ActivateCampaign(Campaign c)
+    {
+        c.Status = "Active";
+        c.Sent   = c.Recipients;
+        await _toast.ShowAsync(new ToastModel { Title="Campaign Sent", Content=$"\"{c.Name}\" activated and dispatched.", CssClass="e-toast-success" });
+    }
+
+    async Task PauseCampaign(Campaign c)
+    {
+        c.Status = "Paused";
+        await _toast.ShowAsync(new ToastModel { Title="Campaign Paused", Content=$"\"{c.Name}\" has been paused.", CssClass="e-toast-info" });
+    }
+
+    void ResetFilters() { _search=""; _typeFilter=""; _statusFilter=""; }
+    void Refresh() => BuildStub();
+
+    async Task ExportAsync() =>
+        await _toast.ShowAsync(new ToastModel { Title="Exported", Content="Campaigns exported.", CssClass="e-toast-success" });
+
+    static string StatusCss(string s)  => s.ToLower().Replace(" ","").Replace("-","");
+    static string TypeCss(string t)    => t.ToLower().Replace(" ","").Replace("-","");
+    static string TypeIcon(string t)   => t switch
+    {
+        "Renewal Notice"  => "bi-bell",
+        "Quote Delivery"  => "bi-quote",
+        "Follow-up"       => "bi-reply-all",
+        "Bind Reminder"   => "bi-check-square",
+        "Win-back"        => "bi-arrow-counterclockwise",
+        "Coverage Review" => "bi-shield-check",
+        _ => "bi-megaphone"
+    };
+    static string ChannelIcon(string c) => c switch
+    {
+        "Email"        => "bi-envelope",
+        "SMS"          => "bi-chat-dots",
+        "Email + SMS"  => "bi-broadcast",
+        "Portal"       => "bi-globe",
+        "Letter"       => "bi-file-earmark-text",
+        _ => "bi-broadcast"
+    };
+    static string LogIcon(string ev)    => ev switch { "sent" => "bi-send", "open" => "bi-envelope-open", "response" => "bi-reply", "renewed" => "bi-check-circle", "scheduled" => "bi-calendar-check", _ => "bi-info-circle" };
+    static string LogIconCss(string ev) => ev switch { "sent" => "rcm-log-sent", "open" => "rcm-log-open", "response" => "rcm-log-resp", "renewed" => "rcm-log-rn", _ => "" };
+}

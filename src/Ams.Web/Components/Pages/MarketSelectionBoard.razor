@@ -1,0 +1,525 @@
+@page "/submissions/{SubmissionId:guid}/markets"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Market Selection Board — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@if (_loading)
+{
+    <div class="msb-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading markets…</span></div>
+}
+else
+{
+    <!-- ── HEADER ─────────────────────────────────────────────────── -->
+    <div class="msb-header">
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="GoBack">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Submission
+        </button>
+        <div class="msb-header-title">
+            <i class="bi bi-diagram-3-fill msb-title-icon" aria-hidden="true"></i>
+            <div>
+                <h1 class="msb-h1">Market Selection Board</h1>
+                <span class="msb-sub">@_submissionNo · @_account · @_lob</span>
+            </div>
+        </div>
+        <div class="msb-header-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm"
+                    @onclick='() => _view = (_view == "board" ? "matrix" : "board")'>
+                <i class="bi @(_view == "board" ? "bi-table" : "bi-kanban") " aria-hidden="true"></i>
+                @(_view == "board" ? "Matrix View" : "Board View")
+            </button>
+            <button class="um-btn um-btn-primary um-btn-sm" @onclick="SubmitSelected">
+                <i class="bi bi-send" aria-hidden="true"></i>
+                Submit Tier 1 (@_markets.Count(m => m.Tier == 1))
+            </button>
+        </div>
+    </div>
+
+    <!-- ── STRATEGY KPI STRIP ────────────────────────────────────── -->
+    <div class="msb-kpi-strip">
+        @KpiCard("bi-diagram-3",        "Markets Pooled",      _markets.Count.ToString(),                                               "msb-kpi-pool")
+        @KpiCard("bi-1-circle-fill",    "Tier 1 Selected",     _markets.Count(m=>m.Tier==1).ToString(),                                 "msb-kpi-t1")
+        @KpiCard("bi-2-circle-fill",    "Tier 2 Selected",     _markets.Count(m=>m.Tier==2).ToString(),                                 "msb-kpi-t2")
+        @KpiCard("bi-bullseye",         "Avg Appetite Score",  (_markets.Any() ? _markets.Average(m=>m.AppetiteScore) : 0).ToString("F0") + "/100", "msb-kpi-apt")
+        @KpiCard("bi-clock",            "Best SLA",            (_markets.Any() ? _markets.Min(m=>m.TurnaroundDays) : 0) + "d",         "msb-kpi-sla")
+        @KpiCard("bi-trophy",           "Avg Hit Ratio",       (_markets.Any() ? _markets.Average(m=>m.HitRatioPct) : 0).ToString("F0") + "%",     "msb-kpi-hit")
+        @KpiCard("bi-bar-chart-fill",   "Avg Bind Ratio",      (_markets.Any() ? _markets.Average(m=>m.BindRatioPct) : 0).ToString("F0") + "%",    "msb-kpi-bind")
+        @KpiCard("bi-percent",          "Avg Commission",      (_markets.Any() ? _markets.Average(m=>m.CommissionPct) : 0).ToString("F1") + "%",   "msb-kpi-comm")
+    </div>
+
+    <!-- ── FILTER BAR ────────────────────────────────────────────── -->
+    <div class="msb-filter-bar">
+        <input class="e-input msb-search" @bind="_search" @bind:event="oninput" placeholder="Search carriers…" />
+        <select class="e-input msb-filter-sel" @bind="_filterTier">
+            <option value="-1">All Tiers</option>
+            <option value="1">Tier 1</option>
+            <option value="2">Tier 2</option>
+            <option value="3">Watch</option>
+            <option value="0">Unassigned</option>
+        </select>
+        <label class="msb-filter-lbl">Min Appetite:</label>
+        <input type="range" class="msb-slider" min="0" max="100" step="5"
+               @bind="_minAppetite" @bind:event="oninput" />
+        <span class="msb-slider-val">@_minAppetite</span>
+        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+            <i class="bi bi-x" aria-hidden="true"></i> Reset
+        </button>
+        <span class="msb-filter-count">@FilteredMarkets.Count() showing</span>
+    </div>
+
+    @if (_view == "board")
+    {
+        <!-- ── BOARD VIEW ─────────────────────────────────────────── -->
+        <div class="msb-board">
+            @foreach (var tier in new[]{ (Label:"Tier 1 — Primary", Num:1, Css:"t1"), (Label:"Tier 2 — Secondary", Num:2, Css:"t2"), (Label:"Watch List", Num:3, Css:"watch"), (Label:"Unassigned", Num:0, Css:"unassigned") })
+            {
+                var tierMarkets = FilteredMarkets.Where(m => m.Tier == tier.Num).ToList();
+                <div class="msb-lane msb-lane-@tier.Css">
+                    <div class="msb-lane-head">
+                        <div class="msb-lane-label">@tier.Label</div>
+                        <div class="msb-lane-count">@tierMarkets.Count</div>
+                    </div>
+                    <div class="msb-lane-body">
+                        @foreach (var mkt in tierMarkets)
+                        {
+                            <div class="msb-card msb-card-@(mkt.Submitted ? "submitted" : "")">
+                                <!-- Score ring -->
+                                <div class="msb-card-head">
+                                    <div class="msb-score-ring msb-score-@ScoreRing(mkt.AppetiteScore)">
+                                        <span class="msb-score-val">@mkt.AppetiteScore</span>
+                                        <span class="msb-score-lbl">APT</span>
+                                    </div>
+                                    <div class="msb-card-info">
+                                        <div class="msb-card-carrier">@mkt.Carrier</div>
+                                        <div class="msb-card-program">@mkt.Program</div>
+                                    </div>
+                                    @if (mkt.Submitted)
+                                    {
+                                        <span class="msb-submitted-badge">
+                                            <i class="bi bi-send-check" aria-hidden="true"></i> Sent
+                                        </span>
+                                    }
+                                </div>
+
+                                <!-- Score metrics bar -->
+                                <div class="msb-metrics">
+                                    @Metric("bi-clock",        "SLA",    mkt.TurnaroundDays + "d", mkt.TurnaroundDays <= 5 ? "good" : mkt.TurnaroundDays <= 10 ? "ok" : "slow")
+                                    @Metric("bi-bullseye",     "Hit",    mkt.HitRatioPct + "%",    mkt.HitRatioPct >= 70 ? "good" : mkt.HitRatioPct >= 40 ? "ok" : "slow")
+                                    @Metric("bi-shield-check", "Bind",   mkt.BindRatioPct + "%",   mkt.BindRatioPct >= 60 ? "good" : mkt.BindRatioPct >= 35 ? "ok" : "slow")
+                                    @Metric("bi-percent",      "Comm",   mkt.CommissionPct + "%",  mkt.CommissionPct >= 15 ? "good" : mkt.CommissionPct >= 10 ? "ok" : "slow")
+                                </div>
+
+                                <!-- Producer preference stars -->
+                                <div class="msb-pref-row">
+                                    <span class="msb-pref-lbl">Producer Pref</span>
+                                    <div class="msb-stars">
+                                        @for (int i = 1; i <= 5; i++)
+                                        {
+                                            <i class="bi @(i <= mkt.ProducerPreference ? "bi-star-fill msb-star-on" : "bi-star msb-star-off")" aria-hidden="true"></i>
+                                        }
+                                    </div>
+                                    @if (!string.IsNullOrEmpty(mkt.UnderwriterName))
+                                    {
+                                        <span class="msb-uw-name">@mkt.UnderwriterName</span>
+                                    }
+                                </div>
+
+                                <!-- Commission variance bar -->
+                                <div class="msb-comm-var-row">
+                                    <span class="msb-cv-lbl">Commission</span>
+                                    <div class="msb-cv-bar-wrap">
+                                        <div class="msb-cv-bar" style="width:@Math.Min(mkt.CommissionPct*5,100)%"></div>
+                                    </div>
+                                    <span class="msb-cv-val @(mkt.CommissionPct >= 15 ? "msb-cv-hi" : mkt.CommissionPct >= 10 ? "" : "msb-cv-lo")">@mkt.CommissionPct.ToString("F1")%</span>
+                                </div>
+
+                                <!-- Strategic notes -->
+                                @if (!string.IsNullOrEmpty(mkt.StrategyNote))
+                                {
+                                    <div class="msb-strategy-note">
+                                        <i class="bi bi-lightbulb" aria-hidden="true"></i> @mkt.StrategyNote
+                                    </div>
+                                }
+
+                                <!-- Card actions -->
+                                <div class="msb-card-actions">
+                                    @if (mkt.Tier != 1)
+                                    {
+                                        <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => SetTier(mkt, 1)">
+                                            <i class="bi bi-1-circle" aria-hidden="true"></i> Tier 1
+                                        </button>
+                                    }
+                                    @if (mkt.Tier != 2)
+                                    {
+                                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => SetTier(mkt, 2)">
+                                            <i class="bi bi-2-circle" aria-hidden="true"></i> Tier 2
+                                        </button>
+                                    }
+                                    @if (mkt.Tier != 0)
+                                    {
+                                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => SetTier(mkt, 0)">
+                                            <i class="bi bi-x" aria-hidden="true"></i>
+                                        </button>
+                                    }
+                                    <button class="um-btn um-btn-ghost um-btn-xs msb-info-btn"
+                                            @onclick="() => OpenDetail(mkt)">
+                                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                        @if (!tierMarkets.Any())
+                        {
+                            <div class="msb-lane-empty">
+                                <i class="bi bi-inbox" aria-hidden="true"></i>
+                                <span>No markets in this tier</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <!-- ── MATRIX VIEW ────────────────────────────────────────── -->
+        <div class="msb-matrix-wrap">
+            <SfGrid DataSource="@FilteredMarkets.ToList()" AllowSorting="true" AllowPaging="true"
+                    AllowResizing="true" RowHeight="44">
+                <GridPageSettings PageSize="25" />
+                <GridColumns>
+                    <GridColumn Field="Carrier"          HeaderText="Carrier / Program"  Width="200"
+                                Template="@(ctx => CarrierCell((MarketRow)ctx))" />
+                    <GridColumn Field="Tier"             HeaderText="Tier"               Width="90"
+                                Template="@(ctx => TierChip(((MarketRow)ctx).Tier))" />
+                    <GridColumn Field="AppetiteScore"    HeaderText="Appetite ▼"        Width="110"
+                                Template="@(ctx => ScoreBar(((MarketRow)ctx).AppetiteScore, "apt"))" />
+                    <GridColumn Field="TurnaroundDays"   HeaderText="SLA (days)"         Width="100"
+                                Template="@(ctx => SlaCell(((MarketRow)ctx).TurnaroundDays))" />
+                    <GridColumn Field="HitRatioPct"      HeaderText="Hit Ratio %"        Width="105"
+                                Template="@(ctx => PctBar(((MarketRow)ctx).HitRatioPct, "hit"))" />
+                    <GridColumn Field="BindRatioPct"     HeaderText="Bind Ratio %"       Width="110"
+                                Template="@(ctx => PctBar(((MarketRow)ctx).BindRatioPct, "bind"))" />
+                    <GridColumn Field="ProducerPreference" HeaderText="Producer Pref"    Width="120"
+                                Template="@(ctx => StarsCell(((MarketRow)ctx).ProducerPreference))" />
+                    <GridColumn Field="CommissionPct"    HeaderText="Commission %"       Width="115"
+                                Template="@(ctx => CommCell(((MarketRow)ctx).CommissionPct))" />
+                    <GridColumn Field="UnderwriterName"  HeaderText="Underwriter"        Width="140" />
+                    <GridColumn Field="Submitted"        HeaderText="Submitted"          Width="100"
+                                Template="@(ctx => SubmittedCell(((MarketRow)ctx).Submitted))" />
+                    <GridColumn HeaderText=""            Width="110"  AllowSorting="false"
+                                Template="@(ctx => MatrixActions((MarketRow)ctx))" />
+                </GridColumns>
+            </SfGrid>
+        </div>
+    }
+
+    <!-- ── MARKET DETAIL DRAWER ──────────────────────────────────── -->
+    @if (_detailMarket is not null)
+    {
+        <div class="msb-drawer-backdrop" @onclick="() => _detailMarket = null"></div>
+        <div class="msb-drawer">
+            <div class="msb-drawer-head">
+                <div>
+                    <h2 class="msb-drawer-carrier">@_detailMarket.Carrier</h2>
+                    <span class="msb-drawer-prog">@_detailMarket.Program</span>
+                </div>
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _detailMarket = null">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="msb-drawer-body">
+                <!-- Big score -->
+                <div class="msb-big-score msb-score-@ScoreRing(_detailMarket.AppetiteScore)">
+                    <div class="msb-bs-val">@_detailMarket.AppetiteScore</div>
+                    <div class="msb-bs-lbl">Appetite Score</div>
+                </div>
+
+                <!-- Score breakdown -->
+                <h3 class="msb-drawer-section-head">Strategy Metrics</h3>
+                @DrawerMetricRow("Turnaround SLA",       _detailMarket.TurnaroundDays + " business days", ScoreRing(100 - _detailMarket.TurnaroundDays * 8))
+                @DrawerMetricRow("Expected Hit Ratio",   _detailMarket.HitRatioPct + "%",                  ScoreRing(_detailMarket.HitRatioPct))
+                @DrawerMetricRow("Historical Bind Ratio",_detailMarket.BindRatioPct + "%",                  ScoreRing(_detailMarket.BindRatioPct))
+                @DrawerMetricRow("Commission Rate",      _detailMarket.CommissionPct.ToString("F1") + "%", _detailMarket.CommissionPct >= 15 ? "high" : _detailMarket.CommissionPct >= 10 ? "ok" : "low")
+                @DrawerMetricRow("Producer Preference",  new string('★', _detailMarket.ProducerPreference) + new string('☆', 5 - _detailMarket.ProducerPreference), "ok")
+
+                <!-- Appetite details -->
+                <h3 class="msb-drawer-section-head">Appetite Details</h3>
+                @foreach (var ap in _detailMarket.AppetiteDetails)
+                {
+                    <div class="msb-apt-row">
+                        <span class="msb-apt-field">@ap.Key</span>
+                        <span class="msb-apt-val @(ap.Value == "Yes" ? "msb-apt-yes" : ap.Value == "No" ? "msb-apt-no" : "")">@ap.Value</span>
+                    </div>
+                }
+
+                <!-- Historical data -->
+                <h3 class="msb-drawer-section-head">Submission History (this market)</h3>
+                <table class="msb-hist-table">
+                    <thead><tr><th>Year</th><th>Submitted</th><th>Quoted</th><th>Bound</th><th>Avg Premium</th></tr></thead>
+                    <tbody>
+                        @foreach (var h in _detailMarket.History)
+                        {
+                            <tr>
+                                <td>@h.Year</td>
+                                <td>@h.Submitted</td>
+                                <td>@h.Quoted</td>
+                                <td>@h.Bound</td>
+                                <td>@h.AvgPremium.ToString("C0")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+
+                <!-- Actions -->
+                <div class="msb-drawer-actions">
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => { SetTier(_detailMarket, 1); _detailMarket = null; }">
+                        <i class="bi bi-1-circle" aria-hidden="true"></i> Add to Tier 1
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { SetTier(_detailMarket, 2); _detailMarket = null; }">
+                        <i class="bi bi-2-circle" aria-hidden="true"></i> Add to Tier 2
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public Guid SubmissionId { get; set; }
+
+    SfToast _toast = default!;
+
+    bool   _loading       = true;
+    string _view          = "board";
+    string _search        = "";
+    int    _filterTier    = -1;
+    int    _minAppetite   = 0;
+    string _submissionNo  = "";
+    string _account       = "";
+    string _lob           = "";
+
+    MarketRow? _detailMarket = null;
+
+    IEnumerable<MarketRow> FilteredMarkets => _markets
+        .Where(m => (string.IsNullOrEmpty(_search) || m.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase) || m.Program.Contains(_search, StringComparison.OrdinalIgnoreCase))
+                 && (_filterTier == -1 || m.Tier == _filterTier)
+                 && m.AppetiteScore >= _minAppetite);
+
+    sealed class MarketRow
+    {
+        public string  Carrier            { get; set; } = "";
+        public string  Program            { get; set; } = "";
+        public string  UnderwriterName    { get; set; } = "";
+        public int     Tier               { get; set; }        // 0=unassigned 1=T1 2=T2 3=watch
+        public int     AppetiteScore      { get; set; }        // 0-100
+        public int     TurnaroundDays     { get; set; }
+        public int     HitRatioPct        { get; set; }        // 0-100
+        public int     BindRatioPct       { get; set; }        // 0-100
+        public int     ProducerPreference { get; set; }        // 1-5
+        public decimal CommissionPct      { get; set; }
+        public bool    Submitted          { get; set; }
+        public string  StrategyNote       { get; set; } = "";
+        public List<KeyValuePair<string,string>> AppetiteDetails { get; set; } = new();
+        public List<HistRow> History      { get; set; } = new();
+    }
+
+    sealed class HistRow
+    {
+        public string  Year       { get; set; } = "";
+        public int     Submitted  { get; set; }
+        public int     Quoted     { get; set; }
+        public int     Bound      { get; set; }
+        public decimal AvgPremium { get; set; }
+    }
+
+    readonly List<MarketRow> _markets = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home","/"), new("Submissions","/submissions"),
+            new("Submission",$"/submissions/{SubmissionId}"),
+            new("Markets",$"/submissions/{SubmissionId}/markets"));
+        await Task.Delay(0);
+        BuildStub();
+        _loading = false;
+    }
+
+    void BuildStub()
+    {
+        _submissionNo = "SUB-2025-0042";
+        _account      = "Sullivan Mfg. LLC";
+        _lob          = "General Liability";
+
+        _markets.AddRange(new[]
+        {
+            new MarketRow
+            {
+                Carrier="Travelers Indemnity",       Program="Select Accounts GL",
+                UnderwriterName="Lisa Chen",         Tier=1,
+                AppetiteScore=92, TurnaroundDays=5,  HitRatioPct=78, BindRatioPct=64, ProducerPreference=5, CommissionPct=16.5m,
+                Submitted=true,
+                StrategyNote="Primary preferred carrier. Consistent quoting on mfg accounts.",
+                AppetiteDetails=new(){ new("Mfg GL","Yes"), new("Products/CO","Yes"), new("Max Payroll","$10M"), new("Min Premium","$5,000"), new("State","TX, LA, OK") },
+                History=new(){ new(){Year="2024",Submitted=12,Quoted=9,Bound=7,AvgPremium=16_800}, new(){Year="2023",Submitted=10,Quoted=8,Bound=6,AvgPremium=14_200} }
+            },
+            new MarketRow
+            {
+                Carrier="Hartford Fire & Cas.",      Program="Spectrum Commercial",
+                UnderwriterName="Mike Rosario",      Tier=1,
+                AppetiteScore=85, TurnaroundDays=7,  HitRatioPct=65, BindRatioPct=52, ProducerPreference=4, CommissionPct=15.0m,
+                Submitted=true,
+                StrategyNote="Strong broad-form coverage. Good for products-completed ops.",
+                AppetiteDetails=new(){ new("Mfg GL","Yes"), new("Products/CO","Yes"), new("Max Payroll","$8M"), new("Steel Fabrication","Preferred"), new("State","All") },
+                History=new(){ new(){Year="2024",Submitted=8,Quoted=6,Bound=4,AvgPremium=19_100}, new(){Year="2023",Submitted=7,Quoted=5,Bound=3,AvgPremium=17_400} }
+            },
+            new MarketRow
+            {
+                Carrier="Liberty Mutual",            Program="Business Insurance",
+                UnderwriterName="Jennifer Wu",       Tier=1,
+                AppetiteScore=78, TurnaroundDays=10, HitRatioPct=58, BindRatioPct=41, ProducerPreference=3, CommissionPct=14.5m,
+                Submitted=true,
+                StrategyNote="Needs 7yr loss runs. Higher premium but broader exclusion waivers.",
+                AppetiteDetails=new(){ new("Mfg GL","Yes"), new("Products/CO","Conditional"), new("Max Revenue","$15M"), new("Loss Runs","7 years req."), new("State","TX") },
+                History=new(){ new(){Year="2024",Submitted=6,Quoted=4,Bound=2,AvgPremium=21_500}, new(){Year="2023",Submitted=5,Quoted=3,Bound=2,AvgPremium=19_800} }
+            },
+            new MarketRow
+            {
+                Carrier="Zurich American",           Program="Z-Pac Manufacturing",
+                UnderwriterName="Prior carrier",     Tier=3,
+                AppetiteScore=41, TurnaroundDays=8,  HitRatioPct=30, BindRatioPct=22, ProducerPreference=2, CommissionPct=12.0m,
+                Submitted=false,
+                StrategyNote="Declined prior submission. Products/CO exposure exceeds per-account limit.",
+                AppetiteDetails=new(){ new("Mfg GL","Conditional"), new("Products/CO","No — over capacity"), new("Max Revenue","$8M"), new("Prior Declines","May apply"), new("State","TX") },
+                History=new(){ new(){Year="2024",Submitted=4,Quoted=1,Bound=1,AvgPremium=18_200}, new(){Year="2023",Submitted=3,Quoted=2,Bound=1,AvgPremium=16_000} }
+            },
+            new MarketRow
+            {
+                Carrier="CNA Commercial",            Program="CNA Connect",
+                UnderwriterName="—",                 Tier=2,
+                AppetiteScore=70, TurnaroundDays=12, HitRatioPct=50, BindRatioPct=38, ProducerPreference=3, CommissionPct=14.0m,
+                Submitted=false,
+                StrategyNote="Backup market. Slower turnaround but competitive on limits.",
+                AppetiteDetails=new(){ new("Mfg GL","Yes"), new("Products/CO","Conditional"), new("Max Payroll","$5M"), new("State","TX, OK") },
+                History=new(){ new(){Year="2024",Submitted=5,Quoted=3,Bound=2,AvgPremium=17_600} }
+            },
+            new MarketRow
+            {
+                Carrier="Markel Corporation",        Program="Markel Specialty",
+                UnderwriterName="Sarah Kim",         Tier=2,
+                AppetiteScore=66, TurnaroundDays=14, HitRatioPct=44, BindRatioPct=33, ProducerPreference=3, CommissionPct=13.5m,
+                Submitted=false,
+                StrategyNote="E&S option. Broader appetite on difficult classes.",
+                AppetiteDetails=new(){ new("Mfg GL","Yes"), new("Products/CO","Yes — E&S"), new("Hard-to-place","Yes"), new("State","All — E&S") },
+                History=new(){ new(){Year="2024",Submitted=3,Quoted=2,Bound=1,AvgPremium=22_400} }
+            },
+            new MarketRow
+            {
+                Carrier="Cincinnati Financial",      Program="Commercial Lines",
+                UnderwriterName="Dan Torres",        Tier=0,
+                AppetiteScore=58, TurnaroundDays=9,  HitRatioPct=48, BindRatioPct=36, ProducerPreference=4, CommissionPct=15.5m,
+                Submitted=false,
+                StrategyNote="Preferred commission structure. Slower quoting on larger accounts.",
+                AppetiteDetails=new(){ new("Mfg GL","Yes"), new("Max Revenue","$6M"), new("State","TX") },
+                History=new(){ new(){Year="2024",Submitted=2,Quoted=1,Bound=1,AvgPremium=15_900} }
+            },
+            new MarketRow
+            {
+                Carrier="Employers Holdings",        Program="Employers Commercial",
+                UnderwriterName="—",                 Tier=0,
+                AppetiteScore=45, TurnaroundDays=15, HitRatioPct=35, BindRatioPct=28, ProducerPreference=2, CommissionPct=11.0m,
+                Submitted=false,
+                StrategyNote="Lower appetite score. Use as last resort.",
+                AppetiteDetails=new(){ new("Mfg GL","Conditional"), new("Max Revenue","$4M"), new("State","TX") },
+                History=new(){ new(){Year="2024",Submitted=2,Quoted=1,Bound=0,AvgPremium=0} }
+            },
+        });
+    }
+
+    void SetTier(MarketRow m, int tier) => m.Tier = tier;
+    void OpenDetail(MarketRow m) => _detailMarket = m;
+    void ResetFilters() { _search = ""; _filterTier = -1; _minAppetite = 0; }
+    void GoBack() => Nav.NavigateTo($"/submissions/{SubmissionId}");
+
+    async Task SubmitSelected()
+    {
+        var tier1 = _markets.Where(m => m.Tier == 1 && !m.Submitted).ToList();
+        foreach (var m in tier1) m.Submitted = true;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "Submitted",
+            Content  = $"{tier1.Count} market{(tier1.Count==1?"":"s")} submitted.",
+            CssClass = "e-toast-success"
+        });
+    }
+
+    static string ScoreRing(int score) =>
+        score >= 80 ? "high" : score >= 60 ? "ok" : score >= 40 ? "low" : "poor";
+
+    // ── Cell renderers ─────────────────────────────────────────────
+    RenderFragment CarrierCell(MarketRow r) =>
+        @<div class="msb-carrier-cell">
+            <div class="msb-cc-name">@r.Carrier</div>
+            <div class="msb-cc-prog">@r.Program</div>
+        </div>;
+
+    RenderFragment TierChip(int tier) =>
+        @<span class="msb-tier-chip msb-tier-@tier">@(tier switch { 1=>"Tier 1", 2=>"Tier 2", 3=>"Watch", _=>"—" })</span>;
+
+    RenderFragment ScoreBar(int score, string kind) =>
+        @<div class="msb-score-bar-wrap">
+            <div class="msb-score-bar msb-sb-@ScoreRing(score)" style="width:@score%"></div>
+            <span class="msb-sb-val">@score</span>
+        </div>;
+
+    RenderFragment PctBar(int pct, string kind) =>
+        @<div class="msb-score-bar-wrap">
+            <div class="msb-score-bar msb-sb-@(pct >= 60 ? "high" : pct >= 35 ? "ok" : "low")" style="width:@pct%"></div>
+            <span class="msb-sb-val">@pct%</span>
+        </div>;
+
+    RenderFragment SlaCell(int days) =>
+        @<span class="@(days <= 5 ? "msb-sla-fast" : days <= 10 ? "msb-sla-ok" : "msb-sla-slow")">@days d</span>;
+
+    RenderFragment StarsCell(int pref) =>
+        @<span class="msb-stars-sm">@(new string('★', pref))@(new string('☆', 5-pref))</span>;
+
+    RenderFragment CommCell(decimal pct) =>
+        @<span class="@(pct >= 15 ? "msb-comm-hi" : pct < 12 ? "msb-comm-lo" : "")">@pct.ToString("F1")%</span>;
+
+    RenderFragment SubmittedCell(bool s) =>
+        s ? @<span class="msb-sub-yes"><i class="bi bi-send-check" aria-hidden="true"></i> Sent</span>
+          : @<span class="msb-sub-no">—</span>;
+
+    RenderFragment MatrixActions(MarketRow r) =>
+        @<div class="msb-mat-actions">
+            <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => SetTier(r, 1)"><i class="bi bi-1-circle" aria-hidden="true"></i></button>
+            <button class="um-btn um-btn-ghost   um-btn-xs" @onclick="() => SetTier(r, 2)"><i class="bi bi-2-circle" aria-hidden="true"></i></button>
+            <button class="um-btn um-btn-ghost   um-btn-xs" @onclick="() => OpenDetail(r)"><i class="bi bi-info-circle" aria-hidden="true"></i></button>
+        </div>;
+
+    RenderFragment Metric(string icon, string lbl, string val, string quality) =>
+        @<div class="msb-metric msb-metric-@quality">
+            <i class="bi @icon" aria-hidden="true"></i>
+            <span class="msb-metric-lbl">@lbl</span>
+            <span class="msb-metric-val">@val</span>
+        </div>;
+
+    RenderFragment DrawerMetricRow(string label, string val, string quality) =>
+        @<div class="msb-dmr">
+            <span class="msb-dmr-lbl">@label</span>
+            <span class="msb-dmr-val msb-dmr-@quality">@val</span>
+        </div>;
+
+    RenderFragment KpiCard(string icon, string label, string val, string css) =>
+        @<div class="msb-kpi-card @css">
+            <div class="msb-kpi-val">@val</div>
+            <div class="msb-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </div>;
+}

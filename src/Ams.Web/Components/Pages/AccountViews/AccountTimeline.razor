@@ -1,0 +1,444 @@
+@page "/accounts/{AccountId:guid}/timeline"
+@namespace Ams.Web.Components.Pages.AccountViews
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Timeline — @(_accountName ?? "Account")</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Account Timeline"
+               Subtitle="@($"Complete activity and event history for {_accountName ?? "this account"}")"
+               Icon="bi-clock-history">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo($"/accounts/{AccountId}")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Account 360
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "tl-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showAdd = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Log Event
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Filter bar -->
+<div class="tl-filter-bar">
+    <div class="tl-search-wrap">
+        <i class="bi bi-search tl-si" aria-hidden="true"></i>
+        <input class="tl-search" type="search" placeholder="Search timeline…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); })" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_categoryOpts" Placeholder="All Categories" ShowClearButton="true" Width="160px"
+                    Value="_filterCategory" ValueChanged="@((string v) => { _filterCategory = v; ApplyFilter(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_channelOpts" Placeholder="All Channels" ShowClearButton="true" Width="150px"
+                    Value="_filterChannel" ValueChanged="@((string v) => { _filterChannel = v; ApplyFilter(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDateRangePicker TValue="DateTime?" Placeholder="Date range…" Width="230px"
+                       StartDate="_rangeStart" EndDate="_rangeEnd"
+                       StartDateChanged="@((DateTime? d) => { _rangeStart = d; ApplyFilter(); })"
+                       EndDateChanged="@((DateTime? d) => { _rangeEnd = d; ApplyFilter(); })" />
+    <div class="tl-view-toggle">
+        <button class="tl-view-btn @(_view=="timeline"?"tl-view-btn--active":"")" @onclick='()=>_view="timeline"' title="Timeline"><i class="bi bi-clock-history" aria-hidden="true"></i></button>
+        <button class="tl-view-btn @(_view=="grid"?"tl-view-btn--active":"")"     @onclick='()=>_view="grid"'     title="Grid"><i class="bi bi-table" aria-hidden="true"></i></button>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="tl-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading timeline…</span></div>
+}
+else if (_filtered.Count == 0)
+{
+    <div class="tl-empty">
+        <i class="bi bi-clock-history tl-empty-icon" aria-hidden="true"></i>
+        <div class="tl-empty-title">No events found</div>
+        <div class="tl-empty-sub">Log calls, meetings, policy changes, claims, billing events, and more to build a complete account history.</div>
+        <button class="um-btn um-btn-primary" @onclick="() => _showAdd = true"><i class="bi bi-plus-lg" aria-hidden="true"></i> Log First Event</button>
+    </div>
+}
+else if (_view == "timeline")
+{
+    <!-- ── Timeline view ────────────────────────────────────────────── -->
+    <div class="tl-wrap">
+        @{
+            string? lastDate = null;
+        }
+        @foreach (var evt in _filtered.OrderByDescending(e => e.OccurredAt))
+        {
+            var dateLabel = evt.OccurredAt.ToString("dddd, MMMM d, yyyy");
+            if (dateLabel != lastDate)
+            {
+                lastDate = dateLabel;
+                <div class="tl-date-divider">
+                    <span class="tl-date-label">@dateLabel</span>
+                </div>
+            }
+            <div class="tl-event @(evt.IsImportant ? "tl-event--important" : "")">
+                <!-- Left: icon + stem -->
+                <div class="tl-event-icon-col">
+                    <div class="tl-icon @CatIconBg(evt.Category)">
+                        <i class="bi @CatIcon(evt.Category)" aria-hidden="true"></i>
+                    </div>
+                    <div class="tl-stem"></div>
+                </div>
+                <!-- Right: content -->
+                <div class="tl-event-body">
+                    <div class="tl-event-header">
+                        <div class="tl-event-title">@evt.Subject</div>
+                        <div class="tl-event-meta-row">
+                            <span class="@CatBadge(evt.Category)">@evt.Category</span>
+                            @if (!string.IsNullOrEmpty(evt.Channel))
+                            {
+                                <span class="tl-channel-chip"><i class="bi @ChannelIcon(evt.Channel)" aria-hidden="true"></i> @evt.Channel</span>
+                            }
+                            @if (evt.IsImportant)
+                            {
+                                <span class="tl-important-chip"><i class="bi bi-star-fill" aria-hidden="true"></i> Important</span>
+                            }
+                            <span class="tl-time">@evt.OccurredAt.ToString("h:mm tt")</span>
+                        </div>
+                    </div>
+                    @if (!string.IsNullOrEmpty(evt.Description))
+                    {
+                        <div class="tl-event-desc">@evt.Description</div>
+                    }
+                    @if (!string.IsNullOrEmpty(evt.LinkedId))
+                    {
+                        <div class="tl-event-link">
+                            <i class="bi bi-link-45deg" aria-hidden="true"></i>
+                            <button class="tl-link-btn">@evt.LinkedLabel</button>
+                        </div>
+                    }
+                    <div class="tl-event-footer">
+                        <span class="tl-author"><i class="bi bi-person" aria-hidden="true"></i> @evt.Actor</span>
+                        @if (evt.Outcome is not null)
+                        {
+                            <span class="tl-outcome @OutcomeBadge(evt.Outcome)">@evt.Outcome</span>
+                        }
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => StartEdit(evt)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <!-- ── Grid view ─────────────────────────────────────────────────── -->
+    <div class="tl-grid-wrap">
+        <SfGrid TValue="TimelineEvent" DataSource="_filtered" AllowPaging="true" AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="54">
+            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+            <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
+            <GridColumns>
+                <GridColumn HeaderText="Event" MinWidth="260" Field="@nameof(TimelineEvent.Subject)">
+                    <Template>
+                        @{ var e = (TimelineEvent)context; }
+                        <div class="tl-name-cell">
+                            <div class="tl-gc-icon @CatIconBg(e.Category)"><i class="bi @CatIcon(e.Category)" aria-hidden="true"></i></div>
+                            <div>
+                                <div class="tl-gc-subj">@e.Subject @(e.IsImportant ? "⭐" : "")</div>
+                                <div class="tl-gc-desc">@(e.Description?.Length > 60 ? e.Description[..58] + "…" : e.Description)</div>
+                            </div>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(TimelineEvent.Category)" HeaderText="Category"  Width="140">
+                    <Template>@{var e=(TimelineEvent)context;}<span class="@CatBadge(e.Category)">@e.Category</span></Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(TimelineEvent.Channel)"  HeaderText="Channel"   Width="120" />
+                <GridColumn Field="@nameof(TimelineEvent.Actor)"    HeaderText="By"        Width="150" />
+                <GridColumn Field="@nameof(TimelineEvent.Outcome)"  HeaderText="Outcome"   Width="120">
+                    <Template>@{var e=(TimelineEvent)context;}<span class="@OutcomeBadge(e.Outcome)">@(e.Outcome ?? "—")</span></Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(TimelineEvent.OccurredAt)" HeaderText="Date/Time" Width="160" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>@{var e=(TimelineEvent)context;}<span class="tl-mono">@e.OccurredAt.ToString("MM/dd/yyyy h:mm tt")</span></Template>
+                </GridColumn>
+                <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>@{var e=(TimelineEvent)context;}<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => StartEdit(e)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button></Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- ── Log / Edit Event Dialog ──────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showAdd" Width="560px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="tl-dlg-hdr"><i class="bi bi-clock-history" aria-hidden="true"></i> @(_editTarget is null ? "Log Event" : "Edit Event")</span></Header>
+        <Content>
+            <div class="tl-dlg-body">
+                <div class="tl-dlg-section">Event Details</div>
+                <div class="tl-dlg-grid">
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_categoryOpts" Placeholder="Category *" Width="100%" @bind-Value="_form.Category">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_channelOpts"  Placeholder="Channel"    Width="100%" @bind-Value="_form.Channel">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                    <div style="grid-column:span 2">
+                        <SfTextBox Placeholder="Subject *" @bind-Value="_form.Subject" />
+                    </div>
+                    <div style="grid-column:span 2">
+                        <SfTextBox Placeholder="Description / notes" @bind-Value="_form.Description" Multiline="true" HtmlAttributes="@(new Dictionary<string,object>{{"rows","3"}})" />
+                    </div>
+                    <SfDateTimePicker TValue="DateTime" Placeholder="Date &amp; time *" @bind-Value="_form.OccurredAt" />
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_outcomeOpts" Placeholder="Outcome" Width="100%" @bind-Value="_form.Outcome">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                </div>
+                <div class="tl-dlg-section" style="margin-top:.9rem">Options</div>
+                <div class="tl-dlg-check-row">
+                    <label class="tl-toggle"><input type="checkbox" @bind="_form.IsImportant" /> Mark as important</label>
+                    <label class="tl-toggle"><input type="checkbox" @bind="_form.SendEmail"   /> Send email copy to account owner</label>
+                    <label class="tl-toggle"><input type="checkbox" @bind="_form.CreateTask"  /> Create follow-up task</label>
+                </div>
+                @if (_form.CreateTask)
+                {
+                    <div class="tl-dlg-grid" style="margin-top:.6rem">
+                        <SfTextBox Placeholder="Task subject" @bind-Value="_form.TaskSubject" />
+                        <SfDatePicker TValue="DateTime?" Placeholder="Due date" @bind-Value="_form.TaskDue" />
+                    </div>
+                }
+                @if (!string.IsNullOrEmpty(_formError))
+                {
+                    <div class="tl-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="tl-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseDialog">Cancel</button>
+                <button class="um-btn um-btn-primary"
+                        disabled="@(string.IsNullOrEmpty(_form.Category) || string.IsNullOrEmpty(_form.Subject))"
+                        @onclick="CommitEventAsync">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> @(_editTarget is null ? "Log Event" : "Save")
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid AccountId { get; set; }
+
+    private SfToast?             _toast;
+    private bool                 _loading = true;
+    private string               _view    = "timeline";
+    private string?              _accountName;
+
+    private List<TimelineEvent>  _events  = [];
+    private List<TimelineEvent>  _filtered= [];
+
+    private string    _search         = string.Empty;
+    private string    _filterCategory = string.Empty;
+    private string    _filterChannel  = string.Empty;
+    private DateTime? _rangeStart;
+    private DateTime? _rangeEnd;
+
+    private bool          _showAdd    = false;
+    private TimelineEvent? _editTarget;
+    private EventForm      _form      = new();
+    private string?        _formError;
+
+    private static readonly List<LV> _categoryOpts = [
+        new("Activity","Activity"), new("Policy","Policy"), new("Claim","Claim"),
+        new("Billing","Billing"), new("Submission","Submission"), new("Renewal","Renewal"),
+        new("Marketing","Marketing"), new("Compliance","Compliance"), new("System","System"),
+    ];
+    private static readonly List<LV> _channelOpts = [
+        new("Phone","Phone"), new("Email","Email"), new("In Person","In Person"),
+        new("Portal","Portal"), new("SMS","SMS"), new("Mail","Mail"),
+    ];
+    private static readonly List<LV> _outcomeOpts = [
+        new("Completed","Completed"), new("Left Voicemail","Left Voicemail"),
+        new("No Answer","No Answer"), new("Sent","Sent"), new("Pending","Pending"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home","/"), new("Accounts","/accounts"),
+            new("Account",$"/accounts/{AccountId}"),
+            new("Timeline",$"/accounts/{AccountId}/timeline"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; StateHasChanged();
+        await Task.Delay(0);
+        _accountName = "Sullivan Manufacturing LLC";
+        _events = BuildStubEvents();
+        ApplyFilter();
+        _loading = false;
+    }
+
+    private void ApplyFilter()
+    {
+        _filtered = _events.Where(e =>
+            (string.IsNullOrEmpty(_filterCategory) || e.Category == _filterCategory) &&
+            (string.IsNullOrEmpty(_filterChannel)  || e.Channel  == _filterChannel) &&
+            (_rangeStart is null || e.OccurredAt >= _rangeStart) &&
+            (_rangeEnd   is null || e.OccurredAt <= _rangeEnd) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             (e.Description?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+             e.Actor.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+    }
+
+    private void StartEdit(TimelineEvent e)
+    {
+        _editTarget = e;
+        _form = new EventForm
+        {
+            Category=e.Category, Channel=e.Channel, Subject=e.Subject,
+            Description=e.Description, OccurredAt=e.OccurredAt,
+            Outcome=e.Outcome, IsImportant=e.IsImportant,
+        };
+        _formError = null; _showAdd = true;
+    }
+
+    private void CloseDialog() { _showAdd = false; _editTarget = null; _form = new(); _formError = null; }
+
+    private async Task CommitEventAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_form.Subject)) { _formError = "Subject is required."; return; }
+
+        if (_editTarget is null)
+        {
+            _events.Insert(0, new TimelineEvent
+            {
+                EventId=Guid.NewGuid(), AccountId=AccountId,
+                Category=_form.Category, Channel=_form.Channel, Subject=_form.Subject,
+                Description=_form.Description, OccurredAt=_form.OccurredAt,
+                Outcome=_form.Outcome, IsImportant=_form.IsImportant,
+                Actor="Current User",
+            });
+        }
+        else
+        {
+            _editTarget.Category=_form.Category; _editTarget.Channel=_form.Channel;
+            _editTarget.Subject=_form.Subject;   _editTarget.Description=_form.Description;
+            _editTarget.OccurredAt=_form.OccurredAt; _editTarget.Outcome=_form.Outcome;
+            _editTarget.IsImportant=_form.IsImportant;
+        }
+        ApplyFilter();
+        CloseDialog();
+        await ShowToast(_editTarget is null ? "Event logged." : "Event updated.");
+    }
+
+    private async Task ShowToast(string msg)
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "e-toast-success" });
+    }
+
+    // ── Style helpers ────────────────────────────────────────────────────────
+    private static string CatIcon(string c) => c switch
+    {
+        "Activity"   => "bi-lightning-charge",
+        "Policy"     => "bi-shield-check",
+        "Claim"      => "bi-exclamation-circle",
+        "Billing"    => "bi-receipt",
+        "Submission" => "bi-file-earmark-plus",
+        "Renewal"    => "bi-arrow-clockwise",
+        "Marketing"  => "bi-megaphone",
+        "Compliance" => "bi-patch-check",
+        _            => "bi-gear",
+    };
+    private static string CatIconBg(string c) => c switch
+    {
+        "Activity"   => "tl-icon--act",
+        "Policy"     => "tl-icon--pol",
+        "Claim"      => "tl-icon--clm",
+        "Billing"    => "tl-icon--bil",
+        "Submission" => "tl-icon--sub",
+        "Renewal"    => "tl-icon--ren",
+        "Marketing"  => "tl-icon--mkt",
+        "Compliance" => "tl-icon--cmp",
+        _            => "tl-icon--sys",
+    };
+    private static string CatBadge(string c) => c switch
+    {
+        "Activity"   => "tl-cat tl-cat--act",
+        "Policy"     => "tl-cat tl-cat--pol",
+        "Claim"      => "tl-cat tl-cat--clm",
+        "Billing"    => "tl-cat tl-cat--bil",
+        "Renewal"    => "tl-cat tl-cat--ren",
+        "Marketing"  => "tl-cat tl-cat--mkt",
+        _            => "tl-cat",
+    };
+    private static string ChannelIcon(string ch) => ch switch
+    {
+        "Phone"     => "bi-telephone",
+        "Email"     => "bi-envelope",
+        "In Person" => "bi-person-check",
+        "Portal"    => "bi-globe",
+        "SMS"       => "bi-chat",
+        _           => "bi-envelope",
+    };
+    private static string OutcomeBadge(string? o) => o switch
+    {
+        "Completed"      => "tl-outcome tl-outcome--ok",
+        "Sent"           => "tl-outcome tl-outcome--ok",
+        "Left Voicemail" => "tl-outcome tl-outcome--warn",
+        "No Answer"      => "tl-outcome tl-outcome--warn",
+        "Pending"        => "tl-outcome tl-outcome--pend",
+        _                => "tl-outcome",
+    };
+
+    // ── Stub data ────────────────────────────────────────────────────────────
+    private List<TimelineEvent> BuildStubEvents() =>
+    [
+        new() { EventId=Guid.NewGuid(), AccountId=AccountId, Category="Renewal",    Subject="Renewal outreach call placed",         Description="Spoke with Robert Sullivan. Renewal package sent via email.", Actor="Jane Smith",    Channel="Phone",   OccurredAt=DateTime.UtcNow.AddDays(-2),   Outcome="Completed",      IsImportant=true  },
+        new() { EventId=Guid.NewGuid(), AccountId=AccountId, Category="Policy",     Subject="Endorsement added — Hired/Non-Owned Auto",Description="Added HNOA endorsement to GL policy.",Actor="John Doe",     Channel="Portal",  OccurredAt=DateTime.UtcNow.AddDays(-5),   Outcome="Completed"                     },
+        new() { EventId=Guid.NewGuid(), AccountId=AccountId, Category="Claim",      Subject="FNOL filed — CLM-0041 Property",       Description="Roof damage reported during Q1 storm event.",Actor="Maria Chen",Channel="Email",   OccurredAt=DateTime.UtcNow.AddDays(-20),  Outcome="Pending"                       },
+        new() { EventId=Guid.NewGuid(), AccountId=AccountId, Category="Billing",    Subject="Invoice INV-0088 paid in full",         Description="$24,500 payment received via ACH.",Actor="System",          Channel="Portal",  OccurredAt=DateTime.UtcNow.AddDays(-35),  Outcome="Completed"                     },
+        new() { EventId=Guid.NewGuid(), AccountId=AccountId, Category="Activity",   Subject="Annual review meeting — Chicago office",Description="Full coverage review with CEO and CFO. Identified workers comp gap.",Actor="Jane Smith",Channel="In Person",OccurredAt=DateTime.UtcNow.AddDays(-62), Outcome="Completed", IsImportant=true },
+        new() { EventId=Guid.NewGuid(), AccountId=AccountId, Category="Marketing",  Subject="Enrolled in Renewal Drip campaign",     Description="Account auto-enrolled in Q3 renewal nurture series.",Actor="System",    Channel="Email",   OccurredAt=DateTime.UtcNow.AddDays(-60),  Outcome="Sent"                          },
+        new() { EventId=Guid.NewGuid(), AccountId=AccountId, Category="Submission", Subject="New submission — Umbrella $5M",         Description="Submitted to carrier for Q2 umbrella quote.",Actor="John Doe",   Channel="Email",   OccurredAt=DateTime.UtcNow.AddDays(-90),  Outcome="Pending"                       },
+        new() { EventId=Guid.NewGuid(), AccountId=AccountId, Category="Compliance", Subject="COI issued to Sullivan Realty LLC",     Description="Certificate of insurance delivered per request.",Actor="Jane Smith",Channel="Email", OccurredAt=DateTime.UtcNow.AddDays(-110), Outcome="Sent"                          },
+        new() { EventId=Guid.NewGuid(), AccountId=AccountId, Category="System",     Subject="Account created",                       Description="Account record created in AMS.",Actor="System",               Channel=null,       OccurredAt=DateTime.UtcNow.AddDays(-365), Outcome="Completed"                     },
+    ];
+
+    // ── Models ────────────────────────────────────────────────────────────────
+    private sealed class TimelineEvent
+    {
+        public Guid    EventId     { get; set; } = Guid.NewGuid();
+        public Guid    AccountId   { get; set; }
+        public string  Category    { get; set; } = "Activity";
+        public string? Channel     { get; set; }
+        public string  Subject     { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public string  Actor       { get; set; } = string.Empty;
+        public DateTime OccurredAt { get; set; } = DateTime.UtcNow;
+        public string? Outcome     { get; set; }
+        public bool    IsImportant { get; set; }
+        public string? LinkedId    { get; set; }
+        public string? LinkedLabel { get; set; }
+    }
+    private sealed class EventForm
+    {
+        public string  Category    { get; set; } = "Activity";
+        public string? Channel     { get; set; }
+        public string  Subject     { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public DateTime OccurredAt { get; set; } = DateTime.UtcNow;
+        public string? Outcome     { get; set; }
+        public bool    IsImportant { get; set; }
+        public bool    SendEmail   { get; set; }
+        public bool    CreateTask  { get; set; }
+        public string? TaskSubject { get; set; }
+        public DateTime? TaskDue   { get; set; }
+    }
+    private sealed record LV(string Value, string Label);
+}

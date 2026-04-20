@@ -1,0 +1,391 @@
+@page "/claims"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Claims Register — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── REPORT CLAIM DIALOG ───────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showNewClaimDlg" Width="560px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Report New Claim</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="pd-dlg-grid">
+                    <div>
+                        <label class="cr-dlg-lbl">Policy # *</label>
+                        <SfTextBox @bind-Value="_newClaim.PolicyNumber" Placeholder="e.g. TRV-GL-2024-00421" />
+                    </div>
+                    <div>
+                        <label class="cr-dlg-lbl">Date of Loss *</label>
+                        <SfDatePicker TValue="DateTime?" @bind-Value="_newClaim.DateOfLoss" Placeholder="MM/DD/YYYY" />
+                    </div>
+                    <div>
+                        <label class="cr-dlg-lbl">Date Reported</label>
+                        <SfDatePicker TValue="DateTime?" @bind-Value="_newClaim.DateReported" Placeholder="MM/DD/YYYY" />
+                    </div>
+                    <div>
+                        <label class="cr-dlg-lbl">Loss Type *</label>
+                        <SfDropDownList TValue="string" TItem="string"
+                                        DataSource="@_lossTypes"
+                                        @bind-Value="_newClaim.LossType"
+                                        Placeholder="Select loss type" />
+                    </div>
+                    <div>
+                        <label class="cr-dlg-lbl">Line of Business</label>
+                        <SfDropDownList TValue="string" TItem="string"
+                                        DataSource="@_lobs"
+                                        @bind-Value="_newClaim.Lob"
+                                        Placeholder="Select LOB" />
+                    </div>
+                    <div>
+                        <label class="cr-dlg-lbl">Claimant Name</label>
+                        <SfTextBox @bind-Value="_newClaim.PrimaryClaimant" Placeholder="Primary claimant name" />
+                    </div>
+                </div>
+                <div class="pd-dlg-grid-1">
+                    <div>
+                        <label class="cr-dlg-lbl">Loss Description *</label>
+                        <SfTextBox @bind-Value="_newClaim.LossDescription" Placeholder="Describe the loss…" Multiline="true" />
+                    </div>
+                    <div>
+                        <label class="cr-dlg-lbl">Loss Location</label>
+                        <SfTextBox @bind-Value="_newClaim.LossLocation" Placeholder="Location of loss" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showNewClaimDlg = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveNewClaim">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Report Claim
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<AppPageHeader Title="Claims Register"
+               Subtitle="Track and manage all reported claims across policies and lines of business"
+               Icon="bi-exclamation-circle">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => { _newClaim = new(); _showNewClaimDlg = true; }">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Report Claim
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI STRIP ─────────────────────────────────────────────────── -->
+<div class="cr-kpi-strip">
+    @CrKpi("bi-exclamation-circle-fill", "Open",          _claims.Count(c => c.Status == "Open").ToString(),          "cr-ki-red",    "Open",       () => SetStatusFilter("Open"))
+    @CrKpi("bi-check-circle-fill",       "Closed",        _claims.Count(c => c.Status == "Closed").ToString(),        "cr-ki-gray",   "Closed",     () => SetStatusFilter("Closed"))
+    @CrKpi("bi-arrow-repeat",            "Reopened",      _claims.Count(c => c.Status == "Reopened").ToString(),      "cr-ki-amber",  "Reopened",   () => SetStatusFilter("Reopened"))
+    @CrKpi("bi-gavel",                   "In Litigation", _claims.Count(c => c.Status == "In Litigation").ToString(), "cr-ki-purple", "Litigation", () => SetStatusFilter("In Litigation"))
+    @CrKpi("bi-arrow-counterclockwise",  "Subrogation",   _claims.Count(c => c.Status == "Subrogation").ToString(),   "cr-ki-blue",   "Subrogation",() => SetStatusFilter("Subrogation"))
+    @CrKpi("bi-slash-circle",            "Denied",        _claims.Count(c => c.Status == "Denied").ToString(),        "cr-ki-gray",   "Denied",     () => SetStatusFilter("Denied"))
+    @CrKpi("bi-currency-dollar",         "Total Incurred", _claims.Sum(c => c.TotalIncurred).ToString("C0"),          "cr-ki-red",    null,         null)
+    @CrKpi("bi-safe",                    "Open Reserves",  _claims.Where(c => c.Status != "Closed").Sum(c => c.TotalReserves).ToString("C0"), "cr-ki-amber", null, null)
+    @CrKpi("bi-clock-history",           "Avg Days Open",  AvgDaysOpen + "d",                                         "cr-ki-blue",   null,         null)
+</div>
+
+<!-- ── FILTER BAR ────────────────────────────────────────────────── -->
+<div class="cr-filter-bar">
+    <input class="e-input cr-search" @bind="_search" @bind:event="oninput"
+           placeholder="Search claim #, policy #, claimant, account…" />
+
+    <div class="cr-status-pills">
+        <button class="cr-pill @(_statusFilter == "" ? "cr-pill-active" : "")" @onclick='() => _statusFilter = ""'>All</button>
+        @foreach (var s in _statuses)
+        {
+            <button class="cr-pill @(_statusFilter == s ? "cr-pill-active" : "")" @onclick="() => _statusFilter = s">@s</button>
+        }
+    </div>
+
+    <select class="e-input cr-filter-sel" @bind="_lobFilter">
+        <option value="">All Lines</option>
+        @foreach (var l in _lobs) { <option>@l</option> }
+    </select>
+    <select class="e-input cr-filter-sel" @bind="_carrierFilter">
+        <option value="">All Carriers</option>
+        @foreach (var c in _claims.Select(x => x.Carrier).Distinct().OrderBy(x => x)) { <option>@c</option> }
+    </select>
+    <select class="e-input cr-filter-sel" @bind="_handlerFilter">
+        <option value="">All Handlers</option>
+        @foreach (var h in _claims.Select(x => x.AssignedHandler).Distinct().OrderBy(x => x)) { <option>@h</option> }
+    </select>
+    <select class="e-input cr-filter-sel" @bind="_lossTypeFilter">
+        <option value="">All Loss Types</option>
+        @foreach (var t in _lossTypes) { <option>@t</option> }
+    </select>
+
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+        <i class="bi bi-x" aria-hidden="true"></i> Reset
+    </button>
+    <span class="cr-filter-count">@FilteredClaims.Count() claim(s)</span>
+</div>
+
+<!-- ── MAIN GRID ─────────────────────────────────────────────────── -->
+<div class="cr-grid-wrap">
+    <SfGrid TValue="ClaimRow" DataSource="@FilteredClaims.ToList()"
+            AllowSorting="true" AllowPaging="true" AllowResizing="true"
+            AllowFiltering="true" EnableHover="true" RowHeight="58">
+        <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+        <GridPageSettings PageSize="25" />
+        <GridColumns>
+
+            <GridColumn Field="@nameof(ClaimRow.ClaimNumber)" HeaderText="Claim #" Width="155">
+                <Template>
+                    @{ var c = (ClaimRow)context; }
+                    <button class="cr-claim-link" @onclick="() => OpenClaim(c)">@c.ClaimNumber</button>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(ClaimRow.AccountName)" HeaderText="Account / Insured" MinWidth="190">
+                <Template>
+                    @{ var c = (ClaimRow)context; }
+                    <div class="cr-acct-cell">
+                        <button class="cr-acct-link" @onclick='() => Nav.NavigateTo($"/accounts/{c.AccountId}")'>@c.AccountName</button>
+                        <div class="cr-acct-meta">@c.PolicyNumber · @c.Lob</div>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(ClaimRow.Status)" HeaderText="Status" Width="130">
+                <Template>
+                    @{ var c = (ClaimRow)context; }
+                    <span class="cr-status cr-st-@StatusCss(c.Status)">@c.Status</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(ClaimRow.LossType)" HeaderText="Loss Type" Width="145" />
+
+            <GridColumn Field="@nameof(ClaimRow.PrimaryClaimant)" HeaderText="Claimant" Width="155" />
+
+            <GridColumn Field="@nameof(ClaimRow.DateOfLoss)" HeaderText="Date of Loss" Width="125">
+                <Template>@{ var c = (ClaimRow)context; }<span class="pd-mono">@c.DateOfLoss.ToString("MM/dd/yyyy")</span></Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(ClaimRow.DateReported)" HeaderText="Reported" Width="115">
+                <Template>@{ var c = (ClaimRow)context; }<span class="pd-mono">@c.DateReported.ToString("MM/dd/yyyy")</span></Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(ClaimRow.DaysOpen)" HeaderText="Days Open" Width="105"
+                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    @{ var c = (ClaimRow)context; }
+                    <span class="pd-mono @(c.DaysOpen > 180 ? "pd-viol-warn" : c.DaysOpen > 90 ? "cr-days-warn" : "")">
+                        @(c.Status == "Closed" ? "—" : c.DaysOpen.ToString())
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(ClaimRow.TotalIncurred)" HeaderText="Total Incurred" Width="140"
+                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    @{ var c = (ClaimRow)context; }
+                    <span class="pd-mono @(c.TotalIncurred > 100_000 ? "pd-viol-warn" : "")">
+                        @c.TotalIncurred.ToString("C0")
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(ClaimRow.TotalReserves)" HeaderText="Reserves" Width="125"
+                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>@{ var c = (ClaimRow)context; }<span class="pd-mono">@c.TotalReserves.ToString("C0")</span></Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(ClaimRow.Carrier)" HeaderText="Carrier" Width="165" />
+
+            <GridColumn Field="@nameof(ClaimRow.AssignedHandler)" HeaderText="Handler" Width="140" />
+
+            <GridColumn HeaderText="Flags" Width="100" AllowSorting="false" AllowFiltering="false">
+                <Template>
+                    @{ var c = (ClaimRow)context; }
+                    <div class="cr-flags">
+                        @if (c.IsLitigation) { <span class="cr-flag cr-flag-lit" title="In Litigation"><i class="bi bi-gavel" aria-hidden="true"></i></span> }
+                        @if (c.HasSubrogation){ <span class="cr-flag cr-flag-sub" title="Subrogation Potential"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></span> }
+                        @if (c.IsCatastrophe){ <span class="cr-flag cr-flag-cat" title="Catastrophe Claim"><i class="bi bi-cloud-lightning" aria-hidden="true"></i></span> }
+                        @if (c.IsDisputed)   { <span class="cr-flag cr-flag-dis" title="Coverage Disputed"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span> }
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn HeaderText="Actions" Width="115" AllowSorting="false" AllowFiltering="false">
+                <Template>
+                    @{ var c = (ClaimRow)context; }
+                    <div class="rdb-row-actions">
+                        <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => OpenClaim(c)">
+                            <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Open
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs"
+                                @onclick='() => Nav.NavigateTo($"/policies/{c.PolicyId}")'
+                                title="View policy">
+                            <i class="bi bi-shield" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+@code {
+    SfToast _toast = default!;
+
+    string _search        = "";
+    string _statusFilter  = "";
+    string _lobFilter     = "";
+    string _carrierFilter = "";
+    string _handlerFilter = "";
+    string _lossTypeFilter= "";
+
+    bool       _showNewClaimDlg = false;
+    NewClaimForm _newClaim      = new();
+
+    readonly string[] _statuses  = { "Open","Closed","Reopened","In Litigation","Subrogation","Denied" };
+    readonly string[] _lobs      = { "General Liability","Commercial Auto","Commercial Property","Workers Comp","Umbrella","Professional Liab.","Home/Dwelling","Personal Auto" };
+    readonly string[] _lossTypes = { "Bodily Injury","Property Damage","Auto Collision","Auto Comprehensive","Workers Comp Injury","Product Liability","Professional Error","Theft","Fire","Water/Flood","Wind/Hail","Slip & Fall","Equipment Breakdown" };
+
+    sealed class NewClaimForm
+    {
+        public string    PolicyNumber    { get; set; } = "";
+        public DateTime? DateOfLoss      { get; set; }
+        public DateTime? DateReported    { get; set; }
+        public string    LossType        { get; set; } = "";
+        public string    Lob             { get; set; } = "";
+        public string    PrimaryClaimant { get; set; } = "";
+        public string    LossDescription { get; set; } = "";
+        public string    LossLocation    { get; set; } = "";
+    }
+
+    sealed class ClaimRow
+    {
+        public Guid     ClaimId          { get; set; }
+        public Guid     PolicyId         { get; set; }
+        public Guid     AccountId        { get; set; }
+        public string   ClaimNumber      { get; set; } = "";
+        public string   PolicyNumber     { get; set; } = "";
+        public string   AccountName      { get; set; } = "";
+        public string   Lob              { get; set; } = "";
+        public string   Carrier          { get; set; } = "";
+        public string   Status           { get; set; } = "";
+        public string   LossType         { get; set; } = "";
+        public string   PrimaryClaimant  { get; set; } = "";
+        public DateTime DateOfLoss       { get; set; }
+        public DateTime DateReported     { get; set; }
+        public DateTime? ClosedDate      { get; set; }
+        public int      DaysOpen         { get; set; }
+        public decimal  TotalIncurred    { get; set; }
+        public decimal  TotalReserves    { get; set; }
+        public decimal  TotalPaid        { get; set; }
+        public string   AssignedHandler  { get; set; } = "";
+        public bool     IsLitigation     { get; set; }
+        public bool     HasSubrogation   { get; set; }
+        public bool     IsCatastrophe    { get; set; }
+        public bool     IsDisputed       { get; set; }
+    }
+
+    readonly List<ClaimRow> _claims = new();
+
+    int AvgDaysOpen
+    {
+        get
+        {
+            var open = _claims.Where(c => c.Status != "Closed").ToList();
+            return open.Any() ? (int)open.Average(c => c.DaysOpen) : 0;
+        }
+    }
+
+    IEnumerable<ClaimRow> FilteredClaims => _claims.Where(c =>
+        (string.IsNullOrEmpty(_search) ||
+         c.ClaimNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         c.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         c.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         c.PrimaryClaimant.Contains(_search, StringComparison.OrdinalIgnoreCase))
+     && (string.IsNullOrEmpty(_statusFilter)   || c.Status   == _statusFilter)
+     && (string.IsNullOrEmpty(_lobFilter)       || c.Lob      == _lobFilter)
+     && (string.IsNullOrEmpty(_carrierFilter)   || c.Carrier  == _carrierFilter)
+     && (string.IsNullOrEmpty(_handlerFilter)   || c.AssignedHandler == _handlerFilter)
+     && (string.IsNullOrEmpty(_lossTypeFilter)  || c.LossType == _lossTypeFilter));
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Claims", "/claims"));
+        await Task.Delay(0);
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _claims.Clear();
+        _claims.AddRange(new[]
+        {
+            MakeClaim("CLM-2025-00142","TRV-GL-2024-00421","Sullivan Mfg. LLC",    "General Liability",  "Travelers Indemnity",  "Open",         "Bodily Injury",          "James Hartford",   DateTime.Today.AddDays(-42),  DateTime.Today.AddDays(-40),  null, 42,  85_500m, 120_000m, 35_000m, "Sarah Kim",    true,  false, false, true),
+            MakeClaim("CLM-2025-00138","HFD-CA-2024-14822","Metro Freight Co.",    "Commercial Auto",    "Hartford Fire & Cas.", "Open",         "Auto Collision",         "Maria Lopez",      DateTime.Today.AddDays(-18),  DateTime.Today.AddDays(-17),  null, 18,  12_400m,  22_000m,  5_200m, "James Park",   false, false, false, false),
+            MakeClaim("CLM-2025-00131","LIB-GL-2024-77210","Bridgewater Hotels",   "General Liability",  "Liberty Mutual",       "In Litigation","Slip & Fall",            "Robert Dunning",   DateTime.Today.AddDays(-215), DateTime.Today.AddDays(-212), null, 215, 475_000m,650_000m,120_000m, "Maria Santos", true,  true,  false, true),
+            MakeClaim("CLM-2025-00127","CNA-WC-2024-55102","Dallas Roofing LLC",   "Workers Comp",       "CNA Commercial",       "Open",         "Workers Comp Injury",    "Pedro Castillo",   DateTime.Today.AddDays(-88),  DateTime.Today.AddDays(-85),  null, 88,  34_200m,  55_000m, 18_100m, "Kevin Obi",    false, false, false, false),
+            MakeClaim("CLM-2024-00991","TRV-CP-2024-62011","Greenleaf Nurseries",  "Commercial Property","Travelers Indemnity",  "Closed",       "Fire",                   "Greenleaf Nurseries",DateTime.Today.AddDays(-310),DateTime.Today.AddDays(-308),DateTime.Today.AddDays(-45), 0, 98_000m, 0m, 98_000m, "Sarah Kim", false, false, true,  false),
+            MakeClaim("CLM-2025-00118","MKL-PL-2024-28004","Apex Medical Group",   "Professional Liab.", "Markel Corporation",   "Open",         "Professional Error",     "Patient Group LLC",DateTime.Today.AddDays(-62),  DateTime.Today.AddDays(-60),  null, 62,  180_000m,250_000m, 45_000m, "Maria Santos", true,  false, false, true),
+            MakeClaim("CLM-2025-00109","CNA-GL-2024-71004","Coastal Seafood Dist.","General Liability",  "CNA Commercial",       "Reopened",     "Property Damage",        "Gulf Dock Co.",    DateTime.Today.AddDays(-145), DateTime.Today.AddDays(-143), null, 145, 28_800m,  42_000m, 18_000m, "Kevin Obi",    false, true,  false, false),
+            MakeClaim("CLM-2025-00101","HFD-UMB-2024-38810","Sun Valley Resort",   "Umbrella",           "Hartford Fire & Cas.", "Subrogation",  "Bodily Injury",          "Third Party Corp", DateTime.Today.AddDays(-180), DateTime.Today.AddDays(-178), null, 180, 310_000m,380_000m, 95_000m, "James Park",   false, true,  false, false),
+            MakeClaim("CLM-2024-00888","TRV-CA-2024-90221","Pioneer Automotive",   "Commercial Auto",    "Travelers Indemnity",  "Closed",       "Theft",                  "Pioneer Automotive",DateTime.Today.AddDays(-95), DateTime.Today.AddDays(-93), DateTime.Today.AddDays(-20), 0, 15_500m, 0m, 15_500m, "Sarah Kim", false, false, false, false),
+            MakeClaim("CLM-2025-00144","ZUR-GL-2023-18820","Laredo Steel Works",   "General Liability",  "Zurich American",      "Open",         "Product Liability",      "Rodriguez Family", DateTime.Today.AddDays(-5),   DateTime.Today.AddDays(-4),   null, 5,   8_000m,  75_000m,  1_500m, "Maria Santos", false, false, false, false),
+            MakeClaim("CLM-2024-00821","TRV-GL-2024-00421","Sullivan Mfg. LLC",    "General Liability",  "Travelers Indemnity",  "Denied",       "Property Damage",        "Vendor ABC LLC",   DateTime.Today.AddDays(-220), DateTime.Today.AddDays(-218), DateTime.Today.AddDays(-150), 0, 0m, 0m, 0m, "Sarah Kim", false, false, false, false),
+            MakeClaim("CLM-2025-00133","LIB-GL-2024-77210","Bridgewater Hotels",   "General Liability",  "Liberty Mutual",       "Open",         "Water/Flood",            "Bridgewater Hotels",DateTime.Today.AddDays(-28), DateTime.Today.AddDays(-27), null, 28, 42_000m, 65_000m, 14_000m, "Kevin Obi",   false, false, true,  false),
+        });
+    }
+
+    static ClaimRow MakeClaim(string claimNum, string polNum, string acct, string lob, string carrier,
+        string status, string lossType, string claimant, DateTime dol, DateTime reported, DateTime? closed,
+        int daysOpen, decimal incurred, decimal reserves, decimal paid, string handler,
+        bool lit, bool sub, bool cat, bool dis) => new()
+    {
+        ClaimId=Guid.NewGuid(), PolicyId=Guid.NewGuid(), AccountId=Guid.NewGuid(),
+        ClaimNumber=claimNum, PolicyNumber=polNum, AccountName=acct, Lob=lob, Carrier=carrier,
+        Status=status, LossType=lossType, PrimaryClaimant=claimant,
+        DateOfLoss=dol, DateReported=reported, ClosedDate=closed, DaysOpen=daysOpen,
+        TotalIncurred=incurred, TotalReserves=reserves, TotalPaid=paid,
+        AssignedHandler=handler, IsLitigation=lit, HasSubrogation=sub, IsCatastrophe=cat, IsDisputed=dis
+    };
+
+    void SetStatusFilter(string s) => _statusFilter = _statusFilter == s ? "" : s;
+    void ResetFilters() { _search=""; _statusFilter=""; _lobFilter=""; _carrierFilter=""; _handlerFilter=""; _lossTypeFilter=""; }
+    void Refresh() => BuildStub();
+    void OpenClaim(ClaimRow c) => Nav.NavigateTo($"/claims/{c.ClaimId}");
+
+    async Task SaveNewClaim()
+    {
+        if (string.IsNullOrWhiteSpace(_newClaim.PolicyNumber)) return;
+        _showNewClaimDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title="Claim Reported", Content=$"Claim reported for policy {_newClaim.PolicyNumber}.", CssClass="e-toast-success" });
+    }
+
+    async Task ExportAsync() =>
+        await _toast.ShowAsync(new ToastModel { Title="Exported", Content="Claims register exported.", CssClass="e-toast-success" });
+
+    RenderFragment CrKpi(string icon, string label, string val, string color, string? filterVal, System.Action? onClick) => __builder =>
+    {
+        <div class="cr-kpi-card @color @(onClick is not null ? "cr-kpi-clickable" : "")"
+             @onclick="() => onClick?.Invoke()">
+            <i class="bi @icon cr-kpi-icon" aria-hidden="true"></i>
+            <div>
+                <div class="cr-kpi-val">@val</div>
+                <div class="cr-kpi-lbl">@label</div>
+            </div>
+        </div>
+    };
+
+    static string StatusCss(string s) => s.ToLower().Replace(" ","-").Replace("/","-");
+}

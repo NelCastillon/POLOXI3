@@ -1,0 +1,525 @@
+@page "/accounts/{AccountId:guid}/contacts"
+@namespace Ams.Web.Components.Pages.AccountViews
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Contacts — @(_accountName ?? "Account")</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Contacts"
+               Subtitle="@($"All contacts linked to {_accountName ?? "this account"}")"
+               Icon="bi-people-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo($"/accounts/{AccountId}")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Account 360
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "cl-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showAdd = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Contact
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="cl-kpi-strip">
+    <div class="cl-kpi-card">
+        <span class="cl-ki cl-ki1"><i class="bi bi-people" aria-hidden="true"></i></span>
+        <div><div class="cl-kv">@_contacts.Count</div><div class="cl-kl">Total Contacts</div></div>
+    </div>
+    <div class="cl-kpi-card">
+        <span class="cl-ki cl-ki2"><i class="bi bi-person-check" aria-hidden="true"></i></span>
+        <div><div class="cl-kv">@_contacts.Count(x => x.IsPrimary)</div><div class="cl-kl">Primary</div></div>
+    </div>
+    <div class="cl-kpi-card">
+        <span class="cl-ki cl-ki3"><i class="bi bi-briefcase" aria-hidden="true"></i></span>
+        <div><div class="cl-kv">@_contacts.Count(x => x.ContactType == "Decision Maker")</div><div class="cl-kl">Decision Makers</div></div>
+    </div>
+    <div class="cl-kpi-card">
+        <span class="cl-ki cl-ki4"><i class="bi bi-building" aria-hidden="true"></i></span>
+        <div><div class="cl-kv">@_contacts.Select(x => x.LinkedAccountId).Distinct().Count()</div><div class="cl-kl">Linked Accounts</div></div>
+    </div>
+</div>
+
+<!-- Filter bar -->
+<div class="cl-filter-bar">
+    <div class="cl-search-wrap">
+        <i class="bi bi-search cl-si" aria-hidden="true"></i>
+        <input class="cl-search" type="search" placeholder="Search contacts…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); })" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_typeOpts" Placeholder="All Types" ShowClearButton="true" Width="155px"
+                    Value="_filterType" ValueChanged="@((string v) => { _filterType = v; ApplyFilter(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_roleOpts" Placeholder="All Roles" ShowClearButton="true" Width="155px"
+                    Value="_filterRole" ValueChanged="@((string v) => { _filterRole = v; ApplyFilter(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <div class="cl-view-toggle">
+        <button class="cl-view-btn @(_view == "cards" ? "cl-view-btn--active" : "")" @onclick='() => _view = "cards"' title="Card view"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i></button>
+        <button class="cl-view-btn @(_view == "list"  ? "cl-view-btn--active" : "")" @onclick='() => _view = "list"'  title="List view"><i class="bi bi-list-ul" aria-hidden="true"></i></button>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="cl-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading contacts…</span></div>
+}
+else if (_filtered.Count == 0)
+{
+    <div class="cl-empty">
+        <i class="bi bi-people cl-empty-icon" aria-hidden="true"></i>
+        <div class="cl-empty-title">No contacts found</div>
+        <div class="cl-empty-sub">Add the key contacts for this account — decision-makers, billing contacts, and named insureds.</div>
+        <button class="um-btn um-btn-primary" @onclick="() => _showAdd = true"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add First Contact</button>
+    </div>
+}
+else if (_view == "cards")
+{
+    <!-- Card grid view -->
+    <div class="cl-card-grid">
+        @foreach (var c in _filtered)
+        {
+            <div class="cl-contact-card @(c.IsPrimary ? "cl-contact-card--primary" : "")">
+                @if (c.IsPrimary)
+                {
+                    <div class="cl-primary-ribbon"><i class="bi bi-star-fill" aria-hidden="true"></i> Primary</div>
+                }
+                <div class="cl-card-top">
+                    <div class="cl-card-avatar @AvatarColor(c.FullName)">@Initials(c.FullName)</div>
+                    <div class="cl-card-identity">
+                        <div class="cl-card-name">@c.FullName</div>
+                        <div class="cl-card-title-text">@(c.Title ?? "—")</div>
+                        <div class="cl-card-badges">
+                            <span class="@TypeBadge(c.ContactType)">@c.ContactType</span>
+                            @if (!string.IsNullOrEmpty(c.Role)) { <span class="cl-role-badge">@c.Role</span> }
+                        </div>
+                    </div>
+                </div>
+                <div class="cl-card-links">
+                    @if (!string.IsNullOrEmpty(c.Email))
+                    {
+                        <a href="mailto:@c.Email" class="cl-link"><i class="bi bi-envelope" aria-hidden="true"></i><span class="cl-link-text">@c.Email</span></a>
+                    }
+                    @if (!string.IsNullOrEmpty(c.Phone))
+                    {
+                        <a href="tel:@c.Phone" class="cl-link"><i class="bi bi-telephone" aria-hidden="true"></i><span class="cl-link-text">@c.Phone</span></a>
+                    }
+                    @if (!string.IsNullOrEmpty(c.Mobile))
+                    {
+                        <a href="tel:@c.Mobile" class="cl-link"><i class="bi bi-phone" aria-hidden="true"></i><span class="cl-link-text">@c.Mobile</span></a>
+                    }
+                </div>
+                @if (!string.IsNullOrEmpty(c.LinkedAccountName) && c.LinkedAccountId != AccountId)
+                {
+                    <div class="cl-card-linked">
+                        <i class="bi bi-building" aria-hidden="true"></i>
+                        <button class="cl-link-btn" @onclick='() => Nav.NavigateTo($"/accounts/{c.LinkedAccountId}")'>
+                            @c.LinkedAccountName
+                        </button>
+                    </div>
+                }
+                <div class="cl-card-footer">
+                    <span class="cl-card-owner"><i class="bi bi-person" aria-hidden="true"></i> @(c.Owner ?? "Unassigned")</span>
+                    <div class="cl-card-actions">
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => StartEdit(c)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _logTarget = c; _showLog = true; }" title="Log activity"><i class="bi bi-lightning" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <!-- List / grid view -->
+    <div class="app-datagrid cl-grid-wrap">
+        <SfGrid @ref="_grid" TValue="ContactRow" DataSource="_filtered"
+                AllowPaging="true" AllowSorting="true" AllowFiltering="true"
+                EnableHover="true" RowHeight="58">
+            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+            <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
+            <GridColumns>
+                <GridColumn HeaderText="Contact" MinWidth="220" Field="@nameof(ContactRow.FullName)">
+                    <Template>
+                        @{ var c = (ContactRow)context; }
+                        <div class="cl-name-cell">
+                            <div class="cl-cell-avatar @AvatarColor(c.FullName)">@Initials(c.FullName)</div>
+                            <div>
+                                <div class="cl-cell-name">@c.FullName @(c.IsPrimary ? "⭐" : "")</div>
+                                <div class="cl-cell-sub">@(c.Title ?? "—")</div>
+                            </div>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(ContactRow.ContactType)" HeaderText="Type"  Width="150">
+                    <Template>@{ var c = (ContactRow)context; }<span class="@TypeBadge(c.ContactType)">@c.ContactType</span></Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(ContactRow.Role)"        HeaderText="Role"  Width="150">
+                    <Template>@{ var c = (ContactRow)context; }<span class="cl-role-badge">@(c.Role ?? "—")</span></Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(ContactRow.Email)"       HeaderText="Email" Width="210" />
+                <GridColumn Field="@nameof(ContactRow.Phone)"       HeaderText="Phone" Width="145" />
+                <GridColumn Field="@nameof(ContactRow.LinkedAccountName)" HeaderText="Linked Account" Width="180">
+                    <Template>
+                        @{ var c = (ContactRow)context; }
+                        @if (c.LinkedAccountId != AccountId && !string.IsNullOrEmpty(c.LinkedAccountName))
+                        {
+                            <button class="cl-link-btn" @onclick='() => Nav.NavigateTo($"/accounts/{c.LinkedAccountId}")'><i class="bi bi-building" aria-hidden="true"></i> @c.LinkedAccountName</button>
+                        }
+                        else { <span>—</span> }
+                    </Template>
+                </GridColumn>
+                <GridColumn HeaderText="" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>
+                        @{ var c = (ContactRow)context; }
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => StartEdit(c)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _logTarget = c; _showLog = true; }" title="Log"><i class="bi bi-lightning" aria-hidden="true"></i></button>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- ── Add / Edit Contact Dialog ────────────────────────────── -->
+<SfDialog @bind-Visible="_showAdd" Width="580px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header>
+            <span class="cl-dlg-hdr">
+                <i class="bi @(_editTarget is null ? "bi-person-plus" : "bi-pencil")" aria-hidden="true"></i>
+                @(_editTarget is null ? "Add Contact" : "Edit Contact")
+            </span>
+        </Header>
+        <Content>
+            <div class="cl-dlg-body">
+                <!-- Section: Identity -->
+                <div class="cl-dlg-section-hdr">Identity</div>
+                <div class="cl-dlg-grid">
+                    <SfTextBox Placeholder="First name *"  @bind-Value="_form.FirstName" />
+                    <SfTextBox Placeholder="Middle name"   @bind-Value="_form.MiddleName" />
+                    <SfTextBox Placeholder="Last name *"   @bind-Value="_form.LastName" />
+                    <SfTextBox Placeholder="Suffix (Jr, Sr…)" @bind-Value="_form.Suffix" />
+                    <SfTextBox Placeholder="Preferred name / nickname" @bind-Value="_form.Preferred" />
+                    <SfDatePicker TValue="DateTime?" Placeholder="Date of birth" @bind-Value="_form.DateOfBirth" />
+                </div>
+
+                <!-- Section: Role & Type -->
+                <div class="cl-dlg-section-hdr" style="margin-top:.9rem">Role & Classification</div>
+                <div class="cl-dlg-grid">
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_typeOpts"   Placeholder="Contact type *"  Width="100%" @bind-Value="_form.ContactType"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_roleOpts"   Placeholder="Role"            Width="100%" @bind-Value="_form.Role">          <DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
+                    <SfTextBox Placeholder="Title / Job title"  @bind-Value="_form.Title" />
+                    <SfTextBox Placeholder="Department"         @bind-Value="_form.Department" />
+                    <div class="cl-dlg-checkbox"><label class="cl-toggle"><input type="checkbox" @bind="_form.IsPrimary" /> Primary contact</label></div>
+                    <div class="cl-dlg-checkbox"><label class="cl-toggle"><input type="checkbox" @bind="_form.IsNamedInsured" /> Named insured</label></div>
+                    <div class="cl-dlg-checkbox"><label class="cl-toggle"><input type="checkbox" @bind="_form.IsDecisionMaker" /> Decision maker</label></div>
+                    <div class="cl-dlg-checkbox"><label class="cl-toggle"><input type="checkbox" @bind="_form.HasPortalAccess" /> Portal access</label></div>
+                </div>
+
+                <!-- Section: Contact Info -->
+                <div class="cl-dlg-section-hdr" style="margin-top:.9rem">Contact Information</div>
+                <div class="cl-dlg-grid">
+                    <SfTextBox Placeholder="Email"          @bind-Value="_form.Email" />
+                    <SfTextBox Placeholder="Phone"          @bind-Value="_form.Phone" />
+                    <SfTextBox Placeholder="Mobile"         @bind-Value="_form.Mobile" />
+                    <SfTextBox Placeholder="Fax"            @bind-Value="_form.Fax" />
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_prefContactOpts" Placeholder="Preferred contact method" Width="100%" @bind-Value="_form.PreferredContact"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_prefLanguageOpts" Placeholder="Preferred language" Width="100%" @bind-Value="_form.PreferredLanguage"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
+                </div>
+
+                <!-- Section: Address -->
+                <div class="cl-dlg-section-hdr" style="margin-top:.9rem">Address</div>
+                <div class="cl-dlg-grid">
+                    <div style="grid-column:span 2"><SfTextBox Placeholder="Street address" @bind-Value="_form.Street" /></div>
+                    <SfTextBox Placeholder="City"    @bind-Value="_form.City" />
+                    <SfTextBox Placeholder="State"   @bind-Value="_form.State" />
+                    <SfTextBox Placeholder="ZIP"     @bind-Value="_form.Zip" />
+                    <SfTextBox Placeholder="Country" @bind-Value="_form.Country" />
+                </div>
+
+                <!-- Section: Account linkage -->
+                <div class="cl-dlg-section-hdr" style="margin-top:.9rem">Account Linkage</div>
+                <div class="cl-dlg-grid">
+                    <SfTextBox Placeholder="Linked account name (search…)" @bind-Value="_form.LinkedAccountName" />
+                    <SfTextBox Placeholder="SSN / Tax ID (last 4)" @bind-Value="_form.SsnLast4" />
+                </div>
+
+                @if (!string.IsNullOrEmpty(_formError))
+                {
+                    <div class="cl-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="cl-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseAddDialog">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="CommitContactAsync"
+                        disabled="@(string.IsNullOrEmpty(_form.FirstName) || string.IsNullOrEmpty(_form.LastName) || string.IsNullOrEmpty(_form.ContactType))">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> @(_editTarget is null ? "Add Contact" : "Save Changes")
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- Log Activity Dialog -->
+<SfDialog @bind-Visible="_showLog" Width="480px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="cl-dlg-hdr"><i class="bi bi-lightning" aria-hidden="true"></i> Log Activity — @_logTarget?.FullName</span></Header>
+        <Content>
+            <div class="cl-dlg-body" style="display:flex;flex-direction:column;gap:.75rem">
+                <SfDropDownList TValue="string" TItem="LV" DataSource="_actTypes" Placeholder="Activity type…" Width="100%" @bind-Value="_newAct.Type"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
+                <SfTextBox Placeholder="Subject *" @bind-Value="_newAct.Subject" />
+                <SfTextBox Placeholder="Notes" @bind-Value="_newAct.Notes" Multiline="true" HtmlAttributes="@(new Dictionary<string,object>{{"rows","3"}})" />
+                <SfDateTimePicker TValue="DateTime" Placeholder="Date & time" @bind-Value="_newAct.OccurredAt" />
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="cl-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showLog = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="CommitActivityAsync"
+                        disabled="@(string.IsNullOrEmpty(_newAct.Type) || string.IsNullOrEmpty(_newAct.Subject))">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid AccountId { get; set; }
+
+    private SfToast?              _toast;
+    private SfGrid<ContactRow>?   _grid;
+    private bool                  _loading    = true;
+    private string                _view       = "cards";
+    private string?               _accountName;
+
+    private List<ContactRow>  _contacts = [];
+    private List<ContactRow>  _filtered = [];
+
+    private string  _search      = string.Empty;
+    private string  _filterType  = string.Empty;
+    private string  _filterRole  = string.Empty;
+
+    private bool         _showAdd     = false;
+    private bool         _showLog     = false;
+    private ContactRow?  _editTarget;
+    private ContactRow?  _logTarget;
+    private ContactForm  _form        = new();
+    private string?      _formError;
+    private ActivityInput _newAct     = new();
+
+    private static readonly List<LV> _typeOpts = [
+        new("Named Insured","Named Insured"), new("Additional Insured","Additional Insured"),
+        new("Decision Maker","Decision Maker"), new("Billing Contact","Billing Contact"),
+        new("Claims Contact","Claims Contact"), new("HR Contact","HR Contact"),
+        new("Spouse","Spouse"), new("Dependent","Dependent"),
+        new("Guarantor","Guarantor"), new("Other","Other"),
+    ];
+    private static readonly List<LV> _roleOpts = [
+        new("Owner","Owner"), new("CEO","CEO"), new("CFO","CFO"), new("HR Manager","HR Manager"),
+        new("Risk Manager","Risk Manager"), new("Procurement","Procurement"), new("Other","Other"),
+    ];
+    private static readonly List<LV> _prefContactOpts = [new("Email","Email"),new("Phone","Phone"),new("SMS","SMS"),new("Portal","Portal")];
+    private static readonly List<LV> _prefLanguageOpts = [new("English","English"),new("Spanish","Spanish"),new("French","French"),new("Other","Other")];
+    private static readonly List<LV> _actTypes = [new("Call","Call"),new("Email","Email"),new("Meeting","Meeting"),new("Note","Note"),new("Task","Task")];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home","/"), new("Accounts","/accounts"),
+            new("Account",  $"/accounts/{AccountId}"),
+            new("Contacts", $"/accounts/{AccountId}/contacts"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; StateHasChanged();
+        await Task.Delay(0); // TODO: Api.GetAccountContactsAsync(AccountId)
+        _accountName = "Sullivan Manufacturing LLC";
+        _contacts = BuildStubContacts();
+        ApplyFilter();
+        _loading = false;
+    }
+
+    private void ApplyFilter()
+    {
+        _filtered = _contacts.Where(c =>
+            (string.IsNullOrEmpty(_filterType) || c.ContactType == _filterType) &&
+            (string.IsNullOrEmpty(_filterRole) || c.Role == _filterRole) &&
+            (string.IsNullOrEmpty(_search) ||
+             c.FullName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             (c.Email?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+             (c.Title?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false))
+        ).ToList();
+    }
+
+    private void StartEdit(ContactRow c)
+    {
+        _editTarget = c;
+        _form = new ContactForm
+        {
+            FirstName=c.FirstName, LastName=c.LastName, Title=c.Title,
+            ContactType=c.ContactType, Role=c.Role, Email=c.Email,
+            Phone=c.Phone, Mobile=c.Mobile, IsPrimary=c.IsPrimary,
+            IsNamedInsured=c.IsNamedInsured, IsDecisionMaker=c.IsDecisionMaker,
+            HasPortalAccess=c.HasPortalAccess,
+        };
+        _formError = null; _showAdd = true;
+    }
+
+    private void CloseAddDialog()
+    {
+        _showAdd = false; _editTarget = null; _form = new(); _formError = null;
+    }
+
+    private async Task CommitContactAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_form.FirstName) || string.IsNullOrWhiteSpace(_form.LastName))
+        { _formError = "First name and last name are required."; return; }
+
+        if (_editTarget is null)
+        {
+            _contacts.Add(new ContactRow
+            {
+                ContactId=Guid.NewGuid(), AccountId=AccountId,
+                FirstName=_form.FirstName, LastName=_form.LastName,
+                Title=_form.Title, ContactType=_form.ContactType, Role=_form.Role,
+                Email=_form.Email, Phone=_form.Phone, Mobile=_form.Mobile,
+                IsPrimary=_form.IsPrimary, IsNamedInsured=_form.IsNamedInsured,
+                IsDecisionMaker=_form.IsDecisionMaker, HasPortalAccess=_form.HasPortalAccess,
+                LinkedAccountId=AccountId, LinkedAccountName=_accountName,
+            });
+        }
+        else
+        {
+            _editTarget.FirstName=_form.FirstName; _editTarget.LastName=_form.LastName;
+            _editTarget.Title=_form.Title; _editTarget.ContactType=_form.ContactType;
+            _editTarget.Role=_form.Role; _editTarget.Email=_form.Email;
+            _editTarget.Phone=_form.Phone; _editTarget.Mobile=_form.Mobile;
+            _editTarget.IsPrimary=_form.IsPrimary; _editTarget.IsNamedInsured=_form.IsNamedInsured;
+            _editTarget.IsDecisionMaker=_form.IsDecisionMaker; _editTarget.HasPortalAccess=_form.HasPortalAccess;
+        }
+        ApplyFilter();
+        CloseAddDialog();
+        await ShowToast(_editTarget is null ? "Contact added." : "Contact updated.");
+    }
+
+    private async Task CommitActivityAsync()
+    {
+        _showLog = false; _newAct = new();
+        await ShowToast("Activity logged.");
+    }
+
+    private async Task ShowToast(string msg)
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "e-toast-success" });
+    }
+
+    // ── Style helpers ─────────────────────────────────────────────────────────
+    private static string TypeBadge(string t) => t switch
+    {
+        "Named Insured"      => "cl-type cl-type--named",
+        "Additional Insured" => "cl-type cl-type--add",
+        "Decision Maker"     => "cl-type cl-type--dm",
+        "Billing Contact"    => "cl-type cl-type--billing",
+        "Claims Contact"     => "cl-type cl-type--claims",
+        "Spouse"             => "cl-type cl-type--spouse",
+        "Dependent"          => "cl-type cl-type--dep",
+        _                    => "cl-type",
+    };
+    private static string AvatarColor(string name)
+    {
+        var colors = new[] {"cl-av1","cl-av2","cl-av3","cl-av4","cl-av5","cl-av6"};
+        return colors[Math.Abs(name.GetHashCode()) % colors.Length];
+    }
+    private static string Initials(string name)
+    {
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?";
+    }
+
+    // ── Stub data ─────────────────────────────────────────────────────────────
+    private List<ContactRow> BuildStubContacts() =>
+    [
+        new ContactRow { ContactId=Guid.NewGuid(), AccountId=AccountId, FirstName="Robert", LastName="Sullivan", Title="CEO", ContactType="Decision Maker", Role="CEO", Email="rsullivan@sullivanmfg.com", Phone="(312) 555-0101", IsPrimary=true, IsDecisionMaker=true, HasPortalAccess=true, LinkedAccountId=AccountId, LinkedAccountName="Sullivan Manufacturing LLC" },
+        new ContactRow { ContactId=Guid.NewGuid(), AccountId=AccountId, FirstName="Maria",  LastName="Chen",    Title="CFO", ContactType="Billing Contact",  Role="CFO", Email="mchen@sullivanmfg.com",    Phone="(312) 555-0102", IsPrimary=false,IsDecisionMaker=true, HasPortalAccess=true, LinkedAccountId=AccountId, LinkedAccountName="Sullivan Manufacturing LLC" },
+        new ContactRow { ContactId=Guid.NewGuid(), AccountId=AccountId, FirstName="Tom",    LastName="Reyes",   Title="HR Manager", ContactType="HR Contact",  Role="HR Manager", Email="treyes@sullivanmfg.com",Phone="(312) 555-0103", IsPrimary=false,IsDecisionMaker=false,HasPortalAccess=false,LinkedAccountId=AccountId, LinkedAccountName="Sullivan Manufacturing LLC" },
+        new ContactRow { ContactId=Guid.NewGuid(), AccountId=AccountId, FirstName="Angela", LastName="Park",    Title="Risk Manager", ContactType="Named Insured", Role="Risk Manager", Email="apark@sullivanmfg.com",Phone="(312) 555-0104", IsNamedInsured=true,HasPortalAccess=true,LinkedAccountId=AccountId,LinkedAccountName="Sullivan Manufacturing LLC" },
+        new ContactRow { ContactId=Guid.NewGuid(), AccountId=Guid.NewGuid(), FirstName="James",  LastName="Sullivan",Title="President",ContactType="Decision Maker",Role="Owner",Email="jsullivan@sullivanrealty.com",Phone="(312) 555-0201",LinkedAccountId=Guid.NewGuid(),LinkedAccountName="Sullivan Realty LLC" },
+    ];
+
+    // ── Models ────────────────────────────────────────────────────────────────
+    private sealed class ContactRow
+    {
+        public Guid    ContactId          { get; set; } = Guid.NewGuid();
+        public Guid    AccountId          { get; set; }
+        public string  FirstName          { get; set; } = string.Empty;
+        public string  LastName           { get; set; } = string.Empty;
+        public string  FullName           => $"{FirstName} {LastName}".Trim();
+        public string? Title              { get; set; }
+        public string? MiddleName         { get; set; }
+        public string? Suffix             { get; set; }
+        public string? Preferred          { get; set; }
+        public DateTime? DateOfBirth      { get; set; }
+        public string  ContactType        { get; set; } = "Other";
+        public string? Role               { get; set; }
+        public string? Department         { get; set; }
+        public string? Email              { get; set; }
+        public string? Phone              { get; set; }
+        public string? Mobile             { get; set; }
+        public string? Fax                { get; set; }
+        public string? Owner              { get; set; }
+        public string? PreferredContact   { get; set; }
+        public string? PreferredLanguage  { get; set; }
+        public bool    IsPrimary          { get; set; }
+        public bool    IsNamedInsured     { get; set; }
+        public bool    IsDecisionMaker    { get; set; }
+        public bool    HasPortalAccess    { get; set; }
+        public Guid    LinkedAccountId    { get; set; }
+        public string? LinkedAccountName  { get; set; }
+        public string? SsnLast4          { get; set; }
+    }
+    private sealed class ContactForm
+    {
+        public string  FirstName         { get; set; } = string.Empty;
+        public string  LastName          { get; set; } = string.Empty;
+        public string? MiddleName        { get; set; }
+        public string? Suffix            { get; set; }
+        public string? Preferred         { get; set; }
+        public DateTime? DateOfBirth     { get; set; }
+        public string  ContactType       { get; set; } = string.Empty;
+        public string? Role              { get; set; }
+        public string? Title             { get; set; }
+        public string? Department        { get; set; }
+        public string? Email             { get; set; }
+        public string? Phone             { get; set; }
+        public string? Mobile            { get; set; }
+        public string? Fax               { get; set; }
+        public string? PreferredContact  { get; set; }
+        public string? PreferredLanguage { get; set; }
+        public string? LinkedAccountName { get; set; }
+        public string? SsnLast4         { get; set; }
+        public string? Street            { get; set; }
+        public string? City              { get; set; }
+        public string? State             { get; set; }
+        public string? Zip               { get; set; }
+        public string? Country           { get; set; }
+        public bool    IsPrimary         { get; set; }
+        public bool    IsNamedInsured    { get; set; }
+        public bool    IsDecisionMaker   { get; set; }
+        public bool    HasPortalAccess   { get; set; }
+    }
+    private sealed class ActivityInput { public string Type { get; set; }=string.Empty; public string Subject { get; set; }=string.Empty; public string? Notes { get; set; } public DateTime OccurredAt { get; set; }=DateTime.UtcNow; }
+    private sealed record LV(string Value, string Label);
+}

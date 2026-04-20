@@ -1,0 +1,391 @@
+@page "/admin/reference/commission-schedules"
+@namespace Ams.Web.Components.Pages.ReferenceAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Commission Schedules — Reference Data</PageTitle>
+
+<AppPageHeader Title="Commission Schedules"
+               Subtitle="Carrier and MGA commission rate schedules by line of business and policy type"
+               Icon="bi-percent">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Schedule
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="cs-kpi-strip">
+    <div class="cs-kpi-card">
+        <span class="cs-kpi-icon cs-kpi-icon--total"><i class="bi bi-percent" aria-hidden="true"></i></span>
+        <div><div class="cs-kpi-value">@_totalCount</div><div class="cs-kpi-label">Total Schedules</div></div>
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
+        <span class="cs-kpi-icon cs-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="cs-kpi-value">@_activeCount</div><div class="cs-kpi-label">Active</div></div>
+        @if (_kpiActive == 2) { <span class="cs-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0">
+        <span class="cs-kpi-icon cs-kpi-icon--contingent"><i class="bi bi-stars" aria-hidden="true"></i></span>
+        <div><div class="cs-kpi-value">@_contingentCount</div><div class="cs-kpi-label">Contingent</div></div>
+        @if (_kpiActive == 3) { <span class="cs-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="cs-kpi-card">
+        <span class="cs-kpi-icon cs-kpi-icon--avg"><i class="bi bi-graph-up" aria-hidden="true"></i></span>
+        <div><div class="cs-kpi-value">@(_avgRate.ToString("F1"))%</div><div class="cs-kpi-label">Avg New Rate</div></div>
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search carrier, LOB or schedule name…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_lobOptions"
+                        Placeholder="All Lines"
+                        ShowClearButton="true"
+                        Width="180px"
+                        Value="_filterLob"
+                        ValueChanged="@((string v) => { _filterLob = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_scheduleTypeOptions"
+                        Placeholder="All Types"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterType"
+                        ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <label class="cs-toggle-label">
+            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
+            Active only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="CommissionScheduleEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(CommissionScheduleEntry.ScheduleName)" HeaderText="Schedule" Width="220">
+                <Template>
+                    @{ var e = (CommissionScheduleEntry)context; }
+                    <div class="cs-name-cell">
+                        <span class="cs-schedule-icon" aria-hidden="true"><i class="bi bi-percent"></i></span>
+                        <div>
+                            <div class="cs-schedule-name">@e.ScheduleName</div>
+                            <div class="cs-carrier-sub">@e.CarrierName</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CommissionScheduleEntry.LobCode)" HeaderText="LoB" Width="90" />
+            <GridColumn Field="@nameof(CommissionScheduleEntry.ScheduleType)" HeaderText="Type" Width="130">
+                <Template>
+                    @{ var e = (CommissionScheduleEntry)context; }
+                    <span class="@TypeBadgeClass(e.ScheduleType)">@e.ScheduleType</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CommissionScheduleEntry.NewBusinessRate)" HeaderText="New Biz %" Width="110">
+                <Template>
+                    @{ var e = (CommissionScheduleEntry)context; }
+                    <span class="cs-rate">@e.NewBusinessRate.ToString("F2")%</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CommissionScheduleEntry.RenewalRate)" HeaderText="Renewal %" Width="110">
+                <Template>
+                    @{ var e = (CommissionScheduleEntry)context; }
+                    <span class="cs-rate">@e.RenewalRate.ToString("F2")%</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CommissionScheduleEntry.EffectiveDate)" HeaderText="Effective" Width="120">
+                <Template>
+                    @{ var e = (CommissionScheduleEntry)context; }
+                    <span>@e.EffectiveDate.ToString("d")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CommissionScheduleEntry.ExpiryDate)" HeaderText="Expires" Width="120">
+                <Template>
+                    @{ var e = (CommissionScheduleEntry)context; }
+                    <span>@(e.ExpiryDate.HasValue ? e.ExpiryDate.Value.ToString("d") : "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CommissionScheduleEntry.IsActive)" HeaderText="Status" Width="100">
+                <Template>
+                    @{ var e = (CommissionScheduleEntry)context; }
+                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (CommissionScheduleEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.ScheduleId == Guid.Empty ? "Add Commission Schedule" : "Edit Schedule")"
+               OnSave="SaveAsync"
+               OnCancel="CloseDrawer">
+    <Body>
+        <div class="cs-form">
+            <label class="cs-form-label">Schedule Name *</label>
+            <input class="um-input" @bind="_editModel.ScheduleName" />
+
+            <label class="cs-form-label">Carrier Name</label>
+            <input class="um-input" @bind="_editModel.CarrierName" />
+
+            <label class="cs-form-label">Line of Business</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_lobOptions"
+                            @bind-Value="_editModel.LobCode"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="cs-form-label">Schedule Type</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_scheduleTypeOptions"
+                            @bind-Value="_editModel.ScheduleType"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <div class="cs-form-row">
+                <div>
+                    <label class="cs-form-label">New Business Rate (%)</label>
+                    <input class="um-input cs-mono" type="number" step="0.01" @bind="_editModel.NewBusinessRate" />
+                </div>
+                <div>
+                    <label class="cs-form-label">Renewal Rate (%)</label>
+                    <input class="um-input cs-mono" type="number" step="0.01" @bind="_editModel.RenewalRate" />
+                </div>
+            </div>
+
+            <label class="cs-form-label">Contingent Rate (%)</label>
+            <input class="um-input cs-mono" type="number" step="0.01" @bind="_editModel.ContingentRate" />
+
+            <div class="cs-form-row">
+                <div>
+                    <label class="cs-form-label">Effective Date *</label>
+                    <input class="um-input" type="date" @bind="_editModel.EffectiveDate" />
+                </div>
+                <div>
+                    <label class="cs-form-label">Expiry Date</label>
+                    <input class="um-input" type="date" @bind="_editModel.ExpiryDate" />
+                </div>
+            </div>
+
+            <label class="cs-form-label">Notes</label>
+            <textarea class="um-input" rows="3" @bind="_editModel.Notes"></textarea>
+
+            <label class="cs-form-label">Active</label>
+            <SfSwitch @bind-Checked="_editModel.IsActive" />
+        </div>
+    </Body>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<CommissionScheduleEntry> _allEntries = [];
+    private List<CommissionScheduleEntry> _entries    = [];
+
+    private bool _loading    = false;
+    private bool _showDrawer = false;
+
+    private string _search          = string.Empty;
+    private string _filterLob       = string.Empty;
+    private string _filterType      = string.Empty;
+    private bool   _filterActiveOnly = false;
+    private int    _kpiActive       = 0;
+
+    private int    _totalCount      = 0;
+    private int    _activeCount     = 0;
+    private int    _contingentCount = 0;
+    private double _avgRate         = 0;
+
+    private string KpiClass2 => "cs-kpi-card" + (_kpiActive == 2 ? " cs-kpi-card--active" : "");
+    private string KpiClass3 => "cs-kpi-card" + (_kpiActive == 3 ? " cs-kpi-card--active" : "");
+
+    private static readonly List<LabelValue> _lobOptions =
+    [
+        new("BOP", "BOP"), new("GL",  "GL"),  new("WC",  "WC"),
+        new("CA",  "CA"),  new("CPP", "CPP"), new("PL",  "PL"),
+        new("CY",  "CY"),  new("IM",  "IM"),
+    ];
+
+    private static readonly List<LabelValue> _scheduleTypeOptions =
+    [
+        new("Standard",   "Standard"),
+        new("Contingent", "Contingent"),
+        new("Profit",     "Profit Sharing"),
+        new("Override",   "Override"),
+        new("Bonus",      "Bonus"),
+    ];
+
+    private CommissionScheduleEntry _editModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",              "/"),
+            new("Reference Data",    "/admin/reference/carriers"),
+            new("Commission Schedules", "/admin/reference/commission-schedules"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: Api.GetCommissionSchedulesAsync(_tenantId)
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterLob)  || e.LobCode == _filterLob) &&
+            (string.IsNullOrEmpty(_filterType) || e.ScheduleType == _filterType) &&
+            (!_filterActiveOnly || e.IsActive) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.ScheduleName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.CarrierName.Contains(_search,  StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        if (_kpiActive == 2) _entries = _entries.Where(e =>  e.IsActive).ToList();
+        if (_kpiActive == 3) _entries = _entries.Where(e => e.ScheduleType == "Contingent").ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive  = _kpiActive == n ? 0 : n;
+        _filterType = string.Empty;
+        _filterActiveOnly = false;
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount      = _allEntries.Count;
+        _activeCount     = _allEntries.Count(e => e.IsActive);
+        _contingentCount = _allEntries.Count(e => e.ScheduleType == "Contingent");
+        _avgRate         = _allEntries.Count > 0 ? _allEntries.Average(e => (double)e.NewBusinessRate) : 0;
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(CommissionScheduleEntry e)
+    {
+        _editModel = new CommissionScheduleEntry
+        {
+            ScheduleId      = e.ScheduleId,
+            ScheduleName    = e.ScheduleName,
+            CarrierName     = e.CarrierName,
+            LobCode         = e.LobCode,
+            ScheduleType    = e.ScheduleType,
+            NewBusinessRate = e.NewBusinessRate,
+            RenewalRate     = e.RenewalRate,
+            ContingentRate  = e.ContingentRate,
+            EffectiveDate   = e.EffectiveDate,
+            ExpiryDate      = e.ExpiryDate,
+            Notes           = e.Notes,
+            IsActive        = e.IsActive,
+        };
+        _showDrawer = true;
+    }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveAsync()
+    {
+        // TODO: Api.SaveCommissionScheduleAsync(_tenantId, _editModel)
+        await Task.Delay(0);
+        _showDrawer = false;
+        await LoadAsync();
+        await ShowToastAsync("Commission schedule saved.", "e-toast-success");
+    }
+
+    private async Task ExportAsync() =>
+        await ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string TypeBadgeClass(string type) => type switch
+    {
+        "Standard"   => "cs-type-badge cs-type-badge--standard",
+        "Contingent" => "cs-type-badge cs-type-badge--contingent",
+        "Profit"     => "cs-type-badge cs-type-badge--profit",
+        "Override"   => "cs-type-badge cs-type-badge--override",
+        "Bonus"      => "cs-type-badge cs-type-badge--bonus",
+        _            => "cs-type-badge",
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class CommissionScheduleEntry
+    {
+        public Guid      ScheduleId      { get; set; } = Guid.Empty;
+        public string    ScheduleName    { get; set; } = string.Empty;
+        public string    CarrierName     { get; set; } = string.Empty;
+        public string    LobCode         { get; set; } = string.Empty;
+        public string    ScheduleType    { get; set; } = "Standard";
+        public decimal   NewBusinessRate { get; set; }
+        public decimal   RenewalRate     { get; set; }
+        public decimal   ContingentRate  { get; set; }
+        public DateTime  EffectiveDate   { get; set; } = DateTime.Today;
+        public DateTime? ExpiryDate      { get; set; }
+        public string?   Notes           { get; set; }
+        public bool      IsActive        { get; set; } = true;
+    }
+}

@@ -1222,6 +1222,7 @@ CREATE TABLE DMS.Document (
     DocumentId        UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
     TenantId          UNIQUEIDENTIFIER NOT NULL,
     DocumentTypeCode  NVARCHAR(100)    NOT NULL,
+    CategoryCode      NVARCHAR(100)    NULL,
     EntityName        NVARCHAR(100)    NULL,
     EntityId          UNIQUEIDENTIFIER NULL,
     FileName          NVARCHAR(500)    NOT NULL,
@@ -1231,7 +1232,11 @@ CREATE TABLE DMS.Document (
     VersionNumber     INT              NOT NULL DEFAULT 1,
     StatusCode        NVARCHAR(50)     NOT NULL DEFAULT 'Active',
     RetentionDate     DATE             NULL,
+    Description       NVARCHAR(2000)   NULL,
+    Tags              NVARCHAR(1000)   NULL,
+    UploadedByName    NVARCHAR(300)    NULL,
     CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    ModifiedDateUtc   DATETIME2        NULL,
     CreatedByUserId   UNIQUEIDENTIFIER NULL,
     IsDeleted         BIT              NOT NULL DEFAULT 0
 );
@@ -1553,9 +1558,24 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Workflow.W
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Workflow.ApprovalStep') AND name = 'CreatedDateUtc')
     ALTER TABLE Workflow.ApprovalStep ADD CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME();
 
--- DMS.Document
+-- DMS.Document  —  base column back-fills
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('DMS.Document') AND name = 'CreatedDateUtc')
     ALTER TABLE DMS.Document ADD CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME();
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('DMS.Document') AND name = 'CategoryCode')
+    ALTER TABLE DMS.Document ADD CategoryCode NVARCHAR(100) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('DMS.Document') AND name = 'Description')
+    ALTER TABLE DMS.Document ADD Description NVARCHAR(2000) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('DMS.Document') AND name = 'Tags')
+    ALTER TABLE DMS.Document ADD Tags NVARCHAR(1000) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('DMS.Document') AND name = 'UploadedByName')
+    ALTER TABLE DMS.Document ADD UploadedByName NVARCHAR(300) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('DMS.Document') AND name = 'ModifiedDateUtc')
+    ALTER TABLE DMS.Document ADD ModifiedDateUtc DATETIME2 NULL;
 
 -- Assistant.AssistantConversation
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Assistant.AssistantConversation') AND name = 'CreatedDateUtc')

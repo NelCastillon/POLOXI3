@@ -1,0 +1,214 @@
+@* PolicyChangeTimeline — reusable timeline component showing every policy event
+   with full exposure-delta tracking across endorsements, renewals, and remarkets.
+   Usage: <PolicyChangeTimeline Events="@_events" />
+*@
+@namespace Ams.Web.Components.Shared
+
+<div class="pct-root">
+    @if (!Events.Any())
+    {
+        <div class="pct-empty">
+            <i class="bi bi-clock-history pct-empty-icon" aria-hidden="true"></i>
+            <span>No timeline events yet.</span>
+        </div>
+    }
+    else
+    {
+        <div class="pct-line-wrap">
+            @foreach (var (ev, idx) in Events.Select((e, i) => (e, i)))
+            {
+                <div class="pct-event @(idx == 0 ? "pct-event-first" : "")">
+                    <!-- spine connector -->
+                    <div class="pct-spine-col">
+                        <div class="pct-node pct-node-@ev.EventType.ToLower().Replace(" ","-")">
+                            <i class="bi @EventIcon(ev.EventType)" aria-hidden="true"></i>
+                        </div>
+                        @if (idx < Events.Count - 1)
+                        {
+                            <div class="pct-connector"></div>
+                        }
+                    </div>
+
+                    <!-- content -->
+                    <div class="pct-content">
+                        <div class="pct-content-head" @onclick="() => Toggle(idx)">
+                            <div class="pct-head-left">
+                                <span class="pct-event-type pct-et-@ev.EventType.ToLower().Replace(" ","-")">@ev.EventType</span>
+                                <span class="pct-event-title">@ev.Title</span>
+                            </div>
+                            <div class="pct-head-right">
+                                @if (ev.PremiumDelta != 0)
+                                {
+                                    <span class="@(ev.PremiumDelta > 0 ? "pct-delta-pos" : "pct-delta-neg")">
+                                        @ev.PremiumDelta.ToString("+$#,##0;-$#,##0")
+                                    </span>
+                                }
+                                <span class="pct-date">@ev.EventDate.ToString("MMM d, yyyy")</span>
+                                <span class="pct-by">@ev.PerformedBy</span>
+                                <i class="bi @(_expanded.Contains(idx) ? "bi-chevron-up" : "bi-chevron-down") pct-chev"
+                                   aria-hidden="true"></i>
+                            </div>
+                        </div>
+
+                        @if (_expanded.Contains(idx))
+                        {
+                            <div class="pct-detail">
+                                @if (!string.IsNullOrEmpty(ev.Description))
+                                {
+                                    <p class="pct-desc">@ev.Description</p>
+                                }
+
+                                @if (ev.ExposureDeltas.Count > 0)
+                                {
+                                    <table class="pct-delta-tbl">
+                                        <thead>
+                                            <tr>
+                                                <th>Field</th>
+                                                <th>Before</th>
+                                                <th>After</th>
+                                                <th>Change</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var d in ev.ExposureDeltas)
+                                            {
+                                                <tr>
+                                                    <td class="pct-delta-field">@d.Field</td>
+                                                    <td class="pct-delta-before">@d.Before</td>
+                                                    <td class="pct-delta-after @(d.Increased ? "pct-da-up" : d.Decreased ? "pct-da-down" : "")">@d.After</td>
+                                                    <td>
+                                                        @if (d.Increased)
+                                                        {
+                                                            <span class="pct-chg pct-chg-up">
+                                                                <i class="bi bi-arrow-up-short" aria-hidden="true"></i>@d.ChangeLabel
+                                                            </span>
+                                                        }
+                                                        else if (d.Decreased)
+                                                        {
+                                                            <span class="pct-chg pct-chg-down">
+                                                                <i class="bi bi-arrow-down-short" aria-hidden="true"></i>@d.ChangeLabel
+                                                            </span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span class="pct-chg pct-chg-neutral">—</span>
+                                                        }
+                                                    </td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+
+                                @if (!string.IsNullOrEmpty(ev.Carrier))
+                                {
+                                    <div class="pct-meta-row">
+                                        <span class="pct-meta-lbl">Carrier</span>
+                                        <span class="pct-meta-val">@ev.Carrier</span>
+                                    </div>
+                                }
+                                @if (!string.IsNullOrEmpty(ev.RefNumber))
+                                {
+                                    <div class="pct-meta-row">
+                                        <span class="pct-meta-lbl">Reference #</span>
+                                        <span class="pct-meta-val">@ev.RefNumber</span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<PolicyTimelineEvent> Events { get; set; } = Array.Empty<PolicyTimelineEvent>();
+
+    readonly HashSet<int> _expanded = new();
+
+    void Toggle(int idx)
+    {
+        if (!_expanded.Add(idx)) _expanded.Remove(idx);
+    }
+
+    static string EventIcon(string type) => type switch
+    {
+        "New Business"  => "bi-shield-plus",
+        "Endorsement"   => "bi-pen",
+        "Renewal"       => "bi-arrow-repeat",
+        "Cancellation"  => "bi-slash-circle",
+        "Reinstatement" => "bi-arrow-counterclockwise",
+        "Remarket"      => "bi-arrow-left-right",
+        "Rewrite"       => "bi-pencil-square",
+        "Certificate"   => "bi-award",
+        "Audit"         => "bi-clipboard-check",
+        _               => "bi-dot"
+    };
+
+    // ── Public data models ─────────────────────────────────────────
+    public sealed class PolicyTimelineEvent
+    {
+        public string    EventType      { get; set; } = "";
+        public string    Title          { get; set; } = "";
+        public string    Description    { get; set; } = "";
+        public DateTime  EventDate      { get; set; }
+        public string    PerformedBy    { get; set; } = "";
+        public decimal   PremiumDelta   { get; set; }
+        public string    Carrier        { get; set; } = "";
+        public string    RefNumber      { get; set; } = "";
+        public List<ExposureDelta> ExposureDeltas { get; set; } = new();
+    }
+
+    public sealed class ExposureDelta
+    {
+        public string Field       { get; set; } = "";
+        public string Before      { get; set; } = "";
+        public string After       { get; set; } = "";
+        public string ChangeLabel { get; set; } = "";
+        public bool   Increased   { get; set; }
+        public bool   Decreased   { get; set; }
+
+        public static ExposureDelta Money(string field, decimal before, decimal after)
+        {
+            var delta = after - before;
+            return new ExposureDelta
+            {
+                Field       = field,
+                Before      = before.ToString("C0"),
+                After       = after.ToString("C0"),
+                ChangeLabel = delta.ToString("+$#,##0;-$#,##0"),
+                Increased   = delta > 0,
+                Decreased   = delta < 0,
+            };
+        }
+
+        public static ExposureDelta Text(string field, string before, string after)
+        {
+            return new ExposureDelta
+            {
+                Field       = field,
+                Before      = before,
+                After       = after,
+                ChangeLabel = "Changed",
+                Increased   = false,
+                Decreased   = false,
+            };
+        }
+
+        public static ExposureDelta Count(string field, int before, int after)
+        {
+            var delta = after - before;
+            return new ExposureDelta
+            {
+                Field       = field,
+                Before      = before.ToString(),
+                After       = after.ToString(),
+                ChangeLabel = delta > 0 ? $"+{delta}" : delta.ToString(),
+                Increased   = delta > 0,
+                Decreased   = delta < 0,
+            };
+        }
+    }
+}

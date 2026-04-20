@@ -1,47 +1,209 @@
 @page "/commissions/clawbacks"
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Commission Clawbacks</PageTitle>
+<PageTitle>Commission Clawbacks — AMS</PageTitle>
 
-<h1>Commission Clawbacks</h1>
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
 
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+<!-- Initiate Clawback Dialog -->
+<SfDialog @bind-Visible="_showNew" Width="560px" ShowCloseIcon="true" IsModal="true" Header="Initiate Clawback">
+    <DialogTemplates>
+        <Content>
+            <div class="cw-dlg-body">
+                <div class="form-group mb-2"><label class="cw-lbl">Reason Code</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_reasonCodes" @bind-Value="_newReason" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="cw-lbl">Producer / Payee</label>
+                    <SfTextBox @bind-Value="_newPayee" Placeholder="Producer name…"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="cw-lbl">Clawback Amount</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_newAmount" Format="C2" Width="100%"></SfNumericTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="cw-lbl">Original Transaction Reference</label>
+                    <SfTextBox @bind-Value="_newRef" Placeholder="TX-… or STM-…"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="cw-lbl">Notes</label>
+                    <SfTextBox @bind-Value="_newNotes" Multiline="true"></SfTextBox>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Initiate Clawback" IsPrimary="true" OnClick="InitiateAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showNew = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<!-- What-If Modeling Panel -->
+<SfDialog @bind-Visible="_showModel" Width="600px" ShowCloseIcon="true" IsModal="true" Header="Clawback Impact Modeler">
+    <DialogTemplates>
+        <Content>
+            <div class="cw-model-body">
+                <p class="cw-model-intro">Simulate the net-pay impact of one or more clawbacks before approving. Adjusts for active payment plans and split arrangements.</p>
+                <div class="cw-model-grid">
+                    <div class="cw-mg-row cw-mg-hdr"><span>Scenario</span><span>Gross Earned</span><span>Clawback</span><span>Net Payout</span><span>Δ Impact</span></div>
+                    <div class="cw-mg-row"><span>Current (no clawback)</span><span>$14,500</span><span>—</span><span>$14,500</span><span class="cw-pos">—</span></div>
+                    <div class="cw-mg-row"><span>Single clawback</span><span>$14,500</span><span>$1,200</span><span>$13,300</span><span class="cw-neg">−$1,200</span></div>
+                    <div class="cw-mg-row"><span>With payment plan (3 mo)</span><span>$14,500</span><span>$1,200</span><span>$14,100</span><span class="cw-neg">−$400/mo</span></div>
+                    <div class="cw-mg-row"><span>Full clawback batch</span><span>$14,500</span><span>$4,200</span><span>$10,300</span><span class="cw-neg">−$4,200</span></div>
+                </div>
+                <div class="cw-model-note">Values are illustrative. Final amounts are calculated at batch run time.</div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Close" OnClick="() => _showModel = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<AppPageHeader Title="Commission Clawbacks"
+               Subtitle="Review, approve, and model commission clawbacks including payment cancellations, chargebacks, and repayment arrangements"
+               Icon="bi-arrow-counterclockwise">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="() => _showModel = true">
+            <i class="bi bi-calculator" aria-hidden="true"></i> Clawback Modeler
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/exceptions")'>
+            <i class="bi bi-exclamation-circle" aria-hidden="true"></i> Disputes
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showNew = true">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> Initiate Clawback
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="cw-kpi-strip">
+    @CwKpi("bi-arrow-counterclockwise","Total",    (_items?.Count ?? 0).ToString(),                                      "cw-ki-blue")
+    @CwKpi("bi-hourglass",             "Pending",  (_items?.Count(x=>x.StatusCode=="Pending") ?? 0).ToString(),          "cw-ki-amber")
+    @CwKpi("bi-check-circle",          "Approved", (_items?.Count(x=>x.StatusCode=="Approved") ?? 0).ToString(),         "cw-ki-green")
+    @CwKpi("bi-x-circle",              "Denied",   (_items?.Count(x=>x.StatusCode=="Denied")  ?? 0).ToString(),          "cw-ki-gray")
+    @CwKpi("bi-currency-dollar",       "$ Pending",Fmt(_items?.Where(x=>x.StatusCode=="Pending").Sum(x=>x.Amount)),       "cw-ki-amber")
+    @CwKpi("bi-currency-dollar",       "$ Applied",Fmt(_items?.Where(x=>x.StatusCode=="Approved").Sum(x=>x.Amount)),      "cw-ki-red")
+</div>
+
+<!-- Sub-nav -->
+<div class="cw-subnav">
+    <button class="cw-snav-btn cw-snav-active"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Clawbacks</button>
+    <button class="cw-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
+    <button class="cw-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/exceptions")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions</button>
+    <button class="cw-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/forecast")'><i class="bi bi-graph-up" aria-hidden="true"></i> Forecast</button>
+    <button class="cw-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/planner")'><i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner</button>
+</div>
+
+<!-- Toolbar -->
+<div class="cw-toolbar">
+    <SfTextBox Placeholder="Search…" @bind-Value="_searchTerm" Width="270px"></SfTextBox>
+    <select class="e-input cw-sel" @bind="_filterStatus">
+        <option value="">All Statuses</option>
+        <option value="Pending">Pending</option>
+        <option value="Approved">Approved</option>
+        <option value="Denied">Denied</option>
+        <option value="Reversed">Reversed</option>
+    </select>
+    <select class="e-input cw-sel" @bind="_filterReason">
+        <option value="">All Reasons</option>
+        @foreach (var r in _reasonCodes) { <option value="@r">@r</option> }
+    </select>
 </div>
 
 @if (_items is null)
 {
-    <p>Loading...</p>
+    <div style="padding:2rem"><SfSpinner Visible="true" /></div>
 }
 else
 {
-    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridPageSettings PageSize="10"></GridPageSettings>
+<div class="cw-grid-wrap">
+    <SfGrid DataSource="FilteredItems" AllowSorting="true" AllowPaging="true" Height="480px">
+        <GridPageSettings PageSize="15"></GridPageSettings>
         <GridColumns>
-            <GridColumn Field="@nameof(CommissionClawbackDto.ClawbackDate)" HeaderText="Clawback Date" Type="ColumnType.Date" Format="d" Width="150"></GridColumn>
-            <GridColumn Field="@nameof(CommissionClawbackDto.Amount)" HeaderText="Amount" Format="C2" Width="130"></GridColumn>
-            <GridColumn Field="@nameof(CommissionClawbackDto.ReasonCode)" HeaderText="Reason" Width="140"></GridColumn>
-            <GridColumn Field="@nameof(CommissionClawbackDto.StatusCode)" HeaderText="Status" Width="120"></GridColumn>
-            <GridColumn Field="@nameof(CommissionClawbackDto.ApprovedDateUtc)" HeaderText="Approved Date" Type="ColumnType.DateTime" Format="g" Width="180"></GridColumn>
-            <GridColumn Field="@nameof(CommissionClawbackDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="180"></GridColumn>
+            <GridColumn Field="@nameof(CommissionClawbackDto.ClawbackDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+            <GridColumn HeaderText="Reason" Width="180">
+                <Template>
+                    @{ var c = (CommissionClawbackDto)context; }
+                    <span class="cw-reason-chip cw-r-@c.ReasonCode.ToLower().Replace(" ","-")">@c.ReasonCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CommissionClawbackDto.Amount)" HeaderText="Amount" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(CommissionClawbackDto.Notes)" HeaderText="Notes" Width="240"></GridColumn>
+            <GridColumn HeaderText="Status" Width="110">
+                <Template>
+                    @{ var c2 = (CommissionClawbackDto)context; }
+                    <span class="cw-status-chip cw-st-@c2.StatusCode.ToLower()">@c2.StatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CommissionClawbackDto.ApprovedDateUtc)" HeaderText="Approved" Type="ColumnType.DateTime" Format="d" Width="110"></GridColumn>
+            <GridColumn HeaderText="Actions" Width="150">
+                <Template>
+                    @{ var c3 = (CommissionClawbackDto)context; }
+                    <div class="cw-row-acts">
+                        @if (c3.StatusCode == "Pending")
+                        {
+                            <button class="um-btn um-btn-primary um-btn-xs" title="Approve">
+                                <i class="bi bi-check-circle" aria-hidden="true"></i> Approve
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-xs" title="Deny">
+                                <i class="bi bi-x-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _showModel = true" title="Model impact">
+                            <i class="bi bi-calculator" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
         </GridColumns>
     </SfGrid>
+</div>
 }
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string? _searchTerm;
+    private string _filterStatus = "", _filterReason = "";
+    private bool _showNew, _showModel;
+    private string? _newPayee, _newRef, _newNotes, _newReason = "Policy Cancellation";
+    private decimal _newAmount;
+    private SfToast _toast = default!;
+
+    private readonly List<string> _reasonCodes =
+        ["Policy Cancellation","Non-Sufficient Funds","Policy Rescission","Fraud/Misrepresentation","Carrier Chargeback","Calculation Error","Overpayment","Other"];
+
     private List<CommissionClawbackDto>? _items;
+
+    private IEnumerable<CommissionClawbackDto> FilteredItems => (_items ?? []).Where(x =>
+        (string.IsNullOrEmpty(_filterStatus) || x.StatusCode == _filterStatus) &&
+        (string.IsNullOrEmpty(_filterReason) || x.ReasonCode == _filterReason));
 
     protected override async Task OnInitializedAsync()
     {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Clawbacks",""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         var result = await Api.SearchCommissionClawbacksAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? new List<CommissionClawbackDto>();
+        _items = result?.Items.ToList() ?? [];
     }
+
+    async Task InitiateAsync()
+    {
+        _showNew = false;
+        await _toast.ShowAsync(new ToastModel { Content = "Clawback initiated.", CssClass = "e-toast-warning" });
+    }
+
+    static string Fmt(decimal? v) => v.HasValue ? v.Value.ToString("C0") : "$0";
+
+    RenderFragment CwKpi(string icon, string label, string val, string color) => __builder =>
+    {
+        <div class="cw-kpi-card @color">
+            <i class="bi @icon cw-kpi-icon" aria-hidden="true"></i>
+            <div><div class="cw-kpi-val">@val</div><div class="cw-kpi-lbl">@label</div></div>
+        </div>
+    };
 }

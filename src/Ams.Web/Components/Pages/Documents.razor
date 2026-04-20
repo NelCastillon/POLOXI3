@@ -1,17 +1,77 @@
 @page "/documents"
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 @using Ams.Application.Features.Documents
 
-<PageTitle>Document Management</PageTitle>
-<h1>Document Management</h1>
+<PageTitle>Documents Hub — AMS</PageTitle>
+<AppPageHeader Title="Documents Hub"
+               Subtitle="Policies, forms, certificates, correspondence and all client documents in one place"
+               Icon="bi-folder2-open">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents/forms")'>
+            <i class="bi bi-file-earmark-medical" aria-hidden="true"></i> ACORD Forms
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents/esign")'>
+            <i class="bi bi-pen" aria-hidden="true"></i> E-Sign
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents/packets")'>
+            <i class="bi bi-collection" aria-hidden="true"></i> Packets
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showUpload = true">
+            <i class="bi bi-upload" aria-hidden="true"></i> Upload Document
+        </button>
+    </Actions>
+</AppPageHeader>
 
-<div class="toolbar-row">
-    <SfDropDownList TItem="CategoryOption" TValue="string" DataSource="_categories" @bind-Value="_categoryFilter" Placeholder="All Categories" Width="200px">
+<!-- ── KPI STRIP ──────────────────────────────────────────────────── -->
+<div class="dh-kpi-strip">
+    @DhKpi("bi-folder2",           "Total Documents",      (_items?.Count ?? 0).ToString(),                                             "dh-ki-blue")
+    @DhKpi("bi-pen",               "Pending Signature",    _kpiEsign.ToString(),                                                         "dh-ki-amber")
+    @DhKpi("bi-file-earmark-medical","ACORD Forms",        _kpiAcord.ToString(),                                                         "dh-ki-purple")
+    @DhKpi("bi-exclamation-triangle","OCR Exceptions",     _kpiExceptions.ToString(),                                                    "dh-ki-red")
+    @DhKpi("bi-archive",           "Archived",             (_items?.Count(d => d.StatusCode == "Archived") ?? 0).ToString(),            "dh-ki-gray")
+    @DhKpi("bi-calendar-plus",     "This Week",            (_items?.Count(d => d.CreatedDateUtc >= DateTime.UtcNow.AddDays(-7)) ?? 0).ToString(), "dh-ki-green")
+    @DhKpi("bi-stars",             "AI Classified",        _kpiAiClassified.ToString(),                                                  "dh-ki-purple")
+    @DhKpi("bi-exclamation-circle","Unclassified",         (_items?.Count(d => string.IsNullOrEmpty(d.CategoryCode)) ?? 0).ToString(),  "dh-ki-amber")
+</div>
+
+<!-- ── SUB-NAV STRIP ───────────────────────────────────────────── -->
+<div class="dh-subnav">
+    <button class="dh-subnav-btn dh-subnav-active">
+        <i class="bi bi-folder2" aria-hidden="true"></i> All Documents
+    </button>
+    <button class="dh-subnav-btn" @onclick='() => Nav.NavigateTo("/documents/forms")'>
+        <i class="bi bi-file-earmark-medical" aria-hidden="true"></i> ACORD Forms
+    </button>
+    <button class="dh-subnav-btn" @onclick='() => Nav.NavigateTo("/documents/esign")'>
+        <i class="bi bi-pen" aria-hidden="true"></i> E-Signature Queue
+        @if (_kpiEsign > 0) { <span class="dh-subnav-badge">@_kpiEsign</span> }
+    </button>
+    <button class="dh-subnav-btn" @onclick='() => Nav.NavigateTo("/documents/exceptions")'>
+        <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> OCR Exceptions
+        @if (_kpiExceptions > 0) { <span class="dh-subnav-badge dh-snb-red">@_kpiExceptions</span> }
+    </button>
+    <button class="dh-subnav-btn" @onclick='() => Nav.NavigateTo("/documents/packets")'>
+        <i class="bi bi-collection" aria-hidden="true"></i> Packet Builder
+    </button>
+</div>
+
+<div class="dh-toolbar">
+    <SfDropDownList TItem="CategoryOption" TValue="string" DataSource="_categories" @bind-Value="_categoryFilter"
+                    Placeholder="All Categories" Width="180px">
         <DropDownListFieldSettings Text="Label" Value="Code"></DropDownListFieldSettings>
     </SfDropDownList>
-    <SfTextBox Placeholder="Search files, types, tags..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Search</SfButton>
-    <SfButton CssClass="e-success" OnClick="() => _showUpload = true">Upload Document</SfButton>
+    <SfTextBox Placeholder="Search files, types, tags…" @bind-Value="_searchTerm" Width="280px"></SfTextBox>
+    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync">
+        <i class="bi bi-search" aria-hidden="true"></i> Search
+    </button>
+    <div class="dh-toolbar-right">
+        <select class="e-input dh-view-sel" @bind="_viewMode">
+            <option value="grid">Grid View</option>
+            <option value="list">List View</option>
+        </select>
+    </div>
 </div>
 
 @if (_items is null)
@@ -24,16 +84,60 @@ else
         <GridEvents RowSelected="OnRowSelected" TValue="DocumentDto"></GridEvents>
         <GridPageSettings PageSize="10"></GridPageSettings>
         <GridColumns>
-            <GridColumn Field="@nameof(DocumentDto.FileName)" HeaderText="File Name" Width="240"></GridColumn>
-            <GridColumn Field="@nameof(DocumentDto.CategoryCode)" HeaderText="Category" Width="140"></GridColumn>
-            <GridColumn Field="@nameof(DocumentDto.DocumentTypeCode)" HeaderText="Type" Width="130"></GridColumn>
-            <GridColumn Field="@nameof(DocumentDto.EntityName)" HeaderText="Linked Entity" Width="130"></GridColumn>
-            <GridColumn Field="@nameof(DocumentDto.VersionNumber)" HeaderText="Ver" Width="70" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center"></GridColumn>
-            <GridColumn Field="@nameof(DocumentDto.Tags)" HeaderText="Tags" Width="160"></GridColumn>
-            <GridColumn Field="@nameof(DocumentDto.StatusCode)" HeaderText="Status" Width="100"></GridColumn>
-            <GridColumn Field="@nameof(DocumentDto.RetentionDate)" HeaderText="Retention" Width="120"></GridColumn>
-            <GridColumn Field="@nameof(DocumentDto.CreatedDateUtc)" HeaderText="Uploaded" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
-        </GridColumns>
+                <GridColumn Field="@nameof(DocumentDto.FileName)" HeaderText="File Name" Width="220">
+                    <Template>
+                        @{ var doc = (DocumentDto)context; }
+                        <div class="dh-fn-cell">
+                            <i class="bi @DocIcon(doc.ContentType) dh-fn-icon" aria-hidden="true"></i>
+                            <div>
+                                <div class="dh-fn-name">@doc.FileName</div>
+                                @if (!string.IsNullOrEmpty(doc.Description))
+                                {
+                                    <div class="dh-fn-desc">@doc.Description</div>
+                                }
+                            </div>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn HeaderText="AI Classification" Width="160">
+                    <Template>
+                        @{ var doc2 = (DocumentDto)context; }
+                        <span class="dh-ai-class-chip @(string.IsNullOrEmpty(doc2.CategoryCode) ? "dh-ai-unclassified" : "dh-ai-classified")">
+                            <i class="bi @(string.IsNullOrEmpty(doc2.CategoryCode) ? "bi-question-circle" : "bi-stars")" aria-hidden="true"></i>
+                            @AiClassify(doc2)
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(DocumentDto.CategoryCode)" HeaderText="Category" Width="130"></GridColumn>
+                <GridColumn Field="@nameof(DocumentDto.DocumentTypeCode)" HeaderText="Type" Width="130"></GridColumn>
+                <GridColumn Field="@nameof(DocumentDto.EntityName)" HeaderText="Linked Entity" Width="130"></GridColumn>
+                <GridColumn Field="@nameof(DocumentDto.VersionNumber)" HeaderText="Ver" Width="60" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center"></GridColumn>
+                <GridColumn Field="@nameof(DocumentDto.Tags)" HeaderText="Tags" Width="160"></GridColumn>
+                <GridColumn HeaderText="Status" Width="110">
+                    <Template>
+                        @{ var doc3 = (DocumentDto)context; }
+                        <span class="dh-status-badge dh-st-@(doc3.StatusCode?.ToLower() ?? "active")">
+                            @doc3.StatusCode
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(DocumentDto.RetentionDate)" HeaderText="Retention" Width="110"></GridColumn>
+                <GridColumn Field="@nameof(DocumentDto.CreatedDateUtc)" HeaderText="Uploaded" Type="ColumnType.DateTime" Format="g" Width="145"></GridColumn>
+                <GridColumn HeaderText="Actions" Width="105">
+                    <Template>
+                        @{ var docA = (DocumentDto)context; }
+                        <div class="dh-row-actions">
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo($"/documents/{docA.DocumentId}")' title="Open detail">
+                                <i class="bi bi-arrow-up-right-square" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-xs" title="Send for E-Sign"
+                                    @onclick='() => Nav.NavigateTo("/documents/esign")'>
+                                <i class="bi bi-pen" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
     </SfGrid>
 }
 
@@ -303,6 +407,13 @@ else
     private string? _searchTerm;
     private string? _categoryFilter;
     private List<DocumentDto>? _items;
+    private string _viewMode = "grid";
+
+    // KPI counters (stubs — in production drive from real API)
+    private int _kpiEsign      = 7;
+    private int _kpiAcord      = 24;
+    private int _kpiExceptions = 3;
+    private int _kpiAiClassified => _items?.Count(d => !string.IsNullOrEmpty(d.CategoryCode)) ?? 0;
 
     // Detail panel
     private DocumentDto? _selected;
@@ -351,7 +462,11 @@ else
 
     private List<CategoryOption> _uploadCategories => _categories.Where(c => !string.IsNullOrEmpty(c.Code)).ToList();
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Documents",""));
+        await LoadAsync();
+    }
 
     private async Task LoadAsync()
     {
@@ -462,6 +577,41 @@ else
         if (_selected is not null)
             _shareLinks = (await Api.GetDocumentShareLinksAsync(_selected.DocumentId))?.ToList() ?? [];
     }
+
+    // ── Helpers ─────────────────────────────────────
+    static string AiClassify(DocumentDto d)
+    {
+        if (!string.IsNullOrEmpty(d.CategoryCode)) return d.CategoryCode;
+        var name = (d.FileName ?? "").ToLowerInvariant();
+        if (name.Contains("acord") || name.Contains("form"))    return "ACORD Form";
+        if (name.Contains("policy") || name.Contains("dec"))    return "Policy / Dec Page";
+        if (name.Contains("claim")  || name.Contains("fnol"))   return "Claim Document";
+        if (name.Contains("cert")   || name.Contains("coi"))    return "Certificate";
+        if (name.Contains("endorse")|| name.Contains("endo"))   return "Endorsement";
+        if (name.Contains("invoice")|| name.Contains("bill"))   return "Billing";
+        if (name.Contains("audit"))                              return "Audit";
+        if (name.Contains("proposal"))                          return "Proposal";
+        return "Unclassified";
+    }
+
+    static string DocIcon(string? mime) => mime?.ToLowerInvariant() switch
+    {
+        var m when m?.Contains("pdf")   == true => "bi-file-earmark-pdf",
+        var m when m?.Contains("word")  == true ||
+                   m?.Contains("docx")  == true => "bi-file-earmark-word",
+        var m when m?.Contains("excel") == true ||
+                   m?.Contains("xlsx")  == true => "bi-file-earmark-excel",
+        var m when m?.Contains("image") == true => "bi-file-earmark-image",
+        _                                        => "bi-file-earmark"
+    };
+
+    RenderFragment DhKpi(string icon, string label, string val, string color) => __builder =>
+    {
+        <div class="dh-kpi-card @color">
+            <i class="bi @icon dh-kpi-icon" aria-hidden="true"></i>
+            <div><div class="dh-kpi-val">@val</div><div class="dh-kpi-lbl">@label</div></div>
+        </div>
+    };
 
     private static string FormatSize(long? bytes)
     {

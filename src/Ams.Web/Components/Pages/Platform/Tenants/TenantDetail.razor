@@ -1,6 +1,8 @@
 @page "/platform/tenants/{TenantId:guid}"
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.Tenants
+@using Syncfusion.Blazor.Charts
+@using Syncfusion.Blazor.Cards
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
@@ -105,7 +107,17 @@ else
         </div>
     </div>
 
-    <!-- Tabs: 0 Overview · 1 Configuration · 2 Branding · 3 Domains · 4 Subscription · 5 Features · 6 Usage · 7 Region & Deployment · 8 Quotas · 9 Audit -->
+    <!-- KPI strip -->
+    <div class="td-kpi-row">
+        <AppMetricCard Label="Active Users"    Value="@(_tenant.ActiveUsers.ToString())"                                Icon="bi-people"              Loading="_kpiLoading" />
+        <AppMetricCard Label="Policy Count"    Value="@(_kpiPolicyCount?.ToString("N0") ?? "—")"                         Icon="bi-shield-check"        Loading="_kpiLoading" />
+        <AppMetricCard Label="Storage Used"    Value="@(_kpiStorageGb is not null ? $"{_kpiStorageGb:F1} GB" : "—")"     Icon="bi-database"            Loading="_kpiLoading" />
+        <AppMetricCard Label="Automation Runs" Value="@(_kpiAutomationRuns?.ToString("N0") ?? "—")"                      Icon="bi-gear-wide-connected" Loading="_kpiLoading" />
+        <AppMetricCard Label="API Calls"       Value="@(_kpiApiCalls?.ToString("N0") ?? "—")"                            Icon="bi-lightning-charge"    Loading="_kpiLoading" />
+        <AppMetricCard Label="Portal Usage"    Value="@(_kpiPortalUsage is not null ? $"{_kpiPortalUsage}%" : "—")"      Icon="bi-layout-sidebar"      Loading="_kpiLoading" />
+    </div>
+
+    <!-- Tabs: 0 Overview · 1 Configuration · 2 Branding · 3 Domains · 4 Subscription · 5 Feature Flags · 6 Usage · 7 Region & Deployment · 8 Quotas · 9 Audit · 10 Security · 11 Storage · 12 Integrations -->
     <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="OnTabChangedAsync">
         <Tabs>
 
@@ -509,9 +521,9 @@ else
                 </ContentTemplate>
             </TabItem>
 
-            <!-- 5: Features -->
+            <!-- 5: Feature Flags -->
             <TabItem>
-                <ChildContent><TabHeader Text="Features" IconCss="bi bi-toggles" /></ChildContent>
+                <ChildContent><TabHeader Text="Feature Flags" IconCss="bi bi-toggles" /></ChildContent>
                 <ContentTemplate>
                     <div class="tab-section">
                         <div class="tot-grid tot-grid--2">
@@ -605,6 +617,30 @@ else
                                 <span class="tot-metric-label">Events This Month</span>
                             </div>
                         </div>
+
+                        <!-- Activity trend chart -->
+                        <div class="tot-card td-chart-card">
+                            <div class="tot-card-hdr">
+                                <i class="bi bi-bar-chart-line" aria-hidden="true"></i>
+                                <span>Activity Trend — Last 6 Months</span>
+                            </div>
+                            <div class="tot-card-body td-chart-wrap">
+                                <SfChart Height="220px" Background="transparent">
+                                    <ChartPrimaryXAxis ValueType="Syncfusion.Blazor.Charts.ValueType.Category" />
+                                    <ChartPrimaryYAxis />
+                                    <ChartSeriesCollection>
+                                        <ChartSeries DataSource="_activityData" XName="Month" YName="ApiCalls"
+                                                     Name="API Calls" Type="ChartSeriesType.SplineArea"
+                                                     Opacity="0.4" />
+                                        <ChartSeries DataSource="_activityData" XName="Month" YName="AutomationRuns"
+                                                     Name="Automation Runs" Type="ChartSeriesType.SplineArea"
+                                                     Opacity="0.4" />
+                                    </ChartSeriesCollection>
+                                    <ChartLegendSettings Visible="true" />
+                                </SfChart>
+                            </div>
+                        </div>
+
                         <div class="tot-grid tot-grid--2">
                             <div class="tot-card">
                                 <div class="tot-card-hdr">
@@ -868,35 +904,23 @@ else
                                     <span>Audit Log</span>
                                 </div>
                                 <div class="tot-card-body">
-                                    @if (_auditLoading)
-                                    {
-                                        <div class="um-loading-overlay" aria-live="polite">
-                                            <div class="um-spinner" aria-hidden="true"></div>
-                                            <span>Loading audit log…</span>
-                                        </div>
-                                    }
-                                    else if (_auditEntries.Count == 0)
-                                    {
-                                        <div class="tot-empty-hint">
-                                            <i class="bi bi-journal" aria-hidden="true"></i>
-                                            <span>No audit entries found for this tenant.</span>
-                                        </div>
-                                    }
-                                    else
-                                    {
-                                        <div class="td-audit-list">
-                                            @foreach (var entry in _auditEntries)
-                                            {
-                                                <div class="td-audit-row">
-                                                    <span class="td-audit-icon" aria-hidden="true"><i class="bi bi-activity"></i></span>
-                                                    <div class="td-audit-info">
-                                                        <span class="td-audit-action">@entry.ActionName</span>
-                                                        <span class="td-audit-meta">@entry.PerformedDateUtc.ToString("d MMM yyyy, HH:mm") · @(entry.PerformedByUserId.HasValue ? "User" : "System")</span>
-                                                    </div>
-                                                </div>
-                                            }
-                                        </div>
-                                    }
+                                    <SfGrid TValue="AuditEntryItem" DataSource="@_auditEntries"
+                                            AllowPaging="true" AllowSorting="true"
+                                            CssClass="td-sfgrid">
+                                        <GridLoadingIndicator Type="LoadingType.Spinner" />
+                                        <GridPageSettings PageSize="20" />
+                                        <GridColumns>
+                                            <GridColumn Field="@nameof(AuditEntryItem.PerformedDateUtc)"
+                                                        HeaderText="Date" Width="180" Format="d MMM yyyy, HH:mm" />
+                                            <GridColumn Field="@nameof(AuditEntryItem.ActionName)" HeaderText="Action" />
+                                            <GridColumn HeaderText="Performed By" Width="160">
+                                                <Template>
+                                                    @{ var _ae = (context as AuditEntryItem)!; }
+                                                    <span>@(_ae.PerformedByUserId.HasValue ? "User" : "System")</span>
+                                                </Template>
+                                            </GridColumn>
+                                        </GridColumns>
+                                    </SfGrid>
                                 </div>
                                 <div class="tot-card-footer">
                                     <button class="tot-ql" @onclick="GoToAudit">
@@ -957,6 +981,241 @@ else
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 10: Security -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Security" IconCss="bi bi-shield-lock" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        <div class="tot-grid tot-grid--2">
+                            <SfCard>
+                                <CardHeader Title="Authentication &amp; MFA" />
+                                <CardContent>
+                                    <div class="tot-card-body">
+                                        <div class="tot-field">
+                                            <span class="tot-fl">MFA Policy</span>
+                                            <span class="tot-fv tot-muted">—</span>
+                                        </div>
+                                        <div class="tot-field">
+                                            <span class="tot-fl">MFA Adoption</span>
+                                            <span class="tot-fv tot-muted">—</span>
+                                        </div>
+                                        <div class="tot-field">
+                                            <span class="tot-fl">SSO Provider</span>
+                                            <span class="tot-fv tot-muted">—</span>
+                                        </div>
+                                        <div class="tot-field">
+                                            <span class="tot-fl">Password Policy</span>
+                                            <span class="tot-fv tot-muted">—</span>
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </SfCard>
+                            <SfCard>
+                                <CardHeader Title="Session Policy" />
+                                <CardContent>
+                                    <div class="tot-card-body">
+                                        <div class="tot-field">
+                                            <span class="tot-fl">Session Timeout</span>
+                                            <span class="tot-fv tot-muted">—</span>
+                                        </div>
+                                        <div class="tot-field">
+                                            <span class="tot-fl">Idle Timeout</span>
+                                            <span class="tot-fv tot-muted">—</span>
+                                        </div>
+                                        <div class="tot-field">
+                                            <span class="tot-fl">Max Active Sessions</span>
+                                            <span class="tot-fv tot-muted">—</span>
+                                        </div>
+                                        <div class="tot-field">
+                                            <span class="tot-fl">IP Restrictions</span>
+                                            <span class="tot-fv tot-muted">None configured</span>
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </SfCard>
+                        </div>
+                        <div class="tot-card" style="margin-top:var(--sp-4)">
+                            <div class="tot-card-hdr">
+                                <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+                                <span>Security Events</span>
+                            </div>
+                            <div class="tot-card-body">
+                                @if (_securityLoading)
+                                {
+                                    <div class="um-loading-overlay" aria-live="polite">
+                                        <div class="um-spinner" aria-hidden="true"></div>
+                                        <span>Loading security events…</span>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <SfGrid TValue="SecurityEventItem" DataSource="@_securityEvents"
+                                            AllowPaging="true" AllowSorting="true"
+                                            CssClass="td-sfgrid">
+                                        <GridPageSettings PageSize="10" />
+                                        <GridColumns>
+                                            <GridColumn Field="@nameof(SecurityEventItem.OccurredUtc)"
+                                                        HeaderText="Date" Width="180" Format="d MMM yyyy, HH:mm" />
+                                            <GridColumn Field="@nameof(SecurityEventItem.EventType)" HeaderText="Event" />
+                                            <GridColumn Field="@nameof(SecurityEventItem.Severity)" HeaderText="Severity" Width="110" />
+                                            <GridColumn Field="@nameof(SecurityEventItem.Actor)" HeaderText="User" Width="160" />
+                                        </GridColumns>
+                                    </SfGrid>
+                                }
+                            </div>
+                            <div class="tot-card-footer">
+                                <a class="tot-ql" href="/platform/security?tenantId=@_tenant.TenantId">
+                                    <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Full security report
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 11: Storage -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Storage" IconCss="bi bi-database" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        @if (_storageLoading)
+                        {
+                            <div class="um-loading-overlay" aria-live="polite">
+                                <div class="um-spinner" aria-hidden="true"></div>
+                                <span>Loading storage data…</span>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="tot-grid tot-grid--2">
+                                <SfCard>
+                                    <CardHeader Title="Storage Consumption" />
+                                    <CardContent>
+                                        <div class="tot-card-body">
+                                            <div class="td-chart-wrap">
+                                                <SfAccumulationChart EnableSmartLabels="true" Height="220px" Background="transparent">
+                                                    <AccumulationChartSeriesCollection>
+                                                        <AccumulationChartSeries DataSource="@_storageBreakdown"
+                                                                                 XName="Category" YName="SizeGb"
+                                                                                 InnerRadius="55%" Name="Storage">
+                                                            <AccumulationDataLabelSettings Visible="true"
+                                                                                           Position="AccumulationLabelPosition.Outside" />
+                                                        </AccumulationChartSeries>
+                                                    </AccumulationChartSeriesCollection>
+                                                    <AccumulationChartLegendSettings Visible="true" />
+                                                </SfAccumulationChart>
+                                            </div>
+                                            <div class="tot-field" style="margin-top:var(--sp-2)">
+                                                <span class="tot-fl">Total Used</span>
+                                                <span class="tot-fv"><strong>@(_kpiStorageGb is not null ? $"{_kpiStorageGb:F1} GB" : "—")</strong></span>
+                                            </div>
+                                            <div class="tot-field">
+                                                <span class="tot-fl">Plan Limit</span>
+                                                <span class="tot-fv tot-muted">—</span>
+                                            </div>
+                                            <div class="tot-field">
+                                                <span class="tot-fl">Utilisation</span>
+                                                <span class="tot-fv">
+                                                    <div class="td-quota-bar"><div class="td-quota-fill" style="width:0%"></div></div>
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </CardContent>
+                                </SfCard>
+                                <SfCard>
+                                    <CardHeader Title="Storage Breakdown" />
+                                    <CardContent>
+                                        <div class="tot-card-body">
+                                            <SfGrid TValue="StorageBreakdownItem" DataSource="@_storageBreakdown"
+                                                    AllowSorting="true" CssClass="td-sfgrid">
+                                                <GridColumns>
+                                                    <GridColumn Field="@nameof(StorageBreakdownItem.Category)" HeaderText="Category" />
+                                                    <GridColumn Field="@nameof(StorageBreakdownItem.SizeGb)" HeaderText="Used (GB)" Width="120" Format="N2" />
+                                                    <GridColumn Field="@nameof(StorageBreakdownItem.FileCount)" HeaderText="Files" Width="100" />
+                                                </GridColumns>
+                                            </SfGrid>
+                                        </div>
+                                    </CardContent>
+                                </SfCard>
+                            </div>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 12: Integrations -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Integrations" IconCss="bi bi-plug" /></ChildContent>
+                <ContentTemplate>
+                    <div class="tab-section">
+                        @if (_integrationsLoading)
+                        {
+                            <div class="um-loading-overlay" aria-live="polite">
+                                <div class="um-spinner" aria-hidden="true"></div>
+                                <span>Loading integrations…</span>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="tot-grid tot-grid--2">
+                                <SfCard>
+                                    <CardHeader Title="API Keys" />
+                                    <CardContent>
+                                        <div class="tot-card-body">
+                                            <SfGrid TValue="ApiKeyItem" DataSource="@_apiKeys"
+                                                    AllowPaging="true" AllowSorting="true"
+                                                    CssClass="td-sfgrid">
+                                                <GridPageSettings PageSize="5" />
+                                                <GridColumns>
+                                                    <GridColumn Field="@nameof(ApiKeyItem.Name)" HeaderText="Name" />
+                                                    <GridColumn Field="@nameof(ApiKeyItem.Prefix)" HeaderText="Key Prefix" Width="130" />
+                                                    <GridColumn Field="@nameof(ApiKeyItem.CreatedUtc)" HeaderText="Created" Width="130" Format="d MMM yyyy" />
+                                                    <GridColumn Field="@nameof(ApiKeyItem.Status)" HeaderText="Status" Width="100" />
+                                                </GridColumns>
+                                            </SfGrid>
+                                        </div>
+                                    </CardContent>
+                                </SfCard>
+                                <SfCard>
+                                    <CardHeader Title="Webhooks" />
+                                    <CardContent>
+                                        <div class="tot-card-body">
+                                            <SfGrid TValue="WebhookItem" DataSource="@_webhooks"
+                                                    AllowPaging="true" AllowSorting="true"
+                                                    CssClass="td-sfgrid">
+                                                <GridPageSettings PageSize="5" />
+                                                <GridColumns>
+                                                    <GridColumn Field="@nameof(WebhookItem.Url)" HeaderText="Endpoint URL" />
+                                                    <GridColumn Field="@nameof(WebhookItem.Events)" HeaderText="Events" Width="160" />
+                                                    <GridColumn Field="@nameof(WebhookItem.Active)" HeaderText="Active" Width="80" DisplayAsCheckBox="true" />
+                                                </GridColumns>
+                                            </SfGrid>
+                                        </div>
+                                    </CardContent>
+                                </SfCard>
+                            </div>
+                            <div class="tot-card" style="margin-top:var(--sp-4)">
+                                <div class="tot-card-hdr">
+                                    <i class="bi bi-app-indicator" aria-hidden="true"></i>
+                                    <span>Connected Applications</span>
+                                </div>
+                                <div class="tot-card-body">
+                                    <div class="tot-empty-hint">
+                                        <i class="bi bi-plug" aria-hidden="true"></i>
+                                        <span>No connected applications configured for this tenant.</span>
+                                    </div>
+                                </div>
+                                <div class="tot-card-footer">
+                                    <a class="tot-ql" href="/platform/integrations?tenantId=@_tenant!.TenantId">
+                                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Manage integrations
+                                    </a>
+                                </div>
+                            </div>
+                        }
                     </div>
                 </ContentTemplate>
             </TabItem>
@@ -1080,6 +1339,10 @@ else
     private bool _auditLoading        = false;
     private bool _domainsLoading       = false;
     private bool _brandingLoading      = false;
+    private bool _kpiLoading           = false;
+    private bool _securityLoading      = false;
+    private bool _storageLoading       = false;
+    private bool _integrationsLoading  = false;
 
     // ── Dialog visibility ─────────────────────────────────────────────────────
     private bool _showEdit            = false;
@@ -1099,6 +1362,26 @@ else
     private List<AuditEntryItem>   _auditEntries  = [];
     private List<TenantDomainDto>   _tenantDomains = [];
     private List<BrandingItem>      _tenantBranding = [];
+
+    // ── KPI data ─────────────────────────────────────────────────────────────────────────────────────
+    private int?    _kpiPolicyCount    = null;
+    private double? _kpiStorageGb      = null;
+    private int?    _kpiAutomationRuns = null;
+    private long?   _kpiApiCalls       = null;
+    private int?    _kpiPortalUsage    = null;
+
+    // ── Security tab data ──────────────────────────────────────────────────────────────────────────
+    private List<SecurityEventItem> _securityEvents = [];
+
+    // ── Storage tab data ──────────────────────────────────────────────────────────────────────────
+    private List<StorageBreakdownItem> _storageBreakdown = [];
+
+    // ── Integrations tab data ──────────────────────────────────────────────────────────────────────
+    private List<ApiKeyItem>  _apiKeys  = [];
+    private List<WebhookItem> _webhooks = [];
+
+    // ── Activity chart data ───────────────────────────────────────────────────────────────────────
+    private List<ActivityPoint> _activityData = [];
 
     // ── Options ───────────────────────────────────────────────────────────────
     private static readonly List<LabelValue> _isolationOptions =
@@ -1152,6 +1435,83 @@ else
         }
     }
 
+    private async Task LoadKpisAsync()
+    {
+        _kpiLoading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: wire to real API endpoints when available
+            await Task.Delay(0);
+            _kpiPolicyCount    = null;
+            _kpiStorageGb      = null;
+            _kpiAutomationRuns = null;
+            _kpiApiCalls       = null;
+            _kpiPortalUsage    = null;
+            _activityData      = [];
+        }
+        catch { /* swallow */ }
+        finally
+        {
+            _kpiLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadSecurityTabAsync()
+    {
+        _securityLoading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace with Api.GetTenantSecurityEventsAsync(TenantId)
+            _securityEvents = [];
+        }
+        catch { _securityEvents = []; }
+        finally
+        {
+            _securityLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadStorageTabAsync()
+    {
+        _storageLoading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace with Api.GetTenantStorageBreakdownAsync(TenantId)
+            await Task.Delay(0);
+            _storageBreakdown = [];
+        }
+        catch { _storageBreakdown = []; }
+        finally
+        {
+            _storageLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadIntegrationsTabAsync()
+    {
+        _integrationsLoading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace with Api.GetTenantApiKeysAsync / GetTenantWebhooksAsync
+            await Task.Delay(0);
+            _apiKeys  = [];
+            _webhooks = [];
+        }
+        catch { _apiKeys = []; _webhooks = []; }
+        finally
+        {
+            _integrationsLoading = false;
+            StateHasChanged();
+        }
+    }
+
     private async Task LoadAsync()
     {
         _loading = true;
@@ -1168,6 +1528,7 @@ else
             SetCrumbs();
             if (_overviewRef is not null)
                 await _overviewRef.LoadAsync();
+            _ = LoadKpisAsync();
         }
         finally
         {
@@ -1203,6 +1564,15 @@ else
                     break;
             case 9 when _auditEntries.Count == 0:
                 await LoadAuditTabAsync();
+                break;
+            case 10 when _securityEvents.Count == 0:
+                await LoadSecurityTabAsync();
+                break;
+            case 11 when _storageBreakdown.Count == 0:
+                await LoadStorageTabAsync();
+                break;
+            case 12 when _apiKeys.Count == 0:
+                await LoadIntegrationsTabAsync();
                 break;
         }
     }
@@ -1480,5 +1850,15 @@ else
         bool   IsColor,
         bool   IsLongText,
         string Placeholder);
+
+    private record SecurityEventItem(DateTime OccurredUtc, string EventType, string Severity, string Actor);
+
+    private record StorageBreakdownItem(string Category, double SizeGb, int FileCount);
+
+    private record ActivityPoint(string Month, int ApiCalls, int AutomationRuns);
+
+    private record ApiKeyItem(string Name, string Prefix, DateTime CreatedUtc, string Status);
+
+    private record WebhookItem(string Url, string Events, bool Active);
 
     }

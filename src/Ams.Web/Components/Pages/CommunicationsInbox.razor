@@ -1,0 +1,1045 @@
+@page "/communications/inbox"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Communications Inbox — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── COMPOSE DIALOG ────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showComposeDlg" Width="620px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header>
+            <div class="pd-dlg-hdr">
+                <i class="bi @ChannelIcon(_compose.Channel)" aria-hidden="true"></i>
+                New @_compose.Channel
+            </div>
+        </Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="ci-compose-channel-row">
+                    @foreach (var ch in _channels)
+                    {
+                        <button class="ci-ch-pill @(_compose.Channel == ch ? "ci-ch-active" : "")"
+                                @onclick="() => _compose.Channel = ch">
+                            <i class="bi @ChannelIcon(ch)" aria-hidden="true"></i> @ch
+                        </button>
+                    }
+                </div>
+                <div class="pd-dlg-grid" style="margin-top:.65rem;">
+                    <div><label class="cd-dlg-lbl">Account / Contact *</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@_accountNames" @bind-Value="_compose.Account" Placeholder="Select account" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">To (Name or Address) *</label>
+                        <SfTextBox @bind-Value="_compose.ToAddress" Placeholder="@(_compose.Channel=="SMS" ? "Phone number" : _compose.Channel=="Email" ? "email@domain.com" : "Recipient name")" />
+                    </div>
+                    @if (_compose.Channel == "Email")
+                    {
+                        <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Subject *</label>
+                            <SfTextBox @bind-Value="_compose.Subject" Placeholder="Email subject…" />
+                        </div>
+                    }
+                    <div><label class="cd-dlg-lbl">Template</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@_templates" @bind-Value="_compose.Template" Placeholder="Select template (optional)" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Priority</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"Normal","High","Urgent"})" @bind-Value="_compose.Priority" Placeholder="Normal" />
+                    </div>
+                    <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Message *</label>
+                        <SfTextBox @bind-Value="_compose.Body" Multiline="true"
+                                   Placeholder="@(_compose.Channel=="SMS" ? "Text message (160 chars recommended)…" : "Message body…")"
+                                   HtmlAttributes='@(new() {{"rows","6"}})' />
+                    </div>
+                    @if (_compose.Channel is "Email" or "Portal Message")
+                    {
+                        <div class="ci-attach-row">
+                            <button class="um-btn um-btn-ghost um-btn-xs">
+                                <i class="bi bi-paperclip" aria-hidden="true"></i> Attach File
+                            </button>
+                            @foreach (var a in _compose.Attachments)
+                            {
+                                <span class="ci-attach-chip">@a <button @onclick="() => _compose.Attachments.Remove(a)">×</button></span>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showComposeDlg = false">Discard</button>
+                <button class="um-btn um-btn-ghost" @onclick="SaveDraft">
+                    <i class="bi bi-floppy" aria-hidden="true"></i> Save Draft
+                </button>
+                <button class="um-btn um-btn-primary" @onclick="SendMessage">
+                    <i class="bi bi-send" aria-hidden="true"></i> Send
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── ASSIGN DIALOG ─────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showAssignDlg" Width="380px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-person-check" aria-hidden="true"></i> Assign Conversation</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="pd-dlg-grid-1">
+                    <div><label class="cd-dlg-lbl">Assign To *</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@_agents" @bind-Value="_assignTo" Placeholder="Select agent" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Note</label>
+                        <SfTextBox @bind-Value="_assignNote" Placeholder="Optional handoff note…" Multiline="true" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showAssignDlg = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ConfirmAssign">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Assign
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── ESCALATE DIALOG ───────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showEscalateDlg" Width="400px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Escalate Conversation</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="pd-dlg-grid-1">
+                    <div><label class="cd-dlg-lbl">Escalate To *</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@_supervisors" @bind-Value="_escalateTo" Placeholder="Select supervisor" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Reason *</label>
+                        <SfDropDownList TValue="string" TItem="string"
+                                        DataSource="@(new[]{"Complaint","Coverage Dispute","Legal Threat","Regulatory Issue","VIP Client","Complex Situation","Other"})"
+                                        @bind-Value="_escalateReason" Placeholder="Select reason" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Notes</label>
+                        <SfTextBox @bind-Value="_escalateNote" Placeholder="Escalation context…" Multiline="true" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showEscalateDlg = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ConfirmEscalate">
+                    <i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Escalate
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<AppPageHeader Title="Communications Inbox"
+               Subtitle="Unified 2-way inbox — email, SMS, internal notes and portal messages"
+               Icon="bi-inbox">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/templates")'>
+            <i class="bi bi-layout-text-sidebar" aria-hidden="true"></i> Templates
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCompose">
+            <i class="bi bi-pencil-square" aria-hidden="true"></i> Compose
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI STRIP ─────────────────────────────────────────────────── -->
+<div class="ci-kpi-strip">
+    @CiKpi("bi-inbox",              "Total Unread",      _messages.Count(m => !m.IsRead).ToString(),                                              "ci-ki-blue")
+    @CiKpi("bi-envelope",           "Email",             _messages.Count(m => m.Channel=="Email"   && !m.IsRead).ToString(),                      "ci-ki-blue")
+    @CiKpi("bi-phone",              "SMS",               _messages.Count(m => m.Channel=="SMS"     && !m.IsRead).ToString(),                      "ci-ki-green")
+    @CiKpi("bi-sticky",             "Internal Notes",    _messages.Count(m => m.Channel=="Internal Note" && !m.IsRead).ToString(),                "ci-ki-amber")
+    @CiKpi("bi-globe",              "Portal",            _messages.Count(m => m.Channel=="Portal Message" && !m.IsRead).ToString(),               "ci-ki-purple")
+    @CiKpi("bi-person-x",           "Unassigned",        _messages.Count(m => string.IsNullOrEmpty(m.AssignedTo)).ToString(),                     "ci-ki-red")
+    @CiKpi("bi-arrow-up-circle",    "Escalated",         _messages.Count(m => m.IsEscalated).ToString(),                                          "ci-ki-red")
+    @CiKpi("bi-clock-history",      "Avg Response Time", "2.4 hrs",                                                                               "ci-ki-gray")
+</div>
+
+<!-- ── 3-PANE INBOX LAYOUT ───────────────────────────────────────── -->
+<div class="ci-layout">
+
+    <!-- ────────────────── LEFT NAV SIDEBAR ──────────────────────── -->
+    <aside class="ci-nav">
+
+        <div class="ci-nav-section">
+            <div class="ci-nav-section-lbl">Views</div>
+            @NavItem("inbox",        "bi-inbox",           "All Inbox",    _messages.Count(m => !m.IsRead))
+            @NavItem("unassigned",   "bi-person-x",        "Unassigned",   _messages.Count(m => string.IsNullOrEmpty(m.AssignedTo) && !m.IsRead))
+            @NavItem("escalated",    "bi-arrow-up-circle", "Escalated",    _messages.Count(m => m.IsEscalated))
+            @NavItem("mine",         "bi-person-check",    "Assigned to Me",_messages.Count(m => m.AssignedTo == _currentUser && !m.IsRead))
+            @NavItem("drafts",       "bi-floppy",          "Drafts",       _messages.Count(m => m.Status == "Draft"))
+            @NavItem("sent",         "bi-send",            "Sent",         0)
+        </div>
+
+        <div class="ci-nav-section">
+            <div class="ci-nav-section-lbl">Group By</div>
+            @NavItem("by-account",   "bi-building",        "By Account",   0)
+            @NavItem("by-producer",  "bi-person-badge",    "By Producer",  0)
+            @NavItem("by-branch",    "bi-diagram-2",       "By Branch",    0)
+        </div>
+
+        <div class="ci-nav-section">
+            <div class="ci-nav-section-lbl">Channels</div>
+            @NavItem("ch-email",     "bi-envelope",        "Email",         _messages.Count(m => m.Channel=="Email"          && !m.IsRead))
+            @NavItem("ch-sms",       "bi-phone",           "SMS",           _messages.Count(m => m.Channel=="SMS"            && !m.IsRead))
+            @NavItem("ch-internal",  "bi-sticky",          "Internal Notes",_messages.Count(m => m.Channel=="Internal Note"  && !m.IsRead))
+            @NavItem("ch-portal",    "bi-globe",           "Portal",        _messages.Count(m => m.Channel=="Portal Message" && !m.IsRead))
+        </div>
+
+    </aside>
+
+    <!-- ────────────────── MIDDLE MESSAGE LIST ───────────────────── -->
+    <div class="ci-list-pane">
+
+        <!-- Filter bar -->
+        <div class="ci-list-toolbar">
+            <input class="e-input ci-search" @bind="_search" @bind:event="oninput"
+                   placeholder="Search messages, accounts, subjects…" />
+            <select class="e-input ci-sel" @bind="_channelFilter">
+                <option value="">All Channels</option>
+                @foreach (var ch in _channels) { <option>@ch</option> }
+            </select>
+            <select class="e-input ci-sel" @bind="_statusFilter">
+                <option value="">All Status</option>
+                <option>Open</option><option>Pending</option><option>Resolved</option><option>Draft</option>
+            </select>
+            <select class="e-input ci-sel" @bind="_priorityFilter">
+                <option value="">All Priority</option>
+                <option>Urgent</option><option>High</option><option>Normal</option>
+            </select>
+            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+                <i class="bi bi-x" aria-hidden="true"></i>
+            </button>
+        </div>
+
+        <!-- Sub-header with count + sort -->
+        <div class="ci-list-header">
+            <span class="ci-list-count">@ListLabel — <strong>@FilteredList.Count()</strong> conversation(s)</span>
+            <div class="ci-sort-row">
+                <button class="ci-sort-btn @(_sortNewest ? "ci-sort-active" : "")" @onclick='() => _sortNewest = true'>Newest</button>
+                <button class="ci-sort-btn @(!_sortNewest ? "ci-sort-active" : "")" @onclick='() => _sortNewest = false'>Oldest</button>
+            </div>
+        </div>
+
+        <!-- Message rows -->
+        <div class="ci-message-list">
+            @if (!FilteredList.Any())
+            {
+                <div class="ci-empty">
+                    <i class="bi bi-inbox ci-empty-icon" aria-hidden="true"></i>
+                    <span>No conversations match the current filters.</span>
+                </div>
+            }
+
+            @foreach (var msg in (_sortNewest
+                ? FilteredList.OrderByDescending(m => m.LastActivityAt)
+                : FilteredList.OrderBy(m => m.LastActivityAt)))
+            {
+                <div class="ci-msg-row @(!msg.IsRead ? "ci-msg-unread" : "") @(_selected?.Id == msg.Id ? "ci-msg-selected" : "") @(msg.IsEscalated ? "ci-msg-escalated" : "")"
+                     @onclick="() => SelectMessage(msg)">
+
+                    <!-- Channel + unread dot -->
+                    <div class="ci-msg-channel-col">
+                        <span class="ci-ch-icon ci-ch-@ChannelCss(msg.Channel)" title="@msg.Channel">
+                            <i class="bi @ChannelIcon(msg.Channel)" aria-hidden="true"></i>
+                        </span>
+                        @if (!msg.IsRead)
+                        {
+                            <span class="ci-unread-dot" aria-label="Unread"></span>
+                        }
+                    </div>
+
+                    <!-- Message body preview -->
+                    <div class="ci-msg-body-col">
+                        <div class="ci-msg-top-row">
+                            <span class="ci-msg-account @(!msg.IsRead ? "ci-msg-account-bold" : "")">@msg.AccountName</span>
+                            <span class="ci-msg-time">@FormatTime(msg.LastActivityAt)</span>
+                        </div>
+                        <div class="ci-msg-subject @(!msg.IsRead ? "ci-msg-subject-bold" : "")">@msg.Subject</div>
+                        <div class="ci-msg-preview">@msg.BodyPreview</div>
+                        <div class="ci-msg-meta-row">
+                            @if (!string.IsNullOrEmpty(msg.AssignedTo))
+                            {
+                                <span class="ci-meta-chip ci-mc-agent"><i class="bi bi-person" aria-hidden="true"></i>@msg.AssignedTo</span>
+                            }
+                            else
+                            {
+                                <span class="ci-meta-chip ci-mc-unassigned"><i class="bi bi-person-x" aria-hidden="true"></i>Unassigned</span>
+                            }
+                            @if (!string.IsNullOrEmpty(msg.Producer))
+                            {
+                                <span class="ci-meta-chip"><i class="bi bi-person-badge" aria-hidden="true"></i>@msg.Producer</span>
+                            }
+                            @if (!string.IsNullOrEmpty(msg.Branch))
+                            {
+                                <span class="ci-meta-chip"><i class="bi bi-diagram-2" aria-hidden="true"></i>@msg.Branch</span>
+                            }
+                            @if (msg.IsEscalated)
+                            {
+                                <span class="ci-meta-chip ci-mc-esc"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i>Escalated</span>
+                            }
+                            @if (msg.OptedOut)
+                            {
+                                <span class="ci-optout-chip"><i class="bi bi-slash-circle" aria-hidden="true"></i>Opt-Out</span>
+                            }
+                            <span class="ci-msg-count-chip">@msg.MessageCount msg</span>
+                        </div>
+                        <div class="ci-msg-intel-row">
+                            <span class="ci-sentiment ci-sent-@SentimentCss(msg.Sentiment)" title="Sentiment: @msg.Sentiment">
+                                @SentimentIcon(msg.Sentiment) @msg.Sentiment
+                            </span>
+                            @{ var ageH = GetUnansweredHours(msg); }
+                            @if (ageH >= 4)
+                            {
+                                <span class="ci-aging-badge @(ageH >= 24 ? "ci-aging-hot" : ageH >= 8 ? "ci-aging-warm" : "ci-aging-cool")">
+                                    <i class="bi bi-hourglass-split" aria-hidden="true"></i>@ageH&#8203;h unanswered
+                                </span>
+                            }
+                            @if (!string.IsNullOrEmpty(msg.CsrOwner))
+                            {
+                                <span class="ci-csr-chip"><i class="bi bi-headset" aria-hidden="true"></i>@msg.CsrOwner</span>
+                            }
+                        </div>
+                    </div>
+
+                    <!-- Status + priority -->
+                    <div class="ci-msg-status-col">
+                        <span class="ci-status-badge ci-st-@StatusCss(msg.Status)">@msg.Status</span>
+                        @if (msg.Priority != "Normal")
+                        {
+                            <span class="ci-pri-badge ci-pri-@msg.Priority.ToLower()">@msg.Priority</span>
+                        }
+                    </div>
+
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- ────────────────── RIGHT DETAIL / THREAD PANE ────────────── -->
+    <div class="ci-detail-pane @(_selected is null ? "ci-detail-empty" : "")">
+
+        @if (_selected is null)
+        {
+            <div class="ci-detail-placeholder">
+                <i class="bi bi-chat-left-text ci-dp-icon" aria-hidden="true"></i>
+                <h3>Select a conversation</h3>
+                <p>Choose a message on the left to view the full thread and reply.</p>
+                <button class="um-btn um-btn-primary" @onclick="OpenCompose">
+                    <i class="bi bi-pencil-square" aria-hidden="true"></i> Compose New Message
+                </button>
+            </div>
+        }
+        else
+        {
+            <!-- Detail header -->
+            <div class="ci-detail-header">
+                <div class="ci-dh-left">
+                    <span class="ci-ch-icon ci-ch-lg ci-ch-@ChannelCss(_selected.Channel)">
+                        <i class="bi @ChannelIcon(_selected.Channel)" aria-hidden="true"></i>
+                    </span>
+                    <div>
+                        <div class="ci-dh-subject">@_selected.Subject</div>
+                        <div class="ci-dh-meta">
+                            <span>@_selected.AccountName</span>
+                            <span class="ci-dh-dot">·</span>
+                            <span>@_selected.Channel</span>
+                            @if (!string.IsNullOrEmpty(_selected.Producer))
+                            {
+                                <span class="ci-dh-dot">·</span>
+                                <span>@_selected.Producer</span>
+                            }
+                            @if (!string.IsNullOrEmpty(_selected.Branch))
+                            {
+                                <span class="ci-dh-dot">·</span>
+                                <span>@_selected.Branch</span>
+                            }
+                        </div>
+                    </div>
+                </div>
+                <div class="ci-dh-actions">
+                    <button class="um-btn um-btn-ghost um-btn-xs"
+                            @onclick='() => Nav.NavigateTo($"/communications/thread/{_selected.Id}")'
+                            title="Open full thread">
+                        <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i>
+                    </button>
+                    @if (!_selected.IsRead)
+                    {
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="MarkRead" title="Mark as read">
+                            <i class="bi bi-check2-all" aria-hidden="true"></i>
+                        </button>
+                    }
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _showAssignDlg = true" title="Assign">
+                        <i class="bi bi-person-check" aria-hidden="true"></i>
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _showEscalateDlg = true" title="Escalate">
+                        <i class="bi bi-arrow-up-circle" aria-hidden="true"></i>
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResolveConversation" title="Resolve">
+                        <i class="bi bi-check-circle" aria-hidden="true"></i>
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _selected = null" title="Close">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Conversation info pills -->
+            <div class="ci-dh-pills">
+                <span class="ci-status-badge ci-st-@StatusCss(_selected.Status)">@_selected.Status</span>
+                @if (_selected.Priority != "Normal")
+                {
+                    <span class="ci-pri-badge ci-pri-@_selected.Priority.ToLower()">@_selected.Priority</span>
+                }
+                @if (_selected.IsEscalated)
+                {
+                    <span class="ci-meta-chip ci-mc-esc"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i>Escalated</span>
+                }
+                @if (!string.IsNullOrEmpty(_selected.AssignedTo))
+                {
+                    <span class="ci-meta-chip ci-mc-agent"><i class="bi bi-person" aria-hidden="true"></i>@_selected.AssignedTo</span>
+                }
+                else
+                {
+                    <span class="ci-meta-chip ci-mc-unassigned"><i class="bi bi-person-x" aria-hidden="true"></i>Unassigned</span>
+                }
+                @if (!string.IsNullOrEmpty(_selected.CsrOwner))
+                {
+                    <span class="ci-meta-chip ci-mc-csr"><i class="bi bi-headset" aria-hidden="true"></i>CSR: @_selected.CsrOwner</span>
+                }
+                <span class="ci-sentiment ci-sent-@SentimentCss(_selected.Sentiment) ci-sent-pill">
+                    @SentimentIcon(_selected.Sentiment) @_selected.Sentiment
+                </span>
+                @{ var detailAge = GetUnansweredHours(_selected); }
+                @if (detailAge >= 4)
+                {
+                    <span class="ci-aging-badge @(detailAge >= 24 ? "ci-aging-hot" : detailAge >= 8 ? "ci-aging-warm" : "ci-aging-cool")">
+                        <i class="bi bi-hourglass-split" aria-hidden="true"></i>@detailAge&#8203;h unanswered
+                    </span>
+                }
+                <span class="ci-meta-chip"><i class="bi bi-clock" aria-hidden="true"></i>@_selected.LastActivityAt.ToString("MM/dd/yyyy h:mm tt")</span>
+            </div>
+
+            @if (_selected.OptedOut)
+            {
+                <div class="ci-optout-warning">
+                    <i class="bi bi-slash-circle" aria-hidden="true"></i>
+                    <strong>Opt-Out / Do Not Contact</strong> — This contact has opted out of direct @_selected.Channel communication.
+                    Route all outreach through the designated representative or via legal counsel.
+                </div>
+            }
+
+            @if (!string.IsNullOrEmpty(_selected.AiSummary))
+            {
+                <div class="ci-ai-summary">
+                    <div class="ci-ai-summary-hdr">
+                        <i class="bi bi-stars" aria-hidden="true"></i> AI Thread Summary
+                        <span class="ci-ai-badge">Auto-generated</span>
+                    </div>
+                    <div class="ci-ai-summary-body">@_selected.AiSummary</div>
+                </div>
+            }
+
+            <!-- Message thread -->
+            <div class="ci-thread">
+                @foreach (var msg in _selected.Thread.OrderBy(t => t.SentAt))
+                {
+                    var isOutbound = msg.Direction == "Outbound";
+                    <div class="ci-bubble-wrap @(isOutbound ? "ci-bubble-out" : "ci-bubble-in")">
+                        <div class="ci-bubble @(isOutbound ? "ci-bubble-outbound" : "ci-bubble-inbound") ci-bbl-@ChannelCss(msg.Channel)">
+                            <div class="ci-bubble-header">
+                                <span class="ci-bubble-sender">@msg.SenderName</span>
+                                <span class="ci-bubble-ch"><i class="bi @ChannelIcon(msg.Channel)" aria-hidden="true"></i>@msg.Channel</span>
+                                <span class="ci-bubble-time">@FormatTime(msg.SentAt)</span>
+                                @if (msg.IsAutomated)
+                                {
+                                    <span class="ci-auto-badge"><i class="bi bi-robot" aria-hidden="true"></i>Auto</span>
+                                }
+                            </div>
+                            <div class="ci-bubble-body">@msg.Body</div>
+                            @if (msg.Attachments.Any())
+                            {
+                                <div class="ci-bubble-attachments">
+                                    @foreach (var a in msg.Attachments)
+                                    {
+                                        <span class="ci-attach-chip-sm"><i class="bi bi-paperclip" aria-hidden="true"></i>@a</span>
+                                    }
+                                </div>
+                            }
+                            @if (msg.DeliveryStatus != "Delivered")
+                            {
+                                <div class="ci-bubble-status ci-ds-@msg.DeliveryStatus.ToLower()">
+                                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @msg.DeliveryStatus
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <!-- Reply box -->
+            <div class="ci-reply-box">
+                <div class="ci-reply-toolbar">
+                    <div class="ci-reply-ch-row">
+                        @foreach (var ch in _channels)
+                        {
+                            <button class="ci-ch-pill ci-ch-pill-sm @(_reply.Channel == ch ? "ci-ch-active" : "")"
+                                    @onclick="() => _reply.Channel = ch">
+                                <i class="bi @ChannelIcon(ch)" aria-hidden="true"></i>
+                                @if (ch != "Internal Note") { @ch } else { <span>Note</span> }
+                            </button>
+                        }
+                    </div>
+                    <div class="ci-reply-tools">
+                        <select class="e-input ci-tpl-sel" @bind="_reply.Template" @bind:after="ApplyTemplate">
+                            <option value="">Use template…</option>
+                            @foreach (var t in _templates) { <option>@t</option> }
+                        </select>
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Attach">
+                            <i class="bi bi-paperclip" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+
+                @if (_reply.Channel == "Email")
+                {
+                    <input class="e-input ci-reply-subject" @bind="_reply.Subject" placeholder="Subject…" />
+                }
+
+                <SfTextBox @bind-Value="_reply.Body"
+                           Multiline="true"
+                           Placeholder="@(_reply.Channel=="SMS" ? "Type a text message…" : _reply.Channel=="Internal Note" ? "Write an internal note (not visible to client)…" : _reply.Channel=="Portal Message" ? "Write a portal message…" : "Write your reply…")"
+                           HtmlAttributes='@(new() {{"rows","4"}, {"class","ci-reply-textarea"}})' />
+
+                <div class="ci-reply-footer">
+                    <div class="ci-reply-footer-left">
+                        @if (_reply.Channel == "SMS")
+                        {
+                            <span class="ci-char-count @(_reply.Body.Length > 160 ? "ci-char-warn" : "")">
+                                @_reply.Body.Length / 160 chars
+                            </span>
+                        }
+                        @if (_reply.Channel == "Internal Note")
+                        {
+                            <span class="ci-internal-note-hint">
+                                <i class="bi bi-eye-slash" aria-hidden="true"></i>
+                                Internal only — not sent to client
+                            </span>
+                        }
+                    </div>
+                    <div class="ci-reply-footer-right">
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="DiscardReply">Discard</button>
+                        <button class="um-btn um-btn-primary um-btn-sm" @onclick="SendReply"
+                                disabled="@(string.IsNullOrWhiteSpace(_reply.Body))">
+                            <i class="bi @(_reply.Channel=="Internal Note" ? "bi-sticky" : "bi-send")" aria-hidden="true"></i>
+                            @(_reply.Channel=="Internal Note" ? "Add Note" : "Send Reply")
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+
+</div>
+
+@code {
+    SfToast _toast = default!;
+
+    // ── State ─────────────────────────────────────────────────────
+    string _view           = "inbox";
+    string _search         = "";
+    string _channelFilter  = "";
+    string _statusFilter   = "";
+    string _priorityFilter = "";
+    bool   _sortNewest     = true;
+
+    bool   _showComposeDlg  = false;
+    bool   _showAssignDlg   = false;
+    bool   _showEscalateDlg = false;
+
+    string _assignTo      = "";
+    string _assignNote    = "";
+    string _escalateTo    = "";
+    string _escalateReason= "";
+    string _escalateNote  = "";
+
+    const string _currentUser = "Sarah Kim";
+
+    ConversationThread? _selected = null;
+
+    ComposeForm _compose = new();
+    ReplyForm   _reply   = new();
+
+    // ── Lookups ───────────────────────────────────────────────────
+    readonly string[] _channels     = { "Email", "SMS", "Internal Note", "Portal Message" };
+    readonly string[] _agents       = { "Sarah Kim", "James Park", "Kevin Obi", "Maria Santos", "Lisa Chen" };
+    readonly string[] _supervisors  = { "Diana Perez", "Robert Yamamoto" };
+    readonly string[] _accountNames = { "Sullivan Mfg. LLC", "Bridgewater Hotels", "Metro Freight Co.", "Apex Medical Group", "Dallas Roofing LLC", "Harbor View Marina", "Greenleaf Nurseries", "Sunrise Healthcare", "Pacific Coast Builders" };
+    readonly string[] _templates    = { "Policy Renewal Reminder", "Claim Acknowledgement", "Coverage Review Invitation", "Payment Due Reminder", "CAT Event Check-In", "Certificate Request Confirmation", "Auto Endorsement Confirmation", "Welcome — New Client" };
+
+    // ── Data ──────────────────────────────────────────────────────
+    List<ConversationThread> _messages = new();
+
+    // ── Models ────────────────────────────────────────────────────
+    sealed class ConversationThread
+    {
+        public Guid     Id              { get; set; }
+        public string   AccountName     { get; set; } = "";
+        public string   AccountId       { get; set; } = "";
+        public string   ContactName     { get; set; } = "";
+        public string   ContactEmail    { get; set; } = "";
+        public string   ContactPhone    { get; set; } = "";
+        public string   Channel         { get; set; } = "";
+        public string   Subject         { get; set; } = "";
+        public string   BodyPreview     { get; set; } = "";
+        public string   Status          { get; set; } = "";
+        public string   Priority        { get; set; } = "Normal";
+        public string   AssignedTo      { get; set; } = "";
+        public string   Producer        { get; set; } = "";
+        public string   Branch          { get; set; } = "";
+        public bool     IsRead          { get; set; }
+        public bool     IsEscalated     { get; set; }
+        public bool     OptedOut        { get; set; }
+        public int      MessageCount    { get; set; }
+        public DateTime LastActivityAt  { get; set; }
+        // ── Intelligence fields ──────────────────────────────
+        public string   Sentiment       { get; set; } = "Neutral"; // Positive | Neutral | Negative | Urgent
+        public string   CsrOwner        { get; set; } = "";
+        public string   AiSummary       { get; set; } = "";
+        public List<ThreadMessage> Thread { get; set; } = new();
+    }
+
+    sealed class ThreadMessage
+    {
+        public string   SenderName      { get; set; } = "";
+        public string   Channel         { get; set; } = "";
+        public string   Direction       { get; set; } = "Inbound"; // Inbound | Outbound
+        public string   Body            { get; set; } = "";
+        public DateTime SentAt          { get; set; }
+        public string   DeliveryStatus  { get; set; } = "Delivered";
+        public bool     IsAutomated     { get; set; }
+        public List<string> Attachments { get; set; } = new();
+    }
+
+    sealed class ComposeForm
+    {
+        public string Channel    { get; set; } = "Email";
+        public string Account    { get; set; } = "";
+        public string ToAddress  { get; set; } = "";
+        public string Subject    { get; set; } = "";
+        public string Template   { get; set; } = "";
+        public string Priority   { get; set; } = "Normal";
+        public string Body       { get; set; } = "";
+        public List<string> Attachments { get; set; } = new();
+    }
+
+    sealed class ReplyForm
+    {
+        public string Channel  { get; set; } = "Email";
+        public string Subject  { get; set; } = "";
+        public string Template { get; set; } = "";
+        public string Body     { get; set; } = "";
+    }
+
+    // ── Filtering ─────────────────────────────────────────────────
+    IEnumerable<ConversationThread> FilteredList => _messages
+        .Where(m =>
+            MatchView(m)
+         && (string.IsNullOrEmpty(_search) ||
+             m.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             m.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             m.BodyPreview.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             m.ContactName.Contains(_search, StringComparison.OrdinalIgnoreCase))
+         && (string.IsNullOrEmpty(_channelFilter)  || m.Channel   == _channelFilter)
+         && (string.IsNullOrEmpty(_statusFilter)   || m.Status    == _statusFilter)
+         && (string.IsNullOrEmpty(_priorityFilter) || m.Priority  == _priorityFilter));
+
+    bool MatchView(ConversationThread m) => _view switch
+    {
+        "unassigned"  => string.IsNullOrEmpty(m.AssignedTo),
+        "escalated"   => m.IsEscalated,
+        "mine"        => m.AssignedTo == _currentUser,
+        "drafts"      => m.Status == "Draft",
+        "sent"        => m.Thread.Any(t => t.Direction == "Outbound"),
+        "by-account"  => true,
+        "by-producer" => true,
+        "by-branch"   => true,
+        "ch-email"    => m.Channel == "Email",
+        "ch-sms"      => m.Channel == "SMS",
+        "ch-internal" => m.Channel == "Internal Note",
+        "ch-portal"   => m.Channel == "Portal Message",
+        _             => true   // inbox = all
+    };
+
+    string ListLabel => _view switch
+    {
+        "unassigned"  => "Unassigned",
+        "escalated"   => "Escalated",
+        "mine"        => "Assigned to Me",
+        "drafts"      => "Drafts",
+        "sent"        => "Sent",
+        "by-account"  => "By Account",
+        "by-producer" => "By Producer",
+        "by-branch"   => "By Branch",
+        "ch-email"    => "Email",
+        "ch-sms"      => "SMS",
+        "ch-internal" => "Internal Notes",
+        "ch-portal"   => "Portal Messages",
+        _             => "All Inbox"
+    };
+
+    // ── Lifecycle ─────────────────────────────────────────────────
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Communications","/communications/inbox"), new("Inbox",""));
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _messages.Clear();
+        _messages.AddRange(new[]
+        {
+            // threads below — decorated after AddRange
+            Thread("Sullivan Mfg. LLC",    "Robert Sullivan",  "rjsullivan@email.com", "(713) 555-0101",
+                "Email",    "RE: Policy Renewal — GL 2025",               "Thank you for sending that over. I had a quick question about the aggregate limit…",
+                "Open",     "High",   "Sarah Kim",   "Gulf Coast", "Maria Santos",  false, DateTime.Now.AddHours(-1.2),
+                new[]
+                {
+                    Msg("Robert Sullivan",     "Email", "Inbound",  "Thanks for the renewal proposal. Could you clarify the aggregate limit under the GL policy? We had a claim last year and want to make sure we're properly covered going forward.", DateTime.Now.AddDays(-2).AddHours(-3)),
+                    Msg("Sarah Kim",           "Email", "Outbound", "Hi Robert — great question. The current aggregate is $2M with a $5K deductible per occurrence. Given last year's claim, I'd actually recommend we look at bumping the aggregate to $3M. I'll send a revised quote by end of day.", DateTime.Now.AddDays(-2).AddHours(-1)),
+                    Msg("Robert Sullivan",     "Email", "Inbound",  "Thank you for sending that over. I had a quick question about the aggregate limit — is it possible to get a split limit structure? Our CFO is asking.", DateTime.Now.AddHours(-1.2)),
+                }),
+
+            Thread("Bridgewater Hotels",   "Patricia Howe",    "phowe@bwhotels.com",  "(212) 555-0188",
+                "SMS",     "Claim status for CLM-2025-00131",             "Hi, just checking in — any update on our claim? The adjuster hasn't called back.",
+                "Open",     "Urgent", "Maria Santos","Northeast",  "Diana Perez",   true,  DateTime.Now.AddMinutes(-25),
+                new[]
+                {
+                    Msg("AMS Auto-Bot",        "SMS",   "Outbound", "Hi Patricia, this is AMS Insurance. We received your claim CLM-2025-00131 and a handler will be in touch within 24 hours.", DateTime.Now.AddDays(-1).AddHours(-5), automated:true),
+                    Msg("Patricia Howe",       "SMS",   "Inbound",  "Hi, just checking in — any update on our claim? The adjuster hasn't called back and it's been 3 days.", DateTime.Now.AddMinutes(-25)),
+                }),
+
+            Thread("Dallas Roofing LLC",   "Marcus Webb",      "mwebb@dallasroofing.com","(214) 555-0242",
+                "Portal Message","Certificate of Insurance Request",       "We need a COI for our new project at 1400 Main St, Dallas — contractor requiring $1M GL.",
+                "Pending",  "Normal", "Kevin Obi",   "North Texas","James Park",    false, DateTime.Now.AddHours(-3.5),
+                new[]
+                {
+                    Msg("Marcus Webb",         "Portal Message","Inbound",  "We need a Certificate of Insurance for our new project site at 1400 Main Street, Dallas, TX 75201. The general contractor requires $1M GL coverage. Please send asap — project starts Monday.", DateTime.Now.AddHours(-3.5)),
+                    Msg("Kevin Obi",           "Portal Message","Outbound", "Hi Marcus — got it. I'll pull the COI from Travelers and email it to you within the hour. Please confirm the certificate holder name.", DateTime.Now.AddHours(-2.8)),
+                }),
+
+            Thread("Apex Medical Group",   "Sandra Kim",       "sandrakim@apexmed.com","(832) 555-0377",
+                "Email",    "Malpractice renewal — premium increase query","We received the renewal quote and the premium went up 28%. Can we discuss options?",
+                "Open",     "High",   "",            "Gulf Coast", "Maria Santos",  false, DateTime.Now.AddHours(-6),
+                new[]
+                {
+                    Msg("Sandra Kim",          "Email", "Inbound",  "We received the renewal quote for our Medical Malpractice policy and the premium has increased by 28%. This is significantly above what we budgeted. Can we schedule a call to discuss options — remarketing, higher deductible, coverage modifications?", DateTime.Now.AddHours(-6)),
+                }),
+
+            Thread("Metro Freight Co.",    "Dale Foster",      "dfoster@metrofreight.com","(469) 555-0519",
+                "SMS",     "Auto fleet — adding 3 trucks to policy",      "Hi team, we just purchased 3 new Kenworth T680s. Need to add them to the fleet policy.",
+                "Resolved", "Normal", "James Park",  "North Texas","Robert Yamamoto",false,DateTime.Now.AddDays(-1).AddHours(-2),
+                new[]
+                {
+                    Msg("Dale Foster",         "SMS",   "Inbound",  "Hi team, we just purchased 3 new Kenworth T680s — 2024 models. Need to get them added to the fleet policy asap so we can put them on the road.", DateTime.Now.AddDays(-2).AddHours(-4)),
+                    Msg("James Park",          "SMS",   "Outbound", "Got it Dale! Can you send me the VINs and garaging addresses? I'll get them added same day.", DateTime.Now.AddDays(-2).AddHours(-3)),
+                    Msg("Dale Foster",         "SMS",   "Inbound",  "Sending the VINs over email — all garaged in Irving, TX 75039.", DateTime.Now.AddDays(-2).AddHours(-2.5)),
+                    Msg("James Park",          "Email", "Outbound", "Hi Dale — fleet endorsement confirmed. All 3 trucks added effective today. Certificates attached.", DateTime.Now.AddDays(-1).AddHours(-2), attachments: new[]{"Fleet_Endorsement_Metro_2025.pdf","COI_MetroFreight_Fleet.pdf"}),
+                }),
+
+            Thread("Harbor View Marina",   "Tony Marcellis",   "tony@harborviewmarina.com","(361) 555-0633",
+                "Internal Note","CAT Claim — team note re inspection scheduling","Lisa: inspector confirmed for Thurs 9am. Insured is anxious — please call ahead.",
+                "Open",     "High",   "Lisa Chen",   "Gulf Coast", "Diana Perez",   false, DateTime.Now.AddHours(-0.5),
+                new[]
+                {
+                    Msg("Kevin Obi",           "Internal Note","Outbound","@Lisa — CAT field inspector Ramirez confirmed for Thursday 9am at the marina. Tony (insured) has been calling daily, very anxious. Please call him before the inspection to manage expectations. Estimated damage is $115K.", DateTime.Now.AddHours(-0.5)),
+                }),
+
+            Thread("Greenleaf Nurseries",  "Amy Torres",       "amy@greenleafnurs.com", "(512) 555-0744",
+                "Email",    "Coverage question — equipment breakdown",     "Hi, we had a large commercial refrigeration unit fail last week. Are we covered under our policy?",
+                "Open",     "Normal", "Lisa Chen",   "Central TX", "Maria Santos",  false, DateTime.Now.AddDays(-2).AddHours(-5),
+                new[]
+                {
+                    Msg("Amy Torres",          "Email", "Inbound",  "Hi Lisa, we had a large commercial refrigeration unit fail last Tuesday — caused significant inventory loss. I wanted to check if we have equipment breakdown coverage under our Commercial Property policy. Can you look into this?", DateTime.Now.AddDays(-2).AddHours(-5)),
+                    Msg("AMS Auto-Bot",        "Email", "Outbound", "Hi Amy, thank you for reaching out to AMS Insurance. We received your message and a specialist will review your coverage and respond within 1 business day.", DateTime.Now.AddDays(-2).AddHours(-5).AddMinutes(2), automated:true),
+                    Msg("Lisa Chen",           "Email", "Outbound", "Hi Amy — I pulled your policy and you do have Equipment Breakdown coverage with a $5K deductible. I'm filing a claim on your behalf now. Claim number will be assigned today.", DateTime.Now.AddDays(-1).AddHours(-4)),
+                }),
+
+            Thread("Pacific Coast Builders","Jorge Medina",    "jmedina@pcbuilders.com","(619) 555-0812",
+                "Portal Message","Workers Comp audit documents request",   "The WC audit is coming up — auditor is asking for payroll records by Jan 31.",
+                "Pending",  "Normal", "",            "Southwest",  "Robert Yamamoto",false,DateTime.Now.AddDays(-1).AddHours(-1),
+                new[]
+                {
+                    Msg("WC Audit System",     "Portal Message","Outbound","Dear Jorge, your Workers Compensation policy audit is scheduled for February 10, 2025. Please upload your 2024 payroll records, employee classification list, and subcontractor certificates of insurance by January 31. Visit the portal to upload.", DateTime.Now.AddDays(-3), automated:true),
+                    Msg("Jorge Medina",        "Portal Message","Inbound", "We received the audit notice. The auditor is asking for payroll records by Jan 31. Is there an extension available? Our HR is short-staffed this month.", DateTime.Now.AddDays(-1).AddHours(-1)),
+                }),
+
+            Thread("Sunrise Healthcare",   "Nadia Patel",      "nadia@sunrisehc.com",  "(713) 555-0921",
+                "SMS",     "Attorney rep — claim CLM-2025-00160",         "My attorney advised me not to discuss the claim directly. Please contact John Cruz at (832) 555-1111.",
+                "Escalated","Urgent", "Kevin Obi",   "Gulf Coast", "Diana Perez",   true,  DateTime.Now.AddMinutes(-40),
+                new[]
+                {
+                    Msg("Kevin Obi",           "SMS",   "Outbound", "Hi Nadia, this is Kevin from AMS Insurance following up on claim CLM-2025-00160. Can we schedule a brief call?", DateTime.Now.AddHours(-2)),
+                    Msg("Nadia Patel",         "SMS",   "Inbound",  "My attorney advised me not to discuss the claim directly. Please contact John Cruz at (832) 555-1111.", DateTime.Now.AddMinutes(-40)),
+                }),
+        });
+
+        // ── Intelligence decoration ───────────────────────────────
+        _messages[0].Sentiment = "Negative";  _messages[0].CsrOwner = "Sarah Kim";
+        _messages[0].AiSummary = "Client has questions about GL aggregate structure after a prior claim. CFO is requesting a split-limit option. Renewal proposal sent; awaiting revised quote approval.";
+
+        _messages[1].Sentiment = "Urgent";    _messages[1].CsrOwner = "Maria Santos";
+        _messages[1].AiSummary = "Insured frustrated — adjuster has not contacted her despite a 24-hour promise made 3 days ago. Auto-acknowledgement was sent but no live agent follow-up. High escalation risk.";
+
+        _messages[2].Sentiment = "Neutral";   _messages[2].CsrOwner = "Kevin Obi";
+        _messages[2].AiSummary = "COI request for 1400 Main St, Dallas — $1M GL required by general contractor. Agent responded and requested certificate holder details. Project starts Monday.";
+
+        _messages[3].Sentiment = "Negative";  _messages[3].CsrOwner = "Maria Santos";
+        _messages[3].AiSummary = "28% premium increase on medical malpractice renewal has alarmed client. Awaiting agent outreach to discuss options: remarketing, higher deductible, coverage adjustment. No reply sent yet — aging.";
+
+        _messages[4].Sentiment = "Positive";  _messages[4].CsrOwner = "James Park";
+        _messages[4].AiSummary = "Fleet endorsement completed successfully. Three 2024 Kenworth T680s added to Metro Freight Co. commercial auto policy. COI and endorsement delivered. Thread resolved.";
+
+        _messages[5].Sentiment = "Neutral";   _messages[5].CsrOwner = "Lisa Chen";
+        _messages[5].AiSummary = "Internal staff coordination. CAT inspector Ramirez confirmed for Thursday 9am at Harbor View Marina. Insured is anxious — advance call recommended before site visit.";
+
+        _messages[6].Sentiment = "Positive";  _messages[6].CsrOwner = "Lisa Chen";
+        _messages[6].AiSummary = "Equipment breakdown claim initiated for refrigeration unit failure with significant inventory loss. Client confirmed coverage with $5K deductible. Claim number pending.";
+
+        _messages[7].Sentiment = "Neutral";   _messages[7].CsrOwner = "Robert Yamamoto";
+        _messages[7].AiSummary = "WC annual audit notice sent. Client requesting extension due to HR staffing shortage. No agent response yet — unanswered inbound requires action before Jan 31 deadline.";
+
+        _messages[8].Sentiment = "Urgent";    _messages[8].CsrOwner = "Kevin Obi";
+        _messages[8].AiSummary = "Insured has retained legal counsel for CLM-2025-00160. All future communication must route through attorney John Cruz at (832) 555-1111. Legal hold in effect. Escalated to supervisor Diana Perez.";
+        _messages[8].OptedOut  = true;  // Direct contact opted out — route through attorney
+    }
+
+    static ConversationThread Thread(
+        string account, string contact, string email, string phone,
+        string channel, string subject, string preview,
+        string status, string priority, string assignedTo, string branch, string producer,
+        bool escalated, DateTime lastActivity, ThreadMessage[] messages) => new()
+    {
+        Id            = Guid.NewGuid(),
+        AccountName   = account,
+        ContactName   = contact,
+        ContactEmail  = email,
+        ContactPhone  = phone,
+        Channel       = channel,
+        Subject       = subject,
+        BodyPreview   = preview,
+        Status        = status,
+        Priority      = priority,
+        AssignedTo    = assignedTo,
+        Branch        = branch,
+        Producer      = producer,
+        IsEscalated   = escalated,
+        IsRead        = false,
+        MessageCount  = messages.Length,
+        LastActivityAt= lastActivity,
+        Thread        = messages.ToList()
+    };
+
+    static ThreadMessage Msg(
+        string sender, string channel, string direction, string body, DateTime sentAt,
+        bool automated = false, string[] attachments = null!, string deliveryStatus = "Delivered") => new()
+    {
+        SenderName    = sender,
+        Channel       = channel,
+        Direction     = direction,
+        Body          = body,
+        SentAt        = sentAt,
+        IsAutomated   = automated,
+        Attachments   = (attachments ?? Array.Empty<string>()).ToList(),
+        DeliveryStatus= deliveryStatus
+    };
+
+    // ── Interactions ──────────────────────────────────────────────
+    void SelectMessage(ConversationThread msg)
+    {
+        _selected    = msg;
+        msg.IsRead   = true;
+        _reply       = new ReplyForm { Channel = msg.Channel == "Internal Note" ? "Internal Note" : msg.Channel };
+    }
+
+    void OpenCompose() { _compose = new(); _showComposeDlg = true; }
+
+    async Task SendMessage()
+    {
+        if (string.IsNullOrWhiteSpace(_compose.Body)) return;
+        _messages.Insert(0, new ConversationThread
+        {
+            Id             = Guid.NewGuid(),
+            AccountName    = _compose.Account,
+            Channel        = _compose.Channel,
+            Subject        = string.IsNullOrEmpty(_compose.Subject) ? "(No subject)" : _compose.Subject,
+            BodyPreview    = _compose.Body[..Math.Min(100,_compose.Body.Length)],
+            Status         = "Open",
+            Priority       = _compose.Priority,
+            AssignedTo     = _currentUser,
+            IsRead         = true,
+            MessageCount   = 1,
+            LastActivityAt = DateTime.Now,
+            Thread         = new List<ThreadMessage> { Msg(_currentUser, _compose.Channel, "Outbound", _compose.Body, DateTime.Now) }
+        });
+        _showComposeDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title="Sent", Content=$"{_compose.Channel} sent to {_compose.Account}.", CssClass="e-toast-success" });
+    }
+
+    async Task SaveDraft()
+    {
+        _showComposeDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title="Draft Saved", Content="Message saved as draft.", CssClass="e-toast-info" });
+    }
+
+    async Task SendReply()
+    {
+        if (_selected is null || string.IsNullOrWhiteSpace(_reply.Body)) return;
+        _selected.Thread.Add(Msg(_currentUser, _reply.Channel, "Outbound", _reply.Body, DateTime.Now));
+        _selected.MessageCount++;
+        _selected.LastActivityAt = DateTime.Now;
+        _selected.Status = "Pending";
+        var body = _reply.Body;
+        _reply = new ReplyForm { Channel = _selected.Channel };
+        await _toast.ShowAsync(new ToastModel { Title="Reply Sent", Content=$"{_selected.Channel} reply sent.", CssClass="e-toast-success" });
+    }
+
+    void DiscardReply() { _reply = new ReplyForm { Channel = _selected?.Channel ?? "Email" }; }
+
+    async Task MarkRead()
+    {
+        if (_selected is null) return;
+        _selected.IsRead = true;
+        await _toast.ShowAsync(new ToastModel { Title="Marked Read", Content="Conversation marked as read.", CssClass="e-toast-info" });
+    }
+
+    async Task ResolveConversation()
+    {
+        if (_selected is null) return;
+        _selected.Status = "Resolved";
+        await _toast.ShowAsync(new ToastModel { Title="Resolved", Content=$"Conversation with {_selected.AccountName} resolved.", CssClass="e-toast-success" });
+    }
+
+    async Task ConfirmAssign()
+    {
+        if (_selected is null || string.IsNullOrEmpty(_assignTo)) return;
+        _selected.AssignedTo = _assignTo;
+        _selected.Thread.Add(Msg("System", "Internal Note", "Outbound", $"Assigned to {_assignTo}.{(string.IsNullOrEmpty(_assignNote) ? "" : " Note: " + _assignNote)}", DateTime.Now));
+        _selected.MessageCount++;
+        _showAssignDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title="Assigned", Content=$"Conversation assigned to {_assignTo}.", CssClass="e-toast-success" });
+    }
+
+    async Task ConfirmEscalate()
+    {
+        if (_selected is null || string.IsNullOrEmpty(_escalateTo)) return;
+        _selected.IsEscalated = true;
+        _selected.Priority    = "Urgent";
+        _selected.AssignedTo  = _escalateTo;
+        _selected.Thread.Add(Msg("System", "Internal Note", "Outbound", $"Escalated to {_escalateTo}. Reason: {_escalateReason}.{(string.IsNullOrEmpty(_escalateNote) ? "" : " " + _escalateNote)}", DateTime.Now));
+        _selected.MessageCount++;
+        _showEscalateDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title="Escalated", Content=$"Conversation escalated to {_escalateTo}.", CssClass="e-toast-warning" });
+    }
+
+    void ApplyTemplate()
+    {
+        if (string.IsNullOrEmpty(_reply.Template)) return;
+        _reply.Body = _reply.Template switch
+        {
+            "Policy Renewal Reminder"           => "Dear [Client Name],\n\nYour policy is approaching its renewal date. Please review the attached renewal proposal and contact us with any questions or changes. We're here to ensure your coverage continues without interruption.\n\nBest regards,\n[Agent Name] | AMS Insurance",
+            "Claim Acknowledgement"             => "Dear [Client Name],\n\nWe have received your claim and assigned it to our claims team. Your claim number is [Claim #]. A handler will be in touch within 1 business day.\n\nBest regards,\n[Agent Name] | AMS Insurance",
+            "Certificate Request Confirmation"  => "Dear [Client Name],\n\nYour Certificate of Insurance request has been received. We will process and deliver your COI within [X] business hours.\n\nPlease reply if you need to add additional insured information.\n\nBest regards,\n[Agent Name] | AMS Insurance",
+            "Payment Due Reminder"              => "Dear [Client Name],\n\nThis is a friendly reminder that your premium payment is due on [Due Date]. To avoid any lapse in coverage, please ensure payment is submitted by that date.\n\nBest regards,\n[Agent Name] | AMS Insurance",
+            "CAT Event Check-In"                => "Dear [Client Name],\n\nWe wanted to reach out following the recent weather event in your area. If your property has sustained any damage, please don't hesitate to contact us immediately to file a claim. Our CAT team is standing by.\n\nBest regards,\n[Agent Name] | AMS Insurance",
+            _                                   => _reply.Body
+        };
+    }
+
+    void Refresh() => BuildStub();
+    void ResetFilters() { _search=""; _channelFilter=""; _statusFilter=""; _priorityFilter=""; }
+
+    // ── Helpers ───────────────────────────────────────────────────
+    static string ChannelIcon(string ch) => ch switch
+    {
+        "Email"          => "bi-envelope",
+        "SMS"            => "bi-phone",
+        "Internal Note"  => "bi-sticky",
+        "Portal Message" => "bi-globe",
+        _                => "bi-chat-dots"
+    };
+
+    static string ChannelCss(string ch) => ch switch
+    {
+        "Email"          => "email",
+        "SMS"            => "sms",
+        "Internal Note"  => "note",
+        "Portal Message" => "portal",
+        _                => "gen"
+    };
+
+    static string StatusCss(string s) => s.ToLower().Replace(" ","-");
+
+    static string FormatTime(DateTime dt)
+    {
+        var diff = DateTime.Now - dt;
+        if (diff.TotalMinutes < 60)  return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalHours   < 24)  return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays    < 7)   return $"{(int)diff.TotalDays}d ago";
+        return dt.ToString("MM/dd/yyyy");
+    }
+
+    // ── Sentiment / aging / opt-out helpers ─────────────────────
+    static string SentimentIcon(string s) => s switch
+    {
+        "Positive" => "👍",
+        "Negative" => "👎",
+        "Urgent"   => "⚠️",
+        _          => "🟡"
+    };
+    static string SentimentCss(string s)  => s.ToLower();
+
+    static int GetUnansweredHours(ConversationThread t)
+    {
+        var lastIn = t.Thread.Where(m => m.Direction == "Inbound").MaxBy(m => m.SentAt);
+        if (lastIn is null) return 0;
+        var hasOutboundAfter = t.Thread.Any(m => m.Direction == "Outbound" && m.SentAt > lastIn.SentAt);
+        return hasOutboundAfter ? 0 : (int)(DateTime.Now - lastIn.SentAt).TotalHours;
+    }
+
+    // ── Render helpers ──────────────────────────────────
+    RenderFragment NavItem(string view, string icon, string label, int badge) => __builder =>
+    {
+        <button class="ci-nav-item @(_view == view ? "ci-nav-active" : "")" @onclick="() => { _view = view; _selected = null; }">
+            <i class="bi @icon" aria-hidden="true"></i>
+            <span>@label</span>
+            @if (badge > 0)
+            {
+                <span class="ci-nav-badge">@badge</span>
+            }
+        </button>
+    };
+
+    RenderFragment CiKpi(string icon, string label, string val, string color) => __builder =>
+    {
+        <div class="ci-kpi-card @color">
+            <i class="bi @icon ci-kpi-icon" aria-hidden="true"></i>
+            <div><div class="ci-kpi-val">@val</div><div class="ci-kpi-lbl">@label</div></div>
+        </div>
+    };
+}

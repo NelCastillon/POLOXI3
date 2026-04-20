@@ -1,0 +1,533 @@
+@page "/claims/follow-up"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Claim Follow-Up Queue — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── SNOOZE DIALOG ─────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showSnoozeDlg" Width="380px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-alarm" aria-hidden="true"></i> Snooze Follow-Up</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="fq-snooze-claim">
+                    @if (_snoozeTarget is not null)
+                    {
+                        <span class="fq-snooze-num">@_snoozeTarget.ClaimNumber</span>
+                        <span class="fq-snooze-acct">@_snoozeTarget.AccountName</span>
+                    }
+                </div>
+                <div class="pd-dlg-grid-1" style="margin-top:.75rem;">
+                    <div>
+                        <label class="cd-dlg-lbl">Snooze until</label>
+                        <SfDatePicker TValue="DateTime?" @bind-Value="_snoozeDate" Min="DateTime.Today.AddDays(1)" Placeholder="MM/DD/YYYY" />
+                    </div>
+                    <div>
+                        <label class="cd-dlg-lbl">Reason</label>
+                        <SfDropDownList TValue="string" TItem="string"
+                                        DataSource="@(new[]{"Waiting on insured","Waiting on carrier","Waiting on medical records","Waiting on legal","Pending investigation","Scheduled follow-up","Other"})"
+                                        @bind-Value="_snoozeReason" Placeholder="Select reason" />
+                    </div>
+                    <div>
+                        <label class="cd-dlg-lbl">Notes</label>
+                        <SfTextBox @bind-Value="_snoozeNote" Placeholder="Optional note…" Multiline="true" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showSnoozeDlg = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ConfirmSnooze">
+                    <i class="bi bi-alarm" aria-hidden="true"></i> Snooze
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── LOG ACTION DIALOG ─────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showActionDlg" Width="440px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-check2-square" aria-hidden="true"></i> Log Follow-Up Action</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                @if (_actionTarget is not null)
+                {
+                    <div class="fq-snooze-claim">
+                        <span class="fq-snooze-num">@_actionTarget.ClaimNumber</span>
+                        <span class="fq-snooze-acct">@_actionTarget.AccountName — @_actionTarget.FollowUpReason</span>
+                    </div>
+                }
+                <div class="pd-dlg-grid-1" style="margin-top:.75rem;">
+                    <div>
+                        <label class="cd-dlg-lbl">Action Taken *</label>
+                        <SfDropDownList TValue="string" TItem="string"
+                                        DataSource="@(new[]{"Called claimant","Called carrier adjuster","Emailed claimant","Emailed carrier","Requested medical records","Sent demand to carrier","Filed suit response","Updated reserves","Spoke with attorney","Sent status update to insured","Other"})"
+                                        @bind-Value="_actionTaken" Placeholder="Select action" />
+                    </div>
+                    <div>
+                        <label class="cd-dlg-lbl">Outcome</label>
+                        <SfDropDownList TValue="string" TItem="string"
+                                        DataSource="@(new[]{"Resolved — closing","Follow-up again","Waiting on response","Escalated","No contact — voicemail","Other"})"
+                                        @bind-Value="_actionOutcome" Placeholder="Select outcome" />
+                    </div>
+                    <div>
+                        <label class="cd-dlg-lbl">Notes</label>
+                        <SfTextBox @bind-Value="_actionNote" Placeholder="Action notes…" Multiline="true" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showActionDlg = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ConfirmAction">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save &amp; Close
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<AppPageHeader Title="Claim Follow-Up Queue"
+               Subtitle="Prioritised work queue of claims requiring handler action or carrier follow-up"
+               Icon="bi-list-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/claims/new")'>
+            <i class="bi bi-clipboard-plus" aria-hidden="true"></i> New FNOL
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI STRIP ─────────────────────────────────────────────────── -->
+<div class="fq-kpi-strip">
+    @FqKpi("bi-list-check",          "In Queue",         _queue.Count.ToString(),                                              "fq-ki-blue",   null)
+    @FqKpi("bi-exclamation-triangle","Overdue",          _queue.Count(q => q.IsOverdue).ToString(),                           "fq-ki-red",    "Overdue")
+    @FqKpi("bi-calendar-event",      "Due Today",        _queue.Count(q => q.DueDate.Date == DateTime.Today && !q.IsOverdue).ToString(), "fq-ki-amber", "Today")
+    @FqKpi("bi-calendar-week",       "Due This Week",    _queue.Count(q => q.DueDate.Date <= DateTime.Today.AddDays(7) && q.DueDate.Date > DateTime.Today).ToString(), "fq-ki-blue", "Week")
+    @FqKpi("bi-alarm",               "Snoozed",          _queue.Count(q => q.IsSnoozed).ToString(),                           "fq-ki-gray",   "Snoozed")
+    @FqKpi("bi-fire",                "Urgent",           _queue.Count(q => q.Priority == "Urgent").ToString(),                "fq-ki-red",    "Urgent")
+    @FqKpi("bi-person-check",        "Assigned to Me",   _queue.Count(q => q.AssignedHandler == _currentUser).ToString(),     "fq-ki-purple", "Mine")
+    @FqKpi("bi-currency-dollar",     "Total Incurred",   _queue.Sum(q => q.TotalIncurred).ToString("C0"),                    "fq-ki-gray",   null)
+</div>
+
+<!-- ── FILTER BAR ────────────────────────────────────────────────── -->
+<div class="fq-filter-bar">
+    <input class="e-input fq-search" @bind="_search" @bind:event="oninput"
+           placeholder="Search claim #, account, claimant, reason…" />
+
+    <div class="fq-pill-group">
+        <button class="cr-pill @(_dueFilter=="" ? "cr-pill-active" : "")" @onclick='()=>_dueFilter=""'>All</button>
+        <button class="cr-pill @(_dueFilter=="Overdue" ? "cr-pill-active" : "")" @onclick='()=>_dueFilter="Overdue"'>Overdue</button>
+        <button class="cr-pill @(_dueFilter=="Today" ? "cr-pill-active" : "")" @onclick='()=>_dueFilter="Today"'>Due Today</button>
+        <button class="cr-pill @(_dueFilter=="Week" ? "cr-pill-active" : "")" @onclick='()=>_dueFilter="Week"'>Due This Week</button>
+        <button class="cr-pill @(_dueFilter=="Urgent" ? "cr-pill-active" : "")" @onclick='()=>_dueFilter="Urgent"'>Urgent</button>
+        <button class="cr-pill @(_dueFilter=="Mine" ? "cr-pill-active" : "")" @onclick='()=>_dueFilter="Mine"'>My Queue</button>
+        <button class="cr-pill @(_dueFilter=="Snoozed" ? "cr-pill-active" : "")" @onclick='()=>_dueFilter="Snoozed"'>Snoozed</button>
+    </div>
+
+    <select class="e-input fq-sel" @bind="_handlerFilter">
+        <option value="">All Handlers</option>
+        @foreach (var h in _queue.Select(q => q.AssignedHandler).Distinct().OrderBy(x => x))
+        { <option>@h</option> }
+    </select>
+    <select class="e-input fq-sel" @bind="_reasonFilter">
+        <option value="">All Reasons</option>
+        @foreach (var r in _followUpReasons) { <option>@r</option> }
+    </select>
+    <select class="e-input fq-sel" @bind="_priorityFilter">
+        <option value="">All Priorities</option>
+        <option>Urgent</option><option>High</option><option>Medium</option><option>Low</option>
+    </select>
+
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+        <i class="bi bi-x" aria-hidden="true"></i> Reset
+    </button>
+    <span class="cr-filter-count">@FilteredQueue.Count() item(s)</span>
+</div>
+
+<!-- ── VIEW TOGGLE ───────────────────────────────────────────────── -->
+<div class="fq-view-toggle">
+    <button class="fq-view-btn @(_view=="grid"?"fq-view-active":"")" @onclick='()=>_view="grid"'>
+        <i class="bi bi-table" aria-hidden="true"></i> Grid
+    </button>
+    <button class="fq-view-btn @(_view=="cards"?"fq-view-active":"")" @onclick='()=>_view="cards"'>
+        <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> Cards
+    </button>
+    <button class="fq-view-btn @(_view=="handler"?"fq-view-active":"")" @onclick='()=>_view="handler"'>
+        <i class="bi bi-people" aria-hidden="true"></i> By Handler
+    </button>
+</div>
+
+<!-- ── GRID VIEW ─────────────────────────────────────────────────── -->
+@if (_view == "grid")
+{
+    <div class="fq-grid-wrap">
+        <SfGrid TValue="FollowUpItem" DataSource="@FilteredQueue.ToList()"
+                AllowSorting="true" AllowPaging="true" AllowResizing="true"
+                AllowFiltering="true" EnableHover="true" RowHeight="60">
+            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+            <GridPageSettings PageSize="20" />
+            <GridColumns>
+
+                <GridColumn Field="@nameof(FollowUpItem.Priority)" HeaderText="Pri." Width="90">
+                    <Template>
+                        @{ var q = (FollowUpItem)context; }
+                        <span class="cd-pri cd-pri-@q.Priority.ToLower()">@q.Priority</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(FollowUpItem.ClaimNumber)" HeaderText="Claim #" Width="155">
+                    <Template>
+                        @{ var q = (FollowUpItem)context; }
+                        <button class="cr-claim-link" @onclick="() => GoToClaim(q.ClaimId)">@q.ClaimNumber</button>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(FollowUpItem.AccountName)" HeaderText="Account" MinWidth="180">
+                    <Template>
+                        @{ var q = (FollowUpItem)context; }
+                        <div class="cr-acct-cell">
+                            <span class="fq-acct-name">@q.AccountName</span>
+                            <div class="cr-acct-meta">@q.Lob · @q.LossType</div>
+                        </div>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(FollowUpItem.FollowUpReason)" HeaderText="Follow-Up Reason" MinWidth="195">
+                    <Template>
+                        @{ var q = (FollowUpItem)context; }
+                        <span class="fq-reason fq-reason-@ReasonCss(q.FollowUpReason)">@q.FollowUpReason</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(FollowUpItem.DueDate)" HeaderText="Due Date" Width="120">
+                    <Template>
+                        @{ var q = (FollowUpItem)context; }
+                        <div class="fq-due-cell">
+                            <span class="pd-mono @DueCss(q)">@q.DueDate.ToString("MM/dd/yyyy")</span>
+                            @if (q.IsOverdue) { <span class="fq-overdue-badge">Overdue</span> }
+                            @if (q.DueDate.Date == DateTime.Today && !q.IsOverdue) { <span class="fq-today-badge">Today</span> }
+                        </div>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(FollowUpItem.DaysOpen)" HeaderText="Days Open" Width="105"
+                            TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>
+                        @{ var q = (FollowUpItem)context; }
+                        <span class="pd-mono @(q.DaysOpen > 180 ? "pd-viol-warn" : q.DaysOpen > 90 ? "cr-days-warn" : "")">@q.DaysOpen</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(FollowUpItem.ClaimStatus)" HeaderText="Status" Width="130">
+                    <Template>
+                        @{ var q = (FollowUpItem)context; }
+                        <span class="cr-status cr-st-@StatusCss(q.ClaimStatus)">@q.ClaimStatus</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(FollowUpItem.TotalIncurred)" HeaderText="Incurred" Width="125"
+                            TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>
+                        @{ var q = (FollowUpItem)context; }
+                        <span class="pd-mono @(q.TotalIncurred > 100_000 ? "pd-viol-warn" : "")">@q.TotalIncurred.ToString("C0")</span>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn Field="@nameof(FollowUpItem.AssignedHandler)" HeaderText="Handler" Width="140" />
+
+                <GridColumn HeaderText="Flags" Width="90" AllowSorting="false" AllowFiltering="false">
+                    <Template>
+                        @{ var q = (FollowUpItem)context; }
+                        <div class="cr-flags">
+                            @if (q.IsLitigation)  { <span class="cr-flag cr-flag-lit" title="Litigation"><i class="bi bi-gavel" aria-hidden="true"></i></span> }
+                            @if (q.IsCatastrophe) { <span class="cr-flag cr-flag-cat" title="CAT"><i class="bi bi-cloud-lightning" aria-hidden="true"></i></span> }
+                            @if (q.IsSnoozed)     { <span class="cr-flag fq-flag-snz" title="Snoozed"><i class="bi bi-alarm" aria-hidden="true"></i></span> }
+                        </div>
+                    </Template>
+                </GridColumn>
+
+                <GridColumn HeaderText="Actions" Width="195" AllowSorting="false" AllowFiltering="false">
+                    <Template>
+                        @{ var q = (FollowUpItem)context; }
+                        <div class="rdb-row-actions">
+                            <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => OpenLogAction(q)">
+                                <i class="bi bi-check2-square" aria-hidden="true"></i> Done
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenSnooze(q)" title="Snooze">
+                                <i class="bi bi-alarm" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => GoToClaim(q.ClaimId)" title="Open claim">
+                                <i class="bi bi-arrow-right-circle" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </Template>
+                </GridColumn>
+
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- ── CARDS VIEW ────────────────────────────────────────────────── -->
+@if (_view == "cards")
+{
+    <div class="fq-cards-wrap">
+        @foreach (var q in FilteredQueue.OrderByDescending(x => x.IsOverdue).ThenBy(x => x.DueDate))
+        {
+            <div class="fq-card fq-card-@(q.IsOverdue ? "overdue" : q.DueDate.Date == DateTime.Today ? "today" : "normal")">
+                <div class="fq-card-top">
+                    <button class="cr-claim-link" @onclick="() => GoToClaim(q.ClaimId)">@q.ClaimNumber</button>
+                    <span class="cd-pri cd-pri-@q.Priority.ToLower()">@q.Priority</span>
+                    @if (q.IsOverdue) { <span class="fq-overdue-badge">Overdue</span> }
+                    @if (q.IsSnoozed) { <span class="cr-flag fq-flag-snz"><i class="bi bi-alarm" aria-hidden="true"></i></span> }
+                </div>
+                <div class="fq-card-acct">@q.AccountName</div>
+                <div class="fq-card-meta">@q.Lob · @q.LossType</div>
+                <div class="fq-card-reason">
+                    <span class="fq-reason fq-reason-@ReasonCss(q.FollowUpReason)">@q.FollowUpReason</span>
+                </div>
+                <div class="fq-card-footer">
+                    <span class="fq-card-due @DueCss(q)">
+                        <i class="bi bi-calendar-event" aria-hidden="true"></i>
+                        @q.DueDate.ToString("MM/dd/yyyy")
+                    </span>
+                    <span class="fq-card-handler"><i class="bi bi-person" aria-hidden="true"></i>@q.AssignedHandler</span>
+                    <span class="fq-card-incurred pd-mono">@q.TotalIncurred.ToString("C0")</span>
+                </div>
+                <div class="fq-card-actions">
+                    <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => OpenLogAction(q)">
+                        <i class="bi bi-check2-square" aria-hidden="true"></i> Log Action
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenSnooze(q)">
+                        <i class="bi bi-alarm" aria-hidden="true"></i> Snooze
+                    </button>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+<!-- ── BY HANDLER VIEW ───────────────────────────────────────────── -->
+@if (_view == "handler")
+{
+    <div class="fq-handler-wrap">
+        @foreach (var handler in FilteredQueue.Select(q => q.AssignedHandler).Distinct().OrderBy(h => h))
+        {
+            var items     = FilteredQueue.Where(q => q.AssignedHandler == handler).ToList();
+            var overdue   = items.Count(q => q.IsOverdue);
+            var dueToday  = items.Count(q => q.DueDate.Date == DateTime.Today && !q.IsOverdue);
+            <div class="fq-handler-section">
+                <div class="fq-handler-hdr">
+                    <div class="fq-handler-avatar">@handler[0]</div>
+                    <div class="fq-handler-info">
+                        <div class="fq-handler-name">@handler</div>
+                        <div class="fq-handler-meta">
+                            <span class="fq-hm-chip fq-hm-total">@items.Count total</span>
+                            @if (overdue > 0) { <span class="fq-hm-chip fq-hm-overdue">@overdue overdue</span> }
+                            @if (dueToday > 0){ <span class="fq-hm-chip fq-hm-today">@dueToday due today</span> }
+                            <span class="fq-hm-chip">@items.Sum(q => q.TotalIncurred).ToString("C0") incurred</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="fq-handler-rows">
+                    @foreach (var q in items.OrderByDescending(x => x.IsOverdue).ThenBy(x => x.DueDate))
+                    {
+                        <div class="fq-handler-row fq-hr-@(q.IsOverdue ? "overdue" : q.DueDate.Date == DateTime.Today ? "today" : "normal")">
+                            <button class="cr-claim-link" @onclick="() => GoToClaim(q.ClaimId)">@q.ClaimNumber</button>
+                            <span class="fq-hr-acct">@q.AccountName</span>
+                            <span class="fq-reason fq-reason-@ReasonCss(q.FollowUpReason)">@q.FollowUpReason</span>
+                            <span class="pd-mono @DueCss(q)">@q.DueDate.ToString("MM/dd/yyyy")</span>
+                            <span class="cd-pri cd-pri-@q.Priority.ToLower()">@q.Priority</span>
+                            <div class="rdb-row-actions">
+                                <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => OpenLogAction(q)">
+                                    <i class="bi bi-check2-square" aria-hidden="true"></i>
+                                </button>
+                                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenSnooze(q)">
+                                    <i class="bi bi-alarm" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    SfToast _toast = default!;
+
+    string _view           = "grid";
+    string _search         = "";
+    string _dueFilter      = "";
+    string _handlerFilter  = "";
+    string _reasonFilter   = "";
+    string _priorityFilter = "";
+
+    bool   _showSnoozeDlg  = false;
+    bool   _showActionDlg  = false;
+    DateTime? _snoozeDate  = DateTime.Today.AddDays(3);
+    string _snoozeReason   = "";
+    string _snoozeNote     = "";
+    string _actionTaken    = "";
+    string _actionOutcome  = "";
+    string _actionNote     = "";
+
+    FollowUpItem? _snoozeTarget = null;
+    FollowUpItem? _actionTarget = null;
+
+    const string _currentUser = "Sarah Kim";
+
+    readonly string[] _followUpReasons = {
+        "Reserve Review Due","Medical Records Pending","Demand Letter Response","Attorney Contact",
+        "Carrier Status Check","Investigation Update","IME Scheduled","Settlement Negotiation",
+        "Coverage Decision Pending","Litigation Update","Subrogation Action","Payment Confirmation",
+        "Insured Update","CAT Field Inspection"
+    };
+
+    sealed class FollowUpItem
+    {
+        public Guid     ClaimId          { get; set; }
+        public string   ClaimNumber      { get; set; } = "";
+        public string   AccountName      { get; set; } = "";
+        public string   Lob              { get; set; } = "";
+        public string   LossType         { get; set; } = "";
+        public string   ClaimStatus      { get; set; } = "";
+        public string   FollowUpReason   { get; set; } = "";
+        public string   Priority         { get; set; } = "";
+        public DateTime DueDate          { get; set; }
+        public int      DaysOpen         { get; set; }
+        public decimal  TotalIncurred    { get; set; }
+        public string   AssignedHandler  { get; set; } = "";
+        public bool     IsOverdue        { get; set; }
+        public bool     IsSnoozed        { get; set; }
+        public bool     IsLitigation     { get; set; }
+        public bool     IsCatastrophe    { get; set; }
+    }
+
+    readonly List<FollowUpItem> _queue = new();
+
+    IEnumerable<FollowUpItem> FilteredQueue => _queue.Where(q =>
+        (string.IsNullOrEmpty(_search) ||
+         q.ClaimNumber.Contains(_search,StringComparison.OrdinalIgnoreCase) ||
+         q.AccountName.Contains(_search,StringComparison.OrdinalIgnoreCase) ||
+         q.FollowUpReason.Contains(_search,StringComparison.OrdinalIgnoreCase))
+     && (_dueFilter == "" || _dueFilter switch {
+            "Overdue" => q.IsOverdue,
+            "Today"   => q.DueDate.Date == DateTime.Today && !q.IsOverdue,
+            "Week"    => q.DueDate.Date <= DateTime.Today.AddDays(7) && q.DueDate.Date > DateTime.Today,
+            "Urgent"  => q.Priority == "Urgent",
+            "Mine"    => q.AssignedHandler == _currentUser,
+            "Snoozed" => q.IsSnoozed,
+            _         => true
+        })
+     && (string.IsNullOrEmpty(_handlerFilter)  || q.AssignedHandler  == _handlerFilter)
+     && (string.IsNullOrEmpty(_reasonFilter)   || q.FollowUpReason   == _reasonFilter)
+     && (string.IsNullOrEmpty(_priorityFilter) || q.Priority         == _priorityFilter));
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Claims","/claims"), new("Follow-Up Queue",""));
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _queue.Clear();
+        _queue.AddRange(new[]
+        {
+            MakeItem("CLM-2025-00142","Sullivan Mfg. LLC",      "General Liability", "Bodily Injury",          "Open",         "Reserve Review Due",          "High",   DateTime.Today.AddDays(-3),  42, 85_500m,  "Sarah Kim",   true,  false, true, false),
+            MakeItem("CLM-2025-00131","Bridgewater Hotels",     "General Liability", "Slip & Fall",            "In Litigation","Litigation Update",            "Urgent", DateTime.Today.AddDays(-1),  215,475_000m, "Maria Santos",false, false, true, false),
+            MakeItem("CLM-2025-00127","Dallas Roofing LLC",     "Workers Comp",      "Workers Comp Injury",    "Open",         "Medical Records Pending",      "High",   DateTime.Today,              88, 34_200m,  "Kevin Obi",   false, false, false,false),
+            MakeItem("CLM-2025-00118","Apex Medical Group",     "Professional Liab.","Professional Error",     "Open",         "Demand Letter Response",       "Urgent", DateTime.Today.AddDays(-5),  62, 180_000m, "Maria Santos",false, false, true, false),
+            MakeItem("CLM-2025-00109","Coastal Seafood Dist.",  "General Liability", "Property Damage",        "Reopened",     "Carrier Status Check",         "Medium", DateTime.Today.AddDays(2),   145,28_800m,  "Kevin Obi",   false, false, false,false),
+            MakeItem("CLM-2025-00101","Sun Valley Resort",      "Umbrella",          "Bodily Injury",          "Subrogation",  "Subrogation Action",           "Medium", DateTime.Today.AddDays(5),   180,310_000m, "James Park",  false, true,  false,false),
+            MakeItem("CLM-2025-00138","Metro Freight Co.",      "Commercial Auto",   "Auto Collision",         "Open",         "IME Scheduled",                "Medium", DateTime.Today.AddDays(1),   18, 12_400m,  "James Park",  false, false, false,false),
+            MakeItem("CLM-2025-00144","Laredo Steel Works",     "General Liability", "Product Liability",      "Open",         "Investigation Update",         "Low",    DateTime.Today.AddDays(10),  5,  8_000m,   "Maria Santos",false, false, false,false),
+            MakeItem("CLM-2025-00133","Bridgewater Hotels",     "General Liability", "Water/Flood",            "Open",         "CAT Field Inspection",         "High",   DateTime.Today.AddDays(-2),  28, 42_000m,  "Sarah Kim",   false, false, false,true),
+            MakeItem("CLM-2025-00155","Pacific Coast Builders", "Commercial Auto",   "Auto Collision",         "Open",         "Coverage Decision Pending",    "High",   DateTime.Today.AddDays(-4),  14, 27_500m,  "Sarah Kim",   false, false, false,false),
+            MakeItem("CLM-2025-00160","Sunrise Healthcare",     "Professional Liab.","Professional Error",     "Open",         "Attorney Contact",             "Urgent", DateTime.Today.AddDays(-7),  9,  95_000m,  "Kevin Obi",   false, false, true, false),
+            MakeItem("CLM-2025-00148","Rio Grande Transport",   "Commercial Auto",   "Auto Collision",         "Open",         "Payment Confirmation",         "Low",    DateTime.Today.AddDays(4),   35, 8_200m,   "James Park",  false, false, false,false),
+            MakeItem("CLM-2024-00991","Greenleaf Nurseries",    "Commercial Property","Fire",                  "Open",         "Insured Update",               "Medium", DateTime.Today.AddDays(3),   55, 62_000m,  "Lisa Chen",   false, false, false,false),
+            MakeItem("CLM-2025-00172","Harbor View Marina",     "Commercial Property","Wind/Hail",             "Open",         "CAT Field Inspection",         "High",   DateTime.Today.AddDays(-1),  12, 115_000m, "Lisa Chen",   false, false, false,true),
+        });
+    }
+
+    static FollowUpItem MakeItem(string claimNum, string acct, string lob, string lossType, string status,
+        string reason, string priority, DateTime due, int daysOpen, decimal incurred, string handler,
+        bool lit, bool sub, bool isLit, bool isCat) => new()
+    {
+        ClaimId=Guid.NewGuid(), ClaimNumber=claimNum, AccountName=acct, Lob=lob, LossType=lossType,
+        ClaimStatus=status, FollowUpReason=reason, Priority=priority, DueDate=due, DaysOpen=daysOpen,
+        TotalIncurred=incurred, AssignedHandler=handler, IsOverdue=due < DateTime.Today,
+        IsSnoozed=false, IsLitigation=isLit, IsCatastrophe=isCat
+    };
+
+    void OpenSnooze(FollowUpItem q)   { _snoozeTarget=q; _snoozeDate=DateTime.Today.AddDays(3); _snoozeReason=""; _snoozeNote=""; _showSnoozeDlg=true; }
+    void OpenLogAction(FollowUpItem q){ _actionTarget=q; _actionTaken=""; _actionOutcome=""; _actionNote=""; _showActionDlg=true; }
+    void ResetFilters() { _search=""; _dueFilter=""; _handlerFilter=""; _reasonFilter=""; _priorityFilter=""; }
+    void Refresh() => BuildStub();
+
+    async Task ConfirmSnooze()
+    {
+        if (_snoozeTarget is null) return;
+        _snoozeTarget.IsSnoozed = true;
+        _snoozeTarget.DueDate   = _snoozeDate ?? DateTime.Today.AddDays(3);
+        _snoozeTarget.IsOverdue = false;
+        _showSnoozeDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title="Snoozed", Content=$"{_snoozeTarget.ClaimNumber} snoozed until {_snoozeTarget.DueDate:MM/dd/yyyy}.", CssClass="e-toast-info" });
+    }
+
+    async Task ConfirmAction()
+    {
+        if (_actionTarget is null || string.IsNullOrEmpty(_actionTaken)) return;
+        _queue.Remove(_actionTarget);
+        _showActionDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title="Action Logged", Content=$"{_actionTarget.ClaimNumber} — follow-up closed.", CssClass="e-toast-success" });
+    }
+
+    async Task ExportAsync() =>
+        await _toast.ShowAsync(new ToastModel { Title="Exported", Content="Follow-up queue exported.", CssClass="e-toast-success" });
+
+    void GoToClaim(Guid id)              => Nav.NavigateTo($"/claims/{id}");
+    void ToggleDueFilter(string? filter) => _dueFilter = filter is null ? "" : (_dueFilter == filter ? "" : filter);
+
+    RenderFragment FqKpi(string icon, string label, string val, string color, string? filter) => __builder =>
+    {
+        <div class="fq-kpi-card @color @(filter is not null ? "cr-kpi-clickable" : "")"
+             @onclick="() => ToggleDueFilter(filter)">
+            <i class="bi @icon fq-kpi-icon" aria-hidden="true"></i>
+            <div><div class="fq-kpi-val">@val</div><div class="fq-kpi-lbl">@label</div></div>
+        </div>
+    };
+
+    static string StatusCss(string s)  => s.ToLower().Replace(" ","-").Replace("/","-");
+    static string DueCss(FollowUpItem q) =>
+        q.IsOverdue ? "pd-viol-warn" :
+        q.DueDate.Date == DateTime.Today ? "cr-days-warn" : "";
+
+    static string ReasonCss(string r) => r switch
+    {
+        "Litigation Update"        or "Settlement Negotiation" or "Attorney Contact" => "lit",
+        "Reserve Review Due"       or "Coverage Decision Pending"                    => "cov",
+        "Medical Records Pending"  or "IME Scheduled"                                => "med",
+        "Carrier Status Check"     or "Payment Confirmation"                         => "car",
+        "CAT Field Inspection"     or "Investigation Update"                         => "cat",
+        "Subrogation Action"                                                          => "sub",
+        _                                                                             => "gen",
+    };
+}

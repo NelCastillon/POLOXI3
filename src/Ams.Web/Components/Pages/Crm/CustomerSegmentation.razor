@@ -1,0 +1,400 @@
+@page "/crm/segments"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Customer Segmentation</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Customer Segmentation"
+               Subtitle="Define and manage account segments, scoring rules, and audience lists"
+               Icon="bi-pie-chart-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "sg-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showAdd = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Segment
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="sg-kpi-strip">
+    <div class="sg-kpi-card">
+        <span class="sg-ki sg-ki1"><i class="bi bi-pie-chart" aria-hidden="true"></i></span>
+        <div><div class="sg-kv">@_segments.Count</div><div class="sg-kl">Total Segments</div></div>
+    </div>
+    <div class="sg-kpi-card">
+        <span class="sg-ki sg-ki2"><i class="bi bi-building" aria-hidden="true"></i></span>
+        <div><div class="sg-kv">@_segments.Sum(s => s.AccountCount)</div><div class="sg-kl">Total Accounts Classified</div></div>
+    </div>
+    <div class="sg-kpi-card">
+        <span class="sg-ki sg-ki3"><i class="bi bi-currency-dollar" aria-hidden="true"></i></span>
+        <div><div class="sg-kv">@_segments.Sum(s => s.TotalPremium).ToString("C0")</div><div class="sg-kl">Total Segmented Premium</div></div>
+    </div>
+    <div class="sg-kpi-card">
+        <span class="sg-ki sg-ki4"><i class="bi bi-lightning" aria-hidden="true"></i></span>
+        <div><div class="sg-kv">@_segments.Count(s => s.IsAutomated)</div><div class="sg-kl">Auto-Scoring Rules Active</div></div>
+    </div>
+</div>
+
+<!-- Main layout: segment list + detail panel -->
+<div class="sg-layout">
+    <!-- Left: segment list -->
+    <div class="sg-list-col">
+        <div class="sg-list-hdr">
+            <input class="sg-search" type="search" placeholder="Search segments…"
+                   value="@_search"
+                   @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => _search = e.Value?.ToString() ?? string.Empty)" />
+        </div>
+        <div class="sg-list">
+            @foreach (var seg in _segments.Where(s => string.IsNullOrEmpty(_search) || s.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)))
+            {
+                <button class="sg-seg-row @(_selected?.SegmentId == seg.SegmentId ? "sg-seg-row--active" : "")" @onclick="() => SelectSegment(seg)">
+                    <div class="sg-seg-color" style="background:@seg.Color"></div>
+                    <div class="sg-seg-info">
+                        <div class="sg-seg-name">@seg.Name</div>
+                        <div class="sg-seg-meta">@seg.AccountCount accounts · @seg.TotalPremium.ToString("C0")</div>
+                    </div>
+                    <div class="sg-seg-right">
+                        <span class="@SegTypeBadge(seg.SegmentType)">@seg.SegmentType</span>
+                        @if (seg.IsAutomated) { <span class="sg-auto-chip" title="Auto-scoring"><i class="bi bi-lightning" aria-hidden="true"></i></span> }
+                    </div>
+                </button>
+            }
+        </div>
+    </div>
+
+    <!-- Right: detail / empty state -->
+    <div class="sg-detail-col">
+        @if (_selected is null)
+        {
+            <div class="sg-no-sel">
+                <i class="bi bi-pie-chart sg-no-sel-icon" aria-hidden="true"></i>
+                <div class="sg-no-sel-title">Select a segment</div>
+                <div class="sg-no-sel-sub">Choose a segment from the list to view its accounts, rules, and performance metrics.</div>
+            </div>
+        }
+        else
+        {
+            <!-- Segment header -->
+            <div class="sg-det-header">
+                <div class="sg-det-color" style="background:@_selected.Color"></div>
+                <div class="sg-det-id">
+                    <div class="sg-det-name">@_selected.Name</div>
+                    <div class="sg-det-desc">@_selected.Description</div>
+                    <div class="sg-det-chips">
+                        <span class="@SegTypeBadge(_selected.SegmentType)">@_selected.SegmentType</span>
+                        @if (_selected.IsAutomated) { <span class="sg-auto-chip"><i class="bi bi-lightning" aria-hidden="true"></i> Auto-scored</span> }
+                    </div>
+                </div>
+                <div class="sg-det-actions">
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => StartEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                    <button class="um-btn um-btn-ghost um-btn-sm"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                </div>
+            </div>
+
+            <!-- Segment metrics -->
+            <div class="sg-det-metrics">
+                <div class="sg-met">
+                    <div class="sg-met-val">@_selected.AccountCount</div><div class="sg-met-lbl">Accounts</div>
+                </div>
+                <div class="sg-met">
+                    <div class="sg-met-val">@_selected.TotalPremium.ToString("C0")</div><div class="sg-met-lbl">Total Premium</div>
+                </div>
+                <div class="sg-met">
+                    <div class="sg-met-val">@_selected.AvgPremium.ToString("C0")</div><div class="sg-met-lbl">Avg Premium</div>
+                </div>
+                <div class="sg-met">
+                    <div class="sg-met-val">@_selected.RetentionRate.ToString("P0")</div><div class="sg-met-lbl">Retention Rate</div>
+                </div>
+                <div class="sg-met">
+                    <div class="sg-met-val">@_selected.LossRatio.ToString("P0")</div><div class="sg-met-lbl">Loss Ratio</div>
+                </div>
+                <div class="sg-met">
+                    <div class="sg-met-val">@_selected.AvgRelationshipYears.ToString("F1")</div><div class="sg-met-lbl">Avg Rel. Years</div>
+                </div>
+            </div>
+
+            <!-- Scoring criteria (if automated) -->
+            @if (_selected.IsAutomated && _selected.Rules.Count > 0)
+            {
+                <div class="sg-rules-hdr">
+                    <i class="bi bi-sliders" aria-hidden="true"></i> Scoring Rules
+                    <button class="um-btn um-btn-ghost um-btn-sm" style="margin-left:auto" @onclick="() => _showEditRules = true"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Rules</button>
+                </div>
+                <div class="sg-rules-list">
+                    @foreach (var r in _selected.Rules)
+                    {
+                        <div class="sg-rule-row">
+                            <span class="sg-rule-field">@r.Field</span>
+                            <span class="sg-rule-op">@r.Operator</span>
+                            <span class="sg-rule-val">@r.Value</span>
+                            <span class="sg-rule-pts">+@r.Points pts</span>
+                        </div>
+                    }
+                </div>
+            }
+
+            <!-- Account list in segment -->
+            <div class="sg-accts-hdr">
+                <i class="bi bi-building" aria-hidden="true"></i> Accounts in Segment
+                <span class="sg-acct-count">@_selectedAccounts.Count</span>
+            </div>
+            <div class="app-datagrid sg-acct-grid">
+                <SfGrid TValue="SegmentAccount" DataSource="_selectedAccounts"
+                        AllowPaging="true" AllowSorting="true"
+                        EnableHover="true" RowHeight="52">
+                    <GridPageSettings PageSize="10" />
+                    <GridColumns>
+                        <GridColumn HeaderText="Account" MinWidth="200" Field="@nameof(SegmentAccount.AccountName)">
+                            <Template>
+                                @{ var a = (SegmentAccount)context; }
+                                <div class="sg-acct-cell">
+                                    <div class="sg-acct-av @AvatarColor(a.AccountName)">@Initials(a.AccountName)</div>
+                                    <div>
+                                        <button class="sg-nav-btn" @onclick='() => Nav.NavigateTo($"/accounts/{a.AccountId}")'> @a.AccountName</button>
+                                        <div class="sg-acct-type">@a.AccountType</div>
+                                    </div>
+                                </div>
+                            </Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(SegmentAccount.Score)"        HeaderText="Score"    Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                            <Template>@{ var a = (SegmentAccount)context; }<span class="@ScoreBadge(a.Score)">@a.Score</span></Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(SegmentAccount.TotalPremium)" HeaderText="Premium"  Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                            <Template>@{ var a = (SegmentAccount)context; }<span class="sg-mono">@a.TotalPremium.ToString("C0")</span></Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(SegmentAccount.Owner)"        HeaderText="Owner"    Width="140" />
+                        <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                            <Template>
+                                @{ var a = (SegmentAccount)context; }
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/accounts/{a.AccountId}")' title="View"><i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+                            </Template>
+                        </GridColumn>
+                    </GridColumns>
+                </SfGrid>
+            </div>
+        }
+    </div>
+</div>
+
+<!-- ── Add / Edit Segment Dialog ──────────────────────────────────── -->
+<SfDialog @bind-Visible="_showAdd" Width="580px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="sg-dlg-hdr"><i class="bi bi-pie-chart" aria-hidden="true"></i> @(_editSeg is null ? "New Segment" : "Edit Segment")</span></Header>
+        <Content>
+            <div class="sg-dlg-body">
+                <div class="sg-dlg-section">Segment Identity</div>
+                <div class="sg-dlg-grid">
+                    <div style="grid-column:span 2"><SfTextBox Placeholder="Segment name *" @bind-Value="_form.Name" /></div>
+                    <div style="grid-column:span 2"><SfTextBox Placeholder="Description"    @bind-Value="_form.Description" Multiline="true" HtmlAttributes="@(new Dictionary<string,object>{{"rows","2"}})" /></div>
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_segTypeOpts" Placeholder="Segment type *" Width="100%" @bind-Value="_form.SegmentType"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
+                    <SfColorPicker @bind-Value="_form.Color" />
+                </div>
+                <div class="sg-dlg-section" style="margin-top:.9rem">Options</div>
+                <div class="sg-dlg-check-row">
+                    <label class="sg-toggle"><input type="checkbox" @bind="_form.IsAutomated" /> Enable auto-scoring rules</label>
+                    <label class="sg-toggle"><input type="checkbox" @bind="_form.IsVisible"   /> Visible in dashboards &amp; reports</label>
+                    <label class="sg-toggle"><input type="checkbox" @bind="_form.IsCampaignAudience" /> Available as campaign audience</label>
+                </div>
+                @if (!string.IsNullOrEmpty(_formError))
+                {
+                    <div class="sg-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="sg-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseDialog">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="CommitSegmentAsync"
+                        disabled="@(string.IsNullOrEmpty(_form.Name) || string.IsNullOrEmpty(_form.SegmentType))">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> @(_editSeg is null ? "Create Segment" : "Save")
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private SfToast? _toast;
+    private bool     _loading = true;
+    private string   _search  = string.Empty;
+
+    private List<SegmentModel>  _segments         = [];
+    private SegmentModel?       _selected;
+    private List<SegmentAccount> _selectedAccounts = [];
+
+    private bool          _showAdd       = false;
+    private bool          _showEditRules = false;
+    private SegmentModel? _editSeg;
+    private SegmentForm   _form          = new();
+    private string?       _formError;
+
+    private static readonly List<LV> _segTypeOpts = [
+        new("Tier","Tier"), new("Industry","Industry"), new("Size","Size"),
+        new("Risk","Risk"), new("Lifecycle","Lifecycle"), new("Geographic","Geographic"), new("Custom","Custom"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("CRM","/crm/opportunities"), new("Segments","/crm/segments"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; StateHasChanged();
+        await Task.Delay(0);
+        _segments = BuildStubSegments();
+        _loading = false;
+    }
+
+    private void SelectSegment(SegmentModel seg)
+    {
+        _selected         = seg;
+        _selectedAccounts = BuildStubAccounts(seg);
+    }
+
+    private void StartEdit(SegmentModel seg)
+    {
+        _editSeg = seg;
+        _form = new SegmentForm { Name=seg.Name, Description=seg.Description, SegmentType=seg.SegmentType, Color=seg.Color, IsAutomated=seg.IsAutomated, IsVisible=seg.IsVisible, IsCampaignAudience=seg.IsCampaignAudience };
+        _formError = null; _showAdd = true;
+    }
+
+    private void CloseDialog() { _showAdd = false; _editSeg = null; _form = new(); _formError = null; }
+
+    private async Task CommitSegmentAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_form.Name)) { _formError = "Name is required."; return; }
+
+        if (_editSeg is null)
+        {
+            var seg = new SegmentModel
+            {
+                SegmentId=Guid.NewGuid(), Name=_form.Name, Description=_form.Description,
+                SegmentType=_form.SegmentType, Color=_form.Color, IsAutomated=_form.IsAutomated,
+                IsVisible=_form.IsVisible, IsCampaignAudience=_form.IsCampaignAudience,
+            };
+            _segments.Add(seg); SelectSegment(seg);
+        }
+        else
+        {
+            _editSeg.Name=_form.Name; _editSeg.Description=_form.Description;
+            _editSeg.SegmentType=_form.SegmentType; _editSeg.Color=_form.Color;
+            _editSeg.IsAutomated=_form.IsAutomated; _editSeg.IsVisible=_form.IsVisible;
+            _editSeg.IsCampaignAudience=_form.IsCampaignAudience;
+        }
+        CloseDialog();
+        await ShowToast(_editSeg is null ? "Segment created." : "Segment saved.");
+    }
+
+    private async Task ShowToast(string msg)
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "e-toast-success" });
+    }
+
+    // ── Style helpers ─────────────────────────────────────────────────────────
+    private static string SegTypeBadge(string t) => t switch
+    {
+        "Tier"       => "sg-type sg-type--tier",
+        "Industry"   => "sg-type sg-type--ind",
+        "Size"       => "sg-type sg-type--size",
+        "Risk"       => "sg-type sg-type--risk",
+        "Lifecycle"  => "sg-type sg-type--life",
+        _            => "sg-type",
+    };
+    private static string ScoreBadge(int score) =>
+        score >= 80 ? "sg-score sg-score--hi" : score >= 50 ? "sg-score sg-score--mid" : "sg-score sg-score--lo";
+    private static string AvatarColor(string name)
+    {
+        var c = new[] {"sg-av1","sg-av2","sg-av3","sg-av4","sg-av5","sg-av6"};
+        return c[Math.Abs(name.GetHashCode()) % c.Length];
+    }
+    private static string Initials(string name)
+    {
+        var p = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return p.Length >= 2 ? $"{p[0][0]}{p[^1][0]}" : name.Length > 0 ? name[..1] : "?";
+    }
+
+    // ── Stub data ─────────────────────────────────────────────────────────────
+    private static List<SegmentModel> BuildStubSegments() =>
+    [
+        new() { SegmentId=Guid.NewGuid(), Name="Platinum Tier",      Description="Top 10% of accounts by premium and relationship value",    SegmentType="Tier",      Color="#1d4ed8", AccountCount=24,  TotalPremium=4_200_000, AvgPremium=175000, RetentionRate=.96m, LossRatio=.42m, AvgRelationshipYears=12.4m, IsAutomated=true,  IsVisible=true, IsCampaignAudience=true,
+            Rules=[new("Total Premium",">=","$150,000",30), new("Relationship Years",">=","7",20), new("Claims Count","<=","1",15)] },
+        new() { SegmentId=Guid.NewGuid(), Name="Gold Tier",           Description="Mid-market accounts with strong retention history",        SegmentType="Tier",      Color="#d97706", AccountCount=68,  TotalPremium=5_800_000, AvgPremium=85000,  RetentionRate=.91m, LossRatio=.56m, AvgRelationshipYears=8.2m,  IsAutomated=true,  IsVisible=true, IsCampaignAudience=true,
+            Rules=[new("Total Premium",">=","$50,000",20), new("Retention",">=","3 yrs",15)] },
+        new() { SegmentId=Guid.NewGuid(), Name="Silver Tier",         Description="Growing accounts with potential for cross-sell",           SegmentType="Tier",      Color="#6b7280", AccountCount=142, TotalPremium=4_100_000, AvgPremium=28900,  RetentionRate=.84m, LossRatio=.68m, AvgRelationshipYears=4.1m,  IsAutomated=true,  IsVisible=true, IsCampaignAudience=true, Rules=[] },
+        new() { SegmentId=Guid.NewGuid(), Name="Manufacturing",       Description="All manufacturing SIC code accounts",                     SegmentType="Industry",  Color="#16a34a", AccountCount=55,  TotalPremium=3_200_000, AvgPremium=58000,  RetentionRate=.89m, LossRatio=.61m, AvgRelationshipYears=6.8m,  IsAutomated=false, IsVisible=true, IsCampaignAudience=true, Rules=[] },
+        new() { SegmentId=Guid.NewGuid(), Name="Healthcare",          Description="Medical, dental, and healthcare services",                 SegmentType="Industry",  Color="#0891b2", AccountCount=38,  TotalPremium=2_450_000, AvgPremium=64500,  RetentionRate=.93m, LossRatio=.49m, AvgRelationshipYears=7.2m,  IsAutomated=false, IsVisible=true, IsCampaignAudience=false,Rules=[] },
+        new() { SegmentId=Guid.NewGuid(), Name="High-Risk Renewal",   Description="Accounts with >75% loss ratio due for renewal in 90 days",SegmentType="Risk",      Color="#dc2626", AccountCount=19,  TotalPremium=1_100_000, AvgPremium=57900,  RetentionRate=.72m, LossRatio=.88m, AvgRelationshipYears=3.4m,  IsAutomated=true,  IsVisible=true, IsCampaignAudience=false,
+            Rules=[new("Loss Ratio",">=","75%",40), new("Renewal Days","<=","90",30)] },
+        new() { SegmentId=Guid.NewGuid(), Name="Personal Lines HH",   Description="Household accounts — personal auto, home, life",          SegmentType="Lifecycle", Color="#7c3aed", AccountCount=312, TotalPremium=1_900_000, AvgPremium=6100,   RetentionRate=.88m, LossRatio=.64m, AvgRelationshipYears=5.9m,  IsAutomated=false, IsVisible=true, IsCampaignAudience=true, Rules=[] },
+    ];
+
+    private static List<SegmentAccount> BuildStubAccounts(SegmentModel seg)
+    {
+        var names = new[]{"Sullivan Manufacturing LLC","Apex Healthcare Inc","Riverfront Realty","Midwest Logistics","Tech Horizon LLC","Northern Steel Co","Lake Shore Dental"};
+        var owners= new[]{"Jane Smith","John Doe","Mike Chen","Sara Park"};
+        return names.Take(Math.Min(names.Length, seg.AccountCount)).Select((n,i) => new SegmentAccount
+        {
+            AccountId   = Guid.NewGuid(), AccountName = n, AccountType = i % 3 == 0 ? "Personal" : "Commercial",
+            TotalPremium= seg.AvgPremium * (0.7m + (i * 0.15m)), Score = Math.Min(100, 50 + (i * 8)),
+            Owner       = owners[i % owners.Length],
+        }).ToList();
+    }
+
+    // ── Models ────────────────────────────────────────────────────────────────
+    private sealed class SegmentModel
+    {
+        public Guid    SegmentId           { get; set; }
+        public string  Name                { get; set; } = string.Empty;
+        public string? Description         { get; set; }
+        public string  SegmentType         { get; set; } = "Custom";
+        public string  Color               { get; set; } = "#6b7280";
+        public int     AccountCount        { get; set; }
+        public decimal TotalPremium        { get; set; }
+        public decimal AvgPremium          { get; set; }
+        public decimal RetentionRate       { get; set; }
+        public decimal LossRatio           { get; set; }
+        public decimal AvgRelationshipYears{ get; set; }
+        public bool    IsAutomated         { get; set; }
+        public bool    IsVisible           { get; set; } = true;
+        public bool    IsCampaignAudience  { get; set; }
+        public List<ScoringRule> Rules     { get; set; } = [];
+    }
+    private sealed class ScoringRule
+    {
+        public string Field    { get; set; }
+        public string Operator { get; set; }
+        public string Value    { get; set; }
+        public int    Points   { get; set; }
+        public ScoringRule(string f, string op, string v, int pts) { Field=f; Operator=op; Value=v; Points=pts; }
+    }
+    private sealed class SegmentAccount
+    {
+        public Guid    AccountId   { get; set; }
+        public string  AccountName { get; set; } = string.Empty;
+        public string  AccountType { get; set; } = "Commercial";
+        public int     Score       { get; set; }
+        public decimal TotalPremium{ get; set; }
+        public string? Owner       { get; set; }
+    }
+    private sealed class SegmentForm
+    {
+        public string  Name               { get; set; } = string.Empty;
+        public string? Description        { get; set; }
+        public string  SegmentType        { get; set; } = string.Empty;
+        public string  Color              { get; set; } = "#1d4ed8";
+        public bool    IsAutomated        { get; set; }
+        public bool    IsVisible          { get; set; } = true;
+        public bool    IsCampaignAudience { get; set; }
+    }
+    private sealed record LV(string Value, string Label);
+}

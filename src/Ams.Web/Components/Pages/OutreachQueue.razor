@@ -1,0 +1,458 @@
+@page "/communications/outreach"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Call List / Outreach Queue — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── LOG CONTACT DIALOG ─────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showLogDlg" Width="480px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-telephone-outbound" aria-hidden="true"></i> Log Contact Attempt</div></Header>
+        <Content>
+            @if (_logTarget is not null)
+            {
+                <div class="pd-dlg-body">
+                    <div class="pd-dlg-grid-1">
+                        <div><label class="cd-dlg-lbl">Outcome *</label>
+                            <SfDropDownList TValue="string" TItem="string"
+                                            DataSource="@(new[]{"Reached — Completed","Reached — Call Back Requested","No Answer — Voicemail Left","No Answer — No Voicemail","Line Disconnected","Wrong Number","Opted Out","Referred to Producer"})"
+                                            @bind-Value="_logOutcome" Placeholder="Select outcome" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Next Action</label>
+                            <SfDropDownList TValue="string" TItem="string"
+                                            DataSource="@(new[]{"None","Call Again Tomorrow","Call Again This Week","Send Email Follow-Up","Send SMS","Schedule Meeting","Assign to Producer","Remove from Queue"})"
+                                            @bind-Value="_logNextAction" Placeholder="None" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Next Contact Date</label>
+                            <SfDatePicker TValue="DateTime?" @bind-Value="_logNextDate" Placeholder="MM/DD/YYYY" Min="DateTime.Today" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Notes</label>
+                            <SfTextBox @bind-Value="_logNotes" Placeholder="Call notes, key takeaways…" Multiline="true" />
+                        </div>
+                    </div>
+                </div>
+            }
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showLogDlg = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ConfirmLog">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── ASSIGN DIALOG ─────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showAssignDlg" Width="380px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-person-check" aria-hidden="true"></i> Assign Outreach Records</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="pd-dlg-grid-1">
+                    <div><label class="cd-dlg-lbl">Assign To *</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@_agents" @bind-Value="_assignTo" Placeholder="Select agent or CSR" />
+                    </div>
+                    <p style="font-size:.8rem;color:var(--um-muted,#64748b)">
+                        <strong>@_selectedIds.Count</strong> record(s) selected will be reassigned.
+                    </p>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showAssignDlg = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ConfirmAssign">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Assign
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── BATCH SMS DIALOG ───────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showSmsDlg" Width="520px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-phone" aria-hidden="true"></i> Batch SMS — @_selectedIds.Count record(s)</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="pd-dlg-grid-1">
+                    <div><label class="cd-dlg-lbl">Template</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@_smsTemplates" @bind-Value="_batchSmsTemplate" Placeholder="Select template (optional)" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Message *</label>
+                        <SfTextBox @bind-Value="_batchSmsBody" Placeholder="SMS message text…" Multiline="true" />
+                        <div class="oq-char-count @(_batchSmsBody.Length > 160 ? "oq-char-warn" : "")">
+                            @_batchSmsBody.Length / 160 chars
+                        </div>
+                    </div>
+                    <div><label class="cd-dlg-lbl">Compliance</label>
+                        <div style="display:flex;flex-direction:column;gap:.35rem;margin-top:.25rem;">
+                            <SfCheckBox @bind-Checked="_smsTcpa" Label="TCPA consent confirmed for all recipients" />
+                            <SfCheckBox @bind-Checked="_smsHonorOptOut" Label="Exclude opted-out contacts automatically" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showSmsDlg = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SendBatchSms"
+                        disabled="@(string.IsNullOrWhiteSpace(_batchSmsBody) || !_smsTcpa)">
+                    <i class="bi bi-send" aria-hidden="true"></i> Send SMS
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<AppPageHeader Title="Call List / Outreach Queue"
+               Subtitle="Prioritized outreach — renewals, follow-ups, retention and new business"
+               Icon="bi-telephone-outbound">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/appointments")'>
+            <i class="bi bi-calendar-event" aria-hidden="true"></i> Appointments
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/inbox")'>
+            <i class="bi bi-inbox" aria-hidden="true"></i> Inbox
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI STRIP ─────────────────────────────────────────────────── -->
+<div class="oq-kpi-strip">
+    @Kpi("bi-list-task",          "Total Queue",    _contacts.Count.ToString(),                                       "oq-ki-blue")
+    @Kpi("bi-alarm",              "Due Today",      _contacts.Count(c => c.NextContactDate?.Date <= DateTime.Today && c.Status == "Open").ToString(),   "oq-ki-red")
+    @Kpi("bi-hourglass-split",    "Overdue",        _contacts.Count(c => c.NextContactDate?.Date < DateTime.Today && c.Status == "Open").ToString(),    "oq-ki-red")
+    @Kpi("bi-telephone-outbound", "Contacted",      _contacts.Count(c => c.Attempts > 0).ToString(),                 "oq-ki-green")
+    @Kpi("bi-check2-all",         "Completed",      _contacts.Count(c => c.Status == "Completed").ToString(),        "oq-ki-green")
+    @Kpi("bi-slash-circle",       "Opted Out",      _contacts.Count(c => c.OptedOut).ToString(),                     "oq-ki-amber")
+    @Kpi("bi-person-x",           "Unassigned",     _contacts.Count(c => string.IsNullOrEmpty(c.AssignedTo)).ToString(),"oq-ki-amber")
+    @Kpi("bi-graph-up",           "Reach Rate",     $"{(_contacts.Count > 0 ? _contacts.Count(c=>c.LastOutcome?.StartsWith("Reached") == true)*100/_contacts.Count : 0)}%","oq-ki-gray")
+</div>
+
+<!-- ── FILTER / ACTION BAR ───────────────────────────────────────── -->
+<div class="oq-toolbar">
+    <div class="oq-toolbar-left">
+        <input class="e-input oq-search" @bind="_search" @bind:event="oninput" placeholder="Search accounts, contacts, reasons…" />
+        <select class="e-input oq-sel" @bind="_reasonFilter">
+            <option value="">All Reasons</option>
+            @foreach (var r in _reasons) { <option>@r</option> }
+        </select>
+        <select class="e-input oq-sel" @bind="_statusFilter">
+            <option value="">All Status</option>
+            <option>Open</option><option>In Progress</option><option>Completed</option><option>Deferred</option><option>Opted Out</option>
+        </select>
+        <select class="e-input oq-sel" @bind="_priorityFilter">
+            <option value="">All Priority</option>
+            <option>Critical</option><option>High</option><option>Medium</option><option>Low</option>
+        </select>
+        <select class="e-input oq-sel" @bind="_assignedFilter">
+            <option value="">All Agents</option>
+            @foreach (var a in _agents) { <option>@a</option> }
+        </select>
+        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+            <i class="bi bi-x" aria-hidden="true"></i>
+        </button>
+    </div>
+    <div class="oq-toolbar-right">
+        @if (_selectedIds.Any())
+        {
+            <span class="oq-sel-count">@_selectedIds.Count selected</span>
+            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _showAssignDlg = true">
+                <i class="bi bi-person-check" aria-hidden="true"></i> Assign
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _showSmsDlg = true">
+                <i class="bi bi-phone" aria-hidden="true"></i> Batch SMS
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="BatchComplete">
+                <i class="bi bi-check2-all" aria-hidden="true"></i> Mark Complete
+            </button>
+        }
+        <div style="font-size:.75rem;color:var(--um-muted,#64748b)">
+            <strong>@Filtered.Count()</strong> record(s)
+        </div>
+    </div>
+</div>
+
+<!-- ── TABLE ─────────────────────────────────────────────────────── -->
+<div class="oq-table-wrap">
+    <table class="oq-table">
+        <thead>
+            <tr>
+                <th>
+                    <input type="checkbox" @onchange="e => ToggleAll(e)" checked="@(_selectedIds.Count == Filtered.Count() && Filtered.Any())" />
+                </th>
+                <th>Account / Contact</th>
+                <th>Reason</th>
+                <th>Priority</th>
+                <th>Assigned To</th>
+                <th>Producer</th>
+                <th>Branch</th>
+                <th>Attempts</th>
+                <th>Last Contact</th>
+                <th>Next Contact</th>
+                <th>Last Outcome</th>
+                <th>Opt-Out</th>
+                <th>Status</th>
+                <th class="oq-th-actions">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (!Filtered.Any())
+            {
+                <tr><td colspan="14" class="oq-empty">No records match the current filters.</td></tr>
+            }
+            @foreach (var c in Filtered.OrderBy(x => PriorityOrder(x.Priority)).ThenBy(x => x.NextContactDate))
+            {
+                var overdue = c.NextContactDate?.Date < DateTime.Today && c.Status == "Open";
+                var dueToday= c.NextContactDate?.Date == DateTime.Today && c.Status == "Open";
+                <tr class="@(overdue ? "oq-tr-overdue" : dueToday ? "oq-tr-today" : "") @(_selectedIds.Contains(c.Id) ? "oq-tr-selected" : "")">
+                    <td>
+                        <input type="checkbox" checked="@_selectedIds.Contains(c.Id)"
+                               @onchange="e => ToggleRow(c.Id, (bool)e.Value!)" />
+                    </td>
+                    <td>
+                        <div class="oq-account">@c.AccountName</div>
+                        <div class="oq-contact"><i class="bi bi-person" aria-hidden="true"></i>@c.ContactName</div>
+                        <div class="oq-contact"><i class="bi bi-envelope" aria-hidden="true"></i>@c.Email</div>
+                        <div class="oq-contact"><i class="bi bi-phone" aria-hidden="true"></i>@c.Phone</div>
+                    </td>
+                    <td><span class="oq-reason-chip">@c.Reason</span></td>
+                    <td><span class="oq-pri-badge oq-pri-@c.Priority.ToLower()">@c.Priority</span></td>
+                    <td>
+                        @if (!string.IsNullOrEmpty(c.AssignedTo))
+                        { <span class="ci-meta-chip ci-mc-csr" style="font-size:.65rem"><i class="bi bi-headset" aria-hidden="true"></i>@c.AssignedTo</span> }
+                        else
+                        { <span class="ci-meta-chip ci-mc-unassigned" style="font-size:.65rem">Unassigned</span> }
+                    </td>
+                    <td class="oq-td-sm">@c.Producer</td>
+                    <td class="oq-td-sm">@c.Branch</td>
+                    <td class="oq-td-num">
+                        @c.Attempts
+                        @if (c.Attempts >= 3)
+                        { <span class="oq-att-warn" title="3+ attempts">!</span> }
+                    </td>
+                    <td class="oq-td-sm">@(c.LastContactDate.HasValue ? c.LastContactDate.Value.ToString("MM/dd/yy") : "—")</td>
+                    <td class="oq-td-sm @(overdue ? "oq-overdue-cell" : dueToday ? "oq-today-cell" : "")">
+                        @if (c.NextContactDate.HasValue)
+                        {
+                            @c.NextContactDate.Value.ToString("MM/dd/yy")
+                            @if (overdue) { <span class="oq-overdue-badge">Overdue</span> }
+                            @if (dueToday){ <span class="oq-today-badge">Today</span>   }
+                        }
+                        else { <text>—</text> }
+                    </td>
+                    <td class="oq-td-sm">@(string.IsNullOrEmpty(c.LastOutcome) ? "—" : c.LastOutcome)</td>
+                    <td>
+                        @if (c.OptedOut)
+                        { <span class="ci-optout-chip"><i class="bi bi-slash-circle" aria-hidden="true"></i>Opted Out</span> }
+                        else
+                        { <span class="oq-ok"><i class="bi bi-check-circle" aria-hidden="true"></i></span> }
+                    </td>
+                    <td><span class="oq-status-badge oq-st-@c.Status.ToLower().Replace(" ","-")">@c.Status</span></td>
+                    <td class="oq-actions-cell">
+                        <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => OpenLog(c)"
+                                title="Log contact" disabled="@(c.Status == "Completed" || c.OptedOut)">
+                            <i class="bi bi-telephone-outbound" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs"
+                                @onclick='() => Nav.NavigateTo("/communications/appointments")'
+                                title="Schedule appointment">
+                            <i class="bi bi-calendar-plus" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs"
+                                @onclick='() => Nav.NavigateTo("/communications/inbox")'
+                                title="Open inbox">
+                            <i class="bi bi-chat-dots" aria-hidden="true"></i>
+                        </button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    SfToast _toast = default!;
+    string _search         = "";
+    string _reasonFilter   = "";
+    string _statusFilter   = "";
+    string _priorityFilter = "";
+    string _assignedFilter = "";
+
+    bool           _showLogDlg    = false;
+    bool           _showAssignDlg = false;
+    bool           _showSmsDlg    = false;
+    OutreachContact? _logTarget;
+    string         _logOutcome    = "";
+    string         _logNextAction = "";
+    string         _logNotes      = "";
+    DateTime?      _logNextDate;
+    string         _assignTo      = "";
+    string         _batchSmsBody     = "";
+    string         _batchSmsTemplate = "";
+    bool           _smsTcpa          = false;
+    bool           _smsHonorOptOut   = true;
+
+    HashSet<Guid>  _selectedIds = new();
+
+    readonly string[] _agents      = { "Sarah Kim","James Park","Kevin Obi","Maria Santos","Lisa Chen","Robert Yamamoto" };
+    readonly string[] _smsTemplates= { "Renewal Reminder","Payment Due","CAT Check-In","Coverage Review","Win-Back Offer" };
+    readonly string[] _reasons     = { "Renewal — 60 Days","Renewal — 30 Days","Renewal — 90 Days","At-Risk / Cancellation","Non-Payment","New Business Follow-Up","Claims Follow-Up","CAT Outreach","Win-Back","Coverage Gap Identified","Audit Due","Certificate Expiring" };
+
+    sealed class OutreachContact
+    {
+        public Guid     Id              { get; set; }
+        public string   AccountName     { get; set; } = "";
+        public string   ContactName     { get; set; } = "";
+        public string   Email           { get; set; } = "";
+        public string   Phone           { get; set; } = "";
+        public string   Reason          { get; set; } = "";
+        public string   Priority        { get; set; } = "Medium";
+        public string   AssignedTo      { get; set; } = "";
+        public string   Producer        { get; set; } = "";
+        public string   Branch          { get; set; } = "";
+        public string   Status          { get; set; } = "Open";
+        public string   LastOutcome     { get; set; } = "";
+        public string   Notes           { get; set; } = "";
+        public int      Attempts        { get; set; }
+        public bool     OptedOut        { get; set; }
+        public DateTime? LastContactDate{ get; set; }
+        public DateTime? NextContactDate{ get; set; }
+    }
+
+    List<OutreachContact> _contacts = new();
+
+    IEnumerable<OutreachContact> Filtered => _contacts.Where(c =>
+        (string.IsNullOrEmpty(_search)         || c.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.ContactName.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.Reason.Contains(_search, StringComparison.OrdinalIgnoreCase))
+     && (string.IsNullOrEmpty(_reasonFilter)   || c.Reason     == _reasonFilter)
+     && (string.IsNullOrEmpty(_statusFilter)   || c.Status     == _statusFilter)
+     && (string.IsNullOrEmpty(_priorityFilter) || c.Priority   == _priorityFilter)
+     && (string.IsNullOrEmpty(_assignedFilter) || c.AssignedTo == _assignedFilter));
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Communications","/communications/inbox"), new("Outreach Queue",""));
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        var d = DateTime.Today;
+        _contacts = new List<OutreachContact>
+        {
+            C("Bridgewater Hotels",   "Patricia Howe",   "phowe@bwhotels.com",         "(212) 555-0188","Claims Follow-Up",      "Critical","Maria Santos","Maria Santos","Northeast",   false, 2, d.AddDays(-3), d,           "No Answer — Voicemail Left"),
+            C("Apex Medical Group",   "Sandra Kim",      "sandrakim@apexmed.com",       "(832) 555-0377","Renewal — 30 Days",     "Critical","Sarah Kim",  "Maria Santos","Gulf Coast",  false, 0, null,          d,           ""),
+            C("Sunrise Healthcare",   "Nadia Patel",     "nadia@sunrisehc.com",         "(713) 555-0921","Claims Follow-Up",      "Critical","Kevin Obi",  "Diana Perez", "Gulf Coast",  true,  2, d.AddDays(-1), null,        "No Answer — Voicemail Left"),
+            C("Pacific Coast Builders","Jorge Medina",   "jmedina@pcbuilders.com",      "(619) 555-0812","Audit Due",             "High",   "Robert Yamamoto","Robert Yamamoto","Southwest",false,1, d.AddDays(-2), d.AddDays(2),"Reached — Call Back Requested"),
+            C("Sullivan Mfg. LLC",    "Robert Sullivan", "rjsullivan@email.com",        "(713) 555-0101","Renewal — 60 Days",     "High",   "Sarah Kim",  "Maria Santos","Gulf Coast",  false, 1, d.AddDays(-1), d.AddDays(1),"Reached — Completed"),
+            C("Harbor Logistics",     "Chris Navarro",   "cnavarro@harborlog.com",      "(713) 555-0224","New Business Follow-Up","High",   "Sarah Kim",  "Maria Santos","Gulf Coast",  false, 2, d.AddDays(-1), d,           "No Answer — No Voicemail"),
+            C("Greenleaf Nurseries",  "Amy Torres",      "amy@greenleafnurs.com",       "(512) 555-0744","Claims Follow-Up",      "Medium", "Lisa Chen",  "Maria Santos","Central TX",  false, 0, null,          d.AddDays(1),""),
+            C("Dallas Roofing LLC",   "Marcus Webb",     "mwebb@dallasroofing.com",     "(214) 555-0242","Certificate Expiring",  "Medium", "Kevin Obi",  "James Park",  "North Texas", false, 0, null,          d.AddDays(3),""),
+            C("Metro Freight Co.",    "Dale Foster",     "dfoster@metrofreight.com",    "(469) 555-0519","Coverage Gap Identified","Medium","James Park", "Robert Yamamoto","North Texas",false,1, d.AddDays(-4), d.AddDays(4),"Reached — Completed"),
+            C("Harbor View Marina",   "Tony Marcellis",  "tony@harborviewmarina.com",   "(361) 555-0633","CAT Outreach",          "High",   "Lisa Chen",  "Diana Perez", "Gulf Coast",  false, 1, d.AddDays(-1), d,           "Reached — Completed"),
+            C("Southwest Realty Grp", "Lori Walsh",      "lwalsh@swrealtygrp.com",      "(210) 555-0341","Renewal — 90 Days",     "Low",    "",           "Robert Yamamoto","Southwest", false, 0, null,          d.AddDays(10),""),
+            C("Clearwater Dental",    "Dr. Paul Reyes",  "preyes@clearwaterdental.com", "(832) 555-0490","At-Risk / Cancellation","Critical","",           "Diana Perez", "Gulf Coast",  false, 3, d.AddDays(-5), d.AddDays(-2),"No Answer — Voicemail Left"),
+            C("Peak Performance Gym", "James Ortega",    "jortega@peakgym.com",         "(469) 555-0621","Non-Payment",           "High",   "James Park", "James Park",  "North Texas", false, 2, d.AddDays(-3), d.AddDays(-1),"No Answer — No Voicemail"),
+            C("Coastal Properties",   "Anne Simmons",    "asimmons@coastalprop.com",    "(361) 555-0732","Win-Back",              "Medium", "Sarah Kim",  "Maria Santos","Gulf Coast",  false, 1, d.AddDays(-7), d.AddDays(3),"Reached — Call Back Requested"),
+            C("Blue Mesa Restaurant", "Carlos Herrera",  "cherrera@bluemesa.com",       "(512) 555-0855","Renewal — 60 Days",     "Medium", "Lisa Chen",  "Maria Santos","Central TX",  false, 0, null,          d.AddDays(5),""),
+        };
+    }
+
+    static OutreachContact C(
+        string account, string contact, string email, string phone,
+        string reason, string priority, string assignedTo, string producer, string branch,
+        bool optedOut, int attempts, DateTime? lastContact, DateTime? nextContact, string lastOutcome,
+        string status = "Open") => new()
+    {
+        Id              = Guid.NewGuid(),
+        AccountName     = account,  ContactName = contact, Email = email, Phone = phone,
+        Reason          = reason,   Priority    = priority, AssignedTo = assignedTo,
+        Producer        = producer, Branch      = branch,  OptedOut = optedOut,
+        Attempts        = attempts, LastContactDate = lastContact, NextContactDate = nextContact,
+        LastOutcome     = lastOutcome, Status = optedOut ? "Opted Out" : status
+    };
+
+    void OpenLog(OutreachContact c) { _logTarget = c; _logOutcome = ""; _logNextAction = ""; _logNotes = ""; _logNextDate = null; _showLogDlg = true; }
+    void ResetFilters() { _search = ""; _reasonFilter = ""; _statusFilter = ""; _priorityFilter = ""; _assignedFilter = ""; }
+
+    async Task ConfirmLog()
+    {
+        if (_logTarget is null || string.IsNullOrEmpty(_logOutcome)) return;
+        _logTarget.Attempts++;
+        _logTarget.LastOutcome    = _logOutcome;
+        _logTarget.LastContactDate= DateTime.Now;
+        _logTarget.NextContactDate= _logNextDate;
+        _logTarget.Notes          = string.IsNullOrEmpty(_logNotes) ? _logTarget.Notes : _logNotes;
+
+        if (_logOutcome.StartsWith("Reached — Completed") || _logNextAction == "Remove from Queue")
+            _logTarget.Status = "Completed";
+        else if (_logOutcome == "Opted Out")
+        { _logTarget.OptedOut = true; _logTarget.Status = "Opted Out"; }
+        else
+            _logTarget.Status = "In Progress";
+
+        _showLogDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title = "Logged", Content = $"Contact attempt logged for {_logTarget.AccountName}.", CssClass = "e-toast-success" });
+    }
+
+    async Task ConfirmAssign()
+    {
+        if (string.IsNullOrEmpty(_assignTo)) return;
+        foreach (var id in _selectedIds)
+        {
+            var c = _contacts.FirstOrDefault(x => x.Id == id);
+            if (c is not null) c.AssignedTo = _assignTo;
+        }
+        _showAssignDlg = false;
+        _selectedIds.Clear();
+        await _toast.ShowAsync(new ToastModel { Title = "Assigned", Content = $"{_selectedIds.Count} records assigned to {_assignTo}.", CssClass = "e-toast-success" });
+    }
+
+    async Task SendBatchSms()
+    {
+        _showSmsDlg = false;
+        var count = _selectedIds.Count;
+        _selectedIds.Clear();
+        await _toast.ShowAsync(new ToastModel { Title = "Batch SMS Sent", Content = $"SMS sent to {count} contacts.", CssClass = "e-toast-success" });
+    }
+
+    async Task BatchComplete()
+    {
+        foreach (var id in _selectedIds)
+        {
+            var c = _contacts.FirstOrDefault(x => x.Id == id);
+            if (c is not null) c.Status = "Completed";
+        }
+        var count = _selectedIds.Count;
+        _selectedIds.Clear();
+        await _toast.ShowAsync(new ToastModel { Title = "Completed", Content = $"{count} record(s) marked complete.", CssClass = "e-toast-success" });
+    }
+
+    void ToggleRow(Guid id, bool check) { if (check) _selectedIds.Add(id); else _selectedIds.Remove(id); }
+
+    void ToggleAll(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        var all = (bool)e.Value!;
+        if (all) { foreach (var c in Filtered) _selectedIds.Add(c.Id); }
+        else _selectedIds.Clear();
+    }
+
+    static int PriorityOrder(string p) => p switch { "Critical" => 0, "High" => 1, "Medium" => 2, _ => 3 };
+
+    RenderFragment Kpi(string icon, string label, string val, string color) => __builder =>
+    {
+        <div class="oq-kpi-card @color">
+            <i class="bi @icon oq-kpi-icon" aria-hidden="true"></i>
+            <div><div class="oq-kpi-val">@val</div><div class="oq-kpi-lbl">@label</div></div>
+        </div>
+    };
+}

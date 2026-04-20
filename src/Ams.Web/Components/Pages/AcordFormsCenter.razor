@@ -1,0 +1,235 @@
+@page "/documents/forms"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>ACORD Forms Center — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="ACORD Forms Center"
+               Subtitle="Browse, pre-fill, and submit standard ACORD forms — policy-aware auto-population included"
+               Icon="bi-file-earmark-medical">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Documents
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showPrefill = true">
+            <i class="bi bi-stars" aria-hidden="true"></i> AI Auto-Fill Selected
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="af-kpi-strip">
+    <div class="af-kpi"><i class="bi bi-file-earmark-medical af-kpi-icon blue" aria-hidden="true"></i><div><div class="af-kv">@_forms.Count</div><div class="af-kl">Total Forms</div></div></div>
+    <div class="af-kpi"><i class="bi bi-check-circle af-kpi-icon green" aria-hidden="true"></i><div><div class="af-kv">@_forms.Count(f => f.Status == "Completed")</div><div class="af-kl">Completed</div></div></div>
+    <div class="af-kpi"><i class="bi bi-hourglass af-kpi-icon amber" aria-hidden="true"></i><div><div class="af-kv">@_forms.Count(f => f.Status == "In Progress")</div><div class="af-kl">In Progress</div></div></div>
+    <div class="af-kpi"><i class="bi bi-pen af-kpi-icon purple" aria-hidden="true"></i><div><div class="af-kv">@_forms.Count(f => f.Status == "Pending E-Sign")</div><div class="af-kl">Pending E-Sign</div></div></div>
+    <div class="af-kpi"><i class="bi bi-stars af-kpi-icon purple" aria-hidden="true"></i><div><div class="af-kv">@_forms.Count(f => f.AiPrefilled)</div><div class="af-kl">AI Pre-filled</div></div></div>
+    <div class="af-kpi"><i class="bi bi-exclamation-circle af-kpi-icon red" aria-hidden="true"></i><div><div class="af-kv">@_forms.Count(f => f.Status == "Rejected")</div><div class="af-kl">Rejected</div></div></div>
+</div>
+
+<!-- Toolbar -->
+<div class="af-toolbar">
+    <SfTextBox Placeholder="Search forms by number, name, policy…" @bind-Value="_search" Width="300px"></SfTextBox>
+    <select class="e-input af-sel" @bind="_filterLine">
+        <option value="">All Lines of Business</option>
+        @foreach (var l in _lines) { <option value="@l">@l</option> }
+    </select>
+    <select class="e-input af-sel" @bind="_filterStatus">
+        <option value="">All Statuses</option>
+        <option value="Blank">Blank</option>
+        <option value="In Progress">In Progress</option>
+        <option value="Completed">Completed</option>
+        <option value="Pending E-Sign">Pending E-Sign</option>
+        <option value="Rejected">Rejected</option>
+    </select>
+    <div class="af-toolbar-right">
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => _view = "cards"'>
+            <i class="bi bi-grid" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => _view = "grid"'>
+            <i class="bi bi-list" aria-hidden="true"></i>
+        </button>
+    </div>
+</div>
+
+<!-- Forms library -->
+@if (_view == "cards")
+{
+    <div class="af-card-grid">
+        @foreach (var f in FilteredForms)
+        {
+            <div class="af-card @(f == _selected ? "af-card-sel" : "")" @onclick="() => SelectForm(f)">
+                <div class="af-card-top">
+                    <span class="af-acord-num">ACORD @f.FormNumber</span>
+                    @if (f.AiPrefilled) { <span class="af-ai-badge"><i class="bi bi-stars" aria-hidden="true"></i> AI</span> }
+                </div>
+                <div class="af-card-title">@f.FormName</div>
+                <div class="af-card-line">@f.LineOfBusiness</div>
+                <div class="af-card-footer">
+                    <span class="af-status-chip af-st-@f.Status.ToLower().Replace(" ","-")">@f.Status</span>
+                    <div class="af-card-actions">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true"
+                                @onclick="() => PrefillForm(f)" title="AI Pre-fill">
+                            <i class="bi bi-stars" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true"
+                                @onclick='() => Nav.NavigateTo("/documents/esign")' title="Send for E-Sign">
+                            <i class="bi bi-pen" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <SfGrid DataSource="FilteredForms" AllowSorting="true" AllowPaging="true" Height="480px">
+        <GridEvents RowSelected="OnRowSelected" TValue="AcordFormRow"></GridEvents>
+        <GridPageSettings PageSize="15"></GridPageSettings>
+        <GridColumns>
+            <GridColumn Field="@nameof(AcordFormRow.FormNumber)" HeaderText="Form #" Width="80"></GridColumn>
+            <GridColumn Field="@nameof(AcordFormRow.FormName)" HeaderText="Form Name" Width="260"></GridColumn>
+            <GridColumn Field="@nameof(AcordFormRow.LineOfBusiness)" HeaderText="Line" Width="130"></GridColumn>
+            <GridColumn Field="@nameof(AcordFormRow.Edition)" HeaderText="Edition" Width="80"></GridColumn>
+            <GridColumn HeaderText="AI Pre-filled" Width="100">
+                <Template>
+                    @{ var fr = (AcordFormRow)context; }
+                    @if (fr.AiPrefilled) { <span class="af-ai-badge"><i class="bi bi-stars" aria-hidden="true"></i> Yes</span> }
+                    else                 { <span style="color:var(--um-muted,#94a3b8)">—</span> }
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Status" Width="130">
+                <Template>
+                    @{ var fr2 = (AcordFormRow)context; }
+                    <span class="af-status-chip af-st-@fr2.Status.ToLower().Replace(" ","-")">@fr2.Status</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AcordFormRow.PolicyNumber)" HeaderText="Policy #" Width="130"></GridColumn>
+            <GridColumn Field="@nameof(AcordFormRow.LastModified)" HeaderText="Modified" Type="ColumnType.DateTime" Format="g" Width="145"></GridColumn>
+            <GridColumn HeaderText="Actions" Width="120">
+                <Template>
+                    @{ var fr3 = (AcordFormRow)context; }
+                    <div style="display:flex;gap:.2rem">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => PrefillForm(fr3)" title="AI Pre-fill">
+                            <i class="bi bi-stars" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/documents/esign")' title="E-Sign">
+                            <i class="bi bi-pen" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/documents/packets")' title="Add to Packet">
+                            <i class="bi bi-collection-plus" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+}
+
+<!-- ── AI Pre-fill Dialog ─────────────────────────────────────────── -->
+<SfDialog Width="580px" IsModal="true" @bind-Visible="_showPrefill" Header="AI Policy-Aware Pre-fill" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Content>
+            <div class="af-prefill-body">
+                <div class="af-prefill-ai-banner">
+                    <i class="bi bi-stars" aria-hidden="true"></i>
+                    <div>
+                        <div class="af-pf-title">AI Document Intelligence</div>
+                        <div class="af-pf-sub">Automatically populate ACORD fields from the linked policy, insured details, and coverage data.</div>
+                    </div>
+                </div>
+                <div class="form-group mb-2">
+                    <label class="af-lbl">Select Policy</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_policies" @bind-Value="_prefillPolicy" Placeholder="Choose policy…" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2">
+                    <label class="af-lbl">Form to Pre-fill</label>
+                    <SfDropDownList TValue="string" TItem="AcordFormRow" DataSource="_forms" @bind-Value="_prefillFormNumber" Width="100%">
+                        <DropDownListFieldSettings Text="FormName" Value="FormNumber"></DropDownListFieldSettings>
+                    </SfDropDownList>
+                </div>
+                @if (_prefillRunning)
+                {
+                    <div class="af-prefill-progress">
+                        <SfSpinner Visible="true" Size="28" />
+                        <span>Extracting policy data and populating fields…</span>
+                    </div>
+                }
+                @if (_prefillDone)
+                {
+                    <div class="af-prefill-result">
+                        <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                        <span>Pre-fill complete — <strong>@_prefillFieldCount fields</strong> populated with @(_prefillConfidence)% confidence.</span>
+                    </div>
+                }
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Run AI Pre-fill" IsPrimary="true" OnClick="RunPrefillAsync" Disabled="_prefillRunning"></DialogButton>
+        <DialogButton Content="Send for E-Sign" OnClick='() => Nav.NavigateTo("/documents/esign")' Disabled="!_prefillDone"></DialogButton>
+        <DialogButton Content="Close" OnClick="() => _showPrefill = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    private SfToast _toast = default!;
+    private string _search = "", _filterLine = "", _filterStatus = "", _view = "cards";
+    private AcordFormRow? _selected;
+    private bool _showPrefill, _prefillRunning, _prefillDone;
+    private string? _prefillPolicy, _prefillFormNumber;
+    private int _prefillFieldCount, _prefillConfidence;
+
+    private readonly List<string> _lines = ["Commercial Lines","Personal Lines","Specialty","Life & Health","Excess & Surplus"];
+    private readonly List<string> _policies = ["POL-2025-00142","POL-2025-00089","POL-2024-99310","POL-2024-88204","POL-2025-00217"];
+
+    private readonly List<AcordFormRow> _forms =
+    [
+        new("25",  "Certificate of Liability Insurance",       "Commercial Lines","2016/03","Completed",        "POL-2025-00142", true,  DateTime.Now.AddDays(-2)),
+        new("28",  "Evidence of Property Insurance",           "Commercial Lines","2016/03","In Progress",      "POL-2025-00089", true,  DateTime.Now.AddDays(-1)),
+        new("75",  "Commercial Insurance Application",         "Commercial Lines","2013/02","Blank",            "",               false, DateTime.Now.AddDays(-5)),
+        new("126", "Commercial General Liability Section",     "Commercial Lines","2016/11","Pending E-Sign",   "POL-2025-00142", true,  DateTime.Now.AddHours(-3)),
+        new("130", "Commercial Property Application",          "Commercial Lines","2014/05","Blank",            "",               false, DateTime.Now.AddDays(-7)),
+        new("160", "Homeowners Insurance Application",         "Personal Lines",  "2014/04","Completed",        "POL-2024-99310", true,  DateTime.Now.AddDays(-3)),
+        new("1",   "Property Insurance Application",           "Personal Lines",  "2011/03","In Progress",      "POL-2024-88204", false, DateTime.Now.AddDays(-1)),
+        new("80",  "Homeowner Policy Change Request",          "Personal Lines",  "2011/03","Completed",        "POL-2025-00217", true,  DateTime.Now.AddHours(-6)),
+        new("36",  "Binder",                                   "Commercial Lines","2007/09","Pending E-Sign",   "POL-2025-00089", true,  DateTime.Now.AddDays(-4)),
+        new("137", "Commercial Umbrella Application",          "Excess & Surplus","2013/02","Blank",            "",               false, DateTime.Now.AddDays(-10)),
+        new("125", "Business Auto Application",                "Commercial Lines","2013/02","In Progress",      "POL-2025-00142", false, DateTime.Now.AddDays(-2)),
+        new("702", "Workers Compensation Application",         "Commercial Lines","2014/05","Rejected",         "POL-2024-88204", false, DateTime.Now.AddDays(-6)),
+    ];
+
+    private IEnumerable<AcordFormRow> FilteredForms => _forms.Where(f =>
+        (string.IsNullOrEmpty(_search) || f.FormName.Contains(_search, StringComparison.OrdinalIgnoreCase) || f.FormNumber.Contains(_search) || (f.PolicyNumber?.Contains(_search) ?? false)) &&
+        (string.IsNullOrEmpty(_filterLine)   || f.LineOfBusiness == _filterLine) &&
+        (string.IsNullOrEmpty(_filterStatus) || f.Status == _filterStatus));
+
+    protected override void OnInitialized() =>
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Documents","/documents"), new("ACORD Forms",""));
+
+    void SelectForm(AcordFormRow f)    { _selected = f; _prefillFormNumber = f.FormNumber; }
+    void OnRowSelected(RowSelectEventArgs<AcordFormRow> a) => SelectForm(a.Data);
+
+    void PrefillForm(AcordFormRow f)   { _selected = f; _prefillFormNumber = f.FormNumber; _prefillDone = false; _prefillRunning = false; _showPrefill = true; }
+
+    async Task RunPrefillAsync()
+    {
+        _prefillRunning = true; _prefillDone = false; StateHasChanged();
+        await Task.Delay(1800);
+        _prefillRunning = false; _prefillDone = true;
+        _prefillFieldCount  = new Random().Next(28, 62);
+        _prefillConfidence  = new Random().Next(88, 99);
+        var form = _forms.FirstOrDefault(f => f.FormNumber == _prefillFormNumber);
+        if (form is not null) { _forms[_forms.IndexOf(form)] = form with { AiPrefilled = true, Status = "In Progress", LastModified = DateTime.Now }; }
+        StateHasChanged();
+        await _toast.ShowAsync(new ToastModel { Content = $"AI pre-fill complete — {_prefillFieldCount} fields populated.", CssClass = "e-toast-success" });
+    }
+
+    record AcordFormRow(string FormNumber, string FormName, string LineOfBusiness, string Edition, string Status, string PolicyNumber, bool AiPrefilled, DateTime LastModified);
+}

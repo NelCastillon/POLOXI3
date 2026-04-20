@@ -1,0 +1,501 @@
+@page "/documents/{DocumentId:guid}"
+@namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@using Ams.Application.Features.Documents
+
+<PageTitle>Document Detail — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@if (_doc is null)
+{
+    <div class="dd-loading">
+        <SfSpinner Visible="true" Size="40" />
+        <p>Loading document…</p>
+    </div>
+}
+else
+{
+    <AppPageHeader Title="@_doc.FileName"
+                   Subtitle="@($"v{_doc.VersionNumber} · {_doc.CategoryCode} · {FormatSize(_doc.FileSizeBytes)} · Uploaded {_doc.CreatedDateUtc:MMM d, yyyy}")"
+                   Icon="bi-file-earmark-text">
+        <Actions>
+            <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents/esign")'
+                    title="Send for E-Signature">
+                <i class="bi bi-pen" aria-hidden="true"></i> E-Sign
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents/packets")'
+                    title="Add to Packet">
+                <i class="bi bi-collection-plus" aria-hidden="true"></i> Add to Packet
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenShare" title="Create Share Link">
+                <i class="bi bi-share" aria-hidden="true"></i> Share
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenRename">
+                <i class="bi bi-pencil" aria-hidden="true"></i> Rename
+            </button>
+            <button class="um-btn um-btn-ghost" @onclick="ArchiveAsync">
+                <i class="bi bi-archive" aria-hidden="true"></i> Archive
+            </button>
+            <button class="um-btn um-btn-danger" @onclick="DeleteAsync">
+                <i class="bi bi-trash" aria-hidden="true"></i> Delete
+            </button>
+        </Actions>
+    </AppPageHeader>
+
+    <div class="dd-layout">
+        <!-- ── LEFT — preview + AI panel ──────────────────────────── -->
+        <aside class="dd-sidebar">
+            <!-- Document preview card -->
+            <div class="dd-preview-card">
+                <div class="dd-preview-thumb">
+                    <i class="bi @DocIcon(_doc.ContentType)" aria-hidden="true"></i>
+                </div>
+                <div class="dd-preview-meta">
+                    <span class="dd-pm-label">@_doc.ContentType</span>
+                    <span class="dd-pm-size">@FormatSize(_doc.FileSizeBytes)</span>
+                </div>
+                <button class="um-btn um-btn-primary dd-dl-btn">
+                    <i class="bi bi-download" aria-hidden="true"></i> Download
+                </button>
+            </div>
+
+            <!-- AI Classification panel -->
+            <div class="dd-ai-panel">
+                <div class="dd-ai-header">
+                    <i class="bi bi-stars" aria-hidden="true"></i> AI Document Intelligence
+                </div>
+                <div class="dd-ai-row">
+                    <span class="dd-ai-lbl">Classification</span>
+                    <span class="dd-ai-chip dd-ai-classified">@AiClassify(_doc)</span>
+                </div>
+                <div class="dd-ai-row">
+                    <span class="dd-ai-lbl">Confidence</span>
+                    <span class="dd-ai-chip dd-ai-conf">@AiConfidence(_doc)%</span>
+                </div>
+                <div class="dd-ai-row">
+                    <span class="dd-ai-lbl">ACORD Form</span>
+                    <span class="dd-ai-chip @(IsAcord(_doc) ? "dd-ai-classified" : "dd-ai-unclassified")">
+                        @(IsAcord(_doc) ? "Yes" : "No")
+                    </span>
+                </div>
+                <div class="dd-ai-row">
+                    <span class="dd-ai-lbl">E-Sign Required</span>
+                    <span class="dd-ai-chip @(NeedsESign(_doc) ? "dd-ai-amber" : "dd-ai-gray")">
+                        @(NeedsESign(_doc) ? "Yes" : "No")
+                    </span>
+                </div>
+                <div class="dd-ai-row">
+                    <span class="dd-ai-lbl">Suggested Tags</span>
+                    <div class="dd-ai-tags">
+                        @foreach (var tag in SuggestTags(_doc))
+                        {
+                            <span class="dd-tag">@tag</span>
+                        }
+                    </div>
+                </div>
+                <div class="dd-ai-actions">
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ApplyAiClassification(_doc)">
+                        <i class="bi bi-check-circle" aria-hidden="true"></i> Apply AI Classification
+                    </button>
+                </div>
+            </div>
+
+            <!-- Retention panel -->
+            <div class="dd-retention-panel">
+                <div class="dd-rp-header"><i class="bi bi-hourglass" aria-hidden="true"></i> Retention Policy</div>
+                <div class="dd-rp-row">
+                    <span>Retention Date</span>
+                    <strong>@(_doc.RetentionDate?.ToString("MMM d, yyyy") ?? "None set")</strong>
+                </div>
+                <div class="dd-rp-row">
+                    <span>Status</span>
+                    <span class="dd-status-badge dd-st-@(_doc.StatusCode?.ToLower() ?? "active")">@(_doc.StatusCode ?? "Active")</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ── RIGHT — tabs ─────────────────────────────────────────── -->
+        <div class="dd-content">
+            <SfTab>
+                <TabItems>
+                    <!-- Details -->
+                    <TabItem>
+                        <ChildContent><TabHeader Text="Details"></TabHeader></ChildContent>
+                        <ContentTemplate>
+                            <div class="dd-detail-grid">
+                                <div class="dd-dg-card">
+                                    <div class="dd-dg-title"><i class="bi bi-info-circle" aria-hidden="true"></i> Metadata</div>
+                                    <div class="dd-dg-body">
+                                        <div class="dd-field"><span class="dd-fl">Category</span><span>@_doc.CategoryCode</span></div>
+                                        <div class="dd-field"><span class="dd-fl">Type</span><span>@_doc.DocumentTypeCode</span></div>
+                                        <div class="dd-field"><span class="dd-fl">Version</span><span>@_doc.VersionNumber</span></div>
+                                        <div class="dd-field"><span class="dd-fl">Content Type</span><span>@_doc.ContentType</span></div>
+                                        <div class="dd-field"><span class="dd-fl">File Size</span><span>@FormatSize(_doc.FileSizeBytes)</span></div>
+                                        <div class="dd-field"><span class="dd-fl">Entity</span><span>@_doc.EntityName</span></div>
+                                        <div class="dd-field"><span class="dd-fl">Uploaded By</span><span>@_doc.UploadedByName</span></div>
+                                        <div class="dd-field"><span class="dd-fl">Uploaded</span><span>@_doc.CreatedDateUtc.ToString("MMM d, yyyy h:mm tt")</span></div>
+                                    </div>
+                                    <div class="dd-dg-footer">
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showMeta = true">
+                                            <i class="bi bi-pencil" aria-hidden="true"></i> Edit Metadata
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="dd-dg-card" style="grid-column:2/-1">
+                                    <div class="dd-dg-title"><i class="bi bi-text-left" aria-hidden="true"></i> Description &amp; Tags</div>
+                                    <div class="dd-dg-body">
+                                        <p class="dd-desc">@(string.IsNullOrWhiteSpace(_doc.Description) ? "No description provided." : _doc.Description)</p>
+                                        <div class="dd-tags-row">
+                                            @if (!string.IsNullOrWhiteSpace(_doc.Tags))
+                                            {
+                                                @foreach (var t in _doc.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                                                {
+                                                    <span class="dd-tag">@t</span>
+                                                }
+                                            }
+                                            else
+                                            {
+                                                <span class="dd-no-tags">No tags</span>
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </ContentTemplate>
+                    </TabItem>
+
+                    <!-- Versions -->
+                    <TabItem>
+                        <ChildContent><TabHeader Text="Versions"></TabHeader></ChildContent>
+                        <ContentTemplate>
+                            <div class="dd-tab-toolbar">
+                                <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => _showNewVer = true">
+                                    <i class="bi bi-plus-circle" aria-hidden="true"></i> New Version
+                                </button>
+                            </div>
+                            @if (_versions is null)
+                            {
+                                <SfSpinner Visible="true" />
+                            }
+                            else
+                            {
+                                <SfGrid DataSource="_versions" AllowSorting="true" Height="340px">
+                                    <GridColumns>
+                                        <GridColumn Field="@nameof(DocumentVersionDto.VersionNumber)" HeaderText="Ver" Width="60"></GridColumn>
+                                        <GridColumn Field="@nameof(DocumentVersionDto.FileName)" HeaderText="File" Width="200"></GridColumn>
+                                        <GridColumn Field="@nameof(DocumentVersionDto.ChangeNotes)" HeaderText="Notes" Width="220"></GridColumn>
+                                        <GridColumn Field="@nameof(DocumentVersionDto.CreatedDateUtc)" HeaderText="Date" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
+                                    </GridColumns>
+                                </SfGrid>
+                            }
+                        </ContentTemplate>
+                    </TabItem>
+
+                    <!-- Share Links -->
+                    <TabItem>
+                        <ChildContent><TabHeader Text="Share Links"></TabHeader></ChildContent>
+                        <ContentTemplate>
+                            <div class="dd-tab-toolbar">
+                                <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenShare">
+                                    <i class="bi bi-share" aria-hidden="true"></i> New Share Link
+                                </button>
+                            </div>
+                            @if (_shareLinks is null)
+                            {
+                                <SfSpinner Visible="true" />
+                            }
+                            else
+                            {
+                                <SfGrid DataSource="_shareLinks" AllowSorting="true" Height="340px">
+                                    <GridColumns>
+                                        <GridColumn Field="@nameof(DocumentShareLinkDto.Token)" HeaderText="Token" Width="200"></GridColumn>
+                                        <GridColumn Field="@nameof(DocumentShareLinkDto.ExpiresDateUtc)" HeaderText="Expires" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
+                                        <GridColumn Field="@nameof(DocumentShareLinkDto.AccessCount)" HeaderText="Accessed" Width="90"></GridColumn>
+                                        <GridColumn Field="@nameof(DocumentShareLinkDto.MaxAccessCount)" HeaderText="Max" Width="70"></GridColumn>
+                                        <GridColumn Field="@nameof(DocumentShareLinkDto.IsRevoked)" HeaderText="Revoked" Width="90"></GridColumn>
+                                        <GridColumn HeaderText="Actions" Width="90">
+                                            <Template>
+                                                @{ var lnk = (DocumentShareLinkDto)context; }
+                                                @if (!lnk.IsRevoked)
+                                                {
+                                                    <button class="um-btn um-btn-danger um-btn-xs" @onclick="() => RevokeShareLinkAsync(lnk.ShareLinkId)">Revoke</button>
+                                                }
+                                            </Template>
+                                        </GridColumn>
+                                    </GridColumns>
+                                </SfGrid>
+                            }
+                        </ContentTemplate>
+                    </TabItem>
+
+                    <!-- Audit Trail -->
+                    <TabItem>
+                        <ChildContent><TabHeader Text="Audit Trail"></TabHeader></ChildContent>
+                        <ContentTemplate>
+                            @if (_accessLog is null)
+                            {
+                                <SfSpinner Visible="true" />
+                            }
+                            else
+                            {
+                                <SfGrid DataSource="_accessLog" AllowSorting="true" Height="380px">
+                                    <GridColumns>
+                                        <GridColumn Field="@nameof(DocumentAccessLogDto.ActionCode)" HeaderText="Action" Width="130"></GridColumn>
+                                        <GridColumn Field="@nameof(DocumentAccessLogDto.UserId)" HeaderText="User" Width="200"></GridColumn>
+                                        <GridColumn Field="@nameof(DocumentAccessLogDto.IpAddress)" HeaderText="IP Address" Width="150"></GridColumn>
+                                        <GridColumn Field="@nameof(DocumentAccessLogDto.AccessDateUtc)" HeaderText="Date" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
+                                    </GridColumns>
+                                </SfGrid>
+                            }
+                        </ContentTemplate>
+                    </TabItem>
+                </TabItems>
+            </SfTab>
+        </div>
+    </div>
+}
+
+<!-- ── Edit Metadata Dialog ─────────────────────────────────────── -->
+<SfDialog Width="460px" IsModal="true" @bind-Visible="_showMeta" Header="Edit Metadata" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Content>
+            <div class="form-group mb-2">
+                <label>Description</label>
+                <SfTextBox @bind-Value="_metaReq.Description" Multiline="true"></SfTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <label>Tags (comma-separated)</label>
+                <SfTextBox @bind-Value="_metaReq.Tags"></SfTextBox>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Save" IsPrimary="true" OnClick="SubmitMetaAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showMeta = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<!-- ── New Version Dialog ───────────────────────────────────────── -->
+<SfDialog Width="460px" IsModal="true" @bind-Visible="_showNewVer" Header="Upload New Version" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Content>
+            <div class="form-group mb-2"><label>File Name</label><SfTextBox @bind-Value="_verReq.FileName"></SfTextBox></div>
+            <div class="form-group mb-2"><label>Storage Path</label><SfTextBox @bind-Value="_verReq.StoragePath"></SfTextBox></div>
+            <div class="form-group mb-2"><label>Content Type</label><SfTextBox @bind-Value="_verReq.ContentType"></SfTextBox></div>
+            <div class="form-group mb-2"><label>Change Notes</label><SfTextBox @bind-Value="_verReq.ChangeNotes" Multiline="true"></SfTextBox></div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Upload Version" IsPrimary="true" OnClick="SubmitVersionAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showNewVer = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<!-- ── Share Link Dialog ─────────────────────────────────────────── -->
+<SfDialog Width="440px" IsModal="true" @bind-Visible="_showShare" Header="Create Share Link" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Content>
+            <div class="form-group mb-2"><label>Expires (UTC)</label>
+                <SfDateTimePicker TValue="DateTime" @bind-Value="_shareExpires" Width="100%"></SfDateTimePicker>
+            </div>
+            <div class="form-group mb-2"><label>Max Access Count</label>
+                <SfNumericTextBox TValue="int?" @bind-Value="_shareMaxAccess" Width="100%"></SfNumericTextBox>
+            </div>
+            <div class="form-group mb-2">
+                <SfCheckBox Label="Require PIN" @bind-Checked="_sharePin"></SfCheckBox>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Create Link" IsPrimary="true" OnClick="SubmitShareAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showShare = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<!-- ── Rename Dialog ─────────────────────────────────────────────── -->
+<SfDialog Width="400px" IsModal="true" @bind-Visible="_showRename" Header="Rename Document" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Content>
+            <div class="form-group mb-2"><label>New File Name</label>
+                <SfTextBox @bind-Value="_renameReq.NewFileName"></SfTextBox>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Rename" IsPrimary="true" OnClick="SubmitRenameAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showRename = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid DocumentId { get; set; }
+
+    private SfToast _toast = default!;
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    private DocumentDto?              _doc;
+    private List<DocumentVersionDto>? _versions;
+    private List<DocumentShareLinkDto>? _shareLinks;
+    private List<DocumentAccessLogDto>? _accessLog;
+
+    // Dialog flags
+    private bool _showMeta, _showNewVer, _showShare, _showRename;
+
+    // Request objects
+    private UpdateDocumentMetadataRequest _metaReq  = new();
+    private CreateDocumentVersionRequest  _verReq   = new();
+    private RenameDocumentRequest         _renameReq = new();
+    private DateTime  _shareExpires   = DateTime.UtcNow.AddDays(7);
+    private int?      _shareMaxAccess;
+    private bool      _sharePin;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Documents","/documents"), new("Detail",""));
+        await LoadAllAsync();
+    }
+
+    private async Task LoadAllAsync()
+    {
+        _doc = await Api.GetDocumentByIdAsync(DocumentId);
+        if (_doc is null) return;
+        var vt = Api.GetDocumentVersionsAsync(DocumentId);
+        var lt = Api.GetDocumentShareLinksAsync(DocumentId);
+        var at = Api.GetDocumentAccessLogAsync(DocumentId);
+        await Task.WhenAll(vt, lt, at);
+        _versions   = (await vt)?.ToList() ?? [];
+        _shareLinks = (await lt)?.ToList() ?? [];
+        _accessLog  = (await at)?.ToList() ?? [];
+    }
+
+    private async Task ArchiveAsync()
+    {
+        await Api.ArchiveDocumentAsync(DocumentId);
+        await _toast.ShowAsync(new ToastModel { Content = "Document archived.", CssClass = "e-toast-success" });
+        Nav.NavigateTo("/documents");
+    }
+
+    private async Task DeleteAsync()
+    {
+        await Api.DeleteDocumentAsync(DocumentId);
+        Nav.NavigateTo("/documents");
+    }
+
+    private async Task SubmitMetaAsync()
+    {
+        _metaReq.DocumentId = DocumentId;
+        await Api.UpdateDocumentMetadataAsync(_metaReq);
+        _showMeta = false;
+        _doc = await Api.GetDocumentByIdAsync(DocumentId);
+        await _toast.ShowAsync(new ToastModel { Content = "Metadata updated.", CssClass = "e-toast-success" });
+    }
+
+    private async Task SubmitVersionAsync()
+    {
+        _verReq.TenantId   = _tenantId;
+        _verReq.DocumentId = DocumentId;
+        await Api.CreateDocumentVersionAsync(_verReq);
+        _verReq   = new();
+        _showNewVer = false;
+        _doc      = await Api.GetDocumentByIdAsync(DocumentId);
+        _versions = (await Api.GetDocumentVersionsAsync(DocumentId))?.ToList() ?? [];
+        await _toast.ShowAsync(new ToastModel { Content = "New version uploaded.", CssClass = "e-toast-success" });
+    }
+
+    private void OpenShare()   => _showShare  = true;
+    private void OpenRename()  { _renameReq = new RenameDocumentRequest { DocumentId = DocumentId, NewFileName = _doc?.FileName }; _showRename = true; }
+
+    private async Task SubmitShareAsync()
+    {
+        var req = new CreateDocumentShareLinkRequest
+        {
+            TenantId = _tenantId, DocumentId = DocumentId, CreatedByUserId = Guid.Empty,
+            ExpiresDateUtc = _shareExpires, MaxAccessCount = _shareMaxAccess, RequiresPin = _sharePin
+        };
+        await Api.CreateDocumentShareLinkAsync(req);
+        _showShare  = false;
+        _shareLinks = (await Api.GetDocumentShareLinksAsync(DocumentId))?.ToList() ?? [];
+        await _toast.ShowAsync(new ToastModel { Content = "Share link created.", CssClass = "e-toast-success" });
+    }
+
+    private async Task SubmitRenameAsync()
+    {
+        await Api.RenameDocumentAsync(_renameReq);
+        _showRename = false;
+        _doc = await Api.GetDocumentByIdAsync(DocumentId);
+    }
+
+    private async Task RevokeShareLinkAsync(Guid id)
+    {
+        await Api.RevokeDocumentShareLinkAsync(id);
+        _shareLinks = (await Api.GetDocumentShareLinksAsync(DocumentId))?.ToList() ?? [];
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────
+    static string AiClassify(DocumentDto d)
+    {
+        if (!string.IsNullOrEmpty(d.CategoryCode)) return d.CategoryCode;
+        var n = (d.FileName ?? "").ToLowerInvariant();
+        if (n.Contains("acord") || n.Contains("form"))  return "ACORD Form";
+        if (n.Contains("policy")|| n.Contains("dec"))   return "Policy / Dec Page";
+        if (n.Contains("claim") || n.Contains("fnol"))  return "Claim Document";
+        if (n.Contains("cert")  || n.Contains("coi"))   return "Certificate";
+        if (n.Contains("endorse")|| n.Contains("endo")) return "Endorsement";
+        if (n.Contains("invoice")|| n.Contains("bill")) return "Billing";
+        if (n.Contains("proposal"))                     return "Proposal";
+        return "Unclassified";
+    }
+
+    static int AiConfidence(DocumentDto d)
+    {
+        if (!string.IsNullOrEmpty(d.CategoryCode)) return 98;
+        var n = (d.FileName ?? "").ToLowerInvariant();
+        return (n.Contains("acord") || n.Contains("policy") || n.Contains("cert")) ? 87 : 61;
+    }
+
+    static bool IsAcord(DocumentDto d)  => (d.FileName ?? "").ToLowerInvariant().Contains("acord") || (d.DocumentTypeCode ?? "").ToLowerInvariant().Contains("acord");
+    static bool NeedsESign(DocumentDto d) => IsAcord(d) || (d.DocumentTypeCode ?? "").ToLowerInvariant().Contains("contract");
+
+    static IEnumerable<string> SuggestTags(DocumentDto d)
+    {
+        var tags = new List<string>();
+        if (IsAcord(d))    tags.Add("ACORD");
+        if (NeedsESign(d)) tags.Add("needs-esign");
+        if (!string.IsNullOrWhiteSpace(d.EntityName)) tags.Add(d.EntityName);
+        if (!string.IsNullOrWhiteSpace(d.Tags)) return tags;
+        tags.Add("auto-tagged");
+        return tags;
+    }
+
+    void ApplyAiClassification(DocumentDto d)
+    {
+        _metaReq.DocumentId = d.DocumentId;
+        _metaReq.Tags = string.Join(", ", SuggestTags(d));
+        _showMeta = true;
+    }
+
+    static string DocIcon(string? mime) => mime?.ToLowerInvariant() switch
+    {
+        var m when m?.Contains("pdf")   == true => "bi-file-earmark-pdf",
+        var m when m?.Contains("word")  == true ||
+                   m?.Contains("docx")  == true => "bi-file-earmark-word",
+        var m when m?.Contains("excel") == true ||
+                   m?.Contains("xlsx")  == true => "bi-file-earmark-excel",
+        var m when m?.Contains("image") == true => "bi-file-earmark-image",
+        _                                        => "bi-file-earmark"
+    };
+
+    static string FormatSize(long? bytes) => bytes switch
+    {
+        null          => "—",
+        < 1024        => $"{bytes} B",
+        < 1048576     => $"{bytes / 1024.0:F1} KB",
+        < 1073741824  => $"{bytes / 1048576.0:F1} MB",
+        _             => $"{bytes / 1073741824.0:F2} GB"
+    };
+}

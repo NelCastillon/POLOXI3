@@ -1,0 +1,248 @@
+@page "/admin/reference/carrier-appetite"
+@namespace Ams.Web.Components.Pages.ReferenceAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Carrier Appetite Matrix — Reference Data</PageTitle>
+
+<AppPageHeader Title="Carrier Appetite Matrix"
+               Subtitle="Cross-reference of carrier writing appetite by line of business and risk class"
+               Icon="bi-grid-3x3">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Legend -->
+<div class="ca-legend-strip">
+    <span class="ca-legend-label">Appetite key:</span>
+    <span class="ca-appetite ca-appetite--preferred"><i class="bi bi-star-fill" aria-hidden="true"></i> Preferred</span>
+    <span class="ca-appetite ca-appetite--standard"><i class="bi bi-check-circle" aria-hidden="true"></i> Standard</span>
+    <span class="ca-appetite ca-appetite--limited"><i class="bi bi-dash-circle" aria-hidden="true"></i> Limited</span>
+    <span class="ca-appetite ca-appetite--declined"><i class="bi bi-x-circle-fill" aria-hidden="true"></i> Declined</span>
+    <span class="ca-appetite ca-appetite--na"><i class="bi bi-slash-circle" aria-hidden="true"></i> N/A</span>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search carrier…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_lobFilterOptions"
+                        Placeholder="All Lines"
+                        ShowClearButton="true"
+                        Width="180px"
+                        Value="_filterLob"
+                        ValueChanged="@((string v) => { _filterLob = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_appetiteFilterOptions"
+                        Placeholder="Any Appetite"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterAppetite"
+                        ValueChanged="@((string v) => { _filterAppetite = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Matrix grid -->
+<div class="um-grid-card app-datagrid ca-matrix-card">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="AppetiteRow"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(AppetiteRow.CarrierName)" HeaderText="Carrier" Width="200">
+                <Template>
+                    @{ var e = (AppetiteRow)context; }
+                    <div class="ca-carrier-cell">
+                        <span class="ca-carrier-icon" aria-hidden="true"><i class="bi bi-building"></i></span>
+                        <div>
+                            <div class="ca-carrier-name">@e.CarrierName</div>
+                            <div class="ca-carrier-naic ca-mono">@e.NaicCode</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AppetiteRow.LobName)" HeaderText="Line of Business" Width="180" />
+            <GridColumn Field="@nameof(AppetiteRow.AppetiteLevel)" HeaderText="Appetite" Width="130">
+                <Template>
+                    @{ var e = (AppetiteRow)context; }
+                    <span class="@AppetiteClass(e.AppetiteLevel)">
+                        <i class="@AppetiteIcon(e.AppetiteLevel)" aria-hidden="true"></i> @e.AppetiteLevel
+                    </span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AppetiteRow.MinPremium)" HeaderText="Min Premium" Width="130">
+                <Template>
+                    @{ var e = (AppetiteRow)context; }
+                    <span class="ca-mono">@(e.MinPremium.HasValue ? e.MinPremium.Value.ToString("C0") : "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AppetiteRow.MaxPremium)" HeaderText="Max Premium" Width="130">
+                <Template>
+                    @{ var e = (AppetiteRow)context; }
+                    <span class="ca-mono">@(e.MaxPremium.HasValue ? e.MaxPremium.Value.ToString("C0") : "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AppetiteRow.Notes)" HeaderText="Notes" Width="220">
+                <Template>
+                    @{ var e = (AppetiteRow)context; }
+                    @if (!string.IsNullOrWhiteSpace(e.Notes))
+                    {
+                        <span class="ca-notes" title="@e.Notes">@e.Notes</span>
+                    }
+                    else
+                    {
+                        <span class="ca-no-notes">—</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AppetiteRow.LastReviewedDate)" HeaderText="Last Reviewed" Width="140">
+                <Template>
+                    @{ var e = (AppetiteRow)context; }
+                    <span>@(e.LastReviewedDate.HasValue ? e.LastReviewedDate.Value.ToString("d") : "—")</span>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<AppetiteRow> _allEntries = [];
+    private List<AppetiteRow> _entries    = [];
+
+    private bool _loading = false;
+
+    private string _search          = string.Empty;
+    private string _filterLob       = string.Empty;
+    private string _filterAppetite  = string.Empty;
+
+    private static readonly List<LabelValue> _lobFilterOptions =
+    [
+        new("BOP",  "BOP"),
+        new("GL",   "General Liability"),
+        new("WC",   "Workers Comp"),
+        new("CA",   "Commercial Auto"),
+        new("CPP",  "Commercial Package"),
+        new("PL",   "Professional Liability"),
+        new("CY",   "Cyber"),
+        new("IM",   "Inland Marine"),
+    ];
+
+    private static readonly List<LabelValue> _appetiteFilterOptions =
+    [
+        new("Preferred", "Preferred"),
+        new("Standard",  "Standard"),
+        new("Limited",   "Limited"),
+        new("Declined",  "Declined"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",             "/"),
+            new("Reference Data",   "/admin/reference/carriers"),
+            new("Appetite Matrix",  "/admin/reference/carrier-appetite"));
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace with Api.GetCarrierAppetiteMatrixAsync(_tenantId)
+            await Task.Delay(0);
+            _allEntries = [];
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterLob)      || e.LobCode == _filterLob) &&
+            (string.IsNullOrEmpty(_filterAppetite) || e.AppetiteLevel == _filterAppetite) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.CarrierName.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        StateHasChanged();
+    }
+
+    private async Task ExportAsync() =>
+        await ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string AppetiteClass(string level) => level switch
+    {
+        "Preferred" => "ca-appetite ca-appetite--preferred",
+        "Standard"  => "ca-appetite ca-appetite--standard",
+        "Limited"   => "ca-appetite ca-appetite--limited",
+        "Declined"  => "ca-appetite ca-appetite--declined",
+        _           => "ca-appetite ca-appetite--na",
+    };
+
+    private static string AppetiteIcon(string level) => level switch
+    {
+        "Preferred" => "bi bi-star-fill",
+        "Standard"  => "bi bi-check-circle",
+        "Limited"   => "bi bi-dash-circle",
+        "Declined"  => "bi bi-x-circle-fill",
+        _           => "bi bi-slash-circle",
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed record AppetiteRow
+    {
+        public Guid     RowId            { get; init; } = Guid.NewGuid();
+        public string   CarrierName      { get; init; } = string.Empty;
+        public string   NaicCode         { get; init; } = string.Empty;
+        public string   LobCode          { get; init; } = string.Empty;
+        public string   LobName          { get; init; } = string.Empty;
+        public string   AppetiteLevel    { get; init; } = "Standard";  // Preferred | Standard | Limited | Declined | N/A
+        public decimal? MinPremium       { get; init; }
+        public decimal? MaxPremium       { get; init; }
+        public string?  Notes            { get; init; }
+        public DateTime? LastReviewedDate { get; init; }
+    }
+}

@@ -1,0 +1,272 @@
+@page "/admin/agency/teams"
+@namespace Ams.Web.Components.Pages.AgencyAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Departments &amp; Teams — Agency Setup</PageTitle>
+
+<AppPageHeader Title="Departments &amp; Teams"
+               Subtitle="Manage organisational units, departments and their team assignments"
+               Icon="bi-diagram-3">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Team
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="dt-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0">
+        <span class="dt-kpi-icon dt-kpi-icon--total"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="dt-kpi-value">@_totalCount</div>
+            <div class="dt-kpi-label">Total Teams</div>
+        </div>
+        @if (_kpiActive == 1) { <span class="dt-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
+        <span class="dt-kpi-icon dt-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="dt-kpi-value">@_activeCount</div>
+            <div class="dt-kpi-label">Active</div>
+        </div>
+        @if (_kpiActive == 2) { <span class="dt-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="dt-kpi-card">
+        <span class="dt-kpi-icon dt-kpi-icon--members"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="dt-kpi-value">@_memberCount</div>
+            <div class="dt-kpi-label">Total Members</div>
+        </div>
+    </div>
+    <div class="dt-kpi-card">
+        <span class="dt-kpi-icon dt-kpi-icon--depts"><i class="bi bi-building" aria-hidden="true"></i></span>
+        <div>
+            <div class="dt-kpi-value">@_deptCount</div>
+            <div class="dt-kpi-label">Departments</div>
+        </div>
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search team or department…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_deptOptions"
+                        Placeholder="All Departments"
+                        ShowClearButton="true"
+                        Width="180px"
+                        Value="_filterDept"
+                        ValueChanged="@((string v) => { _filterDept = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <label class="dt-toggle-label">
+            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
+            Active only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="TeamEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(TeamEntry.TeamName)" HeaderText="Team Name" Width="200">
+                <Template>
+                    @{ var e = (TeamEntry)context; }
+                    <div class="dt-name-cell">
+                        <span class="dt-team-icon" aria-hidden="true"><i class="bi bi-people"></i></span>
+                        <div>
+                            <div class="dt-team-name">@e.TeamName</div>
+                            <div class="dt-team-code">@e.TeamCode</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(TeamEntry.Department)" HeaderText="Department" Width="180" />
+            <GridColumn Field="@nameof(TeamEntry.TeamLead)" HeaderText="Team Lead" Width="180" />
+            <GridColumn Field="@nameof(TeamEntry.MemberCount)" HeaderText="Members" Width="100" />
+            <GridColumn Field="@nameof(TeamEntry.IsActive)" HeaderText="Status" Width="110">
+                <Template>
+                    @{ var e = (TeamEntry)context; }
+                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")"
+                                    Label="@(e.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (TeamEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.TeamId == Guid.Empty ? "New Team" : "Edit Team")"
+               OnSave="SaveTeamAsync"
+               OnCancel="CloseDrawer">
+    <Body>
+        <div class="dt-form">
+            <label class="dt-form-label">Team Name *</label>
+            <input class="um-input" @bind="_editModel.TeamName" placeholder="Team name" />
+
+            <label class="dt-form-label">Team Code</label>
+            <input class="um-input dt-mono" @bind="_editModel.TeamCode" placeholder="Short code" />
+
+            <label class="dt-form-label">Department</label>
+            <input class="um-input" @bind="_editModel.Department" placeholder="Department name" />
+
+            <label class="dt-form-label">Team Lead</label>
+            <input class="um-input" @bind="_editModel.TeamLead" placeholder="Full name" />
+
+            <label class="dt-form-label">Active</label>
+            <SfSwitch @bind-Checked="_editModel.IsActive" />
+        </div>
+    </Body>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<TeamEntry> _allEntries = [];
+    private List<TeamEntry> _entries    = [];
+
+    private bool _loading    = false;
+    private bool _showDrawer = false;
+
+    private string _search         = string.Empty;
+    private string _filterDept     = string.Empty;
+    private bool   _filterActiveOnly = false;
+    private int    _kpiActive      = 0;
+
+    private int _totalCount  = 0;
+    private int _activeCount = 0;
+    private int _memberCount = 0;
+    private int _deptCount   = 0;
+
+    private string KpiClass1 => "dt-kpi-card" + (_kpiActive == 1 ? " dt-kpi-card--active" : "");
+    private string KpiClass2 => "dt-kpi-card" + (_kpiActive == 2 ? " dt-kpi-card--active" : "");
+
+    private static readonly List<LabelValue> _deptOptions = [];
+
+    private TeamEntry _editModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",        "/"),
+            new("Agency Setup","/admin/agency/profile"),
+            new("Teams",       "/admin/agency/teams"));
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace with Api.GetTeamsAsync(_tenantId)
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterDept) || e.Department == _filterDept) &&
+            (!_filterActiveOnly || e.IsActive) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.TeamName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.Department.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        if (_kpiActive == 2) _entries = _entries.Where(e => e.IsActive).ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive       = _kpiActive == n ? 0 : n;
+        _filterActiveOnly = _kpiActive == 2;
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount  = _allEntries.Count;
+        _activeCount = _allEntries.Count(e => e.IsActive);
+        _memberCount = _allEntries.Sum(e => e.MemberCount);
+        _deptCount   = _allEntries.Select(e => e.Department).Distinct().Count();
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(TeamEntry e) { _editModel = new TeamEntry { TeamId = e.TeamId, TeamCode = e.TeamCode, TeamName = e.TeamName, Department = e.Department, TeamLead = e.TeamLead, MemberCount = e.MemberCount, IsActive = e.IsActive }; _showDrawer = true; }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveTeamAsync()
+    {
+        // TODO: Api.SaveTeamAsync
+        await Task.Delay(0);
+        _showDrawer = false;
+        await LoadAsync();
+        await ShowToastAsync("Team saved.", "e-toast-success");
+    }
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class TeamEntry
+    {
+        public Guid   TeamId      { get; set; } = Guid.NewGuid();
+        public string TeamCode    { get; set; } = string.Empty;
+        public string TeamName    { get; set; } = string.Empty;
+        public string Department  { get; set; } = string.Empty;
+        public string TeamLead    { get; set; } = string.Empty;
+        public int    MemberCount { get; set; }
+        public bool   IsActive    { get; set; } = true;
+    }
+}

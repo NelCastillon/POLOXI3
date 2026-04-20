@@ -1,0 +1,518 @@
+@page "/workbench/marketing"
+@namespace Ams.Web.Components.Pages.Workbench
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Marketing Workbench</PageTitle>
+
+<WorkbenchShell Title="Marketing Workbench"
+                Subtitle="Campaigns, lead sources, outreach tasks, referral tracking, event follow-ups and content approvals"
+                Icon="bi-megaphone-fill"
+                @bind-Scope="_scope"
+                BranchId="@_branchId"
+                BranchIdChanged="OnBranchChangedAsync"
+                TeamId="@_teamId"
+                TeamIdChanged="OnTeamChangedAsync"
+                SavedViews="_savedViews"
+                OnSaveView="SaveViewAsync"
+                OnLoadView="LoadViewAsync"
+                OnDeleteView="DeleteViewAsync"
+                SlaItems="_slaItems"
+                AiSummary="_aiSummary"
+                AiSummaryLoading="_aiLoading"
+                AiSummaryGeneratedAt="_aiGeneratedAt"
+                OnGenerateAiSummary="GenerateAiSummaryAsync"
+                OnRefresh="LoadAsync"
+                Loading="_loading">
+    <ExtraActions>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/campaigns/new")'>
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Campaign
+        </button>
+    </ExtraActions>
+    <Queues>
+
+        <!-- ── KPI strip ─────────────────────────────────────────────────── -->
+        <div class="wb-kpi-strip">
+            <div class="@KpiClass(1)" @onclick='() => FocusQueue(1, "campaigns")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i1"><i class="bi bi-megaphone-fill" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val">@_c.ActiveCampaigns</div>
+                    <div class="wb-kpi-lbl">Active Campaigns</div>
+                    <div class="wb-kpi-sub">@_c.CampaignLeads leads generated</div>
+                </div>
+                @KpiDot(1)
+            </div>
+            <div class="@KpiClass(2)" @onclick='() => FocusQueue(2, "outreach")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i2"><i class="bi bi-envelope-fill" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val @(_c.OutreachOverdue > 0 ? "wb-kpi-val--warn" : "")">@_c.OutreachTasks</div>
+                    <div class="wb-kpi-lbl">Outreach Tasks</div>
+                    <div class="wb-kpi-sub @(_c.OutreachOverdue > 0 ? "wb-sub--warn" : "")">@_c.OutreachOverdue overdue</div>
+                </div>
+                @KpiDot(2)
+            </div>
+            <div class="@KpiClass(3)" @onclick='() => FocusQueue(3, "referrals")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i3"><i class="bi bi-share-fill" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val">@_c.Referrals</div>
+                    <div class="wb-kpi-lbl">Referrals</div>
+                    <div class="wb-kpi-sub">@_c.ReferralsConverted converted</div>
+                </div>
+                @KpiDot(3)
+            </div>
+            <div class="@KpiClass(4)" @onclick='() => FocusQueue(4, "events")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i4"><i class="bi bi-calendar-event-fill" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val">@_c.UpcomingEvents</div>
+                    <div class="wb-kpi-lbl">Events</div>
+                    <div class="wb-kpi-sub">@_c.EventFollowUps follow-ups pending</div>
+                </div>
+                @KpiDot(4)
+            </div>
+            <div class="@KpiClass(5)" @onclick='() => FocusQueue(5, "content")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i2"><i class="bi bi-file-richtext-fill" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val @(_c.ContentPendingApproval > 0 ? "wb-kpi-val--warn" : "")">@_c.ContentPendingApproval</div>
+                    <div class="wb-kpi-lbl">Content Approvals</div>
+                </div>
+                @KpiDot(5)
+            </div>
+            <div class="@KpiClass(6)" @onclick='() => FocusQueue(6, "analytics")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i1"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val">@_c.ConversionRate.ToString("F1")%</div>
+                    <div class="wb-kpi-lbl">Lead Conversion</div>
+                    <div class="wb-kpi-sub">@_c.TotalLeads total leads</div>
+                </div>
+                @KpiDot(6)
+            </div>
+        </div>
+
+        @QueueTabs()
+        @FilterRow()
+
+        @if (!_loading)
+        {
+            <!-- ── Campaigns ───────────────────────────────────────────────── -->
+            @if (_activeQueue == "campaigns")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="MktItem" DataSource="@Filtered(_campaigns)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Status"  Width="120"><Template>@{ var i=(MktItem)context; }<span class="@StatusBadge(i.Status)">@i.Status</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.Title)"       HeaderText="Campaign"   Width="230"><Template>@{ var i=(MktItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub">@i.Channel</div></div></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.TargetAudience)" HeaderText="Audience" Width="160" />
+                            <GridColumn Field="@nameof(MktItem.Budget)"      HeaderText="Budget"     Width="120" TextAlign="TextAlign.Right"><Template>@{ var i=(MktItem)context; }<span class="wb-mono">@i.Budget.ToString("C0")</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.Leads)"       HeaderText="Leads"      Width="90"  TextAlign="TextAlign.Right" />
+                            <GridColumn Field="@nameof(MktItem.Conversions)" HeaderText="Conv."      Width="90"  TextAlign="TextAlign.Right" />
+                            <GridColumn HeaderText="Conv. Rate" Width="120" TextAlign="TextAlign.Right">
+                                <Template>@{ var i=(MktItem)context; var r=i.Leads>0?(double)i.Conversions/i.Leads*100:0; }<span class="@RateBadge(r)">@r.ToString("F1")%</span></Template>
+                            </GridColumn>
+                            <GridColumn Field="@nameof(MktItem.EndDate)"     HeaderText="Ends"       Width="120"><Template>@{ var i=(MktItem)context; }<span class="@(i.EndDate<DateTime.Today?"wb-overdue":"")">@i.EndDate.ToString("d")</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.AssignedTo)"  HeaderText="Owner"      Width="140" />
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(MktItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            <!-- ── Outreach Tasks ──────────────────────────────────────────── -->
+            @if (_activeQueue == "outreach")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="MktItem" DataSource="@Filtered(_outreach)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(MktItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.Title)"       HeaderText="Task"       Width="240"><Template>@{ var i=(MktItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.ContactName)" HeaderText="Contact"    Width="170" />
+                            <GridColumn Field="@nameof(MktItem.Channel)"     HeaderText="Channel"    Width="120"><Template>@{ var i=(MktItem)context; }<span class="@ChanBadge(i.Channel)">@i.Channel</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.CampaignName)" HeaderText="Campaign"  Width="170" />
+                            <GridColumn Field="@nameof(MktItem.AssignedTo)"  HeaderText="Assignee"   Width="140" />
+                            <GridColumn Field="@nameof(MktItem.DueDate)"     HeaderText="Due"        Width="110"><Template>@{ var i=(MktItem)context; }<span class="@(i.DueDate<DateTime.Today?"wb-overdue":"")">@i.DueDate.ToString("d")</span></Template></GridColumn>
+                            <GridColumn HeaderText="SLA" Width="120"><Template>@{ var i=(MktItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(MktItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            <!-- ── Referrals ───────────────────────────────────────────────── -->
+            @if (_activeQueue == "referrals")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="MktItem" DataSource="@Filtered(_referrals)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Status" Width="120"><Template>@{ var i=(MktItem)context; }<span class="@StatusBadge(i.Status)">@i.Status</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.ContactName)" HeaderText="Referred By" Width="180" />
+                            <GridColumn Field="@nameof(MktItem.Title)"       HeaderText="Prospect"   Width="200" />
+                            <GridColumn Field="@nameof(MktItem.Channel)"     HeaderText="Source"     Width="130" />
+                            <GridColumn Field="@nameof(MktItem.EstPremium)"  HeaderText="Est. Premium" Width="140" TextAlign="TextAlign.Right"><Template>@{ var i=(MktItem)context; }<span class="wb-mono wb-bold">@i.EstPremium.ToString("C0")</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.AssignedTo)"  HeaderText="Producer"   Width="150" />
+                            <GridColumn Field="@nameof(MktItem.ReceivedDate)" HeaderText="Received"  Width="130"><Template>@{ var i=(MktItem)context; }<span>@i.ReceivedDate?.ToString("d")</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(MktItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            <!-- ── Events ─────────────────────────────────────────────────── -->
+            @if (_activeQueue == "events")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="MktItem" DataSource="@Filtered(_events)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Status" Width="120"><Template>@{ var i=(MktItem)context; }<span class="@StatusBadge(i.Status)">@i.Status</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.Title)"       HeaderText="Event"     Width="240"><Template>@{ var i=(MktItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub">@i.Location</div></div></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.EventDate)"   HeaderText="Date"      Width="130"><Template>@{ var i=(MktItem)context; }<span>@i.EventDate?.ToString("d")</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.Attendees)"   HeaderText="Attending" Width="110" TextAlign="TextAlign.Right" />
+                            <GridColumn Field="@nameof(MktItem.Leads)"       HeaderText="Leads Gen." Width="110" TextAlign="TextAlign.Right" />
+                            <GridColumn Field="@nameof(MktItem.AssignedTo)"  HeaderText="Owner"     Width="140" />
+                            <GridColumn Field="@nameof(MktItem.DueDate)"     HeaderText="Follow-up By" Width="130"><Template>@{ var i=(MktItem)context; }<span class="@(i.DueDate<DateTime.Today?"wb-overdue":"")">@i.DueDate.ToString("d")</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(MktItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            <!-- ── Content Approvals ──────────────────────────────────────── -->
+            @if (_activeQueue == "content")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="MktItem" DataSource="@Filtered(_content)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Status" Width="120"><Template>@{ var i=(MktItem)context; }<span class="@StatusBadge(i.Status)">@i.Status</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.Title)"        HeaderText="Content"    Width="280"><Template>@{ var i=(MktItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub">@i.ContentType</div></div></Template></GridColumn>
+                            <GridColumn Field="@nameof(MktItem.CampaignName)" HeaderText="Campaign"   Width="180" />
+                            <GridColumn Field="@nameof(MktItem.AssignedTo)"   HeaderText="Author"     Width="150" />
+                            <GridColumn Field="@nameof(MktItem.ReviewedBy)"   HeaderText="Reviewer"   Width="150" />
+                            <GridColumn Field="@nameof(MktItem.DueDate)"      HeaderText="Due"        Width="110"><Template>@{ var i=(MktItem)context; }<span class="@(i.DueDate<DateTime.Today?"wb-overdue":"")">@i.DueDate.ToString("d")</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="120" TextAlign="TextAlign.Right">
+                                <Template>
+                                    @{ var i=(MktItem)context; }
+                                    <div class="wb-row-actions">
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>ApproveAsync(i)" title="Approve"><i class="bi bi-check-lg" aria-hidden="true"></i></button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)" title="Open"><i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+                                    </div>
+                                </Template>
+                            </GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            <!-- ── Analytics ──────────────────────────────────────────────── -->
+            @if (_activeQueue == "analytics")
+            {
+                <div class="wb-grid-card mkt-analytics-card">
+                    <div class="mkt-analytics-grid">
+                        <div class="mkt-stat-card">
+                            <div class="mkt-stat-icon mkt-stat-i1"><i class="bi bi-people-fill" aria-hidden="true"></i></div>
+                            <div class="mkt-stat-val">@_c.TotalLeads</div>
+                            <div class="mkt-stat-lbl">Total Leads (MTD)</div>
+                        </div>
+                        <div class="mkt-stat-card">
+                            <div class="mkt-stat-icon mkt-stat-i2"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></div>
+                            <div class="mkt-stat-val">@_c.LeadsConverted</div>
+                            <div class="mkt-stat-lbl">Converted</div>
+                        </div>
+                        <div class="mkt-stat-card">
+                            <div class="mkt-stat-icon mkt-stat-i3"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></div>
+                            <div class="mkt-stat-val">@_c.ConversionRate.ToString("F1")%</div>
+                            <div class="mkt-stat-lbl">Conversion Rate</div>
+                        </div>
+                        <div class="mkt-stat-card">
+                            <div class="mkt-stat-icon mkt-stat-i4"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
+                            <div class="mkt-stat-val">@_c.CostPerLead.ToString("C0")</div>
+                            <div class="mkt-stat-lbl">Cost Per Lead</div>
+                        </div>
+                        <div class="mkt-stat-card">
+                            <div class="mkt-stat-icon mkt-stat-i1"><i class="bi bi-megaphone-fill" aria-hidden="true"></i></div>
+                            <div class="mkt-stat-val">@_c.ActiveCampaigns</div>
+                            <div class="mkt-stat-lbl">Active Campaigns</div>
+                        </div>
+                        <div class="mkt-stat-card">
+                            <div class="mkt-stat-icon mkt-stat-i2"><i class="bi bi-share-fill" aria-hidden="true"></i></div>
+                            <div class="mkt-stat-val">@_c.Referrals</div>
+                            <div class="mkt-stat-lbl">Referrals (MTD)</div>
+                        </div>
+                    </div>
+                    <div class="mkt-source-table">
+                        <h3 class="mkt-source-hdr">Lead Sources</h3>
+                        <SfGrid TValue="LeadSource" DataSource="_leadSources" AllowSorting="true" EnableHover="true">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(LeadSource.SourceName)" HeaderText="Source"     Width="200" />
+                                <GridColumn Field="@nameof(LeadSource.Leads)"      HeaderText="Leads"      Width="100" TextAlign="TextAlign.Right" />
+                                <GridColumn Field="@nameof(LeadSource.Converted)"  HeaderText="Converted"  Width="110" TextAlign="TextAlign.Right" />
+                                <GridColumn HeaderText="Conv. %" Width="110" TextAlign="TextAlign.Right">
+                                    <Template>@{ var s=(LeadSource)context; var r=s.Leads>0?(double)s.Converted/s.Leads*100:0; }<span class="@RateBadge(r)">@r.ToString("F1")%</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(LeadSource.AvgPremium)" HeaderText="Avg. Premium" Width="140" TextAlign="TextAlign.Right"><Template>@{ var s=(LeadSource)context; }<span class="wb-mono">@s.AvgPremium.ToString("C0")</span></Template></GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="wb-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+        }
+
+        @DetailPanel()
+
+    </Queues>
+</WorkbenchShell>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private bool   _loading  = false;
+    private string _scope    = "me";
+    private string _branchId = string.Empty;
+    private string _teamId   = string.Empty;
+    private string _activeQueue = "campaigns";
+    private int    _kpiFocus    = 0;
+    private MktItem? _selected  = null;
+
+    private string _search         = string.Empty;
+    private string _filterPriority = string.Empty;
+    private string _filterSla      = string.Empty;
+
+    private string?   _aiSummary     = null;
+    private bool      _aiLoading     = false;
+    private DateTime? _aiGeneratedAt = null;
+
+    private List<WorkbenchShell.SavedView>   _savedViews = [];
+    private List<WorkbenchShell.SlaHeatItem> _slaItems   = [];
+
+    private MktCounts _c = new();
+
+    private List<MktItem>    _campaigns  = [];
+    private List<MktItem>    _outreach   = [];
+    private List<MktItem>    _referrals  = [];
+    private List<MktItem>    _events     = [];
+    private List<MktItem>    _content    = [];
+    private List<LeadSource> _leadSources = [];
+
+    private record QDef(string Id, string Label, string Icon, int Badge, bool IsAlert);
+    private List<QDef> Queues => [
+        new("campaigns", "Campaigns",        "bi bi-megaphone-fill",       _c.ActiveCampaigns,       false),
+        new("outreach",  "Outreach Tasks",   "bi bi-envelope-fill",        _c.OutreachTasks,         _c.OutreachOverdue > 0),
+        new("referrals", "Referrals",        "bi bi-share-fill",           _c.Referrals,             false),
+        new("events",    "Events",           "bi bi-calendar-event-fill",  _c.UpcomingEvents,        false),
+        new("content",   "Content Approvals","bi bi-file-richtext-fill",   _c.ContentPendingApproval,_c.ContentPendingApproval > 0),
+        new("analytics", "Analytics",        "bi bi-graph-up-arrow",       0,                        false),
+    ];
+
+    private static readonly List<WorkbenchShell.LabelValue> _priorityOptions =
+    [
+        new("Critical","Critical"),new("Urgent","Urgent"),
+        new("High","High"),new("Normal","Normal"),new("Low","Low"),
+    ];
+    private static readonly List<WorkbenchShell.LabelValue> _slaOptions =
+    [
+        new("On Track","On Track"),new("At Risk","At Risk"),new("Breached","Breached"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing Workbench","/workbench/marketing"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; StateHasChanged();
+        try
+        {
+            await Task.Delay(0);
+            _campaigns   = []; _outreach  = []; _referrals  = [];
+            _events      = []; _content   = []; _leadSources = [];
+            _c = new();
+            RebuildSla();
+        }
+        finally { _loading = false; }
+    }
+
+    private void RebuildSla() => _slaItems =
+    [
+        new() { QueueName="Campaigns",   InSla=_c.ActiveCampaigns,       Breached=0 },
+        new() { QueueName="Outreach",    InSla=_c.OutreachTasks,         Breached=_c.OutreachOverdue },
+        new() { QueueName="Content",     InSla=_c.ContentPendingApproval,Breached=0 },
+    ];
+
+    private async Task OnBranchChangedAsync(string v) { _branchId = v; await LoadAsync(); }
+    private async Task OnTeamChangedAsync(string v)   { _teamId   = v; await LoadAsync(); }
+
+    private async Task GenerateAiSummaryAsync()
+    {
+        _aiLoading = true; StateHasChanged();
+        await Task.Delay(0);
+        _aiSummary     = "No AI summary available yet. Wire up Api.GetWorkbenchAiSummaryAsync() to populate this field.";
+        _aiGeneratedAt = DateTime.Now;
+        _aiLoading     = false;
+    }
+
+    private async Task ApproveAsync(MktItem i)
+    {
+        // TODO: Api.ApproveContentAsync(_tenantId, i.ItemId)
+        await Task.Delay(0);
+        await ShowToastAsync($"\"{i.Title}\" approved.", "e-toast-success");
+    }
+
+    private Task SaveViewAsync(WorkbenchShell.SavedView v)
+    {
+        v.QueueId = _activeQueue; v.Scope = _scope; v.BranchId = _branchId; v.TeamId = _teamId;
+        _savedViews.RemoveAll(x => x.Name == v.Name); _savedViews.Add(v);
+        return ShowToastAsync($"View \"{v.Name}\" saved.", "e-toast-success");
+    }
+    private Task LoadViewAsync(string name) { var v = _savedViews.FirstOrDefault(x => x.Name == name); if (v is not null) { _activeQueue = v.QueueId; _scope = v.Scope; _branchId = v.BranchId; _teamId = v.TeamId; StateHasChanged(); } return Task.CompletedTask; }
+    private Task DeleteViewAsync(string name) { _savedViews.RemoveAll(x => x.Name == name); return Task.CompletedTask; }
+
+    private List<MktItem> Filtered(List<MktItem> src) => src.Where(i =>
+        (string.IsNullOrEmpty(_filterPriority) || i.Priority == _filterPriority) &&
+        (string.IsNullOrEmpty(_filterSla)      || i.SlaStatus == _filterSla) &&
+        (string.IsNullOrEmpty(_search)         ||
+         i.Title.Contains(_search,        StringComparison.OrdinalIgnoreCase) ||
+         i.ContactName.Contains(_search,  StringComparison.OrdinalIgnoreCase) ||
+         i.CampaignName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         i.RefNumber.Contains(_search,    StringComparison.OrdinalIgnoreCase))
+    ).ToList();
+
+    private void FocusQueue(int n, string id) { _kpiFocus = _kpiFocus == n ? 0 : n; _activeQueue = id; _selected = null; }
+    private string KpiClass(int n) => "wb-kpi-card" + (_kpiFocus == n ? " wb-kpi-card--active" : "");
+    private RenderFragment KpiDot(int n) => _kpiFocus == n ? @<span class="wb-kpi-dot" aria-hidden="true"></span> : _ => { };
+    private void OpenDetail(MktItem i) => _selected = i;
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private RenderFragment QueueTabs() => __builder =>
+    {
+        <div class="wb-queue-tabs" role="tablist">
+        @foreach (var q in Queues)
+        {
+            <button class="wb-queue-tab @(q.Id == _activeQueue ? "wb-queue-tab--active" : "")"
+                    role="tab" @onclick="() => { _activeQueue = q.Id; _selected = null; }">
+                <i class="@q.Icon" aria-hidden="true"></i> @q.Label
+                @if (q.Badge > 0) { <span class="wb-tab-badge @(q.IsAlert?"wb-tab-badge--alert":"")">@q.Badge</span> }
+            </button>
+        }
+        </div>;
+    };
+
+    private RenderFragment FilterRow() => __builder =>
+    {
+        <div class="wb-filter-row">
+            <div class="wb-search-box">
+                <i class="bi bi-search wb-search-icon" aria-hidden="true"></i>
+                <input class="wb-search-input" type="text" placeholder="Search…"
+                       value="@_search" @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; StateHasChanged(); })" />
+            </div>
+            <SfDropDownList TValue="string" TItem="WorkbenchShell.LabelValue" DataSource="_priorityOptions" Placeholder="All Priorities" ShowClearButton="true" Width="155px" Value="_filterPriority" ValueChanged="@((string v) => { _filterPriority = v; StateHasChanged(); })">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+            <SfDropDownList TValue="string" TItem="WorkbenchShell.LabelValue" DataSource="_slaOptions" Placeholder="All SLA" ShowClearButton="true" Width="140px" Value="_filterSla" ValueChanged="@((string v) => { _filterSla = v; StateHasChanged(); })">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>;
+    };
+
+    private RenderFragment DetailPanel() => __builder =>
+    {
+        @if (_selected is not null)
+        {
+            <div class="wb-overlay" @onclick="() => _selected = null" role="button" tabindex="-1" aria-label="Close"></div>
+            <div class="wb-detail-panel" role="complementary">
+                <div class="wb-detail-hdr">
+                    <span class="@StatusBadge(_selected.Status)">@_selected.Status</span>
+                    @if (!string.IsNullOrEmpty(_selected.Priority)) { <span class="@PriBadge(_selected.Priority)">@_selected.Priority</span> }
+                    <button class="um-btn um-btn-ghost um-btn-sm" style="margin-left:auto" @onclick="() => _selected = null"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <h2 class="wb-detail-title">@_selected.Title</h2>
+                <div class="wb-detail-body">
+                    @if (!string.IsNullOrEmpty(_selected.RefNumber))    { <div class="wb-detail-row"><span class="wb-detail-lbl">Ref</span><span class="wb-mono">@_selected.RefNumber</span></div> }
+                    @if (!string.IsNullOrEmpty(_selected.CampaignName)) { <div class="wb-detail-row"><span class="wb-detail-lbl">Campaign</span><span>@_selected.CampaignName</span></div> }
+                    @if (!string.IsNullOrEmpty(_selected.ContactName))  { <div class="wb-detail-row"><span class="wb-detail-lbl">Contact</span><span>@_selected.ContactName</span></div> }
+                    @if (!string.IsNullOrEmpty(_selected.Channel))      { <div class="wb-detail-row"><span class="wb-detail-lbl">Channel</span><span>@_selected.Channel</span></div> }
+                    @if (_selected.Budget > 0)                          { <div class="wb-detail-row"><span class="wb-detail-lbl">Budget</span><span class="wb-mono">@_selected.Budget.ToString("C0")</span></div> }
+                    @if (_selected.EstPremium > 0)                      { <div class="wb-detail-row"><span class="wb-detail-lbl">Est. Premium</span><span class="wb-mono wb-bold">@_selected.EstPremium.ToString("C0")</span></div> }
+                    <div class="wb-detail-row"><span class="wb-detail-lbl">Assignee</span><span>@_selected.AssignedTo</span></div>
+                    <div class="wb-detail-row"><span class="wb-detail-lbl">Due</span><span class="@(_selected.DueDate < DateTime.Today ? "wb-overdue" : "")">@_selected.DueDate.ToString("d")</span></div>
+                    @if (!string.IsNullOrEmpty(_selected.Notes)) { <div class="wb-detail-row"><span class="wb-detail-lbl">Notes</span><p class="wb-detail-notes">@_selected.Notes</p></div> }
+                </div>
+                <div class="wb-detail-footer">
+                    <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selected.DetailUrl)">Open Record <i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+        }
+    };
+
+    private static string PriBadge(string p) => p switch { "Critical"=>"wb-pri wb-pri--critical","Urgent"=>"wb-pri wb-pri--urgent","High"=>"wb-pri wb-pri--high","Normal"=>"wb-pri wb-pri--normal",_=>"wb-pri wb-pri--low" };
+    private static string SlaBadge(string s) => s switch { "On Track"=>"wb-sla wb-sla--ok","At Risk"=>"wb-sla wb-sla--warn",_=>"wb-sla wb-sla--breach" };
+    private static string StatusBadge(string s) => s switch { "Active"=>"wb-status wb-status--approved","Draft"=>"wb-status wb-status--pending","Paused"=>"wb-status wb-status--review","Complete"=>"wb-status wb-status--open","Pending Approval"=>"wb-status wb-status--review","Approved"=>"wb-status wb-status--approved","Rejected"=>"wb-status wb-status--rejected",_=>"wb-status" };
+    private static string ChanBadge(string c) => c switch { "Email"=>"wb-chan wb-chan--email","Phone"=>"wb-chan wb-chan--phone","Social"=>"wb-chan wb-chan--portal","Event"=>"wb-chan wb-chan--chat","Referral"=>"wb-chan wb-chan--chat",_=>"wb-chan" };
+    private static string RateBadge(double r) => r >= 20 ? "wb-sla wb-sla--ok" : r >= 10 ? "wb-sla wb-sla--warn" : "wb-sla wb-sla--breach";
+
+    private sealed class MktCounts
+    {
+        public int    ActiveCampaigns       { get; set; }
+        public int    CampaignLeads         { get; set; }
+        public int    OutreachTasks         { get; set; }
+        public int    OutreachOverdue       { get; set; }
+        public int    Referrals             { get; set; }
+        public int    ReferralsConverted    { get; set; }
+        public int    UpcomingEvents        { get; set; }
+        public int    EventFollowUps        { get; set; }
+        public int    ContentPendingApproval{ get; set; }
+        public int    TotalLeads            { get; set; }
+        public int    LeadsConverted        { get; set; }
+        public double ConversionRate        { get; set; }
+        public decimal CostPerLead         { get; set; }
+    }
+
+    private sealed class MktItem
+    {
+        public Guid      ItemId       { get; set; } = Guid.NewGuid();
+        public string    Title        { get; set; } = string.Empty;
+        public string    RefNumber    { get; set; } = string.Empty;
+        public string    ContactName  { get; set; } = string.Empty;
+        public string    CampaignName { get; set; } = string.Empty;
+        public string    Channel      { get; set; } = string.Empty;
+        public string    ContentType  { get; set; } = string.Empty;
+        public string    TargetAudience{ get; set; }= string.Empty;
+        public string    AssignedTo   { get; set; } = string.Empty;
+        public string    ReviewedBy   { get; set; } = string.Empty;
+        public string    Location     { get; set; } = string.Empty;
+        public string    Priority     { get; set; } = "Normal";
+        public string    SlaStatus    { get; set; } = "On Track";
+        public string    Status       { get; set; } = "Active";
+        public decimal   Budget       { get; set; }
+        public decimal   EstPremium   { get; set; }
+        public int       Leads        { get; set; }
+        public int       Conversions  { get; set; }
+        public int       Attendees    { get; set; }
+        public DateTime  DueDate      { get; set; } = DateTime.Today;
+        public DateTime  EndDate      { get; set; } = DateTime.Today.AddDays(30);
+        public DateTime? EventDate    { get; set; }
+        public DateTime? ReceivedDate { get; set; }
+        public string?   Notes        { get; set; }
+        public string    DetailUrl    { get; set; } = "/workbench/marketing";
+    }
+
+    private sealed class LeadSource
+    {
+        public string  SourceName  { get; set; } = string.Empty;
+        public int     Leads       { get; set; }
+        public int     Converted   { get; set; }
+        public decimal AvgPremium  { get; set; }
+    }
+}

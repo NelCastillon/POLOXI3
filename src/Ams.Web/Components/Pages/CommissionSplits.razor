@@ -1,0 +1,301 @@
+@page "/commissions/splits"
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Split Commission Setup — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- Create/Edit Split Rule Dialog -->
+<SfDialog @bind-Visible="_showCreate" Width="620px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="sp-dlg-hdr"><i class="bi bi-scissors" aria-hidden="true"></i> @(_editRule is null ? "New Split Rule" : "Edit Split Rule")</div></Header>
+        <Content>
+            <div class="sp-dlg-body">
+                <div class="form-group mb-2"><label class="sp-lbl">Rule Name *</label>
+                    <SfTextBox @bind-Value="_editName" Placeholder="e.g. 60/40 New Biz Sharing Rule"></SfTextBox>
+                </div>
+                <div class="form-group mb-2">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+                        <div><label class="sp-lbl">Applies To</label>
+                            <SfDropDownList TValue="string" TItem="string"
+                                DataSource='new[]{"New Business","Renewal","Both","Override Only"}'
+                                @bind-Value="_editAppliesTo" Width="100%"></SfDropDownList>
+                        </div>
+                        <div><label class="sp-lbl">Split Type</label>
+                            <SfDropDownList TValue="string" TItem="string"
+                                DataSource='new[]{"Fixed %","Tiered","Equal Share","Primary/Secondary","Custom"}'
+                                @bind-Value="_editSplitType" Width="100%"></SfDropDownList>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Producer allocation rows -->
+                <label class="sp-lbl">Producer Allocations (must total 100%)</label>
+                <div class="sp-alloc-list">
+                    @for (int i = 0; i < _editProducers.Count; i++)
+                    {
+                        var idx = i;
+                        var alloc = _editProducers[idx];
+                        <div class="sp-alloc-row">
+                            <SfTextBox Value="@alloc.Name" ValueChanged="v => _editProducers[idx] = alloc with { Name = v }" Placeholder="Producer name…" Width="180px"></SfTextBox>
+                            <SfDropDownList TValue="string" TItem="string" Value="@alloc.Role" ValueChanged="v => _editProducers[idx] = alloc with { Role = v }"
+                                DataSource='new[]{"Primary","Secondary","Branch Manager","House Account","Referral"}'
+                                Width="155px"></SfDropDownList>
+                            <SfNumericTextBox TValue="decimal" Value="@alloc.Pct" ValueChanged="v => _editProducers[idx] = alloc with { Pct = v }" Format="N1" Min="0" Max="100" Width="80px"></SfNumericTextBox>
+                            <span class="sp-pct-lbl">%</span>
+                            <button class="sp-rm-btn" @onclick="() => _editProducers.RemoveAt(idx)" title="Remove">
+                                <i class="bi bi-x" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    }
+                    <div class="sp-alloc-footer">
+                        <button class="sp-add-btn" @onclick='() => _editProducers.Add(new(string.Empty, "Secondary", 0m))'>
+                            <i class="bi bi-plus-circle" aria-hidden="true"></i> Add Producer
+                        </button>
+                        <span class="sp-total @(_editProducers.Sum(p=>p.Pct) == 100 ? "sp-t-ok" : "sp-t-err")">
+                            Total: @_editProducers.Sum(p=>p.Pct).ToString("N1")%
+                        </span>
+                    </div>
+                </div>
+
+                <div class="sp-switches">
+                    <div class="sp-sw-row"><SfCheckBox Label="Branch override applies" @bind-Checked="_editBranchOverride"></SfCheckBox></div>
+                    <div class="sp-sw-row"><SfCheckBox Label="House account rule" @bind-Checked="_editHouseAccount"></SfCheckBox></div>
+                    <div class="sp-sw-row"><SfCheckBox Label="Clawback shared proportionally" @bind-Checked="_editSharedClawback"></SfCheckBox></div>
+                </div>
+
+                <div class="form-group mb-2"><label class="sp-lbl">Effective Date</label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_editEffective" Width="100%"></SfDatePicker>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="@(_editRule is null ? "Create Rule" : "Save Changes")" IsPrimary="true" OnClick="SaveRuleAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showCreate = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<AppPageHeader Title="Split Commission Setup"
+               Subtitle="Configure new business and renewal split rules, multi-producer sharing arrangements, branch overrides, and house account rules"
+               Icon="bi-scissors">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/plans")'>
+            <i class="bi bi-clipboard-check" aria-hidden="true"></i> Comp Plans
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/planner")'>
+            <i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="NewRule">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> New Split Rule
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="sp-kpi-strip">
+    @SpKpi("bi-scissors",       "Total Rules",        _rules.Count.ToString(),                               "sp-ki-blue")
+    @SpKpi("bi-check-circle",   "Active",             _rules.Count(r=>r.Status=="Active").ToString(),        "sp-ki-green")
+    @SpKpi("bi-arrow-up-circle","New Biz Rules",      _rules.Count(r=>r.AppliesTo is "New Business" or "Both").ToString(), "sp-ki-blue")
+    @SpKpi("bi-arrow-repeat",   "Renewal Rules",      _rules.Count(r=>r.AppliesTo is "Renewal" or "Both").ToString(),     "sp-ki-blue")
+    @SpKpi("bi-building",       "Branch Override",    _rules.Count(r=>r.BranchOverride).ToString(),          "sp-ki-amber")
+    @SpKpi("bi-house",          "House Account",      _rules.Count(r=>r.HouseAccount).ToString(),            "sp-ki-amber")
+    @SpKpi("bi-people",         "Multi-Producer",     _rules.Count(r=>r.ProducerCount>2).ToString(),         "sp-ki-purple")
+    @SpKpi("bi-arrow-counterclockwise","Shared Clawback",_rules.Count(r=>r.SharedClawback).ToString(),      "sp-ki-red")
+</div>
+
+<!-- Sub-nav -->
+<div class="sp-subnav">
+    <button class="sp-snav-btn sp-snav-active"><i class="bi bi-scissors" aria-hidden="true"></i> Split Rules</button>
+    <button class="sp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/plans")'><i class="bi bi-clipboard-check" aria-hidden="true"></i> Comp Plans</button>
+    <button class="sp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
+    <button class="sp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><i class="bi bi-journal-text" aria-hidden="true"></i> Producer Ledger</button>
+    <button class="sp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/exceptions")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions</button>
+    <button class="sp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/planner")'><i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner</button>
+</div>
+
+<!-- Toolbar -->
+<div class="sp-toolbar">
+    <SfTextBox Placeholder="Search rule name…" @bind-Value="_searchTerm" Width="260px"></SfTextBox>
+    <select class="e-input sp-sel" @bind="_filterApplies">
+        <option value="">All Types</option>
+        <option value="New Business">New Business</option>
+        <option value="Renewal">Renewal</option>
+        <option value="Both">Both</option>
+        <option value="Override Only">Override Only</option>
+    </select>
+    <select class="e-input sp-sel" @bind="_filterStatus">
+        <option value="">All Statuses</option>
+        <option value="Active">Active</option>
+        <option value="Draft">Draft</option>
+        <option value="Archived">Archived</option>
+    </select>
+</div>
+
+<!-- Rules grid -->
+@if (_rules.Count == 0)
+{
+    <div class="sp-empty-state">
+        <i class="bi bi-scissors sp-es-icon" aria-hidden="true"></i>
+        <p>No split rules configured. Create your first rule to enable multi-producer commission sharing.</p>
+        <button class="um-btn um-btn-primary" @onclick="NewRule"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Split Rule</button>
+    </div>
+}
+else
+{
+<div class="sp-grid-wrap">
+    <SfGrid DataSource="FilteredRules" AllowSorting="true" AllowPaging="true" Height="500px">
+        <GridPageSettings PageSize="12"></GridPageSettings>
+        <GridColumns>
+            <GridColumn HeaderText="Rule Name" Width="240">
+                <Template>
+                    @{ var r = (SplitRule)context; }
+                    <div class="sp-rule-cell">
+                        <i class="bi bi-scissors sp-rule-icon" aria-hidden="true"></i>
+                        <div>
+                            <div class="sp-rule-name">@r.Name</div>
+                            <div class="sp-rule-type">@r.SplitType</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Applies To" Width="130">
+                <Template>
+                    @{ var r2 = (SplitRule)context; }
+                    <span class="sp-applies-chip sp-a-@r2.AppliesTo.ToLower().Replace(" ","-")">@r2.AppliesTo</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Producers" Width="260">
+                <Template>
+                    @{ var r3 = (SplitRule)context; }
+                    <div class="sp-producers-cell">
+                        @foreach (var p in r3.Allocations)
+                        {
+                            <div class="sp-prod-row">
+                                <span class="sp-prod-name">@p.Name</span>
+                                <span class="sp-prod-role">@p.Role</span>
+                                <span class="sp-prod-pct">@p.Pct.ToString("N0")%</span>
+                            </div>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Features" Width="160">
+                <Template>
+                    @{ var r4 = (SplitRule)context; }
+                    <div class="sp-feat-chips">
+                        @if (r4.BranchOverride) { <span class="sp-feat sp-f-branch">Branch</span> }
+                        @if (r4.HouseAccount)   { <span class="sp-feat sp-f-house">House</span> }
+                        @if (r4.SharedClawback) { <span class="sp-feat sp-f-clawback">Shared CW</span> }
+                        @if (r4.ProducerCount > 2) { <span class="sp-feat sp-f-multi">@r4.ProducerCount-way</span> }
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Status" Width="100">
+                <Template>
+                    @{ var r5 = (SplitRule)context; }
+                    <span class="sp-status-chip sp-st-@r5.Status.ToLower()">@r5.Status</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SplitRule.Effective)" HeaderText="Effective" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+            <GridColumn HeaderText="Actions" Width="110">
+                <Template>
+                    @{ var r6 = (SplitRule)context; }
+                    <div class="sp-row-acts">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => EditRule(r6)" title="Edit">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/commissions/planner")' title="Model">
+                            <i class="bi bi-calculator" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+}
+
+@code {
+    private string? _searchTerm;
+    private string _filterApplies = "", _filterStatus = "";
+    private bool _showCreate;
+    private SplitRule? _editRule;
+    private string? _editName, _editAppliesTo = "Both", _editSplitType = "Fixed %";
+    private bool _editBranchOverride, _editHouseAccount, _editSharedClawback;
+    private DateTime _editEffective = DateTime.Today;
+    private List<AllocRow> _editProducers = [];
+    private SfToast _toast = default!;
+
+    private readonly List<SplitRule> _rules =
+    [
+        new(Guid.NewGuid(), "60/40 New Biz Sharing",     "New Business", "Fixed %",  [new("Sarah Chen","Primary",60m), new("Marcus Webb","Secondary",40m)], false, false, true,  "Active",  DateTime.Today.AddYears(-1)),
+        new(Guid.NewGuid(), "50/50 Renewal Split",        "Renewal",      "Fixed %",  [new("Sarah Chen","Primary",50m), new("Marcus Webb","Secondary",50m)], false, false, true,  "Active",  DateTime.Today.AddYears(-1)),
+        new(Guid.NewGuid(), "Branch Override — South",    "Both",         "Fixed %",  [new("Sarah Chen","Primary",60m), new("Marcus Webb","Secondary",30m), new("Branch Office","Branch Manager",10m)], true, false, true, "Active", DateTime.Today.AddYears(-1)),
+        new(Guid.NewGuid(), "House Account — Corp",       "Both",         "Fixed %",  [new("House Account","House Account",100m)], false, true, false, "Active",  DateTime.Today.AddYears(-1)),
+        new(Guid.NewGuid(), "Referral 3-Way",             "New Business", "Custom",   [new("Linda Torres","Primary",50m), new("Priya Patel","Secondary",30m), new("Tom Harris","Referral",20m)], false, false, false, "Active", DateTime.Today.AddMonths(-6)),
+        new(Guid.NewGuid(), "Equal Share 4-Producer",     "Both",         "Equal Share",[new("Producer A","Primary",25m),new("Producer B","Secondary",25m),new("Producer C","Secondary",25m),new("Producer D","Secondary",25m)], false, false, true, "Draft", DateTime.Today),
+    ];
+
+    private IEnumerable<SplitRule> FilteredRules => _rules.Where(r =>
+        (string.IsNullOrEmpty(_searchTerm)    || r.Name.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_filterApplies) || r.AppliesTo == _filterApplies) &&
+        (string.IsNullOrEmpty(_filterStatus)  || r.Status == _filterStatus));
+
+    protected override void OnInitialized() =>
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Split Rules",""));
+
+    void NewRule()
+    {
+        _editRule = null; _editName = null;
+        _editAppliesTo = "Both"; _editSplitType = "Fixed %";
+        _editBranchOverride = _editHouseAccount = _editSharedClawback = false;
+        _editEffective = DateTime.Today;
+        _editProducers = [new("", "Primary", 60m), new("", "Secondary", 40m)];
+        _showCreate = true;
+    }
+
+    void EditRule(SplitRule r)
+    {
+        _editRule = r; _editName = r.Name;
+        _editAppliesTo = r.AppliesTo; _editSplitType = r.SplitType;
+        _editBranchOverride = r.BranchOverride; _editHouseAccount = r.HouseAccount; _editSharedClawback = r.SharedClawback;
+        _editEffective = r.Effective;
+        _editProducers = r.Allocations.Select(a => new AllocRow(a.Name, a.Role, a.Pct)).ToList();
+        _showCreate = true;
+    }
+
+    async Task SaveRuleAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_editName) || _editProducers.Sum(p => p.Pct) != 100) return;
+        var allocs = _editProducers.Select(p => new AllocRow(p.Name, p.Role, p.Pct)).ToList();
+        if (_editRule is null)
+            _rules.Insert(0, new(Guid.NewGuid(), _editName, _editAppliesTo!, _editSplitType!, allocs, _editBranchOverride, _editHouseAccount, _editSharedClawback, "Draft", _editEffective));
+        else
+        {
+            var i = _rules.IndexOf(_editRule);
+            if (i >= 0) _rules[i] = _editRule with { Name = _editName, AppliesTo = _editAppliesTo!, SplitType = _editSplitType!, Allocations = allocs, BranchOverride = _editBranchOverride, HouseAccount = _editHouseAccount, SharedClawback = _editSharedClawback, Effective = _editEffective };
+        }
+        _showCreate = false;
+        await _toast.ShowAsync(new ToastModel { Content = "Split rule saved.", CssClass = "e-toast-success" });
+    }
+
+    RenderFragment SpKpi(string icon, string label, string val, string color) => __builder =>
+    {
+        <div class="sp-kpi-card @color">
+            <i class="bi @icon sp-kpi-icon" aria-hidden="true"></i>
+            <div><div class="sp-kpi-val">@val</div><div class="sp-kpi-lbl">@label</div></div>
+        </div>
+    };
+
+    record AllocRow(string Name, string Role, decimal Pct);
+    record SplitRule(Guid Id, string Name, string AppliesTo, string SplitType, List<AllocRow> Allocations,
+                     bool BranchOverride, bool HouseAccount, bool SharedClawback, string Status, DateTime Effective)
+    {
+        public int ProducerCount => Allocations.Count;
+        public string Status { get; set; } = Status;
+    }
+}

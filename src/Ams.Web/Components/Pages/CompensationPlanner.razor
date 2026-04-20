@@ -1,0 +1,313 @@
+@page "/commissions/planner"
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>What-If Compensation Planner — AMS</PageTitle>
+
+<AppPageHeader Title="What-If Compensation Planner"
+               Subtitle="Model new/renewal splits, multi-producer sharing, branch overrides, house account rules, and clawback impact before committing to a compensation structure"
+               Icon="bi-calculator">
+    <Actions>
+        <button class="wp-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/plans")'>
+            <i class="bi bi-clipboard-check" aria-hidden="true"></i> Comp Plans
+        </button>
+        <button class="wp-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/splits")'>
+            <i class="bi bi-scissors" aria-hidden="true"></i> Split Rules
+        </button>
+        <button class="wp-btn-primary" @onclick="RunScenario">
+            <i class="bi bi-play-fill" aria-hidden="true"></i> Run Scenario
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Sub-nav -->
+<div class="wp-subnav">
+    <button class="wp-snav-btn wp-snav-active"><i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner</button>
+    <button class="wp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/plans")'><i class="bi bi-clipboard-check" aria-hidden="true"></i> Plans</button>
+    <button class="wp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/splits")'><i class="bi bi-scissors" aria-hidden="true"></i> Splits</button>
+    <button class="wp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
+    <button class="wp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/forecast")'><i class="bi bi-graph-up" aria-hidden="true"></i> Forecast</button>
+    <button class="wp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/clawbacks")'><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Clawbacks</button>
+</div>
+
+<div class="wp-layout">
+    <!-- ══ INPUTS PANEL ══ -->
+    <div class="wp-inputs">
+        <div class="wp-panel-hdr"><i class="bi bi-sliders" aria-hidden="true"></i> Scenario Inputs</div>
+
+        <!-- Premium / Book -->
+        <div class="wp-section">
+            <div class="wp-section-title">Book of Business</div>
+            <div class="wp-field"><label class="wp-lbl">New Business Premium</label>
+                <SfNumericTextBox TValue="decimal" @bind-Value="_newBizPremium" Format="C0" Width="100%"></SfNumericTextBox>
+            </div>
+            <div class="wp-field"><label class="wp-lbl">Renewal Premium</label>
+                <SfNumericTextBox TValue="decimal" @bind-Value="_renewalPremium" Format="C0" Width="100%"></SfNumericTextBox>
+            </div>
+            <div class="wp-field"><label class="wp-lbl">Policy Count</label>
+                <SfNumericTextBox TValue="int" @bind-Value="_policyCount" Width="100%"></SfNumericTextBox>
+            </div>
+        </div>
+
+        <!-- Rates -->
+        <div class="wp-section">
+            <div class="wp-section-title">Commission Rates</div>
+            <div class="wp-field"><label class="wp-lbl">New Business Rate %</label>
+                <SfNumericTextBox TValue="decimal" @bind-Value="_newBizRate" Format="N2" Min="0" Max="100" Width="100%"></SfNumericTextBox>
+            </div>
+            <div class="wp-field"><label class="wp-lbl">Renewal Rate %</label>
+                <SfNumericTextBox TValue="decimal" @bind-Value="_renewalRate" Format="N2" Min="0" Max="100" Width="100%"></SfNumericTextBox>
+            </div>
+            <div class="wp-field"><label class="wp-lbl">Override / Bonus %</label>
+                <SfNumericTextBox TValue="decimal" @bind-Value="_overrideRate" Format="N2" Min="0" Max="100" Width="100%"></SfNumericTextBox>
+            </div>
+        </div>
+
+        <!-- Split -->
+        <div class="wp-section">
+            <div class="wp-section-title">Split Arrangement</div>
+            <div class="wp-field"><label class="wp-lbl">Split Type</label>
+                <SfDropDownList TValue="string" TItem="string"
+                    DataSource='new[]{"No Split","60/40","50/50","70/30","Custom","Branch Override","House Account"}'
+                    Value="_splitType" Width="100%"
+                    ValueChanged="OnSplitTypeChanged"></SfDropDownList>
+            </div>
+            @if (_splitType == "Custom")
+            {
+                <div class="wp-field"><label class="wp-lbl">Primary Producer %</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_primaryPct" Format="N1" Min="0" Max="100" Width="100%"></SfNumericTextBox>
+                </div>
+            }
+            <div class="wp-field">
+                <SfCheckBox Label="Branch override applies (+rate on top)" @bind-Checked="_branchOverride"></SfCheckBox>
+            </div>
+            <div class="wp-field">
+                <SfCheckBox Label="House account rules (no split)" @bind-Checked="_houseAccount"></SfCheckBox>
+            </div>
+        </div>
+
+        <!-- Clawbacks -->
+        <div class="wp-section">
+            <div class="wp-section-title">Clawback Modeling</div>
+            <div class="wp-field"><label class="wp-lbl">Expected Cancellation Rate %</label>
+                <SfNumericTextBox TValue="decimal" @bind-Value="_cancelRate" Format="N1" Min="0" Max="100" Width="100%"></SfNumericTextBox>
+            </div>
+            <div class="wp-field"><label class="wp-lbl">NSF / Chargeback Rate %</label>
+                <SfNumericTextBox TValue="decimal" @bind-Value="_nsfRate" Format="N1" Min="0" Max="100" Width="100%"></SfNumericTextBox>
+            </div>
+            <div class="wp-field">
+                <SfCheckBox Label="Clawbacks shared proportionally" @bind-Checked="_sharedClawbacks"></SfCheckBox>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ RESULTS PANEL ══ -->
+    <div class="wp-results">
+        <div class="wp-panel-hdr"><i class="bi bi-graph-up" aria-hidden="true"></i> Scenario Results</div>
+
+        @if (!_ran)
+        {
+            <div class="wp-results-empty">
+                <i class="bi bi-play-circle wp-re-icon" aria-hidden="true"></i>
+                <p>Configure your scenario inputs and click <strong>Run Scenario</strong> to see projections.</p>
+            </div>
+        }
+        else
+        {
+            <!-- Summary KPIs -->
+            <div class="wp-result-kpis">
+                @WpKpi("bi-currency-dollar",       "Total Commission",      _result.TotalCommission.ToString("C0"),   "wp-rk-green")
+                @WpKpi("bi-arrow-up-circle",        "New Biz Earned",        _result.NewBizEarned.ToString("C0"),      "wp-rk-blue")
+                @WpKpi("bi-arrow-repeat",           "Renewal Earned",        _result.RenewalEarned.ToString("C0"),     "wp-rk-blue")
+                @WpKpi("bi-building",               "Override / Bonus",      _result.OverrideEarned.ToString("C0"),   "wp-rk-amber")
+                @WpKpi("bi-arrow-counterclockwise", "Projected Clawbacks",  _result.ProjectedClawbacks.ToString("C0"),"wp-rk-red")
+                @WpKpi("bi-cash-stack",             "Net After Clawbacks",   _result.NetPayout.ToString("C0"),         "wp-rk-green")
+            </div>
+
+            <!-- Producer breakdown table -->
+            <div class="wp-breakdown-hdr">Producer Payout Breakdown</div>
+            <div class="wp-breakdown-table">
+                <div class="wp-bt-row wp-bt-hdr">
+                    <span>Producer</span><span>Role</span><span>Split %</span>
+                    <span>Gross Share</span><span>Clawback</span><span>Net Share</span>
+                </div>
+                @foreach (var row in _result.ProducerRows)
+                {
+                    <div class="wp-bt-row">
+                        <span class="wp-bt-name">@row.Name</span>
+                        <span><span class="wp-role-chip wp-r-@row.Role.ToLower().Replace(" ","-")">@row.Role</span></span>
+                        <span class="wp-bt-pct">@row.SplitPct.ToString("N0")%</span>
+                        <span class="wp-bt-amount">@row.GrossShare.ToString("C2")</span>
+                        <span class="wp-bt-cw">@(row.ClawbackShare > 0 ? "(" + row.ClawbackShare.ToString("C2") + ")" : "—")</span>
+                        <span class="wp-bt-net">@row.NetShare.ToString("C2")</span>
+                    </div>
+                }
+            </div>
+
+            <!-- Scenario comparison (compare 3 split variants side by side) -->
+            <div class="wp-breakdown-hdr" style="margin-top:1.25rem">Split Comparison — Same Book</div>
+            <div class="wp-compare-grid">
+                @foreach (var c in _comparisons)
+                {
+                    <div class="wp-compare-card">
+                        <div class="wp-cc-title">@c.Label</div>
+                        <div class="wp-cc-gross">@c.PrimaryNet.ToString("C0")<span class="wp-cc-sub"> primary</span></div>
+                        @if (c.SecondaryNet > 0)
+                        {
+                            <div class="wp-cc-sec">@c.SecondaryNet.ToString("C0")<span class="wp-cc-sub"> secondary</span></div>
+                        }
+                        <div class="wp-cc-net">Net total: <strong>@c.TotalNet.ToString("C0")</strong></div>
+                        @if (c.IsSelected) { <span class="wp-cc-badge">Current scenario</span> }
+                    </div>
+                }
+            </div>
+
+            <!-- Clawback risk timeline -->
+            <div class="wp-breakdown-hdr" style="margin-top:1.25rem">Projected Clawback Risk by Quarter</div>
+            <div class="wp-cw-timeline">
+                @foreach (var q in _result.ClawbackQuarters)
+                {
+                    <div class="wp-cwq-col">
+                        <div class="wp-cwq-bar-wrap">
+                            <div class="wp-cwq-bar" style="height:@(Math.Min(100,q.Amount/_result.ProjectedClawbacks*80))px"></div>
+                        </div>
+                        <div class="wp-cwq-val">@q.Amount.ToString("C0")</div>
+                        <div class="wp-cwq-lbl">@q.Label</div>
+                    </div>
+                }
+            </div>
+
+            <!-- Action buttons -->
+            <div class="wp-actions-row">
+                <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/plans")'>
+                    <i class="bi bi-clipboard-check" aria-hidden="true"></i> Save as Plan
+                </button>
+                <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/splits")'>
+                    <i class="bi bi-scissors" aria-hidden="true"></i> Create Split Rule
+                </button>
+                <button class="um-btn um-btn-ghost" @onclick="Reset">
+                    <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset
+                </button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    // ── Inputs ────────────────────────────────────────────────────────────────
+    private decimal _newBizPremium  = 500_000m;
+    private decimal _renewalPremium = 300_000m;
+    private int     _policyCount    = 120;
+    private decimal _newBizRate     = 10m;
+    private decimal _renewalRate    = 8m;
+    private decimal _overrideRate   = 2m;
+    private string  _splitType      = "60/40";
+    private decimal _primaryPct     = 60m;
+    private bool    _branchOverride, _houseAccount, _sharedClawbacks = true;
+    private decimal _cancelRate     = 3m;
+    private decimal _nsfRate        = 0.5m;
+
+    private bool _ran;
+    private ScenarioResult _result = new();
+
+    protected override void OnInitialized() =>
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("What-If Planner",""));
+
+    void OnSplitTypeChanged(string v)
+    {
+        _splitType = v;
+        _primaryPct = v switch { "60/40" => 60m, "50/50" => 50m, "70/30" => 70m, _ => 60m };
+    }
+
+    void RunScenario()
+    {
+        var (primary, secondary) = ResolveSplit();
+        var newBizComm    = _newBizPremium  * _newBizRate   / 100m;
+        var renewalComm   = _renewalPremium * _renewalRate  / 100m;
+        var overrideBonus = (_newBizPremium + _renewalPremium) * _overrideRate / 100m;
+        if (!_branchOverride) overrideBonus = 0m;
+        var total   = newBizComm + renewalComm + overrideBonus;
+        var clawCancelation = total * _cancelRate / 100m;
+        var clawNsf         = total * _nsfRate    / 100m;
+        var totalClaw       = clawCancelation + clawNsf;
+        var net = total - totalClaw;
+
+        var pRows = new List<ProducerRow>();
+        if (_houseAccount)
+        {
+            pRows.Add(new("House Account","House Account",100m, total, totalClaw, net));
+        }
+        else
+        {
+            pRows.Add(new("Primary Producer","Primary", primary, total*primary/100m, _sharedClawbacks? totalClaw*primary/100m:totalClaw, total*primary/100m - (_sharedClawbacks?totalClaw*primary/100m:totalClaw)));
+            if (secondary > 0)
+                pRows.Add(new("Secondary Producer","Secondary", secondary, total*secondary/100m, _sharedClawbacks?totalClaw*secondary/100m:0m, total*secondary/100m - (_sharedClawbacks?totalClaw*secondary/100m:0m)));
+            if (_branchOverride)
+                pRows.Add(new("Branch Office","Branch Manager", 0m, overrideBonus, 0m, overrideBonus));
+        }
+
+        var quarters = new List<(string Label, decimal Amount)>
+        {
+            ("Q1 2025", totalClaw * .20m),
+            ("Q2 2025", totalClaw * .35m),
+            ("Q3 2025", totalClaw * .25m),
+            ("Q4 2025", totalClaw * .20m),
+        };
+
+        var comparisons = new List<ComparisonRow>
+        {
+            new("No Split (100%)",  net,            0m, net,            _splitType == "No Split"),
+            new("60/40 Split",      net*.60m, net*.40m,  net,           _splitType == "60/40"),
+            new("50/50 Split",      net*.50m, net*.50m,  net,           _splitType == "50/50"),
+            new("70/30 Split",      net*.70m, net*.30m,  net,           _splitType == "70/30"),
+        };
+
+        _result = new ScenarioResult
+        {
+            TotalCommission    = total,
+            NewBizEarned       = newBizComm,
+            RenewalEarned      = renewalComm,
+            OverrideEarned     = overrideBonus,
+            ProjectedClawbacks = totalClaw,
+            NetPayout          = net,
+            ProducerRows       = pRows,
+            ClawbackQuarters   = quarters.Select(q => new QuarterRow(q.Label, q.Amount)).ToList(),
+        };
+        _comparisons = comparisons;
+        _ran = true;
+    }
+
+    private (decimal primary, decimal secondary) ResolveSplit() => _splitType switch
+    {
+        "No Split"       => (100m, 0m),
+        "60/40"          => (60m,  40m),
+        "50/50"          => (50m,  50m),
+        "70/30"          => (70m,  30m),
+        "Custom"         => (_primaryPct, 100m - _primaryPct),
+        "Branch Override"=> (70m,  20m),
+        "House Account"  => (100m, 0m),
+        _                => (60m,  40m),
+    };
+
+    void Reset() { _ran = false; _result = new(); }
+
+    private List<ComparisonRow> _comparisons = [];
+
+    RenderFragment WpKpi(string icon, string label, string val, string color) => __builder =>
+    {
+        <div class="wp-rk-card @color">
+            <i class="bi @icon wp-rk-icon" aria-hidden="true"></i>
+            <div><div class="wp-rk-val">@val</div><div class="wp-rk-lbl">@label</div></div>
+        </div>
+    };
+
+    class ScenarioResult
+    {
+        public decimal TotalCommission, NewBizEarned, RenewalEarned, OverrideEarned, ProjectedClawbacks, NetPayout;
+        public List<ProducerRow> ProducerRows = [];
+        public List<QuarterRow> ClawbackQuarters = [];
+    }
+    record ProducerRow(string Name, string Role, decimal SplitPct, decimal GrossShare, decimal ClawbackShare, decimal NetShare);
+    record QuarterRow(string Label, decimal Amount);
+    record ComparisonRow(string Label, decimal PrimaryNet, decimal SecondaryNet, decimal TotalNet, bool IsSelected);
+}

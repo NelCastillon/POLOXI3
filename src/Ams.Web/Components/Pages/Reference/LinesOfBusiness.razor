@@ -1,0 +1,293 @@
+@page "/admin/reference/lobs"
+@namespace Ams.Web.Components.Pages.ReferenceAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Lines of Business — Reference Data</PageTitle>
+
+<AppPageHeader Title="Lines of Business"
+               Subtitle="Configured lines of business, coverage types and their active/inactive status"
+               Icon="bi-list-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Line
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="lb-kpi-strip">
+    <div class="lb-kpi-card">
+        <span class="lb-kpi-icon lb-kpi-icon--total"><i class="bi bi-list-check" aria-hidden="true"></i></span>
+        <div><div class="lb-kpi-value">@_totalCount</div><div class="lb-kpi-label">Total Lines</div></div>
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
+        <span class="lb-kpi-icon lb-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="lb-kpi-value">@_activeCount</div><div class="lb-kpi-label">Active</div></div>
+        @if (_kpiActive == 2) { <span class="lb-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0">
+        <span class="lb-kpi-icon lb-kpi-icon--inactive"><i class="bi bi-dash-circle" aria-hidden="true"></i></span>
+        <div><div class="lb-kpi-value">@_inactiveCount</div><div class="lb-kpi-label">Inactive</div></div>
+        @if (_kpiActive == 3) { <span class="lb-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="lb-kpi-card">
+        <span class="lb-kpi-icon lb-kpi-icon--coverage"><i class="bi bi-shield-fill" aria-hidden="true"></i></span>
+        <div><div class="lb-kpi-value">@_coverageTypeCount</div><div class="lb-kpi-label">Coverage Types</div></div>
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search line of business or code…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_categoryOptions"
+                        Placeholder="All Categories"
+                        ShowClearButton="true"
+                        Width="180px"
+                        Value="_filterCategory"
+                        ValueChanged="@((string v) => { _filterCategory = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <label class="lb-toggle-label">
+            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
+            Active only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="LobEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(LobEntry.LobName)" HeaderText="Line of Business" Width="220">
+                <Template>
+                    @{ var e = (LobEntry)context; }
+                    <div class="lb-name-cell">
+                        <span class="lb-lob-code lb-mono">@e.LobCode</span>
+                        <div class="lb-lob-name">@e.LobName</div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(LobEntry.Category)" HeaderText="Category" Width="150">
+                <Template>
+                    @{ var e = (LobEntry)context; }
+                    <span class="@CategoryBadgeClass(e.Category)">@e.Category</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(LobEntry.CoverageTypes)" HeaderText="Coverage Types" Width="220">
+                <Template>
+                    @{ var e = (LobEntry)context; }
+                    <div class="lb-coverage-chips">
+                        @foreach (var ct in e.CoverageTypes.Take(3))
+                        {
+                            <span class="lb-chip">@ct</span>
+                        }
+                        @if (e.CoverageTypes.Count > 3)
+                        {
+                            <span class="lb-chip lb-chip--more">+@(e.CoverageTypes.Count - 3)</span>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(LobEntry.CarrierCount)" HeaderText="Carriers" Width="90" />
+            <GridColumn Field="@nameof(LobEntry.IsActive)" HeaderText="Status" Width="100">
+                <Template>
+                    @{ var e = (LobEntry)context; }
+                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (LobEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.LobId == Guid.Empty ? "Add Line of Business" : "Edit Line of Business")"
+               OnSave="SaveLobAsync"
+               OnCancel="CloseDrawer">
+    <Body>
+        <div class="lb-form">
+            <label class="lb-form-label">LOB Name *</label>
+            <input class="um-input" @bind="_editModel.LobName" />
+
+            <label class="lb-form-label">LOB Code</label>
+            <input class="um-input lb-mono" @bind="_editModel.LobCode" placeholder="e.g. BOP, GL, WC" />
+
+            <label class="lb-form-label">Category</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_categoryOptions"
+                            @bind-Value="_editModel.Category"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="lb-form-label">Active</label>
+            <SfSwitch @bind-Checked="_editModel.IsActive" />
+        </div>
+    </Body>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<LobEntry> _allEntries = [];
+    private List<LobEntry> _entries    = [];
+
+    private bool _loading    = false;
+    private bool _showDrawer = false;
+
+    private string _search           = string.Empty;
+    private string _filterCategory   = string.Empty;
+    private bool   _filterActiveOnly = false;
+    private int    _kpiActive        = 0;
+
+    private int _totalCount       = 0;
+    private int _activeCount      = 0;
+    private int _inactiveCount    = 0;
+    private int _coverageTypeCount = 0;
+
+    private string KpiClass2 => "lb-kpi-card" + (_kpiActive == 2 ? " lb-kpi-card--active" : "");
+    private string KpiClass3 => "lb-kpi-card" + (_kpiActive == 3 ? " lb-kpi-card--active" : "");
+
+    private static readonly List<LabelValue> _categoryOptions =
+    [
+        new("Commercial",  "Commercial"),
+        new("Personal",    "Personal"),
+        new("Specialty",   "Specialty"),
+        new("Employee",    "Employee Benefits"),
+        new("Life",        "Life & Health"),
+    ];
+
+    private LobEntry _editModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",             "/"),
+            new("Reference Data",   "/admin/reference/carriers"),
+            new("Lines of Business","/admin/reference/lobs"));
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterCategory) || e.Category == _filterCategory) &&
+            (!_filterActiveOnly || e.IsActive) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.LobName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.LobCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        if (_kpiActive == 2) _entries = _entries.Where(e =>  e.IsActive).ToList();
+        if (_kpiActive == 3) _entries = _entries.Where(e => !e.IsActive).ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive      = _kpiActive == n ? 0 : n;
+        _filterActiveOnly = false;
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount        = _allEntries.Count;
+        _activeCount       = _allEntries.Count(e => e.IsActive);
+        _inactiveCount     = _allEntries.Count(e => !e.IsActive);
+        _coverageTypeCount = _allEntries.Sum(e => e.CoverageTypes.Count);
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(LobEntry e) { _editModel = new LobEntry { LobId = e.LobId, LobCode = e.LobCode, LobName = e.LobName, Category = e.Category, CoverageTypes = [..e.CoverageTypes], CarrierCount = e.CarrierCount, IsActive = e.IsActive }; _showDrawer = true; }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveLobAsync()
+    {
+        await Task.Delay(0);
+        _showDrawer = false;
+        await LoadAsync();
+        await ShowToastAsync("Line of business saved.", "e-toast-success");
+    }
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string CategoryBadgeClass(string cat) => cat switch
+    {
+        "Commercial" => "lb-cat-badge lb-cat-badge--commercial",
+        "Personal"   => "lb-cat-badge lb-cat-badge--personal",
+        "Specialty"  => "lb-cat-badge lb-cat-badge--specialty",
+        "Employee"   => "lb-cat-badge lb-cat-badge--employee",
+        "Life"       => "lb-cat-badge lb-cat-badge--life",
+        _            => "lb-cat-badge",
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class LobEntry
+    {
+        public Guid         LobId         { get; set; } = Guid.Empty;
+        public string       LobCode       { get; set; } = string.Empty;
+        public string       LobName       { get; set; } = string.Empty;
+        public string       Category      { get; set; } = "Commercial";
+        public List<string> CoverageTypes { get; set; } = [];
+        public int          CarrierCount  { get; set; }
+        public bool         IsActive      { get; set; } = true;
+    }
+}

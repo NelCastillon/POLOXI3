@@ -1,0 +1,477 @@
+@page "/workbench/csr"
+@namespace Ams.Web.Components.Pages.Workbench
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>CSR Workbench</PageTitle>
+
+<WorkbenchShell Title="CSR Workbench"
+                Subtitle="Customer service queues — service requests, endorsements, certificates, billing enquiries, complaints and follow-ups"
+                Icon="bi-headset"
+                @bind-Scope="_scope"
+                BranchId="@_branchId"
+                BranchIdChanged="OnBranchChangedAsync"
+                TeamId="@_teamId"
+                TeamIdChanged="OnTeamChangedAsync"
+                SavedViews="_savedViews"
+                OnSaveView="SaveViewAsync"
+                OnLoadView="LoadViewAsync"
+                OnDeleteView="DeleteViewAsync"
+                SlaItems="_slaItems"
+                AiSummary="_aiSummary"
+                AiSummaryLoading="_aiLoading"
+                AiSummaryGeneratedAt="_aiGeneratedAt"
+                OnGenerateAiSummary="GenerateAiSummaryAsync"
+                OnRefresh="LoadAsync"
+                Loading="_loading">
+    <ExtraActions>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/service-requests/new")'>
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Request
+        </button>
+    </ExtraActions>
+    <Queues>
+
+        <!-- ── KPI strip ─────────────────────────────────────────────────── -->
+        <div class="wb-kpi-strip">
+            <div class="@KpiClass(1)" @onclick='() => FocusQueue(1, "service-requests")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i1"><i class="bi bi-headset" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val @(_c.ServiceRequests > 0 ? "wb-kpi-val--alert" : "")">@_c.ServiceRequests</div>
+                    <div class="wb-kpi-lbl">Service Requests</div>
+                </div>
+                @KpiDot(1)
+            </div>
+            <div class="@KpiClass(2)" @onclick='() => FocusQueue(2, "endorsements")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i2"><i class="bi bi-pen-fill" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val">@_c.Endorsements</div>
+                    <div class="wb-kpi-lbl">Endorsements</div>
+                </div>
+                @KpiDot(2)
+            </div>
+            <div class="@KpiClass(3)" @onclick='() => FocusQueue(3, "certificates")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i3"><i class="bi bi-patch-check-fill" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val">@_c.Certificates</div>
+                    <div class="wb-kpi-lbl">Certificates</div>
+                </div>
+                @KpiDot(3)
+            </div>
+            <div class="@KpiClass(4)" @onclick='() => FocusQueue(4, "billing-enquiries")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i4"><i class="bi bi-receipt" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val">@_c.BillingEnquiries</div>
+                    <div class="wb-kpi-lbl">Billing Enquiries</div>
+                </div>
+                @KpiDot(4)
+            </div>
+            <div class="@KpiClass(5)" @onclick='() => FocusQueue(5, "complaints")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i5"><i class="bi bi-exclamation-octagon-fill" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val @(_c.Complaints > 0 ? "wb-kpi-val--alert" : "")">@_c.Complaints</div>
+                    <div class="wb-kpi-lbl">Complaints</div>
+                </div>
+                @KpiDot(5)
+            </div>
+            <div class="@KpiClass(6)" @onclick='() => FocusQueue(6, "follow-ups")' role="button" tabindex="0">
+                <span class="wb-kpi-icon wb-kpi-i6"><i class="bi bi-alarm-fill" aria-hidden="true"></i></span>
+                <div class="wb-kpi-body">
+                    <div class="wb-kpi-val @(_c.OverdueFollowUps > 0 ? "wb-kpi-val--warn" : "")">@_c.FollowUps</div>
+                    <div class="wb-kpi-lbl">Follow-ups</div>
+                    <div class="wb-kpi-sub @(_c.OverdueFollowUps > 0 ? "wb-sub--warn" : "")">@_c.OverdueFollowUps overdue</div>
+                </div>
+                @KpiDot(6)
+            </div>
+        </div>
+
+        <!-- ── Queue tabs ─────────────────────────────────────────────────── -->
+        @QueueTabs()
+
+        <!-- ── Filter row ─────────────────────────────────────────────────── -->
+        @FilterRow()
+
+        <!-- ── Grids ──────────────────────────────────────────────────────── -->
+        @if (!_loading)
+        {
+            @if (_activeQueue == "service-requests")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="WbItem" DataSource="@Filtered(_serviceRequests)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(WbItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.Title)" HeaderText="Request" Width="240">
+                                <Template>@{ var i=(WbItem)context; }<div class="wb-name-cell"><div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></div></Template>
+                            </GridColumn>
+                            <GridColumn Field="@nameof(WbItem.AccountName)" HeaderText="Account"    Width="180" />
+                            <GridColumn Field="@nameof(WbItem.Category)"    HeaderText="Category"   Width="140" />
+                            <GridColumn Field="@nameof(WbItem.Channel)"     HeaderText="Channel"    Width="110"><Template>@{ var i=(WbItem)context; }<span class="@ChanBadge(i.Channel)">@i.Channel</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.AssignedTo)"  HeaderText="Assignee"   Width="140" />
+                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
+                            <GridColumn HeaderText="Age"  Width="80"><Template>@{ var i=(WbItem)context; }<span class="@AgeBadge(i.AgeDays)">@i.AgeDays d</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            @if (_activeQueue == "endorsements")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="WbItem" DataSource="@Filtered(_endorsements)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(WbItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.Title)"       HeaderText="Endorsement" Width="220"><Template>@{ var i=(WbItem)context; }<div class="wb-name-cell"><div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></div></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.AccountName)" HeaderText="Account"     Width="180" />
+                            <GridColumn Field="@nameof(WbItem.PolicyNumber)" HeaderText="Policy #"   Width="140"><Template>@{ var i=(WbItem)context; }<span class="wb-mono">@i.PolicyNumber</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.AssignedTo)"  HeaderText="Assignee"    Width="140" />
+                            <GridColumn Field="@nameof(WbItem.DueDate)"     HeaderText="Needed By"   Width="120"><Template>@{ var i=(WbItem)context; }<span class="@(i.DueDate<DateTime.Today?"wb-overdue":"")">@i.DueDate.ToString("d")</span></Template></GridColumn>
+                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            @if (_activeQueue == "certificates")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="WbItem" DataSource="@Filtered(_certificates)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(WbItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.Title)"        HeaderText="Cert Type"  Width="180"><Template>@{ var i=(WbItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.AccountName)"  HeaderText="Account"    Width="170" />
+                            <GridColumn Field="@nameof(WbItem.CertHolder)"   HeaderText="Holder"     Width="190" />
+                            <GridColumn Field="@nameof(WbItem.PolicyNumber)" HeaderText="Policy #"   Width="130"><Template>@{ var i=(WbItem)context; }<span class="wb-mono">@i.PolicyNumber</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.AssignedTo)"   HeaderText="Assignee"   Width="140" />
+                            <GridColumn Field="@nameof(WbItem.DueDate)"      HeaderText="Needed By"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@(i.DueDate<DateTime.Today?"wb-overdue":"")">@i.DueDate.ToString("d")</span></Template></GridColumn>
+                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            @if (_activeQueue == "billing-enquiries")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="WbItem" DataSource="@Filtered(_billingEnquiries)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(WbItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.Title)"       HeaderText="Enquiry"    Width="220"><Template>@{ var i=(WbItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.AccountName)" HeaderText="Account"    Width="180" />
+                            <GridColumn Field="@nameof(WbItem.Amount)"      HeaderText="Amount"     Width="120" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<span class="wb-mono">@i.Amount.ToString("C0")</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.Category)"    HeaderText="Category"   Width="140" />
+                            <GridColumn Field="@nameof(WbItem.AssignedTo)"  HeaderText="Assignee"   Width="140" />
+                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
+                            <GridColumn HeaderText="Age"  Width="80"><Template>@{ var i=(WbItem)context; }<span class="@AgeBadge(i.AgeDays)">@i.AgeDays d</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            @if (_activeQueue == "complaints")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="WbItem" DataSource="@Filtered(_complaints)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Severity" Width="110"><Template>@{ var i=(WbItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.Title)"       HeaderText="Complaint"  Width="240"><Template>@{ var i=(WbItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.AccountName)" HeaderText="Account"    Width="180" />
+                            <GridColumn Field="@nameof(WbItem.Category)"    HeaderText="Type"       Width="130" />
+                            <GridColumn Field="@nameof(WbItem.AssignedTo)"  HeaderText="Assignee"   Width="140" />
+                            <GridColumn Field="@nameof(WbItem.EscalationLevel)" HeaderText="Escalation" Width="120"><Template>@{ var i=(WbItem)context; }<span class="@EscBadge(i.EscalationLevel)">L@(i.EscalationLevel)</span></Template></GridColumn>
+                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
+                            <GridColumn HeaderText="Age"  Width="80"><Template>@{ var i=(WbItem)context; }<span class="@AgeBadge(i.AgeDays)">@i.AgeDays d</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+            @if (_activeQueue == "follow-ups")
+            {
+                <div class="wb-grid-card app-datagrid">
+                    <SfGrid TValue="WbItem" DataSource="@Filtered(_followUps)" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                        <GridColumns>
+                            <GridColumn HeaderText="Priority" Width="100"><Template>@{ var i=(WbItem)context; }<span class="@PriBadge(i.Priority)">@i.Priority</span></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.Title)"       HeaderText="Follow-up"  Width="230"><Template>@{ var i=(WbItem)context; }<div><div class="wb-item-name">@i.Title</div><div class="wb-item-sub wb-mono">@i.RefNumber</div></div></Template></GridColumn>
+                            <GridColumn Field="@nameof(WbItem.AccountName)" HeaderText="Account"    Width="180" />
+                            <GridColumn Field="@nameof(WbItem.Category)"    HeaderText="Type"       Width="130" />
+                            <GridColumn Field="@nameof(WbItem.AssignedTo)"  HeaderText="Assignee"   Width="140" />
+                            <GridColumn Field="@nameof(WbItem.DueDate)"     HeaderText="Due"        Width="110"><Template>@{ var i=(WbItem)context; }<span class="@(i.DueDate<DateTime.Today?"wb-overdue":"")">@i.DueDate.ToString("d")</span></Template></GridColumn>
+                            <GridColumn HeaderText="SLA"  Width="120"><Template>@{ var i=(WbItem)context; }<span class="@SlaBadge(i.SlaStatus)">@i.SlaStatus</span></Template></GridColumn>
+                            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right"><Template>@{ var i=(WbItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>OpenDetail(i)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button></Template></GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="wb-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+        }
+
+        @DetailPanel()
+
+    </Queues>
+</WorkbenchShell>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private bool    _loading  = false;
+    private string  _scope    = "me";
+    private string  _branchId = string.Empty;
+    private string  _teamId   = string.Empty;
+    private string  _activeQueue = "service-requests";
+    private int     _kpiFocus    = 0;
+    private WbItem? _selected    = null;
+
+    private string _search         = string.Empty;
+    private string _filterPriority = string.Empty;
+    private string _filterCategory = string.Empty;
+    private string _filterSla      = string.Empty;
+
+    // AI
+    private string?   _aiSummary     = null;
+    private bool      _aiLoading     = false;
+    private DateTime? _aiGeneratedAt = null;
+
+    // Saved views
+    private List<WorkbenchShell.SavedView> _savedViews = [];
+
+    // SLA
+    private List<WorkbenchShell.SlaHeatItem> _slaItems = [];
+
+    // Counts
+    private CsrCounts _c = new();
+
+    // Queues
+    private List<WbItem> _serviceRequests  = [];
+    private List<WbItem> _endorsements     = [];
+    private List<WbItem> _certificates     = [];
+    private List<WbItem> _billingEnquiries = [];
+    private List<WbItem> _complaints       = [];
+    private List<WbItem> _followUps        = [];
+
+    private record QDef(string Id, string Label, string Icon, int Badge, bool IsAlert);
+    private List<QDef> Queues => [
+        new("service-requests",  "Service Requests",  "bi bi-headset",                _c.ServiceRequests,  false),
+        new("endorsements",      "Endorsements",      "bi bi-pen-fill",                _c.Endorsements,     false),
+        new("certificates",      "Certificates",      "bi bi-patch-check-fill",        _c.Certificates,     false),
+        new("billing-enquiries", "Billing Enquiries", "bi bi-receipt",                 _c.BillingEnquiries, false),
+        new("complaints",        "Complaints",        "bi bi-exclamation-octagon-fill", _c.Complaints,      _c.Complaints > 0),
+        new("follow-ups",        "Follow-ups",        "bi bi-alarm-fill",              _c.FollowUps,        _c.OverdueFollowUps > 0),
+    ];
+
+    private static readonly List<WorkbenchShell.LabelValue> _priorityOptions =
+    [
+        new("Critical","Critical"), new("Urgent","Urgent"),
+        new("High","High"), new("Normal","Normal"), new("Low","Low"),
+    ];
+    private static readonly List<WorkbenchShell.LabelValue> _slaOptions =
+    [
+        new("On Track","On Track"), new("At Risk","At Risk"), new("Breached","Breached"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CSR Workbench", "/workbench/csr"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; StateHasChanged();
+        try
+        {
+            await Task.Delay(0);
+            _serviceRequests  = []; _endorsements    = [];
+            _certificates     = []; _billingEnquiries= [];
+            _complaints       = []; _followUps       = [];
+            _c = new();
+            RebuildSla();
+        }
+        finally { _loading = false; }
+    }
+
+    private void RebuildSla() => _slaItems =
+    [
+        new() { QueueName = "Service Requests",  InSla = _c.ServiceRequests,  Breached = 0 },
+        new() { QueueName = "Endorsements",      InSla = _c.Endorsements,     Breached = 0 },
+        new() { QueueName = "Certificates",      InSla = _c.Certificates,     Breached = 0 },
+        new() { QueueName = "Billing Enquiries", InSla = _c.BillingEnquiries, Breached = 0 },
+        new() { QueueName = "Complaints",        InSla = _c.Complaints,       Breached = 0 },
+        new() { QueueName = "Follow-ups",        InSla = _c.FollowUps,        Breached = 0 },
+    ];
+
+    private async Task OnBranchChangedAsync(string v) { _branchId = v; await LoadAsync(); }
+    private async Task OnTeamChangedAsync(string v)   { _teamId   = v; await LoadAsync(); }
+
+    private async Task GenerateAiSummaryAsync()
+    {
+        _aiLoading = true; StateHasChanged();
+        await Task.Delay(0);
+        _aiSummary     = "No AI summary available yet. Wire up Api.GetWorkbenchAiSummaryAsync() to populate this field.";
+        _aiGeneratedAt = DateTime.Now;
+        _aiLoading     = false;
+    }
+
+    private Task SaveViewAsync(WorkbenchShell.SavedView v)
+    {
+        v.QueueId = _activeQueue; v.Scope = _scope; v.BranchId = _branchId; v.TeamId = _teamId;
+        _savedViews.RemoveAll(x => x.Name == v.Name);
+        _savedViews.Add(v);
+        return ShowToastAsync($"View \"{v.Name}\" saved.", "e-toast-success");
+    }
+
+    private Task LoadViewAsync(string name)
+    {
+        var v = _savedViews.FirstOrDefault(x => x.Name == name);
+        if (v is null) return Task.CompletedTask;
+        _activeQueue = v.QueueId; _scope = v.Scope; _branchId = v.BranchId; _teamId = v.TeamId;
+        StateHasChanged();
+        return ShowToastAsync($"View \"{name}\" loaded.");
+    }
+
+    private Task DeleteViewAsync(string name) { _savedViews.RemoveAll(x => x.Name == name); return Task.CompletedTask; }
+
+    private List<WbItem> Filtered(List<WbItem> src) => src.Where(i =>
+        (string.IsNullOrEmpty(_filterPriority) || i.Priority == _filterPriority) &&
+        (string.IsNullOrEmpty(_filterSla)      || i.SlaStatus == _filterSla) &&
+        (string.IsNullOrEmpty(_filterCategory) || i.Category  == _filterCategory) &&
+        (string.IsNullOrEmpty(_search)         ||
+         i.Title.Contains(_search,       StringComparison.OrdinalIgnoreCase) ||
+         i.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         i.RefNumber.Contains(_search,   StringComparison.OrdinalIgnoreCase))
+    ).ToList();
+
+    private void FocusQueue(int n, string id) { _kpiFocus = _kpiFocus == n ? 0 : n; _activeQueue = id; _selected = null; }
+    private string KpiClass(int n) => "wb-kpi-card" + (_kpiFocus == n || (_kpiFocus == 0 && _activeQueue == QueueIdForKpi(n)) ? " wb-kpi-card--active" : "");
+    private RenderFragment KpiDot(int n) => _kpiFocus == n ? @<span class="wb-kpi-dot" aria-hidden="true"></span> : _ => { };
+
+    private string QueueIdForKpi(int n) => n switch { 1=>"service-requests",2=>"endorsements",3=>"certificates",4=>"billing-enquiries",5=>"complaints",6=>"follow-ups",_=>string.Empty };
+
+    private void OpenDetail(WbItem i) => _selected = i;
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    // ── Shared render helpers (tabs / filter row / detail panel) ──────────────────
+    private RenderFragment QueueTabs() => __builder =>
+    {
+        <div class="wb-queue-tabs" role="tablist">
+        @foreach (var q in Queues)
+        {
+            <button class="wb-queue-tab @(q.Id == _activeQueue ? "wb-queue-tab--active" : "")"
+                    role="tab" aria-selected="@(q.Id == _activeQueue)"
+                    @onclick="() => { _activeQueue = q.Id; _selected = null; }">
+                <i class="@q.Icon" aria-hidden="true"></i> @q.Label
+                @if (q.Badge > 0) { <span class="wb-tab-badge @(q.IsAlert ? "wb-tab-badge--alert" : "")">@q.Badge</span> }
+            </button>
+        }
+        </div>;
+    };
+
+    private RenderFragment FilterRow() => __builder =>
+    {
+        <div class="wb-filter-row">
+            <div class="wb-search-box">
+                <i class="bi bi-search wb-search-icon" aria-hidden="true"></i>
+                <input class="wb-search-input" type="text" placeholder="Search…"
+                       value="@_search" @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; StateHasChanged(); })" />
+            </div>
+            <SfDropDownList TValue="string" TItem="WorkbenchShell.LabelValue" DataSource="_priorityOptions" Placeholder="All Priorities" ShowClearButton="true" Width="155px" Value="_filterPriority" ValueChanged="@((string v) => { _filterPriority = v; StateHasChanged(); })">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+            <SfDropDownList TValue="string" TItem="WorkbenchShell.LabelValue" DataSource="_slaOptions" Placeholder="All SLA" ShowClearButton="true" Width="140px" Value="_filterSla" ValueChanged="@((string v) => { _filterSla = v; StateHasChanged(); })">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>;
+    };
+
+    private RenderFragment DetailPanel() => __builder =>
+    {
+        @if (_selected is not null)
+        {
+            <div class="wb-overlay" @onclick="() => _selected = null" role="button" tabindex="-1" aria-label="Close"></div>
+            <div class="wb-detail-panel" role="complementary" aria-label="Item detail">
+                <div class="wb-detail-hdr">
+                    <span class="@PriBadge(_selected.Priority)">@_selected.Priority</span>
+                    <span class="@SlaBadge(_selected.SlaStatus)">@_selected.SlaStatus</span>
+                    <button class="um-btn um-btn-ghost um-btn-sm" style="margin-left:auto" @onclick="() => _selected = null"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <h2 class="wb-detail-title">@_selected.Title</h2>
+                <div class="wb-detail-body">
+                    @DetailRow("Ref",      @<span class="wb-mono">@_selected.RefNumber</span>)
+                    @DetailRow("Account",  @<span>@_selected.AccountName</span>)
+                    @if (!string.IsNullOrEmpty(_selected.PolicyNumber)) { @DetailRow("Policy #", @<span class="wb-mono">@_selected.PolicyNumber</span>) }
+                    @DetailRow("Assignee", @<span>@_selected.AssignedTo</span>)
+                    @DetailRow("Category", @<span>@_selected.Category</span>)
+                    @DetailRow("Due",      @<span class="@(_selected.DueDate < DateTime.Today ? "wb-overdue" : "")">@_selected.DueDate.ToString("d")</span>)
+                    @DetailRow("Age",      @<span class="@AgeBadge(_selected.AgeDays)">@_selected.AgeDays d</span>)
+                    @if (!string.IsNullOrEmpty(_selected.Notes)) { @DetailRow("Notes", @<p class="wb-detail-notes">@_selected.Notes</p>) }
+                </div>
+                <div class="wb-detail-footer">
+                    <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selected.DetailUrl)">Open Record <i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+        }
+    };
+
+    private static RenderFragment DetailRow(string label, RenderFragment val) => __builder =>
+    {
+        <div class="wb-detail-row"><span class="wb-detail-lbl">@label</span>@val</div>;
+    };
+
+    // ── Static helpers ────────────────────────────────────────────────────────────
+    private static string PriBadge(string p) => p switch { "Critical"=>"wb-pri wb-pri--critical","Urgent"=>"wb-pri wb-pri--urgent","High"=>"wb-pri wb-pri--high","Normal"=>"wb-pri wb-pri--normal",_=>"wb-pri wb-pri--low" };
+    private static string SlaBadge(string s) => s switch { "On Track"=>"wb-sla wb-sla--ok","At Risk"=>"wb-sla wb-sla--warn",_=>"wb-sla wb-sla--breach" };
+    private static string AgeBadge(int d) => d > 7 ? "wb-age wb-age--old" : d > 3 ? "wb-age wb-age--mid" : "wb-age wb-age--ok";
+    private static string ChanBadge(string c) => c switch { "Email"=>"wb-chan wb-chan--email","Phone"=>"wb-chan wb-chan--phone","Portal"=>"wb-chan wb-chan--portal","Chat"=>"wb-chan wb-chan--chat",_=>"wb-chan" };
+    private static string EscBadge(int l) => l >= 3 ? "wb-esc wb-esc--3" : l == 2 ? "wb-esc wb-esc--2" : "wb-esc wb-esc--1";
+
+    // ── Models ────────────────────────────────────────────────────────────────────
+    private sealed class CsrCounts
+    {
+        public int ServiceRequests  { get; set; }
+        public int Endorsements     { get; set; }
+        public int Certificates     { get; set; }
+        public int BillingEnquiries { get; set; }
+        public int Complaints       { get; set; }
+        public int FollowUps        { get; set; }
+        public int OverdueFollowUps { get; set; }
+    }
+
+    private sealed class WbItem
+    {
+        public Guid     ItemId          { get; set; } = Guid.NewGuid();
+        public string   Title           { get; set; } = string.Empty;
+        public string   RefNumber       { get; set; } = string.Empty;
+        public string   AccountName     { get; set; } = string.Empty;
+        public string   PolicyNumber    { get; set; } = string.Empty;
+        public string   CertHolder      { get; set; } = string.Empty;
+        public string   Category        { get; set; } = string.Empty;
+        public string   Channel         { get; set; } = string.Empty;
+        public string   AssignedTo      { get; set; } = string.Empty;
+        public string   Priority        { get; set; } = "Normal";
+        public string   SlaStatus       { get; set; } = "On Track";
+        public int      EscalationLevel { get; set; } = 1;
+        public DateTime DueDate         { get; set; } = DateTime.Today;
+        public DateTime CreatedAt       { get; set; } = DateTime.UtcNow;
+        public int      AgeDays         { get; set; }
+        public decimal  Amount          { get; set; }
+        public string?  Notes           { get; set; }
+        public string   DetailUrl       { get; set; } = "/workbench/csr";
+    }
+}

@@ -1,34 +1,158 @@
 @page "/payments"
+@page "/billing/payments"
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Payments</PageTitle>
-<h1>Payments &amp; Collections</h1>
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+<PageTitle>Payments — AMS</PageTitle>
+
+<AppPageHeader Title="Payments"
+               Subtitle="Record, track, and reconcile premium payments across all billing methods and accounts"
+               Icon="bi-cash-coin">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+            <i class="bi bi-receipt" aria-hidden="true"></i> Invoices
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/payment-experience")'>
+            <i class="bi bi-graph-up" aria-hidden="true"></i> Payment Experience
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showRecord = true">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> Record Payment
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="pay-kpi-strip">
+    @PayKpi("bi-cash-coin",       "Total Payments",   Fmt(_items?.Sum(x=>x.Amount)),                                            "pay-ki-blue")
+    @PayKpi("bi-check-circle",    "Cleared",          (_items?.Count(x=>x.StatusCode=="Cleared") ?? 0).ToString(),             "pay-ki-green")
+    @PayKpi("bi-hourglass",       "Pending",          (_items?.Count(x=>x.StatusCode=="Pending") ?? 0).ToString(),             "pay-ki-amber")
+    @PayKpi("bi-x-circle",        "Failed",           (_items?.Count(x=>x.StatusCode=="Failed")  ?? 0).ToString(),             "pay-ki-red")
+    @PayKpi("bi-arrow-repeat",    "ACH",              (_items?.Count(x=>x.PaymentMethodCode=="ACH") ?? 0).ToString(),           "pay-ki-blue")
+    @PayKpi("bi-credit-card",     "Card",             (_items?.Count(x=>x.PaymentMethodCode=="Card") ?? 0).ToString(),         "pay-ki-purple")
+    @PayKpi("bi-clock-history",   "Avg Days-to-Pay",  _avgDaysToPay.ToString("F1") + " d",                                     "pay-ki-gray")
+    @PayKpi("bi-exclamation-circle","NSF / Returns",  _nsfCount.ToString(),                                                     "pay-ki-red")
 </div>
-@if (_items is null) { <p>Loading...</p> }
+
+<!-- Sub-nav -->
+<div class="pay-subnav">
+    <button class="pay-snav-btn pay-snav-active"><i class="bi bi-cash-coin" aria-hidden="true"></i> Payments</button>
+    <button class="pay-snav-btn" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
+    <button class="pay-snav-btn" @onclick='() => Nav.NavigateTo("/billing/credits")'><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Credits</button>
+    <button class="pay-snav-btn" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'><i class="bi bi-ui-checks-grid" aria-hidden="true"></i> Reconciliation</button>
+    <button class="pay-snav-btn" @onclick='() => Nav.NavigateTo("/billing/payment-experience")'><i class="bi bi-graph-up" aria-hidden="true"></i> Payment Experience</button>
+</div>
+
+<!-- Toolbar -->
+<div class="pay-toolbar">
+    <SfTextBox Placeholder="Search reference, notes, method…" @bind-Value="_searchTerm" Width="280px"></SfTextBox>
+    <select class="e-input pay-sel" @bind="_filterMethod">
+        <option value="">All Methods</option>
+        <option value="ACH">ACH</option>
+        <option value="Card">Credit/Debit Card</option>
+        <option value="Check">Check</option>
+        <option value="Wire">Wire Transfer</option>
+        <option value="Cash">Cash</option>
+    </select>
+    <select class="e-input pay-sel" @bind="_filterStatus">
+        <option value="">All Statuses</option>
+        <option value="Cleared">Cleared</option>
+        <option value="Pending">Pending</option>
+        <option value="Failed">Failed</option>
+        <option value="Returned">Returned</option>
+        <option value="Void">Void</option>
+    </select>
+    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync">
+        <i class="bi bi-search" aria-hidden="true"></i> Search
+    </button>
+</div>
+@if (_items is null) { <div style="padding:2rem"><SfSpinner Visible="true" /></div> }
 else {
-<SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="10"></GridPageSettings>
+<div class="pay-grid-wrap">
+<SfGrid DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="520px">
+    <GridPageSettings PageSize="15"></GridPageSettings>
     <GridColumns>
-        <GridColumn Field="@nameof(PaymentDto.PaymentDate)"       HeaderText="Date"    Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
-        <GridColumn Field="@nameof(PaymentDto.Amount)"            HeaderText="Amount"  Width="130" Format="C2"></GridColumn>
-        <GridColumn Field="@nameof(PaymentDto.PaymentMethodCode)" HeaderText="Method"  Width="130"></GridColumn>
-        <GridColumn Field="@nameof(PaymentDto.ReferenceNumber)"   HeaderText="Ref #"   Width="160"></GridColumn>
-        <GridColumn Field="@nameof(PaymentDto.StatusCode)"        HeaderText="Status"  Width="120"></GridColumn>
-        <GridColumn Field="@nameof(PaymentDto.Notes)"             HeaderText="Notes"   Width="280"></GridColumn>
+        <GridColumn Field="@nameof(PaymentDto.PaymentDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+        <GridColumn Field="@nameof(PaymentDto.Amount)" HeaderText="Amount" Width="120" Format="C2" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+        <GridColumn HeaderText="Method" Width="120">
+            <Template>
+                @{ var p = (PaymentDto)context; }
+                <span class="pay-method-chip pay-m-@p.PaymentMethodCode.ToLower()">@PayMethodIcon(p.PaymentMethodCode) @p.PaymentMethodCode</span>
+            </Template>
+        </GridColumn>
+        <GridColumn Field="@nameof(PaymentDto.ReferenceNumber)" HeaderText="Ref #" Width="150"></GridColumn>
+        <GridColumn HeaderText="Status" Width="110">
+            <Template>
+                @{ var p2 = (PaymentDto)context; }
+                <span class="pay-status-chip pay-st-@p2.StatusCode.ToLower()">@p2.StatusCode</span>
+            </Template>
+        </GridColumn>
+        <GridColumn Field="@nameof(PaymentDto.Notes)" HeaderText="Notes" Width="240"></GridColumn>
+        <GridColumn HeaderText="Actions" Width="90">
+            <Template>
+                @{ var p3 = (PaymentDto)context; }
+                <div class="pay-row-acts">
+                    <button class="um-btn um-btn-ghost um-btn-xs"
+                            @onclick='() => Nav.NavigateTo($"/billing/accounts/{p3.AccountId}")'
+                            title="Billing account">
+                        <i class="bi bi-building" aria-hidden="true"></i>
+                    </button>
+                    @if (p3.StatusCode == "Failed" || p3.StatusCode == "Returned")
+                    {
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="View in Payment Experience">
+                            <i class="bi bi-exclamation-circle" style="color:#dc2626" aria-hidden="true"></i>
+                        </button>
+                    }
+                </div>
+            </Template>
+        </GridColumn>
     </GridColumns>
 </SfGrid>
+</div>
 }
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string? _searchTerm;
+    private string _filterMethod = "", _filterStatus = "";
+    private bool _showRecord;
     private List<PaymentDto>? _items;
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    // Payment experience preview metrics (stub — real data from /billing/payment-experience)
+    private double _avgDaysToPay = 8.3;
+    private int    _nsfCount     = 5;
+
+    private IEnumerable<PaymentDto> FilteredItems => (_items ?? []).Where(x =>
+        (string.IsNullOrEmpty(_filterMethod) || x.PaymentMethodCode == _filterMethod) &&
+        (string.IsNullOrEmpty(_filterStatus) || x.StatusCode == _filterStatus));
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Billing","/billing/accounts"), new("Payments",""));
+        await LoadAsync();
+    }
+
     private async Task LoadAsync()
     {
         var result = await Api.SearchPaymentsAsync(_tenantId, _searchTerm);
         _items = result?.Items.ToList() ?? [];
     }
+
+    static string PayMethodIcon(string m) => m switch
+    {
+        "ACH"   => "🯦",
+        "Card"  => "💳",
+        "Check" => "📝",
+        "Wire"  => "🏦",
+        _       => "💵"
+    };
+
+    static string Fmt(decimal? v) => v.HasValue ? v.Value.ToString("C0") : "$0";
+
+    RenderFragment PayKpi(string icon, string label, string val, string color) => __builder =>
+    {
+        <div class="pay-kpi-card @color">
+            <i class="bi @icon pay-kpi-icon" aria-hidden="true"></i>
+            <div><div class="pay-kpi-val">@val</div><div class="pay-kpi-lbl">@label</div></div>
+        </div>
+    };
 }

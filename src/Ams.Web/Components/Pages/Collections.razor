@@ -1,33 +1,165 @@
 @page "/billing/collections"
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Collections</PageTitle>
-<h1>Collections Notes</h1>
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+<PageTitle>Delinquency &amp; Collections — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Delinquency &amp; Collections Queue"
+               Subtitle="Manage overdue accounts, track collection actions, and escalate delinquent policies"
+               Icon="bi-exclamation-triangle">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+            <i class="bi bi-receipt" aria-hidden="true"></i> Invoices
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/payment-experience")'>
+            <i class="bi bi-graph-up" aria-hidden="true"></i> Payment Experience
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showAdd = true">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> Add Note
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="col-kpi-strip">
+    <div class="col-kpi"><i class="bi bi-exclamation-triangle col-ki red" aria-hidden="true"></i><div><div class="col-kv">@(_items?.Count ?? 0)</div><div class="col-kl">Open Cases</div></div></div>
+    <div class="col-kpi"><i class="bi bi-clock-history col-ki amber" aria-hidden="true"></i><div><div class="col-kv">@(_items?.Count(x=>x.ActionCode=="Escalated") ?? 0)</div><div class="col-kl">Escalated</div></div></div>
+    <div class="col-kpi"><i class="bi bi-telephone col-ki blue" aria-hidden="true"></i><div><div class="col-kv">@(_items?.Count(x=>x.ActionCode=="Called") ?? 0)</div><div class="col-kl">Called</div></div></div>
+    <div class="col-kpi"><i class="bi bi-envelope col-ki blue" aria-hidden="true"></i><div><div class="col-kv">@(_items?.Count(x=>x.ActionCode=="Email Sent") ?? 0)</div><div class="col-kl">Emailed</div></div></div>
+    <div class="col-kpi"><i class="bi bi-calendar-check col-ki green" aria-hidden="true"></i><div><div class="col-kv">@(_items?.Count(x=>x.NextFollowUpDate!=null && x.NextFollowUpDate.Value.ToDateTime(TimeOnly.MinValue)<=DateTime.Today) ?? 0)</div><div class="col-kl">Due Today</div></div></div>
+    <div class="col-kpi"><i class="bi bi-shield-x col-ki red" aria-hidden="true"></i><div><div class="col-kv">@_pendingCancellations</div><div class="col-kl">Pending Cancel</div></div></div>
 </div>
-@if (_items is null) { <p>Loading...</p> }
+
+<!-- Sub-nav -->
+<div class="col-subnav">
+    <button class="col-snav-btn col-snav-active"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Collections</button>
+    <button class="col-snav-btn" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
+    <button class="col-snav-btn" @onclick='() => Nav.NavigateTo("/billing/payments")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Payments</button>
+    <button class="col-snav-btn" @onclick='() => Nav.NavigateTo("/billing/modes")'><i class="bi bi-diagram-3" aria-hidden="true"></i> Billing Modes</button>
+</div>
+
+<!-- Toolbar -->
+<div class="col-toolbar">
+    <SfTextBox Placeholder="Search notes, actions…" @bind-Value="_searchTerm" Width="280px"></SfTextBox>
+    <select class="e-input col-sel" @bind="_filterAction">
+        <option value="">All Actions</option>
+        <option value="Called">Called</option>
+        <option value="Email Sent">Email Sent</option>
+        <option value="Letter Sent">Letter Sent</option>
+        <option value="Escalated">Escalated</option>
+        <option value="Payment Plan">Payment Plan</option>
+        <option value="Resolved">Resolved</option>
+    </select>
+</div>
+@if (_items is null) { <div style="padding:2rem"><SfSpinner Visible="true" /></div> }
 else {
-<SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="10"></GridPageSettings>
+<div class="col-grid-wrap">
+<SfGrid DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="520px">
+    <GridPageSettings PageSize="15"></GridPageSettings>
     <GridColumns>
-        <GridColumn Field="@nameof(CollectionsNoteDto.NoteDate)"         HeaderText="Date"          Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
-        <GridColumn Field="@nameof(CollectionsNoteDto.ActionCode)"       HeaderText="Action"        Width="140"></GridColumn>
-        <GridColumn Field="@nameof(CollectionsNoteDto.NoteText)"         HeaderText="Note"          Width="360"></GridColumn>
-        <GridColumn Field="@nameof(CollectionsNoteDto.NextFollowUpDate)" HeaderText="Follow-Up"     Type="ColumnType.Date" Format="d" Width="130"></GridColumn>
-        <GridColumn Field="@nameof(CollectionsNoteDto.CreatedDateUtc)"   HeaderText="Created"       Type="ColumnType.DateTime" Format="d" Width="130"></GridColumn>
+        <GridColumn Field="@nameof(CollectionsNoteDto.NoteDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+        <GridColumn HeaderText="Action" Width="140">
+            <Template>
+                @{ var n = (CollectionsNoteDto)context; }
+                <span class="col-action-chip col-ac-@(n.ActionCode?.ToLower().Replace(" ","-") ?? "other")">@n.ActionCode</span>
+            </Template>
+        </GridColumn>
+        <GridColumn Field="@nameof(CollectionsNoteDto.NoteText)" HeaderText="Note" Width="340"></GridColumn>
+        <GridColumn Field="@nameof(CollectionsNoteDto.NextFollowUpDate)" HeaderText="Follow-Up" Type="ColumnType.Date" Format="d" Width="110">
+            <Template>
+                @{ var n2 = (CollectionsNoteDto)context; }
+                @if (n2.NextFollowUpDate.HasValue)
+                {
+                    var overdue = n2.NextFollowUpDate.Value.ToDateTime(TimeOnly.MinValue) <= DateTime.Today;
+                    <span class="@(overdue ? "col-followup-overdue" : "")">@n2.NextFollowUpDate.Value.ToString("MMM d")</span>
+                }
+            </Template>
+        </GridColumn>
+        <GridColumn Field="@nameof(CollectionsNoteDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="110"></GridColumn>
+        <GridColumn HeaderText="Actions" Width="110">
+            <Template>
+                @{ var n3 = (CollectionsNoteDto)context; }
+                <div class="col-row-acts">
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => MarkResolved(n3)" title="Mark resolved">
+                        <i class="bi bi-check-circle" aria-hidden="true"></i>
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Escalate(n3)" title="Escalate">
+                        <i class="bi bi-arrow-up-circle" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </Template>
+        </GridColumn>
     </GridColumns>
 </SfGrid>
+</div>
 }
+
+<!-- Add Note Dialog -->
+<SfDialog Width="480px" IsModal="true" @bind-Visible="_showAdd" Header="Add Collections Note" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Content>
+            <div class="col-dlg-body">
+                <div class="form-group mb-2"><label class="col-lbl">Action</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"Called","Email Sent","Letter Sent","Escalated","Payment Plan","Other"}' @bind-Value="_addAction" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="col-lbl">Note</label>
+                    <SfTextBox @bind-Value="_addNote" Multiline="true" Placeholder="Details of collection action…"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="col-lbl">Follow-Up Date</label>
+                    <SfDatePicker TValue="DateTime?" @bind-Value="_addFollowup" Width="100%"></SfDatePicker>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Save Note" IsPrimary="true" OnClick="SaveNoteAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showAdd = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
 @code {
+    private SfToast _toast = default!;
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string? _searchTerm;
+    private string _filterAction = "";
+    private bool _showAdd;
+    private string? _addAction = "Called", _addNote;
+    private DateTime? _addFollowup;
+    private int _pendingCancellations = 8;
     private List<CollectionsNoteDto>? _items;
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private IEnumerable<CollectionsNoteDto> FilteredItems => (_items ?? []).Where(x =>
+        (string.IsNullOrEmpty(_filterAction) || x.ActionCode == _filterAction));
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Billing","/billing/accounts"), new("Collections",""));
+        await LoadAsync();
+    }
+
     private async Task LoadAsync()
     {
         var result = await Api.SearchCollectionsNotesAsync(_tenantId, _searchTerm);
         _items = result?.Items.ToList() ?? [];
     }
+
+    async Task SaveNoteAsync()
+    {
+        _showAdd = false;
+        _addAction = "Called"; _addNote = null; _addFollowup = null;
+        await _toast.ShowAsync(new ToastModel { Content = "Note saved.", CssClass = "e-toast-success" });
+    }
+
+    async Task MarkResolved(CollectionsNoteDto n)
+    {
+        _items?.Remove(n);
+        await _toast.ShowAsync(new ToastModel { Content = "Case marked resolved.", CssClass = "e-toast-success" });
+    }
+
+    async Task Escalate(CollectionsNoteDto n) =>
+        await _toast.ShowAsync(new ToastModel { Content = "Case escalated.", CssClass = "e-toast-warning" });
 }

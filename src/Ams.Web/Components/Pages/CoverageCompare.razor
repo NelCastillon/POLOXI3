@@ -1,0 +1,460 @@
+@page "/policies/{PolicyId:guid}/compare"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Coverage Comparison — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="3000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@if (_loading)
+{
+    <div class="cmp-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+}
+else
+{
+    <!-- ── HEADER ─────────────────────────────────────────────────── -->
+    <div class="cmp-header">
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="GoBack">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back
+        </button>
+        <div class="cmp-header-title">
+            <i class="bi bi-layout-split cmp-title-icon" aria-hidden="true"></i>
+            <div>
+                <h1 class="cmp-h1">Coverage Comparison</h1>
+                <span class="cmp-sub">@_policyNo · @_account</span>
+            </div>
+        </div>
+        <div class="cmp-header-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportAsync">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/policies/{PolicyId}/versions")'>
+                <i class="bi bi-clock-history" aria-hidden="true"></i> Version History
+            </button>
+        </div>
+    </div>
+
+    <!-- ── VERSION SELECTORS ─────────────────────────────────────── -->
+    <div class="cmp-selectors">
+        <div class="cmp-selector-panel cmp-sel-a">
+            <label class="cmp-sel-lbl"><i class="bi bi-a-square-fill" aria-hidden="true"></i> Version A</label>
+            <SfDropDownList TItem="VersionOption" TValue="string"
+                DataSource="@_versions"
+                Value="_versionA"
+                ValueChanged="@((string v) => { _versionA = v; Recalc(); })">
+                <DropDownListFieldSettings Value="Id" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="cmp-vs-chip">
+            <i class="bi bi-arrows-collapse-vertical" aria-hidden="true"></i>
+            <span>VS</span>
+        </div>
+        <div class="cmp-selector-panel cmp-sel-b">
+            <label class="cmp-sel-lbl"><i class="bi bi-b-square-fill" aria-hidden="true"></i> Version B</label>
+            <SfDropDownList TItem="VersionOption" TValue="string"
+                DataSource="@_versions"
+                Value="_versionB"
+                ValueChanged="@((string v) => { _versionB = v; Recalc(); })">
+                <DropDownListFieldSettings Value="Id" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="cmp-legend">
+            <span class="cmp-leg cmp-leg-inc"><i class="bi bi-arrow-up-short" aria-hidden="true"></i>Increased</span>
+            <span class="cmp-leg cmp-leg-dec"><i class="bi bi-arrow-down-short" aria-hidden="true"></i>Decreased</span>
+            <span class="cmp-leg cmp-leg-chg"><i class="bi bi-pencil" aria-hidden="true"></i>Changed</span>
+            <span class="cmp-leg cmp-leg-same">No change</span>
+        </div>
+    </div>
+
+    <!-- ── SUMMARY BANNER ───────────────────────────────────────── -->
+    @if (_summaryDelta != 0)
+    {
+        <div class="cmp-summary-banner @(_summaryDelta > 0 ? "cmp-ban-up" : "cmp-ban-down")">
+            <i class="bi @(_summaryDelta > 0 ? "bi-arrow-up-circle" : "bi-arrow-down-circle")" aria-hidden="true"></i>
+            <span>
+                Net premium change from <strong>@VersionLabel(_versionA)</strong>
+                to <strong>@VersionLabel(_versionB)</strong>:
+                <strong>@_summaryDelta.ToString("+$#,##0;-$#,##0")</strong>
+            </span>
+            <span class="cmp-ban-changes">@_changedCount field@(_changedCount == 1 ? "" : "s") changed</span>
+        </div>
+    }
+
+    <!-- ── COMPARISON TABLE ─────────────────────────────────────── -->
+    <div class="cmp-table-wrap">
+        @foreach (var sec in _sections)
+        {
+            <div class="cmp-section">
+                <div class="cmp-section-head" @onclick="() => ToggleSection(sec.Title)">
+                    <div class="cmp-sh-left">
+                        <i class="bi @sec.Icon" aria-hidden="true"></i>
+                        <span>@sec.Title</span>
+                        @if (sec.Rows.Any(r => r.Status != ChangeStatus.Same))
+                        {
+                            <span class="cmp-changed-badge">@sec.Rows.Count(r => r.Status != ChangeStatus.Same) changed</span>
+                        }
+                    </div>
+                    <i class="bi @(_collapsedSections.Contains(sec.Title) ? "bi-chevron-right" : "bi-chevron-down") cmp-chev" aria-hidden="true"></i>
+                </div>
+
+                @if (!_collapsedSections.Contains(sec.Title))
+                {
+                    <table class="cmp-table">
+                        <thead>
+                            <tr>
+                                <th class="cmp-th-field">Field</th>
+                                <th class="cmp-th-a">
+                                    <span class="cmp-ver-a-lbl">A — @VersionLabel(_versionA)</span>
+                                </th>
+                                <th class="cmp-th-b">
+                                    <span class="cmp-ver-b-lbl">B — @VersionLabel(_versionB)</span>
+                                </th>
+                                <th class="cmp-th-delta">Change</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in sec.Rows)
+                            {
+                                <tr class="cmp-row cmp-row-@StatusCss(row.Status) @(row.Status != ChangeStatus.Same ? "cmp-row-hl" : "")">
+                                    <td class="cmp-td-field">@row.Field</td>
+                                    <td class="cmp-td-a @(row.Status == ChangeStatus.Decreased ? "cmp-val-better" : "")">@row.ValueA</td>
+                                    <td class="cmp-td-b @(row.Status == ChangeStatus.Increased ? "cmp-val-worse" : row.Status == ChangeStatus.Decreased ? "cmp-val-better" : "")">@row.ValueB</td>
+                                    <td class="cmp-td-delta">
+                                        @if (row.Status == ChangeStatus.Same)
+                                        {
+                                            <span class="cmp-chg-same">—</span>
+                                        }
+                                        else if (row.Status == ChangeStatus.Increased)
+                                        {
+                                            <span class="cmp-chg-inc"><i class="bi bi-arrow-up-short" aria-hidden="true"></i>@row.DeltaLabel</span>
+                                        }
+                                        else if (row.Status == ChangeStatus.Decreased)
+                                        {
+                                            <span class="cmp-chg-dec"><i class="bi bi-arrow-down-short" aria-hidden="true"></i>@row.DeltaLabel</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="cmp-chg-chg"><i class="bi bi-pencil" aria-hidden="true"></i>@row.DeltaLabel</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public Guid PolicyId { get; set; }
+
+    SfToast _toast = default!;
+    bool _loading = true;
+
+    string _policyNo = "";
+    string _account  = "";
+    string _versionA = "";
+    string _versionB = "";
+    decimal _summaryDelta = 0;
+    int     _changedCount = 0;
+
+    readonly HashSet<string> _collapsedSections = new();
+
+    enum ChangeStatus { Same, Increased, Decreased, Changed }
+
+    sealed class VersionOption
+    {
+        public string Id    { get; set; } = "";
+        public string Label { get; set; } = "";
+    }
+
+    sealed class CompareRow
+    {
+        public string       Field      { get; set; } = "";
+        public string       ValueA     { get; set; } = "";
+        public string       ValueB     { get; set; } = "";
+        public string       DeltaLabel { get; set; } = "";
+        public ChangeStatus Status     { get; set; }
+    }
+
+    sealed class CompareSection
+    {
+        public string          Title { get; set; } = "";
+        public string          Icon  { get; set; } = "";
+        public List<CompareRow> Rows { get; set; } = new();
+    }
+
+    List<VersionOption>  _versions = new();
+    List<CompareSection> _sections = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home","/"), new("Policies","/policies"),
+            new("Policy Detail",$"/policies/{PolicyId}"),
+            new("Compare",$"/policies/{PolicyId}/compare"));
+
+        await Task.Delay(0);
+        BuildStub();
+        _loading = false;
+    }
+
+    void BuildStub()
+    {
+        _policyNo = "POL-2025-44821";
+        _account  = "Sullivan Mfg. LLC";
+
+        _versions = new List<VersionOption>
+        {
+            new() { Id="v1", Label="New Business (2023-01-15)"  },
+            new() { Id="v2", Label="END-2023-0041 (2023-04-01)" },
+            new() { Id="v3", Label="END-2023-0112 (2023-07-20)" },
+            new() { Id="v4", Label="Renewal 2024 (2024-01-15)"  },
+            new() { Id="v5", Label="END-2024-0055 (2024-03-12)" },
+            new() { Id="v6", Label="Renewal 2025 (2025-01-15)"  },
+        };
+        _versionA = "v4";
+        _versionB = "v6";
+        Recalc();
+    }
+
+    void Recalc()
+    {
+        // Build comparison sections based on selected versions
+        // In production this would diff real version snapshots from the API.
+        // Stub: simulate version-specific data.
+        var data = GetVersionData();
+        if (!data.TryGetValue(_versionA, out var vA) || !data.TryGetValue(_versionB, out var vB))
+            return;
+
+        _sections = new List<CompareSection>
+        {
+            BuildSection("Policy Info",       "bi-shield",        vA.PolicyInfo,   vB.PolicyInfo),
+            BuildSection("Coverage Limits",   "bi-sliders",       vA.Limits,       vB.Limits),
+            BuildSection("Premiums & Costs",  "bi-cash-stack",    vA.Premiums,     vB.Premiums),
+            BuildSection("Exposures",         "bi-bar-chart",     vA.Exposures,    vB.Exposures),
+            BuildSection("Conditions",        "bi-list-check",    vA.Conditions,   vB.Conditions),
+        };
+
+        _changedCount = _sections.SelectMany(s => s.Rows).Count(r => r.Status != ChangeStatus.Same);
+        _summaryDelta = 0;
+        var premRowA = vA.Premiums.FirstOrDefault(p => p.Key == "Annual Premium");
+        var premRowB = vB.Premiums.FirstOrDefault(p => p.Key == "Annual Premium");
+        if (premRowA is not null && premRowB is not null
+            && decimal.TryParse(premRowA.Value.Replace("$","").Replace(",",""), out var pA)
+            && decimal.TryParse(premRowB.Value.Replace("$","").Replace(",",""), out var pB))
+            _summaryDelta = pB - pA;
+    }
+
+    CompareSection BuildSection(string title, string icon,
+        List<DataPair> rowsA, List<DataPair> rowsB)
+    {
+        var rows = new List<CompareRow>();
+        foreach (var a in rowsA)
+        {
+            var b = rowsB.FirstOrDefault(x => x.Key == a.Key);
+            if (b is null) continue;
+            var status = Classify(a.Key, a.Value, b.Value);
+            rows.Add(new CompareRow
+            {
+                Field      = a.Key,
+                ValueA     = a.Value,
+                ValueB     = b.Value,
+                DeltaLabel = DeltaLabel(a.Key, a.Value, b.Value),
+                Status     = status,
+            });
+        }
+        return new CompareSection { Title = title, Icon = icon, Rows = rows };
+    }
+
+    ChangeStatus Classify(string field, string a, string b)
+    {
+        if (a == b) return ChangeStatus.Same;
+        if (TryMoney(a, out var ma) && TryMoney(b, out var mb))
+            return mb > ma ? ChangeStatus.Increased : ChangeStatus.Decreased;
+        return ChangeStatus.Changed;
+    }
+
+    string DeltaLabel(string field, string a, string b)
+    {
+        if (a == b) return "—";
+        if (TryMoney(a, out var ma) && TryMoney(b, out var mb))
+        {
+            var d = mb - ma;
+            return d.ToString("+$#,##0;-$#,##0");
+        }
+        return "Changed";
+    }
+
+    static bool TryMoney(string s, out decimal v) =>
+        decimal.TryParse(s.Replace("$","").Replace(",",""), out v);
+
+    string VersionLabel(string id) =>
+        _versions.FirstOrDefault(v => v.Id == id)?.Label ?? id;
+
+    static string StatusCss(ChangeStatus s) => s switch
+    {
+        ChangeStatus.Increased => "inc",
+        ChangeStatus.Decreased => "dec",
+        ChangeStatus.Changed   => "chg",
+        _                      => "same"
+    };
+
+    void ToggleSection(string title)
+    {
+        if (!_collapsedSections.Add(title)) _collapsedSections.Remove(title);
+    }
+
+    async Task ExportAsync()
+    {
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "Export",
+            Content  = "Coverage comparison PDF exported.",
+            CssClass = "e-toast-success"
+        });
+    }
+
+    void GoBack() => Nav.NavigateTo($"/policies/{PolicyId}");
+
+    // ── Version snapshot data ────────────────────────────────────
+    record DataPair(string Key, string Value);
+
+    sealed class VersionSnapshot
+    {
+        public List<DataPair> PolicyInfo  { get; init; } = new();
+        public List<DataPair> Limits      { get; init; } = new();
+        public List<DataPair> Premiums    { get; init; } = new();
+        public List<DataPair> Exposures   { get; init; } = new();
+        public List<DataPair> Conditions  { get; init; } = new();
+    }
+
+    Dictionary<string, VersionSnapshot> GetVersionData() => new()
+    {
+        ["v1"] = new VersionSnapshot
+        {
+            PolicyInfo = new()
+            {
+                new("Policy Number","POL-2023-44821"), new("Term","01/15/2023 – 01/15/2024"),
+                new("Carrier","Travelers Indemnity"),  new("Coverage Form","CG 00 01"),
+                new("Status","Active"),
+            },
+            Limits = new()
+            {
+                new("Occurrence Limit","$1,000,000"), new("Aggregate Limit","$2,000,000"),
+                new("Products-Completed Ops","$2,000,000"), new("Personal & Adv Injury","$1,000,000"),
+                new("Medical Payments","$5,000"),    new("Deductible","$0"),
+            },
+            Premiums = new()
+            {
+                new("Annual Premium","$12,400"), new("Commission","$1,860"),
+                new("Taxes & Fees","$372"),      new("Total Cost","$12,772"),
+            },
+            Exposures = new()
+            {
+                new("Annual Payroll","$2,100,000"), new("Annual Revenue","$8,500,000"),
+                new("Employees","42"),              new("Locations","2"),
+            },
+            Conditions = new()
+            {
+                new("Additional Insureds","None"), new("Waiver of Subrogation","No"),
+                new("Primary & Non-Contributory","No"), new("Blanket AI","No"),
+            },
+        },
+        ["v4"] = new VersionSnapshot
+        {
+            PolicyInfo = new()
+            {
+                new("Policy Number","POL-2024-44821"), new("Term","01/15/2024 – 01/15/2025"),
+                new("Carrier","Travelers Indemnity"),  new("Coverage Form","CG 00 01"),
+                new("Status","Active"),
+            },
+            Limits = new()
+            {
+                new("Occurrence Limit","$1,000,000"), new("Aggregate Limit","$2,000,000"),
+                new("Products-Completed Ops","$2,000,000"), new("Personal & Adv Injury","$1,000,000"),
+                new("Medical Payments","$5,000"),    new("Deductible","$0"),
+            },
+            Premiums = new()
+            {
+                new("Annual Premium","$15,000"), new("Commission","$2,250"),
+                new("Taxes & Fees","$450"),      new("Total Cost","$15,450"),
+            },
+            Exposures = new()
+            {
+                new("Annual Payroll","$2,850,000"), new("Annual Revenue","$10,200,000"),
+                new("Employees","58"),              new("Locations","3"),
+            },
+            Conditions = new()
+            {
+                new("Additional Insureds","City of Houston"), new("Waiver of Subrogation","Yes — City of Houston"),
+                new("Primary & Non-Contributory","Yes"), new("Blanket AI","No"),
+            },
+        },
+        ["v5"] = new VersionSnapshot
+        {
+            PolicyInfo = new()
+            {
+                new("Policy Number","POL-2024-44821"), new("Term","01/15/2024 – 01/15/2025"),
+                new("Carrier","Travelers Indemnity"),  new("Coverage Form","CG 00 01"),
+                new("Status","Active"),
+            },
+            Limits = new()
+            {
+                new("Occurrence Limit","$2,000,000"), new("Aggregate Limit","$4,000,000"),
+                new("Products-Completed Ops","$4,000,000"), new("Personal & Adv Injury","$2,000,000"),
+                new("Medical Payments","$5,000"),    new("Deductible","$0"),
+            },
+            Premiums = new()
+            {
+                new("Annual Premium","$16,800"), new("Commission","$2,520"),
+                new("Taxes & Fees","$504"),      new("Total Cost","$17,304"),
+            },
+            Exposures = new()
+            {
+                new("Annual Payroll","$2,850,000"), new("Annual Revenue","$10,200,000"),
+                new("Employees","58"),              new("Locations","3"),
+            },
+            Conditions = new()
+            {
+                new("Additional Insureds","City of Houston"), new("Waiver of Subrogation","Yes — City of Houston"),
+                new("Primary & Non-Contributory","Yes"), new("Blanket AI","Yes"),
+            },
+        },
+        ["v6"] = new VersionSnapshot
+        {
+            PolicyInfo = new()
+            {
+                new("Policy Number","POL-2025-44821"), new("Term","01/15/2025 – 01/15/2026"),
+                new("Carrier","Travelers Indemnity"),  new("Coverage Form","CG 00 01"),
+                new("Status","Active"),
+            },
+            Limits = new()
+            {
+                new("Occurrence Limit","$2,000,000"), new("Aggregate Limit","$4,000,000"),
+                new("Products-Completed Ops","$4,000,000"), new("Personal & Adv Injury","$2,000,000"),
+                new("Medical Payments","$5,000"),    new("Deductible","$0"),
+            },
+            Premiums = new()
+            {
+                new("Annual Premium","$17,250"), new("Commission","$2,588"),
+                new("Taxes & Fees","$518"),      new("Total Cost","$17,768"),
+            },
+            Exposures = new()
+            {
+                new("Annual Payroll","$3,100,000"), new("Annual Revenue","$11,800,000"),
+                new("Employees","64"),              new("Locations","3"),
+            },
+            Conditions = new()
+            {
+                new("Additional Insureds","City of Houston"), new("Waiver of Subrogation","Yes — City of Houston"),
+                new("Primary & Non-Contributory","Yes"), new("Blanket AI","Yes"),
+            },
+        },
+    };
+}

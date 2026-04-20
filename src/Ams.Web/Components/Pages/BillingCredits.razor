@@ -1,0 +1,193 @@
+@page "/billing/credits"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Credits &amp; Refunds — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── ISSUE CREDIT DIALOG ──────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showIssue" Width="560px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="cr-dlg-hdr"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Issue Credit / Refund</div></Header>
+        <Content>
+            <div class="cr-dlg-body">
+                <div class="form-group mb-2"><label class="cr-lbl">Account / Policy *</label>
+                    <SfTextBox @bind-Value="_issueAccount" Placeholder="Account name or policy #"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="cr-lbl">Credit Type</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_creditTypes" @bind-Value="_issueType" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="cr-lbl">Amount *</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_issueAmount" Format="C2" Width="100%"></SfNumericTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="cr-lbl">Reason</label>
+                    <SfTextBox @bind-Value="_issueReason" Multiline="true" Placeholder="Reason for credit or refund…"></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="cr-lbl">Refund Method</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"Original Payment Method","Check","ACH","Credit to Account"}' @bind-Value="_issueMethod" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="cr-lbl">Linked Invoice #</label>
+                    <SfTextBox @bind-Value="_issueInvoice" Placeholder="INV-2025-…"></SfTextBox>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Issue Credit" IsPrimary="true" OnClick="IssueCreditAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showIssue = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+<AppPageHeader Title="Credits &amp; Refunds"
+               Subtitle="Issue, track, and apply premium credits, endorsement refunds, and cancellation returns"
+               Icon="bi-arrow-counterclockwise">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
+            <i class="bi bi-building" aria-hidden="true"></i> Accounts
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+            <i class="bi bi-receipt" aria-hidden="true"></i> Invoices
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showIssue = true">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> Issue Credit
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="cr-kpi-strip">
+    <div class="cr-kpi"><i class="bi bi-arrow-counterclockwise cr-ki blue" aria-hidden="true"></i><div><div class="cr-kv">@_items.Count</div><div class="cr-kl">Total Credits</div></div></div>
+    <div class="cr-kpi"><i class="bi bi-currency-dollar cr-ki blue" aria-hidden="true"></i><div><div class="cr-kv">@Fmt(_items.Sum(x=>x.Amount))</div><div class="cr-kl">Total Value</div></div></div>
+    <div class="cr-kpi"><i class="bi bi-hourglass cr-ki amber" aria-hidden="true"></i><div><div class="cr-kv">@_items.Count(x=>x.Status=="Pending")</div><div class="cr-kl">Pending Approval</div></div></div>
+    <div class="cr-kpi"><i class="bi bi-check-circle cr-ki green" aria-hidden="true"></i><div><div class="cr-kv">@_items.Count(x=>x.Status=="Applied")</div><div class="cr-kl">Applied</div></div></div>
+    <div class="cr-kpi"><i class="bi bi-cash cr-ki purple" aria-hidden="true"></i><div><div class="cr-kv">@_items.Count(x=>x.Status=="Refunded")</div><div class="cr-kl">Refunded</div></div></div>
+    <div class="cr-kpi"><i class="bi bi-x-circle cr-ki red" aria-hidden="true"></i><div><div class="cr-kv">@_items.Count(x=>x.Status=="Denied")</div><div class="cr-kl">Denied</div></div></div>
+</div>
+
+<!-- Toolbar -->
+<div class="cr-toolbar">
+    <SfTextBox Placeholder="Search account, reason, invoice…" @bind-Value="_search" Width="280px"></SfTextBox>
+    <select class="e-input cr-sel" @bind="_filterType">
+        <option value="">All Types</option>
+        @foreach (var t in _creditTypes) { <option value="@t">@t</option> }
+    </select>
+    <select class="e-input cr-sel" @bind="_filterStatus">
+        <option value="">All Statuses</option>
+        <option value="Pending">Pending</option>
+        <option value="Approved">Approved</option>
+        <option value="Applied">Applied</option>
+        <option value="Refunded">Refunded</option>
+        <option value="Denied">Denied</option>
+    </select>
+</div>
+
+<!-- Grid -->
+<div class="cr-grid-wrap">
+    <SfGrid DataSource="FilteredItems" AllowSorting="true" AllowPaging="true" Height="520px">
+        <GridPageSettings PageSize="15"></GridPageSettings>
+        <GridColumns>
+            <GridColumn Field="@nameof(CreditRow.Date)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+            <GridColumn Field="@nameof(CreditRow.AccountName)" HeaderText="Account" Width="190"></GridColumn>
+            <GridColumn HeaderText="Type" Width="160">
+                <Template>
+                    @{ var r = (CreditRow)context; }
+                    <span class="cr-type-chip cr-t-@r.Type.ToLower().Replace(" ","-").Replace("/","-")">@r.Type</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CreditRow.Amount)" HeaderText="Amount" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(CreditRow.RefundMethod)" HeaderText="Refund Via" Width="160"></GridColumn>
+            <GridColumn Field="@nameof(CreditRow.LinkedInvoice)" HeaderText="Invoice #" Width="130"></GridColumn>
+            <GridColumn Field="@nameof(CreditRow.Reason)" HeaderText="Reason" Width="220"></GridColumn>
+            <GridColumn HeaderText="Status" Width="110">
+                <Template>
+                    @{ var r2 = (CreditRow)context; }
+                    <span class="cr-status-chip cr-st-@r2.Status.ToLower()">@r2.Status</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Actions" Width="120">
+                <Template>
+                    @{ var r3 = (CreditRow)context; }
+                    <div style="display:flex;gap:.2rem">
+                        @if (r3.Status == "Pending")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Approve(r3)" title="Approve">
+                                <i class="bi bi-check-circle" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Deny(r3)" title="Deny">
+                                <i class="bi bi-x-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (r3.Status == "Approved")
+                        {
+                            <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => Apply(r3)" title="Apply to invoice">
+                                <i class="bi bi-arrow-return-left" aria-hidden="true"></i> Apply
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+@code {
+    private SfToast _toast = default!;
+    private string _search = "", _filterType = "", _filterStatus = "";
+    private bool _showIssue;
+    private string? _issueAccount, _issueType = "Premium Refund", _issueReason, _issueMethod = "Original Payment Method", _issueInvoice;
+    private decimal _issueAmount;
+
+    private readonly List<string> _creditTypes = ["Premium Refund","Endorsement Credit","Cancellation Return","Billing Adjustment","Duplicate Payment","Carrier Credit","Other"];
+
+    private List<CreditRow> _items =
+    [
+        new(DateTime.Today.AddDays(-2),  "Acme Corp",            "Endorsement Credit",  250m,  "Credit to Account",       "INV-2025-0038", "BI limit reduction mid-term",    "Pending"),
+        new(DateTime.Today.AddDays(-5),  "Westside Properties",  "Premium Refund",       890m,  "Original Payment Method", "INV-2025-0031", "Coverage correction — overpaid", "Approved"),
+        new(DateTime.Today.AddDays(-8),  "Harbor Logistics Inc.","Cancellation Return",  1450m, "ACH",                     "INV-2025-0027", "Policy cancelled pro-rata",       "Applied"),
+        new(DateTime.Today.AddDays(-12), "Green Valley LLC",     "Duplicate Payment",    320m,  "Check",                   "INV-2025-0024", "Duplicate ACH detected",          "Refunded"),
+        new(DateTime.Today.AddDays(-15), "Summit Tech Solutions","Billing Adjustment",   175m,  "Credit to Account",       "",              "Rate correction Q1 2025",         "Applied"),
+        new(DateTime.Today.AddDays(-20), "Coastal Restaurants",  "Carrier Credit",       600m,  "ACH",                     "INV-2025-0018", "Carrier audit dividend",          "Applied"),
+        new(DateTime.Today.AddDays(-25), "Pioneer Manufacturing","Premium Refund",        88m,  "Check",                   "INV-2025-0015", "Inspection credit applied",       "Denied"),
+        new(DateTime.Today.AddDays(-1),  "Bluewater Marine LLC", "Endorsement Credit",  340m,  "Credit to Account",       "INV-2025-0042", "Vessel removed from fleet",       "Pending"),
+    ];
+
+    private IEnumerable<CreditRow> FilteredItems => _items.Where(r =>
+        (string.IsNullOrEmpty(_search)       || r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.Reason.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_filterType)   || r.Type == _filterType) &&
+        (string.IsNullOrEmpty(_filterStatus) || r.Status == _filterStatus));
+
+    protected override void OnInitialized() =>
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Billing","/billing/accounts"), new("Credits & Refunds",""));
+
+    async Task IssueCreditAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_issueAccount) || _issueAmount <= 0) return;
+        _items.Insert(0, new(DateTime.Today, _issueAccount, _issueType ?? "Other", _issueAmount,
+            _issueMethod ?? "ACH", _issueInvoice ?? "", _issueReason ?? "", "Pending"));
+        _showIssue = false;
+        _issueAccount = _issueReason = _issueInvoice = null; _issueAmount = 0;
+        await _toast.ShowAsync(new ToastModel { Content = "Credit issued — pending approval.", CssClass = "e-toast-success" });
+    }
+
+    async Task Approve(CreditRow r) { Update(r, "Approved"); await _toast.ShowAsync(new ToastModel { Content = "Credit approved.", CssClass = "e-toast-success" }); }
+    async Task Deny(CreditRow r)    { Update(r, "Denied");   await _toast.ShowAsync(new ToastModel { Content = "Credit denied.", CssClass = "e-toast-warning" }); }
+    async Task Apply(CreditRow r)   { Update(r, "Applied");  await _toast.ShowAsync(new ToastModel { Content = "Credit applied to invoice.", CssClass = "e-toast-success" }); }
+
+    void Update(CreditRow r, string status)
+    {
+        var idx = _items.IndexOf(r);
+        if (idx >= 0) _items[idx] = r with { Status = status };
+    }
+
+    static string Fmt(decimal v) => v.ToString("C0");
+
+    record CreditRow(DateTime Date, string AccountName, string Type, decimal Amount, string RefundMethod,
+                     string LinkedInvoice, string Reason, string Status)
+    {
+        public string Status { get; set; } = Status;
+    }
+}

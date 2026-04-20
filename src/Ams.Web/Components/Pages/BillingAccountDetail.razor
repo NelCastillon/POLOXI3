@@ -1,0 +1,318 @@
+@page "/billing/accounts/{BillingAccountId:guid}"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Billing Account Detail — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="@_account.Name"
+               Subtitle="@($"{_account.BillingMode} · {_account.Terms} · {_account.DefaultMethod} · {_account.PolicyCount} policies")"
+               Icon="bi-building">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> All Accounts
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+            <i class="bi bi-receipt" aria-hidden="true"></i> Invoices
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/payments")'>
+            <i class="bi bi-cash-coin" aria-hidden="true"></i> Payments
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showPayment = true">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> Record Payment
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="bad-kpi-strip">
+    <div class="bad-kpi"><i class="bi bi-currency-dollar bad-ki red" aria-hidden="true"></i><div><div class="bad-kv">@_account.Balance.ToString("C2")</div><div class="bad-kl">Current Balance</div></div></div>
+    <div class="bad-kpi"><i class="bi bi-credit-card bad-ki blue" aria-hidden="true"></i><div><div class="bad-kv">@_account.CreditLimit.ToString("C2")</div><div class="bad-kl">Credit Limit</div></div></div>
+    <div class="bad-kpi"><i class="bi bi-receipt bad-ki blue" aria-hidden="true"></i><div><div class="bad-kv">@_invoices.Count</div><div class="bad-kl">Invoices</div></div></div>
+    <div class="bad-kpi"><i class="bi bi-cash-coin bad-ki green" aria-hidden="true"></i><div><div class="bad-kv">@_payments.Count</div><div class="bad-kl">Payments</div></div></div>
+    <div class="bad-kpi"><i class="bi bi-exclamation-circle bad-ki red" aria-hidden="true"></i><div><div class="bad-kv">@_invoices.Count(x=>x.Status=="Overdue")</div><div class="bad-kl">Overdue</div></div></div>
+    <div class="bad-kpi"><i class="bi @(_account.AutopayEnrolled ? "bi-check-circle" : "bi-circle") bad-ki @(_account.AutopayEnrolled ? "green" : "gray")" aria-hidden="true"></i><div><div class="bad-kv">@(_account.AutopayEnrolled ? "Yes" : "No")</div><div class="bad-kl">Autopay</div></div></div>
+</div>
+
+<div class="bad-layout">
+    <!-- Left sidebar: account info -->
+    <aside class="bad-sidebar">
+        <div class="bad-info-card">
+            <div class="bad-ic-title"><i class="bi bi-info-circle" aria-hidden="true"></i> Account Info</div>
+            <div class="bad-field"><span class="bad-fl">Billing Mode</span>
+                <span class="bad-mode-chip bad-m-@_account.BillingMode.ToLower().Replace(" ","-")">@_account.BillingMode</span>
+            </div>
+            <div class="bad-field"><span class="bad-fl">Terms</span><span>@_account.Terms</span></div>
+            <div class="bad-field"><span class="bad-fl">Default Method</span><span>@_account.DefaultMethod</span></div>
+            <div class="bad-field"><span class="bad-fl">Credit Limit</span><span>@_account.CreditLimit.ToString("C2")</span></div>
+            <div class="bad-field"><span class="bad-fl">Status</span>
+                <span class="bad-status-chip bad-st-@_account.Status.ToLower()">@_account.Status</span>
+            </div>
+            <div class="bad-field"><span class="bad-fl">Policies</span><span>@_account.PolicyCount</span></div>
+            <div class="bad-field"><span class="bad-fl">Last Payment</span>
+                <span>@(_account.LastPaymentDate?.ToString("MMM d, yyyy") ?? "—")</span>
+            </div>
+            <div class="bad-ic-actions">
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showEdit = true">
+                    <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+                </button>
+                <button class="um-btn um-btn-ghost um-btn-sm @(_account.AutopayEnrolled ? "bad-autopay-on" : "")"
+                        @onclick="ToggleAutopay">
+                    <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                    @(_account.AutopayEnrolled ? "Autopay On" : "Enroll Autopay")
+                </button>
+            </div>
+        </div>
+
+        <!-- Aging summary -->
+        <div class="bad-aging-card">
+            <div class="bad-ic-title"><i class="bi bi-hourglass" aria-hidden="true"></i> AR Aging</div>
+            @foreach (var (bucket, amount) in _aging)
+            {
+                <div class="bad-aging-row">
+                    <span class="bad-aging-lbl">@bucket</span>
+                    <div class="bad-aging-bar-wrap">
+                        <div class="bad-aging-bar" style="width:@AgingPct(amount)%;background:@AgingColor(bucket)"></div>
+                    </div>
+                    <span class="bad-aging-amt">@amount.ToString("C0")</span>
+                </div>
+            }
+        </div>
+    </aside>
+
+    <!-- Right: tabs -->
+    <div class="bad-content">
+        <SfTab>
+            <TabItems>
+                <!-- Invoices tab -->
+                <TabItem>
+                    <ChildContent><TabHeader Text="Invoices"></TabHeader></ChildContent>
+                    <ContentTemplate>
+                        <div class="bad-tab-toolbar">
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+                                <i class="bi bi-plus-circle" aria-hidden="true"></i> New Invoice
+                            </button>
+                        </div>
+                        <SfGrid DataSource="_invoices" AllowSorting="true" AllowPaging="true" Height="320px">
+                            <GridPageSettings PageSize="10"></GridPageSettings>
+                            <GridColumns>
+                                <GridColumn Field="@nameof(AccountInvoice.InvoiceNumber)" HeaderText="Invoice #" Width="140"></GridColumn>
+                                <GridColumn Field="@nameof(AccountInvoice.Total)" HeaderText="Total" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+                                <GridColumn Field="@nameof(AccountInvoice.Balance)" HeaderText="Balance" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+                                <GridColumn HeaderText="Status" Width="110">
+                                    <Template>
+                                        @{ var inv = (AccountInvoice)context; }
+                                        <span class="bad-inv-status bad-ist-@inv.Status.ToLower()">@inv.Status</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(AccountInvoice.DueDate)" HeaderText="Due" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    </ContentTemplate>
+                </TabItem>
+
+                <!-- Payments tab -->
+                <TabItem>
+                    <ChildContent><TabHeader Text="Payments"></TabHeader></ChildContent>
+                    <ContentTemplate>
+                        <div class="bad-tab-toolbar">
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => _showPayment = true">
+                                <i class="bi bi-plus-circle" aria-hidden="true"></i> Record Payment
+                            </button>
+                        </div>
+                        <SfGrid DataSource="_payments" AllowSorting="true" AllowPaging="true" Height="320px">
+                            <GridPageSettings PageSize="10"></GridPageSettings>
+                            <GridColumns>
+                                <GridColumn Field="@nameof(AccountPayment.PaymentDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+                                <GridColumn Field="@nameof(AccountPayment.Amount)" HeaderText="Amount" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+                                <GridColumn Field="@nameof(AccountPayment.Method)" HeaderText="Method" Width="120"></GridColumn>
+                                <GridColumn Field="@nameof(AccountPayment.Reference)" HeaderText="Reference" Width="150"></GridColumn>
+                                <GridColumn HeaderText="Status" Width="110">
+                                    <Template>
+                                        @{ var p = (AccountPayment)context; }
+                                        <span class="bad-pay-status bad-pst-@p.Status.ToLower()">@p.Status</span>
+                                    </Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    </ContentTemplate>
+                </TabItem>
+
+                <!-- Credits tab -->
+                <TabItem>
+                    <ChildContent><TabHeader Text="Credits &amp; Refunds"></TabHeader></ChildContent>
+                    <ContentTemplate>
+                        <div class="bad-tab-toolbar">
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/credits")'>
+                                <i class="bi bi-arrow-up-right-square" aria-hidden="true"></i> Credits Center
+                            </button>
+                        </div>
+                        <SfGrid DataSource="_credits" AllowSorting="true" Height="320px">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(AccountCredit.Date)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+                                <GridColumn Field="@nameof(AccountCredit.Amount)" HeaderText="Amount" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+                                <GridColumn Field="@nameof(AccountCredit.Type)" HeaderText="Type" Width="130"></GridColumn>
+                                <GridColumn Field="@nameof(AccountCredit.Reason)" HeaderText="Reason" Width="240"></GridColumn>
+                                <GridColumn Field="@nameof(AccountCredit.Status)" HeaderText="Status" Width="110"></GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    </ContentTemplate>
+                </TabItem>
+
+                <!-- Activity log tab -->
+                <TabItem>
+                    <ChildContent><TabHeader Text="Activity Log"></TabHeader></ChildContent>
+                    <ContentTemplate>
+                        <div class="bad-activity-list">
+                            @foreach (var ev in _activity)
+                            {
+                                <div class="bad-activity-row">
+                                    <div class="bad-act-dot bad-dot-@ev.Type" aria-hidden="true"></div>
+                                    <div>
+                                        <div class="bad-act-text">@ev.Description</div>
+                                        <div class="bad-act-meta">@ev.Date.ToString("MMM d, yyyy h:mm tt") · @ev.User</div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </ContentTemplate>
+                </TabItem>
+            </TabItems>
+        </SfTab>
+    </div>
+</div>
+
+<!-- Record Payment Dialog -->
+<SfDialog Width="480px" IsModal="true" @bind-Visible="_showPayment" Header="Record Payment" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Content>
+            <div class="bad-dlg-body">
+                <div class="form-group mb-2"><label class="bad-lbl">Amount</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_payAmount" Format="C2" Width="100%"></SfNumericTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="bad-lbl">Method</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"ACH","Credit Card","Check","Wire Transfer","Cash"}' @bind-Value="_payMethod" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="bad-lbl">Reference #</label>
+                    <SfTextBox @bind-Value="_payRef" Placeholder="Check #, ACH trace, etc."></SfTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="bad-lbl">Payment Date</label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_payDate" Width="100%"></SfDatePicker>
+                </div>
+                <div class="form-group mb-2"><label class="bad-lbl">Notes</label>
+                    <SfTextBox @bind-Value="_payNotes" Multiline="true"></SfTextBox>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Record Payment" IsPrimary="true" OnClick="RecordPaymentAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showPayment = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid BillingAccountId { get; set; }
+
+    private SfToast _toast = default!;
+    private bool _showPayment, _showEdit;
+    private string? _payMethod = "ACH", _payRef, _payNotes;
+    private decimal _payAmount;
+    private DateTime _payDate = DateTime.Today;
+
+    // Seed account (in production, load by BillingAccountId)
+    private BillingAccountInfo _account = new(
+        "Acme Corp", "Direct Bill", 12850m, 25000m, "Net 30", "ACH", true, "Active", 5, DateTime.Today.AddDays(-3));
+
+    private readonly List<AccountInvoice> _invoices =
+    [
+        new("INV-2025-0041", 4500m, 4500m, "Overdue",  DateOnly.FromDateTime(DateTime.Today.AddDays(-15))),
+        new("INV-2025-0038", 3200m, 3200m, "Overdue",  DateOnly.FromDateTime(DateTime.Today.AddDays(-45))),
+        new("INV-2025-0035", 5150m,    0m, "Paid",     DateOnly.FromDateTime(DateTime.Today.AddDays(-30))),
+        new("INV-2025-0030", 2800m,    0m, "Paid",     DateOnly.FromDateTime(DateTime.Today.AddDays(-60))),
+        new("INV-2025-0044", 1000m, 1000m, "Open",     DateOnly.FromDateTime(DateTime.Today.AddDays(10))),
+    ];
+
+    private readonly List<AccountPayment> _payments =
+    [
+        new(DateTime.Today.AddDays(-30), 5150m, "ACH",   "ACH-20250115-8842", "Cleared"),
+        new(DateTime.Today.AddDays(-60), 2800m, "Check", "CHK-10047",         "Cleared"),
+        new(DateTime.Today.AddDays(-5),  1500m, "ACH",   "ACH-20250210-5521", "Pending"),
+    ];
+
+    private readonly List<AccountCredit> _credits =
+    [
+        new(DateTime.Today.AddDays(-20), 250m,  "Premium Refund",  "Endorsed mid-term reduction",   "Applied"),
+        new(DateTime.Today.AddDays(-90), 500m,  "Cancellation Ret.","90-day cancellation refund",   "Applied"),
+    ];
+
+    private readonly List<ActivityEvent> _activity =
+    [
+        new("payment",  "Payment of $5,150 recorded via ACH",           DateTime.Now.AddDays(-30), "Lisa M."),
+        new("invoice",  "Invoice INV-2025-0041 issued for $4,500",       DateTime.Now.AddDays(-20), "System"),
+        new("status",   "Account flagged Delinquent — 45+ days overdue", DateTime.Now.AddDays(-2),  "System"),
+        new("note",     "Called insured — no answer, left voicemail",     DateTime.Now.AddDays(-1),  "Tom H."),
+        new("autopay",  "Autopay enrollment confirmed via portal",        DateTime.Now.AddDays(-120), "Sarah C."),
+    ];
+
+    private readonly List<(string Bucket, decimal Amount)> _aging =
+    [
+        ("Current",    1000m),
+        ("1–30 days",  4500m),
+        ("31–60 days", 3200m),
+        ("61–90 days", 5150m),
+        ("90+ days",      0m),
+    ];
+
+    protected override void OnInitialized() =>
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Billing","/billing/accounts"), new("Account Detail",""));
+
+    async Task ToggleAutopay()
+    {
+        _account = _account with { AutopayEnrolled = !_account.AutopayEnrolled };
+        await _toast.ShowAsync(new ToastModel
+        {
+            Content   = _account.AutopayEnrolled ? "Autopay enrolled." : "Autopay removed.",
+            CssClass  = "e-toast-success"
+        });
+    }
+
+    async Task RecordPaymentAsync()
+    {
+        _payments.Insert(0, new(_payDate, _payAmount, _payMethod ?? "ACH", _payRef ?? "—", "Pending"));
+        _showPayment = false;
+        _payAmount   = 0; _payRef = _payNotes = null; _payDate = DateTime.Today;
+        await _toast.ShowAsync(new ToastModel { Content = "Payment recorded.", CssClass = "e-toast-success" });
+    }
+
+    static double AgingPct(decimal amt)
+    {
+        var max = 5150m;
+        return max == 0 ? 0 : Math.Min(100, (double)(amt / max * 100));
+    }
+
+    static string AgingColor(string bucket) => bucket switch
+    {
+        "Current"    => "#059669",
+        "1–30 days"  => "#d97706",
+        "31–60 days" => "#ea580c",
+        "61–90 days" => "#dc2626",
+        "90+ days"   => "#7f1d1d",
+        _            => "#94a3b8"
+    };
+
+    record BillingAccountInfo(string Name, string BillingMode, decimal Balance, decimal CreditLimit,
+                              string Terms, string DefaultMethod, bool AutopayEnrolled, string Status,
+                              int PolicyCount, DateTime? LastPaymentDate)
+    {
+        public bool AutopayEnrolled { get; set; } = AutopayEnrolled;
+    }
+    record AccountInvoice(string InvoiceNumber, decimal Total, decimal Balance, string Status, DateOnly DueDate);
+    record AccountPayment(DateTime PaymentDate, decimal Amount, string Method, string Reference, string Status);
+    record AccountCredit(DateTime Date, decimal Amount, string Type, string Reason, string Status);
+    record ActivityEvent(string Type, string Description, DateTime Date, string User);
+}

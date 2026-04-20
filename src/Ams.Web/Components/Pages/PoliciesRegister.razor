@@ -1,0 +1,851 @@
+@page "/policies"
+@namespace Ams.Web.Components.Pages
+@using Syncfusion.Blazor.QueryBuilder
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Policies Register</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<SfContextMenu @ref="_ctxMenu" TValue="CtxItem" Items="_ctxItems"
+               ItemSelected="OnContextItemSelected">
+    <MenuFieldSettings Text="Text" IconCss="IconCss" />
+</SfContextMenu>
+
+<AppPageHeader Title="Policies Register"
+               Subtitle="Complete policy lifecycle — active, expiring, by carrier, producer, CSR, branch and LOB"
+               Icon="bi-shield-check-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => _showQueryBuilder = !_showQueryBuilder'>
+            <i class="bi bi-funnel" aria-hidden="true"></i> Advanced Filter
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "pr-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => { _editForm = new(); _showForm = true; }">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Policy
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="pr-kpi-strip">
+    <div class="pr-kpi-card pr-kpi-active">
+        <div class="pr-kpi-val">@_kpi.Active</div>
+        <div class="pr-kpi-lbl"><i class="bi bi-shield-check" aria-hidden="true"></i> Active</div>
+    </div>
+    <div class="pr-kpi-card pr-kpi-exp30">
+        <div class="pr-kpi-val">@_kpi.Exp30</div>
+        <div class="pr-kpi-lbl"><i class="bi bi-clock" aria-hidden="true"></i> Expiring 30d</div>
+    </div>
+    <div class="pr-kpi-card pr-kpi-exp60">
+        <div class="pr-kpi-val">@_kpi.Exp60</div>
+        <div class="pr-kpi-lbl"><i class="bi bi-clock" aria-hidden="true"></i> Expiring 60d</div>
+    </div>
+    <div class="pr-kpi-card pr-kpi-exp90">
+        <div class="pr-kpi-val">@_kpi.Exp90</div>
+        <div class="pr-kpi-lbl"><i class="bi bi-clock" aria-hidden="true"></i> Expiring 90d</div>
+    </div>
+    <div class="pr-kpi-card pr-kpi-prem">
+        <div class="pr-kpi-val">@_kpi.TotalPremium.ToString("C0")</div>
+        <div class="pr-kpi-lbl"><i class="bi bi-cash-stack" aria-hidden="true"></i> Total Premium</div>
+    </div>
+    <div class="pr-kpi-card">
+        <div class="pr-kpi-val">@_kpi.Carriers</div>
+        <div class="pr-kpi-lbl"><i class="bi bi-building" aria-hidden="true"></i> Carriers</div>
+    </div>
+</div>
+
+<!-- View tabs -->
+<div class="pr-view-tabs">
+    @foreach (var tab in _tabs)
+    {
+        <button class="pr-view-tab @(_activeTab == tab.Key ? "pr-view-tab--active" : "")"
+                @onclick="() => SetTab(tab.Key)">
+            <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+            @if (tab.Key == "exp30" && _kpi.Exp30 > 0)
+            {
+                <span class="pr-tab-badge pr-tab-badge--warn">@_kpi.Exp30</span>
+            }
+            else if (tab.Key == "exp60" && _kpi.Exp60 > 0)
+            {
+                <span class="pr-tab-badge">@_kpi.Exp60</span>
+            }
+        </button>
+    }
+</div>
+
+<!-- Advanced Query Builder (collapsible) -->
+@if (_showQueryBuilder)
+{
+    <div class="pr-qb-panel">
+        <div class="pr-qb-header">
+            <span><i class="bi bi-funnel-fill" aria-hidden="true"></i> Advanced Filter</span>
+            <div class="pr-qb-actions">
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetQuery">Reset</button>
+                <button class="um-btn um-btn-primary um-btn-sm" @onclick="ApplyQuery">Apply</button>
+            </div>
+        </div>
+        <SfQueryBuilder TValue="PolicyRow" @ref="_qb" DataSource="_allPolicies" EnableNotCondition="true">
+            <QueryBuilderColumns>
+                <QueryBuilderColumn Field="@nameof(PolicyRow.PolicyNumber)"  Label="Policy #"      Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String"  />
+                <QueryBuilderColumn Field="@nameof(PolicyRow.Account)"       Label="Account"       Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String"  />
+                <QueryBuilderColumn Field="@nameof(PolicyRow.Carrier)"       Label="Carrier"       Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String"  />
+                <QueryBuilderColumn Field="@nameof(PolicyRow.Lob)"           Label="LOB"           Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String"  />
+                <QueryBuilderColumn Field="@nameof(PolicyRow.Status)"        Label="Status"        Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String"  />
+                <QueryBuilderColumn Field="@nameof(PolicyRow.Producer)"      Label="Producer"      Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String"  />
+                <QueryBuilderColumn Field="@nameof(PolicyRow.Csr)"           Label="CSR"           Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String"  />
+                <QueryBuilderColumn Field="@nameof(PolicyRow.Branch)"        Label="Branch"        Type="Syncfusion.Blazor.QueryBuilder.ColumnType.String"  />
+                <QueryBuilderColumn Field="@nameof(PolicyRow.WrittenPremium)" Label="Premium"      Type="Syncfusion.Blazor.QueryBuilder.ColumnType.Number"  />
+                <QueryBuilderColumn Field="@nameof(PolicyRow.EffDate)"       Label="Eff Date"      Type="Syncfusion.Blazor.QueryBuilder.ColumnType.Date"    />
+                <QueryBuilderColumn Field="@nameof(PolicyRow.ExpDate)"       Label="Exp Date"      Type="Syncfusion.Blazor.QueryBuilder.ColumnType.Date"    />
+            </QueryBuilderColumns>
+        </SfQueryBuilder>
+    </div>
+}
+
+<!-- Filter bar -->
+<div class="pr-filter-bar">
+    <div class="pr-search-wrap">
+        <i class="bi bi-search pr-si" aria-hidden="true"></i>
+        <input class="pr-search" type="search" placeholder="Search policy #, account, carrier…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
+    </div>
+    <SfDropDownList TValue="string" TItem="PrLv" DataSource="_statusOpts" Placeholder="All Statuses"
+                    ShowClearButton="true" Width="140px"
+                    Value="_filterStatus" ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="PrLv" DataSource="_lobOpts" Placeholder="All LOBs"
+                    ShowClearButton="true" Width="150px"
+                    Value="_filterLob" ValueChanged="@((string v) => { _filterLob = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="PrLv" DataSource="_carrierOpts" Placeholder="All Carriers"
+                    ShowClearButton="true" Width="160px"
+                    Value="_filterCarrier" ValueChanged="@((string v) => { _filterCarrier = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <span class="pr-count">@_filtered.Count policies</span>
+</div>
+
+@if (_loading)
+{
+    <div class="pr-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading policies…</span></div>
+}
+else
+{
+    <!-- ── All / Expiring views — full SfGrid ─────────────────────── -->
+    @if (_activeTab is "all" or "exp30" or "exp60" or "exp90")
+    {
+        <div class="pr-grid-wrap">
+            <SfGrid @ref="_grid" TValue="PolicyRow" DataSource="_filtered"
+                    AllowSorting="true" AllowFiltering="true" AllowPaging="true"
+                    AllowResizing="true" EnableHover="true" RowHeight="52"
+                    ContextMenuItems="_gridCtxItems">
+                <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+                <GridPageSettings PageSize="20" PageSizes="new int[]{10,20,50,100}" />
+                <GridEvents TValue="PolicyRow"
+                            ContextMenuItemClicked="OnGridCtxClicked"
+                            RowSelected="OnRowSelected" />
+                <GridColumns>
+                    <GridColumn Field="@nameof(PolicyRow.PolicyNumber)" HeaderText="Policy #" Width="150" IsPrimaryKey="true">
+                        <Template>
+                            @{ var p = (PolicyRow)context; }
+                            <button class="pr-pol-link" @onclick='() => Nav.NavigateTo($"/policies/{p.Id}")'>@p.PolicyNumber</button>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(PolicyRow.Account)" HeaderText="Account" MinWidth="170">
+                        <Template>
+                            @{ var p = (PolicyRow)context; }
+                            <div class="pr-acct-cell">
+                                <button class="pr-nav-btn" @onclick='() => Nav.NavigateTo($"/accounts/{p.AccountId}")'>@p.Account</button>
+                                <span class="pr-acct-type">@p.AccountType</span>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(PolicyRow.Lob)" HeaderText="LOB" Width="140">
+                        <Template>@{ var p = (PolicyRow)context; }<span class="pr-lob-chip pr-lob-@p.Lob.ToLower().Replace(" ","-")">@p.Lob</span></Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(PolicyRow.Carrier)" HeaderText="Carrier" Width="160" />
+                    <GridColumn Field="@nameof(PolicyRow.Status)" HeaderText="Status" Width="120">
+                        <Template>@{ var p = (PolicyRow)context; }<span class="pr-status pr-status-@p.Status.ToLower()">@p.Status</span></Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(PolicyRow.EffDate)" HeaderText="Eff Date" Width="115" Format="d">
+                        <Template>@{ var p = (PolicyRow)context; }<span class="pr-mono">@p.EffDate.ToString("MM/dd/yyyy")</span></Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(PolicyRow.ExpDate)" HeaderText="Exp Date" Width="115">
+                        <Template>
+                            @{ var p = (PolicyRow)context; }
+                            <span class="pr-mono @ExpDateCss(p.ExpDate)">@p.ExpDate.ToString("MM/dd/yyyy")</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(PolicyRow.WrittenPremium)" HeaderText="Written Prem" Width="140"
+                                TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                        <Template>@{ var p = (PolicyRow)context; }<span class="pr-mono">@p.WrittenPremium.ToString("C0")</span></Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(PolicyRow.Producer)" HeaderText="Producer" Width="145" />
+                    <GridColumn Field="@nameof(PolicyRow.Csr)" HeaderText="CSR" Width="130" />
+                    <GridColumn Field="@nameof(PolicyRow.Branch)" HeaderText="Branch" Width="120" />
+                    <GridColumn HeaderText="" Width="56" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" AllowSorting="false" AllowFiltering="false">
+                        <Template>
+                            @{ var p = (PolicyRow)context; }
+                            <button class="um-btn um-btn-ghost um-btn-sm"
+                                    @onclick="(e) => ShowContextMenu(e, p)"
+                                    title="Actions">
+                                <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                            </button>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        </div>
+    }
+
+    <!-- ── By Carrier ─────────────────────────────────────────────── -->
+    else if (_activeTab == "carrier")
+    {
+        <div class="pr-group-wrap">
+            @foreach (var grp in _filtered.GroupBy(p => p.Carrier).OrderBy(g => g.Key))
+            {
+                <div class="pr-group-card">
+                    <div class="pr-group-header">
+                        <div class="pr-group-title">
+                            <i class="bi bi-building" aria-hidden="true"></i>
+                            <strong>@grp.Key</strong>
+                        </div>
+                        <div class="pr-group-stats">
+                            <span class="pr-gs"><i class="bi bi-shield-check" aria-hidden="true"></i> @grp.Count() policies</span>
+                            <span class="pr-gs pr-gs-prem">@grp.Sum(p => p.WrittenPremium).ToString("C0")</span>
+                        </div>
+                    </div>
+                    <SfGrid TValue="PolicyRow" DataSource="@grp.ToList()"
+                            AllowSorting="true" EnableHover="true" RowHeight="46">
+                        <GridColumns>
+                            <GridColumn Field="@nameof(PolicyRow.PolicyNumber)" HeaderText="Policy #" Width="140" />
+                            <GridColumn Field="@nameof(PolicyRow.Account)"      HeaderText="Account"  MinWidth="160" />
+                            <GridColumn Field="@nameof(PolicyRow.Lob)"          HeaderText="LOB"      Width="130">
+                                <Template>@{ var p = (PolicyRow)context; }<span class="pr-lob-chip pr-lob-@p.Lob.ToLower().Replace(" ","-")">@p.Lob</span></Template>
+                            </GridColumn>
+                            <GridColumn Field="@nameof(PolicyRow.Status)"       HeaderText="Status"   Width="110">
+                                <Template>@{ var p = (PolicyRow)context; }<span class="pr-status pr-status-@p.Status.ToLower()">@p.Status</span></Template>
+                            </GridColumn>
+                            <GridColumn Field="@nameof(PolicyRow.ExpDate)"      HeaderText="Exp Date" Width="115">
+                                <Template>@{ var p = (PolicyRow)context; }<span class="pr-mono @ExpDateCss(p.ExpDate)">@p.ExpDate.ToString("MM/dd/yyyy")</span></Template>
+                            </GridColumn>
+                            <GridColumn Field="@nameof(PolicyRow.WrittenPremium)" HeaderText="Written Prem" Width="135"
+                                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <Template>@{ var p = (PolicyRow)context; }<span class="pr-mono">@p.WrittenPremium.ToString("C0")</span></Template>
+                            </GridColumn>
+                            <GridColumn Field="@nameof(PolicyRow.Producer)" HeaderText="Producer" Width="145" />
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+        </div>
+    }
+
+    <!-- ── By Producer ────────────────────────────────────────────── -->
+    else if (_activeTab == "producer")
+    {
+        <div class="pr-group-wrap">
+            @foreach (var grp in _filtered.GroupBy(p => p.Producer).OrderBy(g => g.Key))
+            {
+                <div class="pr-group-card">
+                    <div class="pr-group-header">
+                        <div class="pr-group-title">
+                            <i class="bi bi-person-badge" aria-hidden="true"></i>
+                            <strong>@grp.Key</strong>
+                        </div>
+                        <div class="pr-group-stats">
+                            <span class="pr-gs">@grp.Count() policies</span>
+                            <span class="pr-gs pr-gs-prem">@grp.Sum(p => p.WrittenPremium).ToString("C0")</span>
+                            <span class="pr-gs pr-gs-warn">@grp.Count(p => DaysToExp(p.ExpDate) <= 30) expiring 30d</span>
+                        </div>
+                    </div>
+                    <SfGrid TValue="PolicyRow" DataSource="@grp.ToList()"
+                            AllowSorting="true" EnableHover="true" RowHeight="46">
+                        <GridColumns>
+                            <GridColumn Field="@nameof(PolicyRow.PolicyNumber)" HeaderText="Policy #" Width="140" />
+                            <GridColumn Field="@nameof(PolicyRow.Account)"      HeaderText="Account"  MinWidth="160" />
+                            <GridColumn Field="@nameof(PolicyRow.Carrier)"      HeaderText="Carrier"  Width="155" />
+                            <GridColumn Field="@nameof(PolicyRow.Lob)"          HeaderText="LOB"      Width="130" />
+                            <GridColumn Field="@nameof(PolicyRow.ExpDate)"      HeaderText="Exp Date" Width="115">
+                                <Template>@{ var p = (PolicyRow)context; }<span class="pr-mono @ExpDateCss(p.ExpDate)">@p.ExpDate.ToString("MM/dd/yyyy")</span></Template>
+                            </GridColumn>
+                            <GridColumn Field="@nameof(PolicyRow.WrittenPremium)" HeaderText="Written Prem" Width="135"
+                                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <Template>@{ var p = (PolicyRow)context; }<span class="pr-mono">@p.WrittenPremium.ToString("C0")</span></Template>
+                            </GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+        </div>
+    }
+
+    <!-- ── By CSR ──────────────────────────────────────────────────── -->
+    else if (_activeTab == "csr")
+    {
+        <div class="pr-group-wrap">
+            @foreach (var grp in _filtered.GroupBy(p => p.Csr).OrderBy(g => g.Key))
+            {
+                <div class="pr-group-card">
+                    <div class="pr-group-header">
+                        <div class="pr-group-title">
+                            <i class="bi bi-headset" aria-hidden="true"></i>
+                            <strong>@grp.Key</strong>
+                        </div>
+                        <div class="pr-group-stats">
+                            <span class="pr-gs">@grp.Count() policies</span>
+                            <span class="pr-gs pr-gs-prem">@grp.Sum(p => p.WrittenPremium).ToString("C0")</span>
+                        </div>
+                    </div>
+                    <SfGrid TValue="PolicyRow" DataSource="@grp.ToList()"
+                            AllowSorting="true" EnableHover="true" RowHeight="46">
+                        <GridColumns>
+                            <GridColumn Field="@nameof(PolicyRow.PolicyNumber)" HeaderText="Policy #" Width="140" />
+                            <GridColumn Field="@nameof(PolicyRow.Account)"      HeaderText="Account"  MinWidth="160" />
+                            <GridColumn Field="@nameof(PolicyRow.Carrier)"      HeaderText="Carrier"  Width="155" />
+                            <GridColumn Field="@nameof(PolicyRow.Lob)"          HeaderText="LOB"      Width="130" />
+                            <GridColumn Field="@nameof(PolicyRow.Status)"       HeaderText="Status"   Width="110">
+                                <Template>@{ var p = (PolicyRow)context; }<span class="pr-status pr-status-@p.Status.ToLower()">@p.Status</span></Template>
+                            </GridColumn>
+                            <GridColumn Field="@nameof(PolicyRow.ExpDate)"      HeaderText="Exp Date" Width="115">
+                                <Template>@{ var p = (PolicyRow)context; }<span class="pr-mono @ExpDateCss(p.ExpDate)">@p.ExpDate.ToString("MM/dd/yyyy")</span></Template>
+                            </GridColumn>
+                            <GridColumn Field="@nameof(PolicyRow.WrittenPremium)" HeaderText="Written Prem" Width="135"
+                                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <Template>@{ var p = (PolicyRow)context; }<span class="pr-mono">@p.WrittenPremium.ToString("C0")</span></Template>
+                            </GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+        </div>
+    }
+
+    <!-- ── By Branch ─────────────────────────────────────────────── -->
+    else if (_activeTab == "branch")
+    {
+        <div class="pr-group-wrap">
+            @foreach (var grp in _filtered.GroupBy(p => p.Branch).OrderBy(g => g.Key))
+            {
+                <div class="pr-group-card">
+                    <div class="pr-group-header">
+                        <div class="pr-group-title">
+                            <i class="bi bi-geo-alt" aria-hidden="true"></i>
+                            <strong>@grp.Key</strong>
+                        </div>
+                        <div class="pr-group-stats">
+                            <span class="pr-gs">@grp.Count() policies</span>
+                            <span class="pr-gs pr-gs-prem">@grp.Sum(p => p.WrittenPremium).ToString("C0")</span>
+                        </div>
+                    </div>
+                    <SfGrid TValue="PolicyRow" DataSource="@grp.ToList()"
+                            AllowSorting="true" EnableHover="true" RowHeight="46">
+                        <GridColumns>
+                            <GridColumn Field="@nameof(PolicyRow.PolicyNumber)" HeaderText="Policy #" Width="140" />
+                            <GridColumn Field="@nameof(PolicyRow.Account)"      HeaderText="Account"  MinWidth="160" />
+                            <GridColumn Field="@nameof(PolicyRow.Carrier)"      HeaderText="Carrier"  Width="155" />
+                            <GridColumn Field="@nameof(PolicyRow.Lob)"          HeaderText="LOB"      Width="130" />
+                            <GridColumn Field="@nameof(PolicyRow.Producer)"     HeaderText="Producer" Width="145" />
+                            <GridColumn Field="@nameof(PolicyRow.WrittenPremium)" HeaderText="Written Prem" Width="135"
+                                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <Template>@{ var p = (PolicyRow)context; }<span class="pr-mono">@p.WrittenPremium.ToString("C0")</span></Template>
+                            </GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            }
+        </div>
+    }
+
+    <!-- ── By LOB ─────────────────────────────────────────────────── -->
+    else if (_activeTab == "lob")
+    {
+        <div class="pr-lob-summary">
+            @foreach (var grp in _filtered.GroupBy(p => p.Lob).OrderByDescending(g => g.Sum(p => p.WrittenPremium)))
+            {
+                var lobPct = _filtered.Count > 0 ? (double)grp.Count() / _filtered.Count * 100 : 0;
+                <div class="pr-lob-row" @onclick='() => { _filterLob = grp.Key; ApplyFilters(); SetTab("all"); }'>
+                    <span class="pr-lob-chip pr-lob-@grp.Key.ToLower().Replace(" ","-")">@grp.Key</span>
+                    <div class="pr-lob-bar-wrap">
+                        <div class="pr-lob-bar" style="width:@(lobPct.ToString("F1"))%"></div>
+                    </div>
+                    <span class="pr-lob-count">@grp.Count()</span>
+                    <span class="pr-lob-prem pr-mono">@grp.Sum(p => p.WrittenPremium).ToString("C0")</span>
+                    <span class="pr-lob-exp">@grp.Count(p => DaysToExp(p.ExpDate) <= 30) exp 30d</span>
+                </div>
+            }
+        </div>
+    }
+}
+
+<!-- New / Edit Policy Dialog -->
+<SfDialog @bind-Visible="_showForm" Width="640px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="pr-dlg-hdr"><i class="bi bi-shield-plus" aria-hidden="true"></i> @(_editForm.Id == Guid.Empty ? "New Policy" : "Edit Policy")</span></Header>
+        <Content>
+            <div class="pr-dlg-body">
+                <div class="pr-dlg-section">Policy Identity</div>
+                <div class="pr-dlg-grid">
+                    <SfTextBox Placeholder="Policy number *" @bind-Value="_editForm.PolicyNumber" />
+                    <SfDropDownList TValue="string" TItem="PrLv" DataSource="_lobOpts" Placeholder="Line of business *"
+                                    Width="100%" @bind-Value="_editForm.Lob">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="PrLv" DataSource="_carrierOpts" Placeholder="Carrier *"
+                                    Width="100%" @bind-Value="_editForm.Carrier">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="PrLv" DataSource="_statusOpts" Placeholder="Status"
+                                    Width="100%" @bind-Value="_editForm.Status">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                </div>
+
+                <div class="pr-dlg-section" style="margin-top:.9rem">Dates & Premium</div>
+                <div class="pr-dlg-grid">
+                    <SfDatePicker TValue="DateTime" Placeholder="Effective date *" @bind-Value="_editForm.EffDate" />
+                    <SfDatePicker TValue="DateTime" Placeholder="Expiration date *" @bind-Value="_editForm.ExpDate" />
+                    <SfNumericTextBox TValue="decimal" Placeholder="Written premium" Format="C2" @bind-Value="_editForm.WrittenPremium" />
+                    <SfNumericTextBox TValue="decimal" Placeholder="Annual premium" Format="C2" @bind-Value="_editForm.AnnualPremium" />
+                </div>
+
+                <div class="pr-dlg-section" style="margin-top:.9rem">Assignment</div>
+                <div class="pr-dlg-grid">
+                    <SfTextBox Placeholder="Account" @bind-Value="_editForm.Account" />
+                    <SfTextBox Placeholder="Producer" @bind-Value="_editForm.Producer" />
+                    <SfTextBox Placeholder="CSR" @bind-Value="_editForm.Csr" />
+                    <SfDropDownList TValue="string" TItem="PrLv" DataSource="_branchOpts" Placeholder="Branch"
+                                    Width="100%" @bind-Value="_editForm.Branch">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                </div>
+
+                <div class="pr-dlg-section" style="margin-top:.9rem">Coverage Notes</div>
+                <SfTextBox Placeholder="Description / notes" Multiline="true" HtmlAttributes='@(new() {{"rows","3"}})' @bind-Value="_editForm.Notes" />
+
+                @if (!string.IsNullOrEmpty(_formError))
+                {
+                    <div class="pr-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pr-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SavePolicyAsync">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save Policy
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- Endorse / Cancel confirm dialog -->
+<SfDialog @bind-Visible="_showActionConfirm" Width="420px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="pr-dlg-hdr"><i class="bi bi-@(_confirmAction == "cancel" ? "x-circle" : "pen")" aria-hidden="true"></i> @_confirmTitle</span></Header>
+        <Content>
+            <p style="padding:.5rem .25rem">@_confirmMsg</p>
+            <SfTextBox Placeholder="Reason / notes" @bind-Value="_confirmNote" />
+        </Content>
+        <FooterTemplate>
+            <div class="pr-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showActionConfirm = false">Cancel</button>
+                <button class="um-btn @(_confirmAction == "cancel" ? "um-btn-danger" : "um-btn-primary")"
+                        @onclick="ExecuteActionAsync">
+                    Confirm
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private SfToast?                 _toast;
+    private SfGrid<PolicyRow>?       _grid;
+    private SfQueryBuilder<PolicyRow>? _qb;
+    private SfContextMenu<CtxItem>?  _ctxMenu;
+
+    private bool   _loading           = true;
+    private bool   _showQueryBuilder  = false;
+    private bool   _showForm          = false;
+    private bool   _showActionConfirm = false;
+    private string _activeTab         = "all";
+    private string _search            = string.Empty;
+    private string _filterStatus      = string.Empty;
+    private string _filterLob         = string.Empty;
+    private string _filterCarrier     = string.Empty;
+    private string _formError         = string.Empty;
+    private string _confirmAction     = string.Empty;
+    private string _confirmTitle      = string.Empty;
+    private string _confirmMsg        = string.Empty;
+    private string _confirmNote       = string.Empty;
+
+    private List<PolicyRow> _allPolicies = [];
+    private List<PolicyRow> _filtered    = [];
+    private PolicyRow?      _ctxTarget;
+    private PolicyForm      _editForm    = new();
+    private PrKpi           _kpi         = new();
+
+    // ── Tab definitions ─────────────────────────────────────────────────────
+    private readonly List<(string Key, string Label, string Icon)> _tabs =
+    [
+        ("all",      "All Policies", "bi-grid"),
+        ("exp30",    "Expiring 30d", "bi-clock-history"),
+        ("exp60",    "Expiring 60d", "bi-clock"),
+        ("exp90",    "Expiring 90d", "bi-clock"),
+        ("carrier",  "By Carrier",  "bi-building"),
+        ("producer", "By Producer", "bi-person-badge"),
+        ("csr",      "By CSR",      "bi-headset"),
+        ("branch",   "By Branch",   "bi-geo-alt"),
+        ("lob",      "By LOB",      "bi-tag"),
+    ];
+
+    // ── Context menu ─────────────────────────────────────────────────────────
+    private readonly List<CtxItem> _ctxItems =
+    [
+        new("view",     "View Detail",    "bi bi-eye"),
+        new("edit",     "Edit",           "bi bi-pencil"),
+        new("endorse",  "Endorse",        "bi bi-pen"),
+        new("renew",    "Renew",          "bi bi-arrow-repeat"),
+        new("cancel",   "Cancel Policy",  "bi bi-x-circle"),
+        new("document", "Add Document",   "bi bi-paperclip"),
+        new("activity", "Log Activity",   "bi bi-lightning"),
+    ];
+
+    private readonly List<ContextMenuItemModel> _gridCtxItems =
+    [
+        new() { Text = "View Detail",   Id = "view"     },
+        new() { Text = "Edit",          Id = "edit"     },
+        new() { Text = "Endorse",       Id = "endorse"  },
+        new() { Text = "Renew",         Id = "renew"    },
+        new() { Text = "Cancel Policy", Id = "cancel"   },
+    ];
+
+    // ── Dropdown options ─────────────────────────────────────────────────────
+    private static readonly List<PrLv> _statusOpts =
+    [
+        new("Active","Active"), new("Cancelled","Cancelled"), new("Expired","Expired"),
+        new("Pending","Pending"), new("Non-Renewed","Non-Renewed"),
+    ];
+    private static readonly List<PrLv> _lobOpts =
+    [
+        new("Commercial Auto","Commercial Auto"), new("Commercial Property","Commercial Property"),
+        new("General Liability","General Liability"), new("Workers Comp","Workers Comp"),
+        new("Professional Liability","Professional Liability"), new("Umbrella","Umbrella"),
+        new("Cyber","Cyber"), new("Directors & Officers","Directors & Officers"),
+        new("Personal Auto","Personal Auto"), new("Homeowners","Homeowners"),
+        new("Life","Life"), new("Health","Health"), new("Flood","Flood"),
+    ];
+    private static readonly List<PrLv> _carrierOpts =
+    [
+        new("Travelers","Travelers"), new("Hartford","Hartford"), new("CNA","CNA"),
+        new("Liberty Mutual","Liberty Mutual"), new("Zurich","Zurich"),
+        new("AIG","AIG"), new("Nationwide","Nationwide"), new("Cincinnati","Cincinnati"),
+    ];
+    private static readonly List<PrLv> _branchOpts =
+    [
+        new("HQ","HQ"), new("Northeast","Northeast"), new("Southeast","Southeast"),
+        new("Midwest","Midwest"), new("West","West"), new("Southwest","Southwest"),
+    ];
+
+    // ── Lifecycle ────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; StateHasChanged();
+        await Task.Delay(0);
+        BuildStubData();
+        ApplyFilters();
+        _loading = false;
+    }
+
+    // ── Filtering ────────────────────────────────────────────────────────────
+    private void SetTab(string tab)
+    {
+        _activeTab = tab;
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        var now = DateTime.Today;
+        var q = _allPolicies.AsEnumerable();
+
+        // Tab filter
+        q = _activeTab switch
+        {
+            "exp30" => q.Where(p => DaysToExp(p.ExpDate) is >= 0 and <= 30),
+            "exp60" => q.Where(p => DaysToExp(p.ExpDate) is >= 0 and <= 60),
+            "exp90" => q.Where(p => DaysToExp(p.ExpDate) is >= 0 and <= 90),
+            _       => q,
+        };
+
+        if (!string.IsNullOrEmpty(_search))
+        {
+            var s = _search.ToLower();
+            q = q.Where(p => p.PolicyNumber.Contains(s, StringComparison.OrdinalIgnoreCase)
+                           || p.Account.Contains(s, StringComparison.OrdinalIgnoreCase)
+                           || p.Carrier.Contains(s, StringComparison.OrdinalIgnoreCase)
+                           || p.Producer.Contains(s, StringComparison.OrdinalIgnoreCase));
+        }
+        if (!string.IsNullOrEmpty(_filterStatus))
+            q = q.Where(p => p.Status == _filterStatus);
+        if (!string.IsNullOrEmpty(_filterLob))
+            q = q.Where(p => p.Lob == _filterLob);
+        if (!string.IsNullOrEmpty(_filterCarrier))
+            q = q.Where(p => p.Carrier == _filterCarrier);
+
+        _filtered = q.ToList();
+        RefreshKpi();
+    }
+
+    private void RefreshKpi()
+    {
+        var now = DateTime.Today;
+        _kpi = new PrKpi
+        {
+            Active       = _allPolicies.Count(p => p.Status == "Active"),
+            Exp30        = _allPolicies.Count(p => DaysToExp(p.ExpDate) is >= 0 and <= 30  && p.Status == "Active"),
+            Exp60        = _allPolicies.Count(p => DaysToExp(p.ExpDate) is >= 0 and <= 60  && p.Status == "Active"),
+            Exp90        = _allPolicies.Count(p => DaysToExp(p.ExpDate) is >= 0 and <= 90  && p.Status == "Active"),
+            TotalPremium = _allPolicies.Where(p => p.Status == "Active").Sum(p => p.WrittenPremium),
+            Carriers     = _allPolicies.Select(p => p.Carrier).Distinct().Count(),
+        };
+    }
+
+    private static int DaysToExp(DateTime exp) => (int)(exp.Date - DateTime.Today).TotalDays;
+    private static string ExpDateCss(DateTime exp)
+    {
+        var days = DaysToExp(exp);
+        return days < 0 ? "pr-exp-past" : days <= 30 ? "pr-exp-30" : days <= 60 ? "pr-exp-60" : string.Empty;
+    }
+
+    private void ResetQuery() { _qb?.Reset(); ApplyFilters(); }
+    private void ApplyQuery()  { ApplyFilters(); }
+
+    // ── Context menu ────────────────────────────────────────────────────────
+    private async Task ShowContextMenu(Microsoft.AspNetCore.Components.Web.MouseEventArgs e, PolicyRow p)
+    {
+        _ctxTarget = p;
+        if (_ctxMenu is not null)
+            await _ctxMenu.OpenAsync(e.ClientX, e.ClientY);
+    }
+
+    private void OnRowSelected(RowSelectEventArgs<PolicyRow> args) => _ctxTarget = args.Data;
+
+    private void OnGridCtxClicked(ContextMenuClickEventArgs<PolicyRow> args)
+    {
+        _ctxTarget = args.RowInfo.RowData;
+        HandleAction(args.Item.Id ?? string.Empty);
+    }
+
+    private void OnContextItemSelected(MenuEventArgs<CtxItem> args)
+    {
+        HandleAction(args.Item.Key);
+    }
+
+    private void HandleAction(string action)
+    {
+        if (_ctxTarget is null) return;
+        switch (action)
+        {
+            case "view":
+                Nav.NavigateTo($"/policies/{_ctxTarget.Id}");
+                break;
+            case "edit":
+                _editForm = PolicyForm.From(_ctxTarget);
+                _showForm = true;
+                break;
+            case "endorse":
+                _confirmAction = "endorse";
+                _confirmTitle  = $"Endorse — {_ctxTarget.PolicyNumber}";
+                _confirmMsg    = $"Create an endorsement for policy {_ctxTarget.PolicyNumber} ({_ctxTarget.Account})?";
+                _confirmNote   = string.Empty;
+                _showActionConfirm = true;
+                break;
+            case "renew":
+                _confirmAction = "renew";
+                _confirmTitle  = $"Renew — {_ctxTarget.PolicyNumber}";
+                _confirmMsg    = $"Start renewal workflow for {_ctxTarget.PolicyNumber} expiring {_ctxTarget.ExpDate:MM/dd/yyyy}?";
+                _confirmNote   = string.Empty;
+                _showActionConfirm = true;
+                break;
+            case "cancel":
+                _confirmAction = "cancel";
+                _confirmTitle  = $"Cancel — {_ctxTarget.PolicyNumber}";
+                _confirmMsg    = $"Cancel policy {_ctxTarget.PolicyNumber} for {_ctxTarget.Account}? This action cannot be undone.";
+                _confirmNote   = string.Empty;
+                _showActionConfirm = true;
+                break;
+        }
+    }
+
+    // ── CRUD ────────────────────────────────────────────────────────────────
+    private async Task SavePolicyAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_editForm.PolicyNumber)) { _formError = "Policy number is required."; return; }
+        if (string.IsNullOrWhiteSpace(_editForm.Lob))          { _formError = "Line of business is required."; return; }
+
+        if (_editForm.Id == Guid.Empty)
+        {
+            _allPolicies.Add(new PolicyRow
+            {
+                Id = Guid.NewGuid(), PolicyNumber = _editForm.PolicyNumber,
+                Account = _editForm.Account, AccountType = "Commercial", AccountId = Guid.NewGuid(),
+                Carrier = _editForm.Carrier, Lob = _editForm.Lob, Status = _editForm.Status,
+                EffDate = _editForm.EffDate, ExpDate = _editForm.ExpDate,
+                WrittenPremium = _editForm.WrittenPremium, AnnualPremium = _editForm.AnnualPremium,
+                Producer = _editForm.Producer, Csr = _editForm.Csr, Branch = _editForm.Branch,
+            });
+        }
+        else
+        {
+            var existing = _allPolicies.FirstOrDefault(p => p.Id == _editForm.Id);
+            if (existing is not null)
+            {
+                existing.PolicyNumber = _editForm.PolicyNumber; existing.Carrier = _editForm.Carrier;
+                existing.Lob = _editForm.Lob; existing.Status = _editForm.Status;
+                existing.EffDate = _editForm.EffDate; existing.ExpDate = _editForm.ExpDate;
+                existing.WrittenPremium = _editForm.WrittenPremium; existing.Producer = _editForm.Producer;
+                existing.Csr = _editForm.Csr; existing.Branch = _editForm.Branch;
+            }
+        }
+        ApplyFilters();
+        _showForm = false; _formError = string.Empty;
+        await ShowToast("Policy saved.");
+    }
+
+    private async Task ExecuteActionAsync()
+    {
+        if (_ctxTarget is not null && _confirmAction == "cancel")
+        {
+            _ctxTarget.Status = "Cancelled";
+            ApplyFilters();
+        }
+        _showActionConfirm = false;
+        await ShowToast($"{char.ToUpper(_confirmAction[0])}{_confirmAction[1..]} action recorded.");
+    }
+
+    private async Task ShowToast(string msg)
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "e-toast-success" });
+    }
+
+    // ── Stub data ────────────────────────────────────────────────────────────
+    private void BuildStubData()
+    {
+        var rng      = new Random(42);
+        var carriers = _carrierOpts.Select(c => c.Value).ToArray();
+        var lobs     = _lobOpts.Select(l => l.Value).ToArray();
+        var statuses = new[] { "Active", "Active", "Active", "Active", "Expired", "Cancelled", "Pending" };
+        var producers= new[] { "James Miller", "Sarah Chen", "Robert Kim", "Linda Torres", "Mike Walsh" };
+        var csrs     = new[] { "Amy Scott", "Dan Rivera", "Paula Ngo", "Chris Hall" };
+        var branches = _branchOpts.Select(b => b.Value).ToArray();
+        var accounts = new[] { "Sullivan Manufacturing LLC", "Lakeside Medical Group", "Apex Tech Solutions",
+                                "Green Valley Foods Inc", "Harbor Logistics Co", "Crestview Holdings",
+                                "Pinnacle Law Partners", "Sunrise Construction", "BlueRidge Energy LLC",
+                                "Cascade Retail Group" };
+        var today = DateTime.Today;
+
+        _allPolicies = Enumerable.Range(1, 80).Select(i =>
+        {
+            var effOffset = rng.Next(-730, -30);
+            var effDate   = today.AddDays(effOffset);
+            var termMonths= rng.Next(6, 24);
+            var expDate   = effDate.AddMonths(termMonths);
+            return new PolicyRow
+            {
+                Id             = Guid.NewGuid(),
+                PolicyNumber   = $"POL-{2024 + (i % 2):0000}-{i:000000}",
+                Account        = accounts[i % accounts.Length],
+                AccountType    = i % 4 == 0 ? "Personal" : "Commercial",
+                AccountId      = Guid.NewGuid(),
+                Carrier        = carriers[i % carriers.Length],
+                Lob            = lobs[i % lobs.Length],
+                Status         = expDate < today ? "Expired" : statuses[i % statuses.Length],
+                EffDate        = effDate,
+                ExpDate        = expDate,
+                WrittenPremium = Math.Round((decimal)(rng.Next(1200, 85000) + rng.NextDouble()), 2),
+                AnnualPremium  = Math.Round((decimal)(rng.Next(1000, 90000) + rng.NextDouble()), 2),
+                Producer       = producers[i % producers.Length],
+                Csr            = csrs[i % csrs.Length],
+                Branch         = branches[i % branches.Length],
+            };
+        }).ToList();
+    }
+
+    // ── Models ───────────────────────────────────────────────────────────────
+    private sealed class PolicyRow
+    {
+        public Guid     Id             { get; set; }
+        public string   PolicyNumber   { get; set; } = string.Empty;
+        public string   Account        { get; set; } = string.Empty;
+        public string   AccountType    { get; set; } = "Commercial";
+        public Guid     AccountId      { get; set; }
+        public string   Carrier        { get; set; } = string.Empty;
+        public string   Lob            { get; set; } = string.Empty;
+        public string   Status         { get; set; } = "Active";
+        public DateTime EffDate        { get; set; }
+        public DateTime ExpDate        { get; set; }
+        public decimal  WrittenPremium { get; set; }
+        public decimal  AnnualPremium  { get; set; }
+        public string   Producer       { get; set; } = string.Empty;
+        public string   Csr            { get; set; } = string.Empty;
+        public string   Branch         { get; set; } = string.Empty;
+    }
+
+    private sealed class PolicyForm
+    {
+        public Guid     Id             { get; set; }
+        public string   PolicyNumber   { get; set; } = string.Empty;
+        public string   Account        { get; set; } = string.Empty;
+        public string   Carrier        { get; set; } = string.Empty;
+        public string   Lob            { get; set; } = string.Empty;
+        public string   Status         { get; set; } = "Active";
+        public DateTime EffDate        { get; set; } = DateTime.Today;
+        public DateTime ExpDate        { get; set; } = DateTime.Today.AddYears(1);
+        public decimal  WrittenPremium { get; set; }
+        public decimal  AnnualPremium  { get; set; }
+        public string   Producer       { get; set; } = string.Empty;
+        public string   Csr            { get; set; } = string.Empty;
+        public string   Branch         { get; set; } = string.Empty;
+        public string   Notes          { get; set; } = string.Empty;
+
+        public static PolicyForm From(PolicyRow p) => new()
+        {
+            Id = p.Id, PolicyNumber = p.PolicyNumber, Account = p.Account,
+            Carrier = p.Carrier, Lob = p.Lob, Status = p.Status,
+            EffDate = p.EffDate, ExpDate = p.ExpDate,
+            WrittenPremium = p.WrittenPremium, AnnualPremium = p.AnnualPremium,
+            Producer = p.Producer, Csr = p.Csr, Branch = p.Branch,
+        };
+    }
+
+    private sealed class PrKpi
+    {
+        public int     Active       { get; set; }
+        public int     Exp30        { get; set; }
+        public int     Exp60        { get; set; }
+        public int     Exp90        { get; set; }
+        public decimal TotalPremium { get; set; }
+        public int     Carriers     { get; set; }
+    }
+
+    private sealed record CtxItem(string Key, string Text, string IconCss);
+    private sealed record PrLv(string Value, string Label);
+}

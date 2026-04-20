@@ -1,0 +1,409 @@
+@page "/crm/duplicates"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Duplicate Management</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Duplicate Management"
+               Subtitle="Detect, review, and resolve duplicate account and contact records"
+               Icon="bi-copy">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "dup-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-secondary" @onclick="RunScanAsync" disabled="@_scanning">
+            <i class="bi @(_scanning ? "bi-hourglass-split" : "bi-search") @(_scanning ? "dup-spin" : "")" aria-hidden="true"></i>
+            @(_scanning ? "Scanning…" : "Scan for Duplicates")
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="dup-kpi-strip">
+    <div class="dup-kpi-card">
+        <span class="dup-ki dup-ki1"><i class="bi bi-copy" aria-hidden="true"></i></span>
+        <div><div class="dup-kv">@_groups.Count</div><div class="dup-kl">Duplicate Groups</div></div>
+    </div>
+    <div class="dup-kpi-card">
+        <span class="dup-ki dup-ki2"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></span>
+        <div><div class="dup-kv">@_groups.Count(g => g.ConfidenceScore >= 90)</div><div class="dup-kl">High Confidence</div></div>
+    </div>
+    <div class="dup-kpi-card">
+        <span class="dup-ki dup-ki3"><i class="bi bi-question-circle" aria-hidden="true"></i></span>
+        <div><div class="dup-kv">@_groups.Count(g => g.ConfidenceScore is >= 70 and < 90)</div><div class="dup-kl">Needs Review</div></div>
+    </div>
+    <div class="dup-kpi-card">
+        <span class="dup-ki dup-ki4"><i class="bi bi-check-circle" aria-hidden="true"></i></span>
+        <div><div class="dup-kv">@_resolvedCount</div><div class="dup-kl">Resolved Today</div></div>
+    </div>
+</div>
+
+<!-- Tabs: Accounts / Contacts -->
+<div class="dup-entity-tabs">
+    <button class="dup-entity-tab @(_entityTab=="accounts"?"dup-entity-tab--active":"")" @onclick='()=>_entityTab="accounts"'>
+        <i class="bi bi-building" aria-hidden="true"></i> Account Duplicates <span class="dup-count-badge">@_groups.Count(g=>g.EntityType=="Account")</span>
+    </button>
+    <button class="dup-entity-tab @(_entityTab=="contacts"?"dup-entity-tab--active":"")" @onclick='()=>_entityTab="contacts"'>
+        <i class="bi bi-person" aria-hidden="true"></i> Contact Duplicates <span class="dup-count-badge">@_groups.Count(g=>g.EntityType=="Contact")</span>
+    </button>
+</div>
+
+<!-- Filter bar -->
+<div class="dup-filter-bar">
+    <div class="dup-search-wrap">
+        <i class="bi bi-search dup-si" aria-hidden="true"></i>
+        <input class="dup-search" type="search" placeholder="Search records…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); })" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_confidenceOpts" Placeholder="All Confidence" ShowClearButton="true" Width="175px"
+                    Value="_filterConf" ValueChanged="@((string v) => { _filterConf = v; ApplyFilter(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="All Statuses" ShowClearButton="true" Width="155px"
+                    Value="_filterStatus" ValueChanged="@((string v) => { _filterStatus = v; ApplyFilter(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <div class="dup-bulk-actions" style="margin-left:auto">
+        <button class="um-btn um-btn-ghost um-btn-sm" disabled="@(!_filtered.Any(g => g.IsSelected))" @onclick="BulkMergeAsync">
+            <i class="bi bi-union" aria-hidden="true"></i> Merge Selected
+        </button>
+        <button class="um-btn um-btn-ghost um-btn-sm" disabled="@(!_filtered.Any(g => g.IsSelected))" @onclick="BulkDismissAsync">
+            <i class="bi bi-x" aria-hidden="true"></i> Dismiss Selected
+        </button>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="dup-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading duplicate groups…</span></div>
+}
+else if (_filtered.Count == 0)
+{
+    <div class="dup-empty">
+        <i class="bi bi-check2-circle dup-empty-icon" aria-hidden="true"></i>
+        <div class="dup-empty-title">No duplicates found</div>
+        <div class="dup-empty-sub">
+            @if (string.IsNullOrEmpty(_search) && string.IsNullOrEmpty(_filterConf) && string.IsNullOrEmpty(_filterStatus))
+            { <span>Your data looks clean! Run a scan to re-check for new duplicates.</span> }
+            else { <span>No groups match the current filters. Try clearing the filters.</span> }
+        </div>
+        <button class="um-btn um-btn-primary" @onclick="RunScanAsync" disabled="@_scanning">
+            <i class="bi bi-search" aria-hidden="true"></i> Run Scan
+        </button>
+    </div>
+}
+else
+{
+    <div class="dup-list">
+        @foreach (var grp in _filtered.Where(g => g.EntityType == (_entityTab == "accounts" ? "Account" : "Contact")))
+        {
+            <div class="dup-group @(_expanded == grp.GroupId ? "dup-group--expanded" : "")">
+                <!-- Group header row -->
+                <div class="dup-group-row" @onclick="() => ToggleExpand(grp.GroupId)">
+                    <input type="checkbox" @bind="grp.IsSelected" @onclick:stopPropagation="true" class="dup-chk" />
+
+                    <div class="@ConfidenceDot(grp.ConfidenceScore)" title="Confidence @grp.ConfidenceScore%"></div>
+
+                    <div class="dup-grp-info">
+                        <div class="dup-grp-title">@grp.PrimaryName <span class="dup-grp-vs">vs</span> @string.Join(", ", grp.Records.Skip(1).Select(r => r.Name))</div>
+                        <div class="dup-grp-meta">
+                            @grp.Records.Count records · @grp.MatchReasons · Last updated @grp.DetectedAt.ToString("MMM d, yyyy")
+                        </div>
+                    </div>
+
+                    <span class="@ConfBadge(grp.ConfidenceScore)">@grp.ConfidenceScore% match</span>
+                    <span class="@StatusBadge(grp.Status)">@grp.Status</span>
+
+                    <div class="dup-grp-actions" @onclick:stopPropagation="true">
+                        <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenMerge(grp)"><i class="bi bi-union" aria-hidden="true"></i> Merge</button>
+                        <button class="um-btn um-btn-ghost  um-btn-sm" @onclick="() => DismissGroup(grp)"><i class="bi bi-x" aria-hidden="true"></i> Dismiss</button>
+                    </div>
+                    <i class="bi @(_expanded == grp.GroupId ? "bi-chevron-up" : "bi-chevron-down") dup-chevron" aria-hidden="true"></i>
+                </div>
+
+                <!-- Expanded: side-by-side comparison -->
+                @if (_expanded == grp.GroupId)
+                {
+                    <div class="dup-compare-panel">
+                        <table class="dup-compare-tbl">
+                            <thead>
+                                <tr>
+                                    <th class="dup-th-field">Field</th>
+                                    @foreach (var rec in grp.Records)
+                                    {
+                                        <th class="dup-th-rec @(rec.IsPrimary ? "dup-th-primary" : "")">
+                                            @rec.Name
+                                            @if (rec.IsPrimary) { <span class="dup-primary-chip">Master</span> }
+                                            <button class="um-btn um-btn-ghost um-btn-sm dup-set-master" @onclick="() => SetMaster(grp, rec)" disabled="@rec.IsPrimary">Set as master</button>
+                                        </th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var field in grp.CompareFields)
+                                {
+                                    <tr class="@(field.HasConflict ? "dup-row-conflict" : "")">
+                                        <td class="dup-td-field">@field.FieldName @(field.HasConflict ? "⚠️" : "")</td>
+                                        @foreach (var rec in grp.Records)
+                                        {
+                                            var val = rec.FieldValues.GetValueOrDefault(field.FieldName, "—");
+                                            <td class="dup-td-val @(rec.IsPrimary && field.HasConflict ? "dup-td-master" : "")">@val</td>
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+
+                        <div class="dup-compare-footer">
+                            <span class="dup-compare-note"><i class="bi bi-info-circle" aria-hidden="true"></i> Merge will keep all policies, contacts, and history from all records. Non-master records are archived.</span>
+                            <button class="um-btn um-btn-primary" @onclick="() => OpenMerge(grp)"><i class="bi bi-union" aria-hidden="true"></i> Merge Records</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+<!-- ── Merge confirmation dialog ────────────────────────────────── -->
+<SfDialog @bind-Visible="_showMerge" Width="500px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="dup-dlg-hdr"><i class="bi bi-union" aria-hidden="true"></i> Confirm Merge</span></Header>
+        <Content>
+            <div class="dup-dlg-body">
+                @if (_mergeTarget is not null)
+                {
+                    <p>You are about to merge <strong>@_mergeTarget.Records.Count records</strong> into the master record <strong>@_mergeTarget.Records.FirstOrDefault(r=>r.IsPrimary)?.Name</strong>.</p>
+                    <div class="dup-merge-details">
+                        <div class="dup-merge-detail"><i class="bi bi-shield-check" aria-hidden="true"></i> All policies and coverages will be consolidated</div>
+                        <div class="dup-merge-detail"><i class="bi bi-people" aria-hidden="true"></i> All contacts will be re-linked to the master record</div>
+                        <div class="dup-merge-detail"><i class="bi bi-clock-history" aria-hidden="true"></i> Full activity and billing history will be merged</div>
+                        <div class="dup-merge-detail"><i class="bi bi-archive" aria-hidden="true"></i> Duplicate records will be archived (not deleted)</div>
+                    </div>
+                    <div class="dup-merge-warn"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> This action cannot be undone. Review the comparison table before proceeding.</div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="dup-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showMerge = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteMergeAsync"><i class="bi bi-union" aria-hidden="true"></i> Merge Records</button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private SfToast? _toast;
+    private bool     _loading   = true;
+    private bool     _scanning  = false;
+    private string   _entityTab = "accounts";
+    private string   _search    = string.Empty;
+    private string   _filterConf   = string.Empty;
+    private string   _filterStatus = string.Empty;
+    private int      _resolvedCount = 3;
+    private Guid?    _expanded;
+
+    private List<DuplicateGroup>  _groups   = [];
+    private List<DuplicateGroup>  _filtered = [];
+    private DuplicateGroup?       _mergeTarget;
+    private bool                  _showMerge = false;
+
+    private static readonly List<LV> _confidenceOpts = [
+        new("high","High (90%+)"), new("medium","Medium (70–89%)"), new("low","Low (<70%)"),
+    ];
+    private static readonly List<LV> _statusOpts = [
+        new("Open","Open"), new("Under Review","Under Review"), new("Dismissed","Dismissed"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("CRM","/crm/opportunities"), new("Duplicates","/crm/duplicates"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; StateHasChanged();
+        await Task.Delay(0);
+        _groups = BuildStubGroups();
+        ApplyFilter();
+        _loading = false;
+    }
+
+    private async Task RunScanAsync()
+    {
+        _scanning = true; StateHasChanged();
+        await Task.Delay(1200); // TODO: Api.ScanDuplicatesAsync()
+        _scanning = false;
+        await ShowToast("Scan complete. 2 new potential duplicates found.");
+        StateHasChanged();
+    }
+
+    private void ApplyFilter()
+    {
+        _filtered = _groups.Where(g =>
+            (string.IsNullOrEmpty(_filterConf) ||
+             (_filterConf == "high"   && g.ConfidenceScore >= 90) ||
+             (_filterConf == "medium" && g.ConfidenceScore is >= 70 and < 90) ||
+             (_filterConf == "low"    && g.ConfidenceScore < 70)) &&
+            (string.IsNullOrEmpty(_filterStatus) || g.Status == _filterStatus) &&
+            (string.IsNullOrEmpty(_search) ||
+             g.PrimaryName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             g.Records.Any(r => r.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)))
+        ).ToList();
+    }
+
+    private void ToggleExpand(Guid id) => _expanded = _expanded == id ? null : id;
+
+    private void OpenMerge(DuplicateGroup grp) { _mergeTarget = grp; _showMerge = true; }
+
+    private void SetMaster(DuplicateGroup grp, DupRecord rec)
+    {
+        foreach (var r in grp.Records) r.IsPrimary = false;
+        rec.IsPrimary = true;
+    }
+
+    private void DismissGroup(DuplicateGroup grp)
+    {
+        grp.Status = "Dismissed";
+        ApplyFilter();
+    }
+
+    private async Task ExecuteMergeAsync()
+    {
+        if (_mergeTarget is not null)
+        {
+            _groups.Remove(_mergeTarget);
+            _resolvedCount++;
+            ApplyFilter();
+        }
+        _showMerge = false; _mergeTarget = null;
+        await ShowToast("Records merged successfully. Duplicates archived.");
+    }
+
+    private async Task BulkMergeAsync()
+    {
+        var selected = _filtered.Where(g => g.IsSelected).ToList();
+        foreach (var g in selected) { _groups.Remove(g); _resolvedCount++; }
+        ApplyFilter();
+        await ShowToast($"{selected.Count} group(s) merged.");
+    }
+
+    private async Task BulkDismissAsync()
+    {
+        foreach (var g in _filtered.Where(g => g.IsSelected)) g.Status = "Dismissed";
+        ApplyFilter();
+        await ShowToast("Selected groups dismissed.");
+    }
+
+    private async Task ShowToast(string msg)
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "e-toast-success" });
+    }
+
+    // ── Style helpers ────────────────────────────────────────────────────────
+    private static string ConfidenceDot(int score) =>
+        score >= 90 ? "dup-dot dup-dot--hi" : score >= 70 ? "dup-dot dup-dot--med" : "dup-dot dup-dot--lo";
+    private static string ConfBadge(int score) =>
+        score >= 90 ? "dup-conf dup-conf--hi" : score >= 70 ? "dup-conf dup-conf--med" : "dup-conf dup-conf--lo";
+    private static string StatusBadge(string s) => s switch
+    {
+        "Dismissed"    => "dup-status dup-status--dismissed",
+        "Under Review" => "dup-status dup-status--review",
+        _              => "dup-status dup-status--open",
+    };
+
+    // ── Stub data ────────────────────────────────────────────────────────────
+    private static List<DuplicateGroup> BuildStubGroups()
+    {
+        var acctFields = new List<CompareField>
+        {
+            new("Account Name", true), new("Phone", false), new("Address", true),
+            new("EIN / Tax ID", false), new("Owner", false), new("Created Date", false),
+        };
+        return
+        [
+            new DuplicateGroup
+            {
+                GroupId=Guid.NewGuid(), EntityType="Account", ConfidenceScore=96, Status="Open",
+                MatchReasons="Same name, same phone", DetectedAt=DateTime.UtcNow.AddDays(-1),
+                PrimaryName="Sullivan Manufacturing LLC",
+                Records=
+                [
+                    new DupRecord { RecordId=Guid.NewGuid(), Name="Sullivan Manufacturing LLC",  IsPrimary=true,  Source="Manual",  CreatedAt=new DateTime(2015,3,1),
+                        FieldValues=new(){{ "Account Name","Sullivan Manufacturing LLC"},{"Phone","(312) 555-0100"},{"Address","123 Main St, Chicago, IL"},{"EIN / Tax ID","12-3456789"},{"Owner","Jane Smith"},{"Created Date","3/1/2015"}}},
+                    new DupRecord { RecordId=Guid.NewGuid(), Name="Sullivan Mfg LLC",            IsPrimary=false, Source="Import", CreatedAt=new DateTime(2022,7,14),
+                        FieldValues=new(){{ "Account Name","Sullivan Mfg LLC"},           {"Phone","(312) 555-0100"},{"Address","123 Main Street, Chicago IL"},{"EIN / Tax ID",""},        {"Owner","John Doe"},  {"Created Date","7/14/2022"}}},
+                ],
+                CompareFields=acctFields,
+            },
+            new DuplicateGroup
+            {
+                GroupId=Guid.NewGuid(), EntityType="Account", ConfidenceScore=83, Status="Open",
+                MatchReasons="Same address, similar name", DetectedAt=DateTime.UtcNow.AddDays(-3),
+                PrimaryName="Apex Healthcare Inc",
+                Records=
+                [
+                    new DupRecord { RecordId=Guid.NewGuid(), Name="Apex Healthcare Inc",         IsPrimary=true,  Source="Manual",  CreatedAt=new DateTime(2018,5,10),
+                        FieldValues=new(){{ "Account Name","Apex Healthcare Inc"},  {"Phone","(773) 555-0200"},{"Address","456 Wacker Dr, Chicago IL"},{"EIN / Tax ID","98-7654321"},{"Owner","Mike Chen"},{"Created Date","5/10/2018"}}},
+                    new DupRecord { RecordId=Guid.NewGuid(), Name="Apex Health Inc",             IsPrimary=false, Source="Import", CreatedAt=new DateTime(2021,2,28),
+                        FieldValues=new(){{ "Account Name","Apex Health Inc"},      {"Phone","(773) 555-0200"},{"Address","456 Wacker Dr, Chicago IL"},{"EIN / Tax ID",""},           {"Owner","Sara Park"}, {"Created Date","2/28/2021"}}},
+                ],
+                CompareFields=acctFields,
+            },
+            new DuplicateGroup
+            {
+                GroupId=Guid.NewGuid(), EntityType="Contact", ConfidenceScore=94, Status="Open",
+                MatchReasons="Same email, same name", DetectedAt=DateTime.UtcNow.AddDays(-2),
+                PrimaryName="Robert Sullivan",
+                Records=
+                [
+                    new DupRecord { RecordId=Guid.NewGuid(), Name="Robert Sullivan",  IsPrimary=true,  Source="Manual", CreatedAt=new DateTime(2015,3,1),
+                        FieldValues=new(){{"First Name","Robert"},{"Last Name","Sullivan"},{"Email","rsullivan@sullivanmfg.com"},{"Phone","(312) 555-0101"},{"Account","Sullivan Manufacturing LLC"}}},
+                    new DupRecord { RecordId=Guid.NewGuid(), Name="Rob Sullivan",     IsPrimary=false, Source="Import", CreatedAt=new DateTime(2023,1,5),
+                        FieldValues=new(){{"First Name","Rob"},   {"Last Name","Sullivan"},{"Email","rsullivan@sullivanmfg.com"},{"Phone","312-555-0101"},     {"Account","Sullivan Mfg LLC"}}},
+                ],
+                CompareFields=[new("First Name",false), new("Last Name",false), new("Email",false), new("Phone",false), new("Account",true)],
+            },
+        ];
+    }
+
+    // ── Models ────────────────────────────────────────────────────────────────
+    private sealed class DuplicateGroup
+    {
+        public Guid   GroupId         { get; set; }
+        public string EntityType      { get; set; } = "Account";
+        public int    ConfidenceScore { get; set; }
+        public string Status          { get; set; } = "Open";
+        public string MatchReasons    { get; set; } = string.Empty;
+        public DateTime DetectedAt    { get; set; }
+        public string PrimaryName     { get; set; } = string.Empty;
+        public List<DupRecord>      Records       { get; set; } = [];
+        public List<CompareField>   CompareFields { get; set; } = [];
+        public bool   IsSelected      { get; set; }
+    }
+    private sealed class DupRecord
+    {
+        public Guid   RecordId   { get; set; }
+        public string Name       { get; set; } = string.Empty;
+        public bool   IsPrimary  { get; set; }
+        public string Source     { get; set; } = string.Empty;
+        public DateTime CreatedAt{ get; set; }
+        public Dictionary<string,string> FieldValues { get; set; } = [];
+    }
+    private sealed class CompareField
+    {
+        public string FieldName   { get; set; }
+        public bool   HasConflict { get; set; }
+        public CompareField(string name, bool conflict) { FieldName=name; HasConflict=conflict; }
+    }
+    private sealed record LV(string Value, string Label);
+}

@@ -1,0 +1,558 @@
+@page "/renewals/remarket"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Remarketing Center — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── SUBMIT TO MARKET DIALOG ──────────────────────────────────── -->
+<SfDialog @bind-Visible="_showSubmitDialog" Width="500px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-send" aria-hidden="true"></i> Submit to Market</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <p class="pd-dlg-lead">Submit <strong>@_submitContext?.AccountName</strong> to a new carrier market.</p>
+                <div class="pd-dlg-grid">
+                    <div>
+                        <label class="rmc-dlg-lbl">Carrier *</label>
+                        <SfTextBox @bind-Value="_submitForm.Carrier" Placeholder="Carrier name" />
+                    </div>
+                    <div>
+                        <label class="rmc-dlg-lbl">Program</label>
+                        <SfTextBox @bind-Value="_submitForm.Program" Placeholder="Program name" />
+                    </div>
+                    <div>
+                        <label class="rmc-dlg-lbl">Underwriter</label>
+                        <SfTextBox @bind-Value="_submitForm.Underwriter" Placeholder="UW name" />
+                    </div>
+                    <div>
+                        <label class="rmc-dlg-lbl">Underwriter Email</label>
+                        <SfTextBox @bind-Value="_submitForm.UwEmail" Placeholder="uw@carrier.com" InputType="InputType.Email" />
+                    </div>
+                </div>
+                <div class="pd-dlg-grid-1">
+                    <div>
+                        <label class="rmc-dlg-lbl">Documents Attached</label>
+                        <SfTextBox @bind-Value="_submitForm.DocsAttached" Placeholder="ACORD 125, Loss Runs, Application…" />
+                    </div>
+                    <div>
+                        <label class="rmc-dlg-lbl">Notes</label>
+                        <SfTextBox @bind-Value="_submitForm.Notes" Placeholder="Submission notes…" Multiline="true" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showSubmitDialog = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveSubmission">
+                    <i class="bi bi-send" aria-hidden="true"></i> Submit
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── UPDATE QUOTE DIALOG ──────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showQuoteDialog" Width="460px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-quote" aria-hidden="true"></i> Update Quote</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="pd-dlg-grid">
+                    <div>
+                        <label class="rmc-dlg-lbl">Status</label>
+                        <SfDropDownList @bind-Value="_quoteForm.Status"
+                                        DataSource="@(new[]{"Submitted","Quoted","Declined","NTU","Pending"})"
+                                        Placeholder="Select status" />
+                    </div>
+                    <div>
+                        <label class="rmc-dlg-lbl">Quoted Premium</label>
+                        <SfNumericTextBox TValue="decimal?" @bind-Value="_quoteForm.QuotedPremium" Format="C2" Placeholder="0.00" />
+                    </div>
+                    <div>
+                        <label class="rmc-dlg-lbl">Quote #</label>
+                        <SfTextBox @bind-Value="_quoteForm.QuoteNumber" Placeholder="Quote reference" />
+                    </div>
+                    <div>
+                        <label class="rmc-dlg-lbl">Quote Expires</label>
+                        <SfDatePicker TValue="DateTime?" @bind-Value="_quoteForm.QuoteExpiry" Placeholder="MM/DD/YYYY" />
+                    </div>
+                </div>
+                <div class="pd-dlg-grid-1">
+                    <div>
+                        <label class="rmc-dlg-lbl">Reason (if Declined / NTU)</label>
+                        <SfTextBox @bind-Value="_quoteForm.DeclineReason" Placeholder="Reason for decline…" />
+                    </div>
+                    <div>
+                        <label class="rmc-dlg-lbl">Notes</label>
+                        <SfTextBox @bind-Value="_quoteForm.Notes" Placeholder="Quote notes…" Multiline="true" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showQuoteDialog = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveQuote">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<AppPageHeader Title="Remarketing Center"
+               Subtitle="Track all accounts being remarketed — markets submitted, quotes received, and quote comparison"
+               Icon="bi-arrow-left-right">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI BAR ───────────────────────────────────────────────────── -->
+<div class="rmc-kpi-bar">
+    <div class="rmc-kpi-card rmc-kpi-active">
+        <i class="bi bi-arrow-left-right rmc-kpi-icon" aria-hidden="true"></i>
+        <div>
+            <div class="rmc-kpi-val">@_accounts.Count</div>
+            <div class="rmc-kpi-lbl">Accounts in Remarketing</div>
+        </div>
+    </div>
+    <div class="rmc-kpi-card">
+        <i class="bi bi-send rmc-kpi-icon" aria-hidden="true"></i>
+        <div>
+            <div class="rmc-kpi-val">@_accounts.Sum(a => a.Markets.Count)</div>
+            <div class="rmc-kpi-lbl">Markets Contacted</div>
+        </div>
+    </div>
+    <div class="rmc-kpi-card rmc-kpi-quoted">
+        <i class="bi bi-quote rmc-kpi-icon" aria-hidden="true"></i>
+        <div>
+            <div class="rmc-kpi-val">@_accounts.Sum(a => a.Markets.Count(m => m.Status == "Quoted"))</div>
+            <div class="rmc-kpi-lbl">Quotes Received</div>
+        </div>
+    </div>
+    <div class="rmc-kpi-card">
+        <i class="bi bi-slash-circle rmc-kpi-icon" aria-hidden="true"></i>
+        <div>
+            <div class="rmc-kpi-val">@_accounts.Sum(a => a.Markets.Count(m => m.Status == "Declined"))</div>
+            <div class="rmc-kpi-lbl">Declinations</div>
+        </div>
+    </div>
+    <div class="rmc-kpi-card rmc-kpi-best">
+        <i class="bi bi-trophy rmc-kpi-icon" aria-hidden="true"></i>
+        <div>
+            <div class="rmc-kpi-val">@BestSavings</div>
+            <div class="rmc-kpi-lbl">Best Rate vs. Current</div>
+        </div>
+    </div>
+    <div class="rmc-kpi-card rmc-kpi-prem">
+        <i class="bi bi-currency-dollar rmc-kpi-icon" aria-hidden="true"></i>
+        <div>
+            <div class="rmc-kpi-val">@_accounts.Sum(a => a.CurrentPremium).ToString("C0")</div>
+            <div class="rmc-kpi-lbl">Total Premium in Play</div>
+        </div>
+    </div>
+</div>
+
+<!-- ── FILTER BAR ────────────────────────────────────────────────── -->
+<div class="rmc-filter-bar">
+    <input class="e-input rmc-search" @bind="_search" @bind:event="oninput"
+           placeholder="Search account, policy #, carrier, producer…" />
+    <select class="e-input rmc-filter-sel" @bind="_lobFilter">
+        <option value="">All Lines</option>
+        @foreach (var l in _accounts.Select(a => a.Lob).Distinct().OrderBy(x => x)) { <option>@l</option> }
+    </select>
+    <select class="e-input rmc-filter-sel" @bind="_producerFilter">
+        <option value="">All Producers</option>
+        @foreach (var p in _accounts.Select(a => a.Producer).Distinct().OrderBy(x => x)) { <option>@p</option> }
+    </select>
+    <select class="e-input rmc-filter-sel" @bind="_statusFilter">
+        <option value="">All Market Statuses</option>
+        <option>Submitted</option><option>Quoted</option><option>Declined</option><option>Pending</option>
+    </select>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+        <i class="bi bi-x" aria-hidden="true"></i> Reset
+    </button>
+    <span class="rmc-filter-count">@Filtered.Count() account(s)</span>
+</div>
+
+<!-- ── REMARKETING ACCOUNTS ──────────────────────────────────────── -->
+<div class="rmc-account-list">
+    @foreach (var acct in Filtered)
+    {
+        <div class="rmc-acct-panel @(_expanded.Contains(acct.PolicyId) ? "rmc-acct-open" : "")">
+
+            <!-- Account row header ────────────────────────────── -->
+            <div class="rmc-acct-hdr" @onclick="() => ToggleExpand(acct)">
+                <div class="rmc-acct-chevron">
+                    <i class="bi @(_expanded.Contains(acct.PolicyId) ? "bi-chevron-down" : "bi-chevron-right")"
+                       aria-hidden="true"></i>
+                </div>
+                <div class="rmc-acct-lob rmc-lob-@LobKey(acct.Lob)">
+                    <i class="bi @LobIcon(acct.Lob)" aria-hidden="true"></i>
+                </div>
+                <div class="rmc-acct-info">
+                    <div class="rmc-acct-title-row">
+                        <span class="rmc-acct-name">@acct.AccountName</span>
+                        <span class="rmc-pol-num">@acct.PolicyNumber</span>
+                        <span class="rmc-lob-badge">@acct.Lob</span>
+                    </div>
+                    <div class="rmc-acct-sub-row">
+                        <span class="rmc-chip"><i class="bi bi-building-fill" aria-hidden="true"></i>Current: @acct.CurrentCarrier</span>
+                        <span class="rmc-chip"><i class="bi bi-cash" aria-hidden="true"></i>@acct.CurrentPremium.ToString("C0")</span>
+                        <span class="rmc-chip rmc-days-@DaysCss(acct.DaysToExpiry)">
+                            <i class="bi bi-clock" aria-hidden="true"></i>@DaysLabel(acct.DaysToExpiry)
+                        </span>
+                        <span class="rmc-chip"><i class="bi bi-person-badge" aria-hidden="true"></i>@acct.Producer</span>
+                    </div>
+                </div>
+                <div class="rmc-acct-summary">
+                    @{ var quoted = acct.Markets.Where(m => m.Status == "Quoted").ToList(); }
+                    <span class="rmc-mkt-count">
+                        <span class="rmc-mkt-num rmc-mkt-submitted">@acct.Markets.Count</span> sent
+                    </span>
+                    <span class="rmc-mkt-count">
+                        <span class="rmc-mkt-num rmc-mkt-quoted">@quoted.Count</span> quoted
+                    </span>
+                    @if (quoted.Any())
+                    {
+                        var best = quoted.MinBy(m => m.QuotedPremium!.Value)!;
+                        var delta = best.QuotedPremium!.Value - acct.CurrentPremium;
+                        <span class="rmc-best-rate @(delta < 0 ? "rmc-best-dn" : "rmc-best-up")">
+                            Best: @best.QuotedPremium.Value.ToString("C0")
+                            (@(delta >= 0 ? "+" : "")@delta.ToString("C0"))
+                        </span>
+                    }
+                </div>
+                <div class="rmc-acct-actions" @onclick:stopPropagation="true">
+                    <button class="um-btn um-btn-ghost um-btn-sm"
+                            @onclick="() => OpenSubmitDialog(acct)">
+                        <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Market
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-sm"
+                            @onclick='() => Nav.NavigateTo($"/renewals/{acct.RenewalId}")'>
+                        <i class="bi bi-arrow-right-circle" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Expanded: market rows ────────────────────────── -->
+            @if (_expanded.Contains(acct.PolicyId))
+            {
+                <div class="rmc-markets">
+                    <div class="rmc-markets-hdr">
+                        <span>Carrier</span>
+                        <span>Program</span>
+                        <span>Submitted</span>
+                        <span>Status</span>
+                        <span>Quoted Premium</span>
+                        <span>vs. Current</span>
+                        <span>Quote Exp.</span>
+                        <span>Underwriter</span>
+                        <span>Actions</span>
+                    </div>
+                    @foreach (var mkt in acct.Markets)
+                    {
+                        <div class="rmc-mkt-row @(mkt.IsSelected ? "rmc-mkt-selected" : "")">
+                            <span class="rmc-mkt-carrier">@mkt.Carrier</span>
+                            <span class="rmc-mkt-prog">@mkt.Program</span>
+                            <span class="rmc-mkt-date pd-mono">@(mkt.SubmittedDate?.ToString("MM/dd/yyyy") ?? "—")</span>
+                            <span>
+                                <span class="rd-mkt-status rd-mkt-@mkt.Status.ToLower().Replace(" ","")">@mkt.Status</span>
+                            </span>
+                            <span class="pd-mono @(mkt.Status == "Quoted" ? "rmc-mkt-prem-val" : "")">
+                                @(mkt.QuotedPremium.HasValue ? mkt.QuotedPremium.Value.ToString("C0") : "—")
+                            </span>
+                            <span>
+                                @if (mkt.QuotedPremium.HasValue)
+                                {
+                                    var d = mkt.QuotedPremium.Value - acct.CurrentPremium;
+                                    <span class="pd-mono @(d < 0 ? "pd-prem-dn" : d > 0 ? "pd-prem-up" : "")">
+                                        @(d >= 0 ? "+" : "")@d.ToString("C0")
+                                    </span>
+                                }
+                                else { <span class="rdb-no-quote">—</span> }
+                            </span>
+                            <span class="pd-mono">@(mkt.QuoteExpiry?.ToString("MM/dd/yyyy") ?? "—")</span>
+                            <span class="rmc-mkt-uw">@mkt.Underwriter</span>
+                            <div class="rmc-mkt-actions">
+                                <button class="um-btn um-btn-ghost um-btn-xs"
+                                        @onclick="() => OpenQuoteDialog(acct, mkt)"
+                                        title="Update quote">
+                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                </button>
+                                @if (mkt.Status == "Quoted" && !mkt.IsSelected)
+                                {
+                                    <button class="um-btn um-btn-primary um-btn-xs"
+                                            @onclick="() => SelectMarket(acct, mkt)"
+                                            title="Select this quote">
+                                        <i class="bi bi-check-circle" aria-hidden="true"></i> Select
+                                    </button>
+                                }
+                                @if (mkt.IsSelected)
+                                {
+                                    <span class="rmc-selected-badge">
+                                        <i class="bi bi-check-circle-fill" aria-hidden="true"></i> Selected
+                                    </span>
+                                }
+                            </div>
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(_getNotes(acct)))
+                    {
+                        <div class="rmc-acct-notes">
+                            <i class="bi bi-sticky" aria-hidden="true"></i> @_getNotes(acct)
+                        </div>
+                    }
+                </div>
+
+                <!-- Inline quote compare ──────────────────────── -->
+                @if (acct.Markets.Count(m => m.Status == "Quoted" && m.QuotedPremium.HasValue) >= 2)
+                {
+                    <div class="rmc-compare">
+                        <div class="rmc-compare-hdr">
+                            <i class="bi bi-layout-split" aria-hidden="true"></i> Quick Quote Comparison
+                        </div>
+                        <div class="rmc-compare-grid">
+                            @foreach (var q in acct.Markets.Where(m => m.Status == "Quoted" && m.QuotedPremium.HasValue).OrderBy(m => m.QuotedPremium!.Value))
+                            {
+                                var delta = q.QuotedPremium!.Value - acct.CurrentPremium;
+                                var isLowest = q.QuotedPremium!.Value == acct.Markets.Where(m => m.Status == "Quoted" && m.QuotedPremium.HasValue).Min(m => m.QuotedPremium!.Value);
+                                <div class="rmc-cmp-card @(isLowest ? "rmc-cmp-best" : "")">
+                                    @if (isLowest) { <div class="rmc-cmp-best-badge"><i class="bi bi-trophy-fill" aria-hidden="true"></i> Lowest</div> }
+                                    <div class="rmc-cmp-carrier">@q.Carrier</div>
+                                    <div class="rmc-cmp-prem">@q.QuotedPremium!.Value.ToString("C0")</div>
+                                    <div class="rmc-cmp-delta @(delta < 0 ? "rmc-best-dn" : "rmc-best-up")">
+                                        @(delta >= 0 ? "+" : "")@delta.ToString("C0")
+                                        (@(delta >= 0 ? "+" : "")@((delta / acct.CurrentPremium * 100).ToString("F1"))%)
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+    }
+</div>
+
+@code {
+    SfToast _toast = default!;
+
+    string _search         = "";
+    string _lobFilter      = "";
+    string _producerFilter = "";
+    string _statusFilter   = "";
+
+    bool            _showSubmitDialog = false;
+    bool            _showQuoteDialog  = false;
+    RemarketAccount? _submitContext   = null;
+    MarketRow?       _quoteContext    = null;
+    readonly HashSet<Guid> _expanded  = new();
+
+    sealed class SubmitForm { public string Carrier=""; public string Program=""; public string Underwriter=""; public string UwEmail=""; public string DocsAttached=""; public string Notes=""; }
+    sealed class QuoteForm  { public string Status="Quoted"; public decimal? QuotedPremium; public string QuoteNumber=""; public DateTime? QuoteExpiry; public string DeclineReason=""; public string Notes=""; }
+
+    SubmitForm _submitForm = new();
+    QuoteForm  _quoteForm  = new();
+
+    sealed class MarketRow
+    {
+        public string    Carrier       { get; set; } = "";
+        public string    Program       { get; set; } = "";
+        public DateTime? SubmittedDate { get; set; }
+        public string    Status        { get; set; } = "";
+        public decimal?  QuotedPremium { get; set; }
+        public DateTime? QuoteExpiry   { get; set; }
+        public string    QuoteNumber   { get; set; } = "";
+        public string    Underwriter   { get; set; } = "";
+        public string    DeclineReason { get; set; } = "";
+        public string    Notes         { get; set; } = "";
+        public bool      IsSelected    { get; set; }
+    }
+
+    sealed class RemarketAccount
+    {
+        public Guid           RenewalId      { get; set; }
+        public Guid           PolicyId       { get; set; }
+        public string         AccountName    { get; set; } = "";
+        public string         PolicyNumber   { get; set; } = "";
+        public string         Lob            { get; set; } = "";
+        public string         CurrentCarrier { get; set; } = "";
+        public decimal        CurrentPremium { get; set; }
+        public int            DaysToExpiry   { get; set; }
+        public string         Producer       { get; set; } = "";
+        public string         Notes          { get; set; } = "";
+        public List<MarketRow> Markets       { get; set; } = new();
+    }
+
+    readonly List<RemarketAccount> _accounts = new();
+
+    string BestSavings
+    {
+        get
+        {
+            var savings = _accounts
+                .SelectMany(a => a.Markets.Where(m => m.Status == "Quoted" && m.QuotedPremium.HasValue)
+                    .Select(m => a.CurrentPremium - m.QuotedPremium!.Value))
+                .Where(d => d > 0);
+            return savings.Any() ? savings.Max().ToString("C0") + " savings" : "—";
+        }
+    }
+
+    IEnumerable<RemarketAccount> Filtered => _accounts.Where(a =>
+        (string.IsNullOrEmpty(_search) ||
+         a.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         a.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         a.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase))
+     && (string.IsNullOrEmpty(_lobFilter)      || a.Lob == _lobFilter)
+     && (string.IsNullOrEmpty(_producerFilter) || a.Producer == _producerFilter)
+     && (string.IsNullOrEmpty(_statusFilter)   || a.Markets.Any(m => m.Status == _statusFilter)));
+
+    Func<RemarketAccount, string> _getNotes = a => a.Notes;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Renewals","/renewals"), new("Remarketing Center","/renewals/remarket"));
+        await Task.Delay(0);
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _accounts.Clear();
+        _accounts.AddRange(new[]
+        {
+            new RemarketAccount
+            {
+                RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(),
+                AccountName="Sullivan Mfg. LLC",  PolicyNumber="TRV-GL-2024-00421",
+                Lob="General Liability", CurrentCarrier="Travelers Indemnity",
+                CurrentPremium=17_250m, DaysToExpiry=18, Producer="Maria Santos",
+                Notes="XCU waiver and blanket AI are key selling points to keep with Travelers.",
+                Markets=new()
+                {
+                    new(){ Carrier="Travelers Indemnity",  Program="Select Accounts GL",    SubmittedDate=DateTime.Today.AddDays(-12), Status="Quoted",   QuotedPremium=18_800m, QuoteExpiry=DateTime.Today.AddDays(20), QuoteNumber="TRV-2025-88421", Underwriter="Lisa Chen"    },
+                    new(){ Carrier="Hartford Fire & Cas.", Program="Spectrum Commercial",   SubmittedDate=DateTime.Today.AddDays(-10), Status="Quoted",   QuotedPremium=19_400m, QuoteExpiry=DateTime.Today.AddDays(15), QuoteNumber="HFD-2025-14822", Underwriter="Mike Rosario" },
+                    new(){ Carrier="Cincinnati Financial", Program="Commercial Lines",       SubmittedDate=DateTime.Today.AddDays(-8),  Status="Pending",  QuotedPremium=null,    QuoteExpiry=null,                       QuoteNumber="",               Underwriter="Dan Torres"   },
+                    new(){ Carrier="Markel Corporation",   Program="Markel E&S",            SubmittedDate=null,                        Status="Submitted",QuotedPremium=null,    QuoteExpiry=null,                       QuoteNumber="",               Underwriter="—"            },
+                }
+            },
+            new RemarketAccount
+            {
+                RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(),
+                AccountName="Bridgewater Hotels",   PolicyNumber="LIB-GL-2024-77210",
+                Lob="General Liability", CurrentCarrier="Liberty Mutual",
+                CurrentPremium=24_800m, DaysToExpiry=37, Producer="Maria Santos",
+                Notes="High loss ratio — need E&S backup. Cincinnati indicated interest at $26,400.",
+                Markets=new()
+                {
+                    new(){ Carrier="Liberty Mutual",       Program="Commercial Package",     SubmittedDate=DateTime.Today.AddDays(-18), Status="Quoted",   QuotedPremium=28_200m, QuoteExpiry=DateTime.Today.AddDays(10), QuoteNumber="LIB-2025-77210", Underwriter="Amy Ford"     },
+                    new(){ Carrier="Cincinnati Financial", Program="Commercial Lines",       SubmittedDate=DateTime.Today.AddDays(-15), Status="Quoted",   QuotedPremium=26_400m, QuoteExpiry=DateTime.Today.AddDays(18), QuoteNumber="CIN-2025-44001", Underwriter="Rob Hicks"    },
+                    new(){ Carrier="Zurich American",      Program="Hotel & Hospitality",   SubmittedDate=DateTime.Today.AddDays(-12), Status="Declined", QuotedPremium=null,    QuoteExpiry=null,                       QuoteNumber="",               Underwriter="Gary Sim", DeclineReason="Loss ratio exceeds appetite" },
+                    new(){ Carrier="Chubb",                Program="Chubb Commercial",      SubmittedDate=DateTime.Today.AddDays(-5),  Status="Pending",  QuotedPremium=null,    QuoteExpiry=null,                       QuoteNumber="",               Underwriter="Sarah Lam"    },
+                }
+            },
+            new RemarketAccount
+            {
+                RenewalId=Guid.NewGuid(), PolicyId=Guid.NewGuid(),
+                AccountName="Coastal Seafood Dist.", PolicyNumber="CNA-GL-2024-71004",
+                Lob="General Liability", CurrentCarrier="CNA Commercial",
+                CurrentPremium=11_600m, DaysToExpiry=88, Producer="Kevin Obi",
+                Notes="Begin remarketing early given 72 risk score and competitor activity.",
+                Markets=new()
+                {
+                    new(){ Carrier="CNA Commercial",       Program="Mid-Market GL",         SubmittedDate=DateTime.Today.AddDays(-5),  Status="Submitted",QuotedPremium=null,    QuoteExpiry=null,                       QuoteNumber="",               Underwriter="Paul Ramos"   },
+                    new(){ Carrier="Travelers Indemnity",  Program="Select Accounts GL",    SubmittedDate=DateTime.Today.AddDays(-3),  Status="Submitted",QuotedPremium=null,    QuoteExpiry=null,                       QuoteNumber="",               Underwriter="Lisa Chen"    },
+                }
+            },
+        });
+    }
+
+    void ToggleExpand(RemarketAccount a)
+    {
+        if (!_expanded.Add(a.PolicyId)) _expanded.Remove(a.PolicyId);
+    }
+
+    void OpenSubmitDialog(RemarketAccount a)
+    {
+        _submitContext = a;
+        _submitForm    = new();
+        _showSubmitDialog = true;
+    }
+
+    async Task SaveSubmission()
+    {
+        if (_submitContext is null || string.IsNullOrWhiteSpace(_submitForm.Carrier)) return;
+        _submitContext.Markets.Add(new MarketRow
+        {
+            Carrier       = _submitForm.Carrier,
+            Program       = _submitForm.Program,
+            Underwriter   = _submitForm.Underwriter,
+            Status        = "Submitted",
+            SubmittedDate = DateTime.Today,
+            Notes         = _submitForm.Notes
+        });
+        _showSubmitDialog = false;
+        _expanded.Add(_submitContext.PolicyId);
+        await _toast.ShowAsync(new ToastModel { Title="Submitted", Content=$"Submitted {_submitContext.AccountName} to {_submitForm.Carrier}.", CssClass="e-toast-success" });
+    }
+
+    void OpenQuoteDialog(RemarketAccount a, MarketRow m)
+    {
+        _submitContext  = a;
+        _quoteContext   = m;
+        _quoteForm      = new QuoteForm { Status=m.Status, QuotedPremium=m.QuotedPremium, QuoteNumber=m.QuoteNumber, QuoteExpiry=m.QuoteExpiry, Notes=m.Notes };
+        _showQuoteDialog = true;
+    }
+
+    async Task SaveQuote()
+    {
+        if (_quoteContext is null) return;
+        _quoteContext.Status        = _quoteForm.Status;
+        _quoteContext.QuotedPremium = _quoteForm.QuotedPremium;
+        _quoteContext.QuoteNumber   = _quoteForm.QuoteNumber;
+        _quoteContext.QuoteExpiry   = _quoteForm.QuoteExpiry;
+        _quoteContext.DeclineReason = _quoteForm.DeclineReason;
+        _quoteContext.Notes         = _quoteForm.Notes;
+        _showQuoteDialog = false;
+        await _toast.ShowAsync(new ToastModel { Title="Quote Updated", Content="Market status updated.", CssClass="e-toast-success" });
+    }
+
+    async Task SelectMarket(RemarketAccount a, MarketRow m)
+    {
+        foreach (var x in a.Markets) x.IsSelected = false;
+        m.IsSelected = true;
+        await _toast.ShowAsync(new ToastModel { Title="Quote Selected", Content=$"{m.Carrier} {m.QuotedPremium!.Value.ToString("C0")} selected for {a.AccountName}.", CssClass="e-toast-success" });
+    }
+
+    void ResetFilters() { _search=""; _lobFilter=""; _producerFilter=""; _statusFilter=""; }
+    void Refresh() => BuildStub();
+
+    async Task ExportAsync() =>
+        await _toast.ShowAsync(new ToastModel { Title="Exported", Content="Remarketing center exported.", CssClass="e-toast-success" });
+
+    static string LobKey(string lob)  => lob.ToLower().Replace(" ","").Replace("/","").Replace("&","").Replace(".","").Replace("-","");
+    static string LobIcon(string lob) => lob switch
+    {
+        "General Liability"   => "bi-shield-check",
+        "Commercial Auto"     => "bi-truck",
+        "Commercial Property" => "bi-building",
+        "Workers Comp"        => "bi-person-fill-gear",
+        "Umbrella"            => "bi-umbrella",
+        _                     => "bi-shield-half"
+    };
+    static string DaysCss(int days)   => days <= 0 ? "expired" : days <= 30 ? "red" : days <= 60 ? "amber" : "blue";
+    static string DaysLabel(int days) => days <= 0 ? $"Expired {Math.Abs(days)}d ago" : $"{days}d left";
+}

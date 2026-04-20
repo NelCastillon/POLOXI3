@@ -1,0 +1,545 @@
+@page "/admin/security/sensitive-data"
+@namespace Ams.Web.Components.Pages.SecurityAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Sensitive Data Audit — Security</PageTitle>
+
+<AppPageHeader Title="Sensitive Data Audit"
+               Subtitle="Field-level access audit for masked PII — SSN, EIN and payment card fields"
+               Icon="bi-file-lock">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="OpenMaskConfig">
+            <i class="bi bi-shield-lock" aria-hidden="true"></i> Masking Config
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="sda-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0" aria-label="Filter: Total Accesses">
+        <span class="sda-kpi-icon sda-kpi-icon--total"><i class="bi bi-eye-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="sda-kpi-value">@_totalCount</div>
+            <div class="sda-kpi-label">Total Accesses</div>
+        </div>
+        @if (_kpiActive == 1) { <span class="sda-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0" aria-label="Filter: SSN Accesses">
+        <span class="sda-kpi-icon sda-kpi-icon--ssn"><i class="bi bi-person-vcard" aria-hidden="true"></i></span>
+        <div>
+            <div class="sda-kpi-value">@_ssnCount</div>
+            <div class="sda-kpi-label">SSN</div>
+        </div>
+        @if (_kpiActive == 2) { <span class="sda-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0" aria-label="Filter: EIN Accesses">
+        <span class="sda-kpi-icon sda-kpi-icon--ein"><i class="bi bi-building-lock" aria-hidden="true"></i></span>
+        <div>
+            <div class="sda-kpi-value">@_einCount</div>
+            <div class="sda-kpi-label">EIN</div>
+        </div>
+        @if (_kpiActive == 3) { <span class="sda-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass4" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0" aria-label="Filter: Payment Accesses">
+        <span class="sda-kpi-icon sda-kpi-icon--payment"><i class="bi bi-credit-card" aria-hidden="true"></i></span>
+        <div>
+            <div class="sda-kpi-value">@_paymentCount</div>
+            <div class="sda-kpi-label">Payment</div>
+        </div>
+        @if (_kpiActive == 4) { <span class="sda-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass5" @onclick="() => SetKpiFilter(5)" role="button" tabindex="0" aria-label="Filter: Unmasked Views">
+        <span class="sda-kpi-icon sda-kpi-icon--unmasked"><i class="bi bi-eye-slash-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="sda-kpi-value">@_unmaskedCount</div>
+            <div class="sda-kpi-label">Unmasked Views</div>
+        </div>
+        @if (_kpiActive == 5) { <span class="sda-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search user, record ID or justification…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_fieldTypeOptions"
+                        Placeholder="All Field Types"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterFieldType"
+                        ValueChanged="@((string v) => { _filterFieldType = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_actionOptions"
+                        Placeholder="All Actions"
+                        ShowClearButton="true"
+                        Width="150px"
+                        Value="_filterAction"
+                        ValueChanged="@((string v) => { _filterAction = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_periodOptions"
+                        Placeholder="All Time"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterPeriod"
+                        ValueChanged="@((string v) => { _filterPeriod = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <label class="sda-toggle-label">
+            <input type="checkbox" @bind="_filterUnmaskedOnly" @bind:after="ApplyFilters" />
+            Unmasked only
+        </label>
+
+        <label class="sda-toggle-label">
+            <input type="checkbox" @bind="_filterNoJustification" @bind:after="ApplyFilters" />
+            No justification
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading audit entries…">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="SensitiveAccessEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
+        <GridColumns>
+
+            <GridColumn Field="@nameof(SensitiveAccessEntry.AccessedAtUtc)"
+                        HeaderText="Timestamp"
+                        Width="160">
+                <Template>
+                    @{ var e = (SensitiveAccessEntry)context; }
+                    <span title="@e.AccessedAtUtc.ToString("g")">@FormatRelative(e.AccessedAtUtc)</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(SensitiveAccessEntry.UserFullName)"
+                        HeaderText="User"
+                        Width="190">
+                <Template>
+                    @{ var e = (SensitiveAccessEntry)context; }
+                    <div class="sda-user-cell">
+                        <span class="sda-avatar" style="@AvatarStyle(e)" aria-hidden="true">@Initials(e)</span>
+                        <div>
+                            <div class="sda-user-name">@e.UserFullName</div>
+                            <div class="sda-user-sub">@e.UserName</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(SensitiveAccessEntry.FieldType)"
+                        HeaderText="Field"
+                        Width="110">
+                <Template>
+                    @{ var e = (SensitiveAccessEntry)context; }
+                    <span class="@FieldBadgeClass(e.FieldType)">
+                        <i class="@FieldIcon(e.FieldType)" aria-hidden="true"></i> @e.FieldType
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(SensitiveAccessEntry.EntityType)"
+                        HeaderText="Record Type"
+                        Width="130" />
+
+            <GridColumn Field="@nameof(SensitiveAccessEntry.EntityId)"
+                        HeaderText="Record ID"
+                        Width="130">
+                <Template>
+                    @{ var e = (SensitiveAccessEntry)context; }
+                    <span class="sda-mono">@e.EntityId</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(SensitiveAccessEntry.MaskedPreview)"
+                        HeaderText="Masked Value"
+                        Width="140">
+                <Template>
+                    @{ var e = (SensitiveAccessEntry)context; }
+                    <span class="sda-masked-value @(e.WasUnmasked ? "sda-masked-value--revealed" : "")">
+                        @e.MaskedPreview
+                        @if (e.WasUnmasked)
+                        {
+                            <i class="bi bi-exclamation-circle-fill sda-unmasked-icon" title="Full value was revealed" aria-hidden="true"></i>
+                        }
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(SensitiveAccessEntry.ActionCode)"
+                        HeaderText="Action"
+                        Width="100">
+                <Template>
+                    @{ var e = (SensitiveAccessEntry)context; }
+                    <AppStatusBadge Status="@(e.ActionCode == "View" ? "Active" : "Pending")"
+                                    Label="@e.ActionCode" />
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(SensitiveAccessEntry.IpAddress)"
+                        HeaderText="IP Address"
+                        Width="130">
+                <Template>
+                    @{ var e = (SensitiveAccessEntry)context; }
+                    <span class="sda-mono">@e.IpAddress</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(SensitiveAccessEntry.Justification)"
+                        HeaderText="Justification"
+                        Width="200">
+                <Template>
+                    @{ var e = (SensitiveAccessEntry)context; }
+                    @if (string.IsNullOrWhiteSpace(e.Justification))
+                    {
+                        <span class="sda-no-justification">
+                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> None provided
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="sda-justification" title="@e.Justification">@e.Justification</span>
+                    }
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- ── Masking Config dialog ───────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showMaskConfig"
+          Width="600px"
+          IsModal="true"
+          ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header>
+            <span class="sda-dlg-header">
+                <i class="bi bi-shield-lock" aria-hidden="true"></i> Field-Level Masking Configuration
+            </span>
+        </Header>
+        <Content>
+            <div class="sda-dlg-body">
+                <p class="sda-dlg-hint">
+                    Configure which fields are masked by default and which roles may unmask them.
+                    All unmask events are captured in this audit log.
+                </p>
+                <div class="sda-mask-rules">
+                    @foreach (var rule in _maskRules)
+                    {
+                        <div class="sda-mask-rule">
+                            <div class="sda-mask-rule-left">
+                                <span class="@FieldBadgeClass(rule.FieldType)">
+                                    <i class="@FieldIcon(rule.FieldType)" aria-hidden="true"></i> @rule.FieldType
+                                </span>
+                                <div>
+                                    <div class="sda-mask-rule-name">@rule.FieldLabel</div>
+                                    <div class="sda-mask-rule-entity">@rule.EntityType · @rule.FieldName</div>
+                                </div>
+                            </div>
+                            <div class="sda-mask-rule-right">
+                                <span class="sda-mask-pattern">@rule.MaskPattern</span>
+                                <span class="@(rule.IsEnabled ? "badge badge-green" : "badge badge-neutral")">
+                                    @(rule.IsEnabled ? "Masked" : "Disabled")
+                                </span>
+                                <span class="sda-mask-roles" title="Roles that can unmask">
+                                    <i class="bi bi-person-badge" aria-hidden="true"></i>
+                                    @(rule.AllowedRoles.Count == 0 ? "No roles" : string.Join(", ", rule.AllowedRoles))
+                                </span>
+                            </div>
+                        </div>
+                    }
+                </div>
+                <div class="sda-dlg-info-banner">
+                    <i class="bi bi-info-circle-fill" aria-hidden="true"></i>
+                    <span>Masking rules are applied at the API response layer. Changes take effect on next request.</span>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="sda-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showMaskConfig = false">Close</button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- Toast -->
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    private SfToast? _toast;
+
+    // ── Data ──────────────────────────────────────────────────────────────────────
+    private List<SensitiveAccessEntry> _allEntries = [];
+    private List<SensitiveAccessEntry> _entries    = [];
+
+    // ── Flags ─────────────────────────────────────────────────────────────────────
+    private bool _loading         = false;
+    private bool _showMaskConfig  = false;
+
+    // ── Filters ───────────────────────────────────────────────────────────────────
+    private string _search              = string.Empty;
+    private string _filterFieldType     = string.Empty;
+    private string _filterAction        = string.Empty;
+    private string _filterPeriod        = string.Empty;
+    private bool   _filterUnmaskedOnly  = false;
+    private bool   _filterNoJustification = false;
+
+    // ── KPI ───────────────────────────────────────────────────────────────────────
+    private int _kpiActive     = 0;
+    private int _totalCount    = 0;
+    private int _ssnCount      = 0;
+    private int _einCount      = 0;
+    private int _paymentCount  = 0;
+    private int _unmaskedCount = 0;
+
+    private string KpiClass1 => "sda-kpi-card sda-kpi-card--total"   + (_kpiActive == 1 ? " sda-kpi-card--active" : "");
+    private string KpiClass2 => "sda-kpi-card sda-kpi-card--ssn"     + (_kpiActive == 2 ? " sda-kpi-card--active" : "");
+    private string KpiClass3 => "sda-kpi-card sda-kpi-card--ein"     + (_kpiActive == 3 ? " sda-kpi-card--active" : "");
+    private string KpiClass4 => "sda-kpi-card sda-kpi-card--payment" + (_kpiActive == 4 ? " sda-kpi-card--active" : "");
+    private string KpiClass5 => "sda-kpi-card sda-kpi-card--unmasked"+ (_kpiActive == 5 ? " sda-kpi-card--active" : "");
+
+    // ── Masking rules (static seed — replace with Api.GetMaskingRulesAsync) ───────
+    private readonly List<MaskRule> _maskRules =
+    [
+        new("SSN",     "Social Security Number",     "User",    "SocialSecurityNumber", "***-**-####", true,  ["Admin", "HR Manager"]),
+        new("EIN",     "Employer Identification No.", "Tenant",  "EinNumber",            "**-***####",  true,  ["Admin", "Finance"]),
+        new("Payment", "Card Number",                "Payment", "CardNumber",            "****-****-****-####", true, ["Admin"]),
+        new("Payment", "Card CVV",                   "Payment", "Cvv",                   "***",         true,  ["Admin"]),
+        new("SSN",     "Tax ID / ITIN",              "User",    "TaxId",                 "***-**-####", true,  ["Admin", "HR Manager"]),
+    ];
+
+    // ── Static options ─────────────────────────────────────────────────────────────
+    private static readonly List<LabelValue> _fieldTypeOptions =
+    [
+        new("SSN",     "SSN"),
+        new("EIN",     "EIN"),
+        new("Payment", "Payment"),
+    ];
+
+    private static readonly List<LabelValue> _actionOptions =
+    [
+        new("View",   "View"),
+        new("Export", "Export"),
+        new("Unmask", "Unmask"),
+        new("Print",  "Print"),
+    ];
+
+    private static readonly List<LabelValue> _periodOptions =
+    [
+        new("Today",   "Today"),
+        new("Week",    "Last 7 days"),
+        new("Month",   "Last 30 days"),
+        new("Quarter", "Last 90 days"),
+    ];
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",     "/"),
+            new("Security", "/admin/security"),
+            new("Sensitive Data Audit", "/admin/security/sensitive-data"));
+
+        await LoadAsync();
+    }
+
+    // ── Data loading ──────────────────────────────────────────────────────────────
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace with Api.GetSensitiveDataAccessAuditAsync(_tenantId, _search)
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        var cutoff = _filterPeriod switch
+        {
+            "Today"   => DateTime.UtcNow.Date,
+            "Week"    => DateTime.UtcNow.AddDays(-7),
+            "Month"   => DateTime.UtcNow.AddDays(-30),
+            "Quarter" => DateTime.UtcNow.AddDays(-90),
+            _         => DateTime.MinValue,
+        };
+
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterFieldType) || e.FieldType == _filterFieldType) &&
+            (string.IsNullOrEmpty(_filterAction)    || e.ActionCode == _filterAction) &&
+            (cutoff == DateTime.MinValue             || e.AccessedAtUtc >= cutoff) &&
+            (!_filterUnmaskedOnly    || e.WasUnmasked) &&
+            (!_filterNoJustification || string.IsNullOrWhiteSpace(e.Justification)) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.UserFullName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.UserName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.EntityId.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             (e.Justification ?? "").Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive          = _kpiActive == n ? 0 : n;
+        _filterFieldType    = string.Empty;
+        _filterUnmaskedOnly = false;
+        switch (_kpiActive)
+        {
+            case 2: _filterFieldType    = "SSN";     break;
+            case 3: _filterFieldType    = "EIN";     break;
+            case 4: _filterFieldType    = "Payment"; break;
+            case 5: _filterUnmaskedOnly = true;      break;
+        }
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount    = _allEntries.Count;
+        _ssnCount      = _allEntries.Count(e => e.FieldType == "SSN");
+        _einCount      = _allEntries.Count(e => e.FieldType == "EIN");
+        _paymentCount  = _allEntries.Count(e => e.FieldType == "Payment");
+        _unmaskedCount = _allEntries.Count(e => e.WasUnmasked);
+    }
+
+    private void OpenMaskConfig() => _showMaskConfig = true;
+
+    private async Task ExportAsync() =>
+        await ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+
+    // ── Toast ─────────────────────────────────────────────────────────────────────
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────────
+    private static string FormatRelative(DateTime dt)
+    {
+        var diff = DateTime.UtcNow - dt;
+        if (diff.TotalMinutes < 1)   return "Just now";
+        if (diff.TotalHours   < 1)   return (int)diff.TotalMinutes + "m ago";
+        if (diff.TotalDays    < 1)   return (int)diff.TotalHours + "h ago";
+        if (diff.TotalDays    < 30)  return (int)diff.TotalDays + "d ago";
+        return dt.ToString("d");
+    }
+
+    private static string Initials(SensitiveAccessEntry e)
+    {
+        var parts = e.UserFullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}"
+            : e.UserFullName.Length >= 1 ? e.UserFullName[..1] : "?";
+    }
+
+    private static string AvatarStyle(SensitiveAccessEntry e)
+    {
+        var hue = Math.Abs(e.UserName.GetHashCode()) % 360;
+        return $"background:hsl({hue},50%,42%);color:#fff;";
+    }
+
+    private static string FieldBadgeClass(string fieldType) => fieldType switch
+    {
+        "SSN"     => "sda-field-badge sda-field-badge--ssn",
+        "EIN"     => "sda-field-badge sda-field-badge--ein",
+        "Payment" => "sda-field-badge sda-field-badge--payment",
+        _         => "sda-field-badge",
+    };
+
+    private static string FieldIcon(string fieldType) => fieldType switch
+    {
+        "SSN"     => "bi bi-person-vcard",
+        "EIN"     => "bi bi-building-lock",
+        "Payment" => "bi bi-credit-card",
+        _         => "bi bi-lock",
+    };
+
+    // ── Inner models ──────────────────────────────────────────────────────────────
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class SensitiveAccessEntry
+    {
+        public Guid     AccessId       { get; set; } = Guid.NewGuid();
+        public DateTime AccessedAtUtc  { get; set; }
+        public string   UserFullName   { get; set; } = string.Empty;
+        public string   UserName       { get; set; } = string.Empty;
+        public string   FieldType      { get; set; } = string.Empty;   // SSN | EIN | Payment
+        public string   EntityType     { get; set; } = string.Empty;
+        public string   EntityId       { get; set; } = string.Empty;
+        public string   MaskedPreview  { get; set; } = string.Empty;
+        public bool     WasUnmasked    { get; set; }
+        public string   ActionCode     { get; set; } = "View";          // View | Export | Unmask | Print
+        public string   IpAddress      { get; set; } = string.Empty;
+        public string?  Justification  { get; set; }
+    }
+
+    private sealed class MaskRule
+    {
+        public string       FieldType    { get; }
+        public string       FieldLabel   { get; }
+        public string       EntityType   { get; }
+        public string       FieldName    { get; }
+        public string       MaskPattern  { get; }
+        public bool         IsEnabled    { get; }
+        public List<string> AllowedRoles { get; }
+
+        public MaskRule(string fieldType, string fieldLabel, string entityType,
+                        string fieldName, string maskPattern, bool isEnabled, List<string> allowedRoles)
+        {
+            FieldType    = fieldType;
+            FieldLabel   = fieldLabel;
+            EntityType   = entityType;
+            FieldName    = fieldName;
+            MaskPattern  = maskPattern;
+            IsEnabled    = isEnabled;
+            AllowedRoles = allowedRoles;
+        }
+    }
+}

@@ -1,0 +1,1279 @@
+@page "/submissions/{SubmissionId:guid}"
+@namespace Ams.Web.Components.Pages
+@using Ams.Web.Components.Shared
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>@(_sub is null ? "Submission" : _sub.SubmissionNo) — Submission Detail</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@if (_loading)
+{
+    <div class="sd-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading submission…</span></div>
+}
+else if (_sub is null)
+{
+    <div class="sd-not-found">
+        <i class="bi bi-send-x sd-nf-icon" aria-hidden="true"></i>
+        <h2>Submission not found</h2>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/submissions")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Submissions
+        </button>
+    </div>
+}
+else
+{
+    <!-- ── HEADER ─────────────────────────────────────────────────── -->
+    <div class="sd-header">
+        <div class="sd-header-left">
+            <div class="sd-lob-icon sd-lob-@LobKey(_sub.Lob)">
+                <i class="bi @LobIcon(_sub.Lob)" aria-hidden="true"></i>
+            </div>
+            <div class="sd-header-info">
+                <div class="sd-title-row">
+                    <h1 class="sd-sub-num">@_sub.SubmissionNo</h1>
+                    <span class="sd-status sd-status-@CssStatus(_sub.Status)">@_sub.Status</span>
+                    <span class="sd-lob-badge sd-lob-@LobKey(_sub.Lob)">@_sub.Lob</span>
+                    @if (!string.IsNullOrEmpty(_sub.Priority))
+                    {
+                        <span class="sd-priority sd-priority-@_sub.Priority.ToLower()">
+                            <i class="bi bi-flag-fill" aria-hidden="true"></i> @_sub.Priority
+                        </span>
+                    }
+                </div>
+                <div class="sd-sub-row">
+                    <button class="sd-acct-link" @onclick='() => Nav.NavigateTo($"/accounts/{Guid.NewGuid()}")'>
+                        <i class="bi bi-building" aria-hidden="true"></i>@_sub.Account
+                    </button>
+                    <span class="sd-sub-chip"><i class="bi bi-person-workspace" aria-hidden="true"></i>@_sub.Producer</span>
+                    <span class="sd-sub-chip"><i class="bi bi-calendar-event" aria-hidden="true"></i>Eff: @_sub.EffDate.ToString("MM/dd/yyyy")</span>
+                    <span class="sd-sub-chip"><i class="bi bi-send" aria-hidden="true"></i>Submitted: @_sub.SubmitDate.ToString("MM/dd/yyyy")</span>
+                    @if (_sub.DueDate.HasValue)
+                    {
+                        var days = (_sub.DueDate.Value - DateTime.Today).TotalDays;
+                        <span class="sd-sub-chip @(days < 0 ? "sd-chip-late" : days <= 3 ? "sd-chip-soon" : "")">
+                            <i class="bi bi-clock" aria-hidden="true"></i>
+                            Due: @_sub.DueDate.Value.ToString("MM/dd/yyyy")
+                        </span>
+                    }
+                </div>
+            </div>
+        </div>
+        <div class="sd-header-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("submit")'>
+                <i class="bi bi-send" aria-hidden="true"></i> Submit to Market
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("quote")'>
+                <i class="bi bi-journal-text" aria-hidden="true"></i> Request Quote
+            </button>
+            @if (_sub.Status == "Quoted")
+            {
+                <button class="um-btn um-btn-success um-btn-sm" @onclick='() => OpenAction("bind")'>
+                    <i class="bi bi-shield-check" aria-hidden="true"></i> Bind
+                </button>
+            }
+            @if (_sub.Status == "Bound")
+            {
+                <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/policies/new")'>
+                    <i class="bi bi-shield-plus" aria-hidden="true"></i> Create Policy
+                </button>
+            }
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("copy")'>
+                <i class="bi bi-copy" aria-hidden="true"></i> Copy
+            </button>
+            <button class="um-btn um-btn-danger um-btn-sm" @onclick='() => OpenAction("decline")'>
+                <i class="bi bi-x-circle" aria-hidden="true"></i> Decline
+            </button>
+        </div>
+    </div>
+
+    <!-- ── KPI STRIP ─────────────────────────────────────────────── -->
+    <div class="sd-kpi-strip">
+        @KpiCard("bi-building",       "Markets Targeted",  _markets.Count.ToString(),                         "sd-kpi-mkt")
+        @KpiCard("bi-send-check",     "Submitted To",      _markets.Count(m=>m.Status!="Pending").ToString(), "sd-kpi-sent")
+        @KpiCard("bi-journal-text",   "Quotes Received",   _quotes.Count.ToString(),                          "sd-kpi-q")
+        @KpiCard("bi-cash-stack",     "Lowest Quote",      _quotes.Any() ? _quotes.Min(q=>q.Premium).ToString("C0") : "—", "sd-kpi-low")
+        @KpiCard("bi-cash-coin",      "Highest Quote",     _quotes.Any() ? _quotes.Max(q=>q.Premium).ToString("C0") : "—", "sd-kpi-high")
+        @KpiCard("bi-file-earmark",   "Documents",         _docs.Count.ToString(),                            "sd-kpi-doc")
+        @KpiCard("bi-question-circle","Questions",         _questions.Count(q=>q.Answered).ToString() + "/" + _questions.Count, "sd-kpi-qns")
+    </div>
+
+    <!-- ── TABS ──────────────────────────────────────────────────── -->
+    <AppDetailTabs @bind-SelectedTab="_tab">
+        <Tabs>
+
+            <!-- ① Risk Data -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Risk Data" IconCss="bi bi-clipboard-data" /></ChildContent>
+                <ContentTemplate>
+                    <div class="sd-tab-body">
+                        <div class="sd-section-grid">
+                            <!-- Named insured & contact -->
+                            <div class="sd-section sd-section-span2">
+                                <div class="sd-section-head">
+                                    <i class="bi bi-person-badge" aria-hidden="true"></i> Named Insured &amp; Contact
+                                </div>
+                                <div class="sd-field-grid">
+                                    @FieldRow("Named Insured",  _sub.Insured)
+                                    @FieldRow("DBA",            _sub.Dba)
+                                    @FieldRow("FEIN",           _sub.Fein)
+                                    @FieldRow("Contact Name",   _sub.ContactName)
+                                    @FieldRow("Phone",          _sub.ContactPhone)
+                                    @FieldRow("Email",          _sub.ContactEmail)
+                                    @FieldRow("Website",        _sub.Website)
+                                    @FieldRow("Mailing Address",_sub.Address)
+                                    @FieldRow("Risk Location",  _sub.RiskAddress)
+                                </div>
+                            </div>
+
+                            <!-- Business info -->
+                            <div class="sd-section">
+                                <div class="sd-section-head">
+                                    <i class="bi bi-briefcase" aria-hidden="true"></i> Business Information
+                                </div>
+                                <div class="sd-field-grid">
+                                    @FieldRow("Entity Type",     _sub.EntityType)
+                                    @FieldRow("Year Founded",    _sub.YearFounded)
+                                    @FieldRow("SIC / NAICS",     _sub.SicNaics)
+                                    @FieldRow("Description",     _sub.BusinessDesc)
+                                    @FieldRow("Years in Business", _sub.YearsInBusiness)
+                                    @FieldRow("Prior Carrier",   _sub.PriorCarrier)
+                                    @FieldRow("Prior Premium",   _sub.PriorPremium.ToString("C0"))
+                                </div>
+                            </div>
+
+                            <!-- Exposures -->
+                            <div class="sd-section">
+                                <div class="sd-section-head">
+                                    <i class="bi bi-bar-chart" aria-hidden="true"></i> Exposure Data
+                                </div>
+                                <div class="sd-field-grid">
+                                    @foreach (var exp in _sub.Exposures)
+                                    {
+                                        @FieldRow(exp.Key, exp.Value)
+                                    }
+                                </div>
+                            </div>
+
+                            <!-- Requested coverages -->
+                            <div class="sd-section sd-section-span2">
+                                <div class="sd-section-head">
+                                    <i class="bi bi-shield-plus" aria-hidden="true"></i> Requested Coverages &amp; Limits
+                                </div>
+                                <table class="sd-cov-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Coverage</th>
+                                            <th>Occurrence Limit</th>
+                                            <th>Aggregate</th>
+                                            <th>Deductible</th>
+                                            <th>Requested</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var cov in _sub.Coverages)
+                                        {
+                                            <tr>
+                                                <td class="sd-cov-name">@cov.Name</td>
+                                                <td>@cov.OccLimit</td>
+                                                <td>@cov.Aggregate</td>
+                                                <td>@cov.Deductible</td>
+                                                <td><span class="sd-cov-req @(cov.Requested ? "sd-cov-yes" : "sd-cov-no")">@(cov.Requested ? "Yes" : "No")</span></td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <!-- Loss history -->
+                            <div class="sd-section sd-section-span2">
+                                <div class="sd-section-head">
+                                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Loss History (5-Year)
+                                </div>
+                                <table class="sd-loss-table">
+                                    <thead><tr><th>Year</th><th>Carrier</th><th>Claims</th><th>Paid</th><th>Reserved</th><th>Total Incurred</th><th>Description</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var loss in _sub.LossHistory)
+                                        {
+                                            <tr>
+                                                <td>@loss.Year</td>
+                                                <td>@loss.Carrier</td>
+                                                <td>@loss.Claims</td>
+                                                <td>@loss.Paid.ToString("C0")</td>
+                                                <td>@loss.Reserved.ToString("C0")</td>
+                                                <td class="sd-loss-incurred">@(loss.Paid+loss.Reserved).ToString("C0")</td>
+                                                <td class="sd-loss-desc">@loss.Description</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ② Markets -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Markets" IconCss="bi bi-building-fill" /></ChildContent>
+                <ContentTemplate>
+                    <div class="sd-tab-body">
+                        <div class="sd-tab-toolbar">
+                            <span class="sd-toolbar-title">
+                                <i class="bi bi-building-fill" aria-hidden="true"></i>
+                                @_markets.Count targeted market@(_markets.Count==1?"":"s")
+                            </span>
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => _showAddMarket = true'>
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Market
+                            </button>
+                        </div>
+                        <div class="sd-market-grid">
+                            @foreach (var mkt in _markets)
+                            {
+                                <div class="sd-mkt-card sd-mkt-@CssMktStatus(mkt.Status)">
+                                    <div class="sd-mkt-head">
+                                        <div class="sd-mkt-carrier">
+                                            <div class="sd-mkt-carrier-icon"><i class="bi bi-building" aria-hidden="true"></i></div>
+                                            <div>
+                                                <div class="sd-mkt-carrier-name">@mkt.Carrier</div>
+                                                <div class="sd-mkt-underwriter">@mkt.Underwriter</div>
+                                            </div>
+                                        </div>
+                                        <span class="sd-mkt-status sd-mkt-st-@CssMktStatus(mkt.Status)">@mkt.Status</span>
+                                    </div>
+                                    <div class="sd-mkt-meta">
+                                        @if (mkt.SubmitDate.HasValue)
+                                        {
+                                            <span class="sd-mkt-meta-chip"><i class="bi bi-send" aria-hidden="true"></i>Sent @mkt.SubmitDate.Value.ToString("MM/dd/yy")</span>
+                                        }
+                                        @if (mkt.DueDate.HasValue)
+                                        {
+                                            <span class="sd-mkt-meta-chip"><i class="bi bi-clock" aria-hidden="true"></i>Due @mkt.DueDate.Value.ToString("MM/dd/yy")</span>
+                                        }
+                                        @if (!string.IsNullOrEmpty(mkt.QuoteRef))
+                                        {
+                                            <span class="sd-mkt-meta-chip sd-mkt-qref"><i class="bi bi-journal-text" aria-hidden="true"></i>@mkt.QuoteRef</span>
+                                        }
+                                    </div>
+                                    @if (!string.IsNullOrEmpty(mkt.Notes))
+                                    {
+                                        <div class="sd-mkt-notes">@mkt.Notes</div>
+                                    }
+                                    <div class="sd-mkt-actions">
+                                        @if (mkt.Status == "Pending")
+                                        {
+                                            <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => SubmitMarket(mkt)">
+                                                <i class="bi bi-send" aria-hidden="true"></i> Submit
+                                            </button>
+                                        }
+                                        @if (mkt.Status == "Awaiting Quote")
+                                        {
+                                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => EnterQuoteMarket(mkt)">
+                                                <i class="bi bi-journal-plus" aria-hidden="true"></i> Enter Quote
+                                            </button>
+                                        }
+                                        <button class="um-btn um-btn-ghost um-btn-xs">
+                                            <i class="bi bi-three-dots" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ③ Documents -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Documents" IconCss="bi bi-file-earmark-text" /></ChildContent>
+                <ContentTemplate>
+                    <div class="sd-tab-body">
+                        <div class="sd-tab-toolbar">
+                            <span class="sd-toolbar-title">
+                                <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
+                                @_docs.Count document@(_docs.Count==1?"":"s")
+                            </span>
+                            <button class="um-btn um-btn-primary um-btn-sm">
+                                <i class="bi bi-cloud-upload" aria-hidden="true"></i> Upload
+                            </button>
+                        </div>
+                        <div class="sd-doc-type-groups">
+                            @foreach (var grp in _docs.GroupBy(d => d.DocType))
+                            {
+                                <div class="sd-doc-group">
+                                    <div class="sd-doc-group-head">@grp.Key <span>(@grp.Count())</span></div>
+                                    <div class="sd-doc-list">
+                                        @foreach (var doc in grp)
+                                        {
+                                            <div class="sd-doc-row">
+                                                <div class="sd-doc-icon sd-doc-icon-@DocExt(doc.FileName)">
+                                                    <i class="bi @DocIcon(doc.FileName)" aria-hidden="true"></i>
+                                                </div>
+                                                <div class="sd-doc-info">
+                                                    <div class="sd-doc-name">@doc.FileName</div>
+                                                    <div class="sd-doc-meta">@doc.UploadedBy · @doc.UploadedDate.ToString("MM/dd/yyyy") · @doc.Size</div>
+                                                </div>
+                                                <div class="sd-doc-actions">
+                                                    @if (!string.IsNullOrEmpty(doc.Version))
+                                                    {
+                                                        <span class="sd-doc-ver">v@doc.Version</span>
+                                                    }
+                                                    <button class="um-btn um-btn-ghost um-btn-xs"><i class="bi bi-download" aria-hidden="true"></i></button>
+                                                    <button class="um-btn um-btn-ghost um-btn-xs"><i class="bi bi-share" aria-hidden="true"></i></button>
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ④ Questions -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Questions" IconCss="bi bi-question-circle" /></ChildContent>
+                <ContentTemplate>
+                    <div class="sd-tab-body">
+                        <div class="sd-tab-toolbar">
+                            <span class="sd-toolbar-title">
+                                <i class="bi bi-question-circle" aria-hidden="true"></i>
+                                @_questions.Count(q=>q.Answered) of @_questions.Count answered
+                            </span>
+                            <div class="sd-q-progress-bar-wrap">
+                                <div class="sd-q-progress-bar" style="width:@QProgress%"></div>
+                            </div>
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="MarkAllAnswered">
+                                <i class="bi bi-check-all" aria-hidden="true"></i> Mark All Answered
+                            </button>
+                        </div>
+                        <div class="sd-question-list">
+                            @foreach (var (sec, qList) in _questions.GroupBy(q => q.Section).Select(g => (g.Key, g.ToList())))
+                            {
+                                <div class="sd-q-section">
+                                    <div class="sd-q-section-head">@sec</div>
+                                    @foreach (var q in qList)
+                                    {
+                                        <div class="sd-q-row @(q.Required && !q.Answered ? "sd-q-required" : "")">
+                                            <div class="sd-q-left">
+                                                <div class="sd-q-num">Q@q.Number</div>
+                                                @if (q.Required) { <span class="sd-q-req-dot" title="Required">*</span> }
+                                            </div>
+                                            <div class="sd-q-body">
+                                                <div class="sd-q-text">@q.Text</div>
+                                                @if (q.AnswerType == "bool")
+                                                {
+                                                    <div class="sd-q-ans-bool">
+                                                        <button class="sd-q-bool-btn @(q.BoolAnswer==true?"sd-q-bool-yes":"")" @onclick="() => { q.BoolAnswer = true; q.Answered = true; }">Yes</button>
+                                                        <button class="sd-q-bool-btn @(q.BoolAnswer==false?"sd-q-bool-no":"")" @onclick="() => { q.BoolAnswer = false; q.Answered = true; }">No</button>
+                                                    </div>
+                                                }
+                                                else if (q.AnswerType == "text")
+                                                {
+                                                    <textarea class="e-input sd-q-textarea" rows="2"
+                                                              placeholder="Enter answer…"
+                                                              @bind="q.TextAnswer"
+                                                              @onblur="() => q.Answered = !string.IsNullOrWhiteSpace(q.TextAnswer)"></textarea>
+                                                }
+                                                else if (q.AnswerType == "number")
+                                                {
+                                                    <input type="number" class="e-input sd-q-input"
+                                                           placeholder="Enter value…"
+                                                           @bind="q.TextAnswer"
+                                                           @onblur="() => q.Answered = !string.IsNullOrWhiteSpace(q.TextAnswer)" />
+                                                }
+                                                @if (!string.IsNullOrEmpty(q.HelpText))
+                                                {
+                                                    <div class="sd-q-help">@q.HelpText</div>
+                                                }
+                                            </div>
+                                            <div class="sd-q-check">
+                                                @if (q.Answered)
+                                                {
+                                                    <i class="bi bi-check-circle-fill sd-q-done" aria-hidden="true"></i>
+                                                }
+                                                else
+                                                {
+                                                    <i class="bi bi-circle sd-q-open" aria-hidden="true"></i>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ⑤ Quotes -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Quotes" IconCss="bi bi-journal-text" /></ChildContent>
+                <ContentTemplate>
+                    <div class="sd-tab-body">
+                        <div class="sd-tab-toolbar">
+                            <span class="sd-toolbar-title">
+                                <i class="bi bi-journal-text" aria-hidden="true"></i>
+                                @_quotes.Count quote@(_quotes.Count==1?"":"s") received
+                            </span>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => _showAddQuote = true'>
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Enter Quote
+                            </button>
+                        </div>
+                        @if (!_quotes.Any())
+                        {
+                            <div class="sd-empty-state">
+                                <i class="bi bi-journal-x sd-empty-icon" aria-hidden="true"></i>
+                                <p>No quotes received yet. Submit to markets to request quotes.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="sd-quote-grid">
+                                @foreach (var q in _quotes.OrderBy(q => q.Premium))
+                                {
+                                    <div class="sd-quote-card @(q.Selected ? "sd-quote-selected" : "") @(q.IsLowest ? "sd-quote-lowest" : "")">
+                                        @if (q.IsLowest)
+                                        {
+                                            <div class="sd-quote-lowest-banner">
+                                                <i class="bi bi-trophy-fill" aria-hidden="true"></i> Lowest Premium
+                                            </div>
+                                        }
+                                        <div class="sd-quote-head">
+                                            <div class="sd-quote-carrier">@q.Carrier</div>
+                                            <div class="sd-quote-premium">@q.Premium.ToString("C0")</div>
+                                        </div>
+                                        <div class="sd-quote-meta">
+                                            <div class="sd-quote-field">
+                                                <span class="sd-qf-lbl">Quote #</span>
+                                                <span class="sd-qf-val">@q.QuoteNo</span>
+                                            </div>
+                                            <div class="sd-quote-field">
+                                                <span class="sd-qf-lbl">Effective</span>
+                                                <span class="sd-qf-val">@q.EffDate.ToString("MM/dd/yyyy")</span>
+                                            </div>
+                                            <div class="sd-quote-field">
+                                                <span class="sd-qf-lbl">Expires</span>
+                                                <span class="sd-qf-val @((q.ExpDate < DateTime.Today) ? "sd-exp-past" : (q.ExpDate - DateTime.Today).TotalDays <= 10 ? "sd-exp-soon" : "")">@q.ExpDate.ToString("MM/dd/yyyy")</span>
+                                            </div>
+                                            <div class="sd-quote-field">
+                                                <span class="sd-qf-lbl">Occ. Limit</span>
+                                                <span class="sd-qf-val">@q.OccLimit</span>
+                                            </div>
+                                            <div class="sd-quote-field">
+                                                <span class="sd-qf-lbl">Aggregate</span>
+                                                <span class="sd-qf-val">@q.Aggregate</span>
+                                            </div>
+                                            <div class="sd-quote-field">
+                                                <span class="sd-qf-lbl">Deductible</span>
+                                                <span class="sd-qf-val">@q.Deductible</span>
+                                            </div>
+                                        </div>
+                                        @if (!string.IsNullOrEmpty(q.Notes))
+                                        {
+                                            <div class="sd-quote-notes">@q.Notes</div>
+                                        }
+                                        <div class="sd-quote-actions">
+                                            <button class="um-btn @(q.Selected ? "um-btn-success" : "um-btn-ghost") um-btn-sm"
+                                                    @onclick="() => SelectQuote(q)">
+                                                <i class="bi @(q.Selected ? "bi-check-circle-fill" : "bi-circle") " aria-hidden="true"></i>
+                                                @(q.Selected ? "Selected" : "Select")
+                                            </button>
+                                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => BindQuote(q)">
+                                                <i class="bi bi-shield-check" aria-hidden="true"></i> Bind
+                                            </button>
+                                            <button class="um-btn um-btn-ghost um-btn-sm">
+                                                <i class="bi bi-download" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ⑥ Activity -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Activity" IconCss="bi bi-activity" /></ChildContent>
+                <ContentTemplate>
+                    <div class="sd-tab-body">
+                        <div class="sd-tab-toolbar">
+                            <span class="sd-toolbar-title"><i class="bi bi-activity" aria-hidden="true"></i> Activity Log</span>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => _showAddNote = true'>
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Note
+                            </button>
+                        </div>
+                        <div class="sd-activity-feed">
+                            @foreach (var act in _activity.OrderByDescending(a => a.When))
+                            {
+                                <div class="sd-act-row">
+                                    <div class="sd-act-icon sd-act-@act.Type">
+                                        <i class="bi @ActivityIcon(act.Type)" aria-hidden="true"></i>
+                                    </div>
+                                    <div class="sd-act-content">
+                                        <div class="sd-act-head">
+                                            <span class="sd-act-user">@act.User</span>
+                                            <span class="sd-act-action">@act.Action</span>
+                                        </div>
+                                        @if (!string.IsNullOrEmpty(act.Detail))
+                                        {
+                                            <div class="sd-act-detail">@act.Detail</div>
+                                        }
+                                        <div class="sd-act-when">@act.When.ToString("MMM d, yyyy h:mm tt")</div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ⑦ Communications -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Communications" IconCss="bi bi-chat-dots" /></ChildContent>
+                <ContentTemplate>
+                    <div class="sd-tab-body">
+                        <div class="sd-tab-toolbar">
+                            <span class="sd-toolbar-title"><i class="bi bi-chat-dots" aria-hidden="true"></i> Communications</span>
+                            <div class="sd-comm-actions">
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("email")'>
+                                    <i class="bi bi-envelope" aria-hidden="true"></i> Email
+                                </button>
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("call")'>
+                                    <i class="bi bi-telephone" aria-hidden="true"></i> Log Call
+                                </button>
+                                <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => OpenAction("note")'>
+                                    <i class="bi bi-sticky" aria-hidden="true"></i> Note
+                                </button>
+                            </div>
+                        </div>
+                        <div class="sd-comm-filter">
+                            @foreach (var f in new[]{"All","Email","Call","Note","SMS"})
+                            {
+                                <button class="sd-comm-filter-btn @(_commFilter==f ? "sd-comm-filter-active" : "")"
+                                        @onclick="() => _commFilter = f">@f</button>
+                            }
+                        </div>
+                        <div class="sd-comm-list">
+                            @foreach (var comm in _comms.Where(c => _commFilter == "All" || c.Type == _commFilter).OrderByDescending(c => c.When))
+                            {
+                                <div class="sd-comm-item sd-comm-@comm.Type.ToLower()">
+                                    <div class="sd-comm-icon">
+                                        <i class="bi @CommIcon(comm.Type)" aria-hidden="true"></i>
+                                    </div>
+                                    <div class="sd-comm-body">
+                                        <div class="sd-comm-head">
+                                            <span class="sd-comm-type-badge sd-comm-badge-@comm.Type.ToLower()">@comm.Type</span>
+                                            <span class="sd-comm-subject">@comm.Subject</span>
+                                            <span class="sd-comm-when">@comm.When.ToString("MMM d, yyyy h:mm tt")</span>
+                                        </div>
+                                        <div class="sd-comm-parties">
+                                            <span><i class="bi bi-person" aria-hidden="true"></i> @comm.From</span>
+                                            @if (!string.IsNullOrEmpty(comm.To))
+                                            {
+                                                <span><i class="bi bi-arrow-right" aria-hidden="true"></i> @comm.To</span>
+                                            }
+                                        </div>
+                                        @if (!string.IsNullOrEmpty(comm.Body))
+                                        {
+                                            <div class="sd-comm-preview">@comm.Body</div>
+                                        }
+                                        @if (comm.HasAttachment)
+                                        {
+                                            <div class="sd-comm-attach"><i class="bi bi-paperclip" aria-hidden="true"></i> Attachment</div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- ⑧ Timeline -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Timeline" IconCss="bi bi-clock-history" /></ChildContent>
+                <ContentTemplate>
+                    <div class="sd-tab-body">
+                        <div class="sd-tab-toolbar">
+                            <span class="sd-toolbar-title"><i class="bi bi-clock-history" aria-hidden="true"></i> Submission Timeline</span>
+                        </div>
+                        <div class="sd-timeline-wrap">
+                            <PolicyChangeTimeline Events="@_timelineEvents" />
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+        </Tabs>
+    </AppDetailTabs>
+
+    <!-- ── ACTION DIALOG ─────────────────────────────────────────── -->
+    <SfDialog @bind-Visible="_showActionDlg" Width="500px" IsModal="true" ShowCloseIcon="true" Header="@_actionTitle">
+        <DialogTemplates>
+            <Content>
+                <div class="sd-dlg-fields">
+                    @if (_actionMode == "submit")
+                    {
+                        <p class="sd-dlg-intro">Select which markets to submit this submission to:</p>
+                        @foreach (var mkt in _markets.Where(m => m.Status == "Pending"))
+                        {
+                            <label class="sd-dlg-check-row">
+                                <SfCheckBox @bind-Checked="mkt.Selected" />
+                                <span>@mkt.Carrier</span>
+                                <span class="sd-dlg-mkt-uw">@mkt.Underwriter</span>
+                            </label>
+                        }
+                        @if (!_markets.Any(m => m.Status == "Pending"))
+                        {
+                            <p class="sd-dlg-muted">All markets have already been submitted.</p>
+                        }
+                    }
+                    else if (_actionMode is "bind")
+                    {
+                        <p class="sd-dlg-intro">Select the quote to bind:</p>
+                        @foreach (var qt in _quotes)
+                        {
+                            <label class="sd-dlg-check-row">
+                                <SfCheckBox @bind-Checked="qt.Selected" />
+                                <span class="sd-dlg-qt-carrier">@qt.Carrier</span>
+                                <span class="sd-dlg-qt-prem">@qt.Premium.ToString("C0")</span>
+                            </label>
+                        }
+                    }
+                    else if (_actionMode is "decline" or "copy")
+                    {
+                        <div class="sd-dlg-field">
+                            <label class="sd-dlg-lbl">Notes</label>
+                            <textarea class="e-input" rows="3" @bind="_actionNotes"></textarea>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="sd-dlg-field">
+                            <label class="sd-dlg-lbl">Notes / Details</label>
+                            <textarea class="e-input" rows="3" @bind="_actionNotes"></textarea>
+                        </div>
+                    }
+                </div>
+            </Content>
+            <FooterTemplate>
+                <button class="um-btn um-btn-ghost" @onclick='() => _showActionDlg = false'>Cancel</button>
+                <button class="um-btn @(_actionMode=="decline" ? "um-btn-danger" : "um-btn-primary")"
+                        @onclick="ExecuteAction">
+                    @_actionTitle
+                </button>
+            </FooterTemplate>
+        </DialogTemplates>
+    </SfDialog>
+
+    <!-- ── ADD MARKET DIALOG ─────────────────────────────────────── -->
+    <SfDialog @bind-Visible="_showAddMarket" Width="440px" IsModal="true" ShowCloseIcon="true" Header="Add Market">
+        <DialogTemplates>
+            <Content>
+                <div class="sd-dlg-fields">
+                    <div class="sd-dlg-field">
+                        <label class="sd-dlg-lbl">Carrier / Market</label>
+                        <input class="e-input" @bind="_newMarket.Carrier" placeholder="Carrier name…" />
+                    </div>
+                    <div class="sd-dlg-field">
+                        <label class="sd-dlg-lbl">Underwriter / Contact</label>
+                        <input class="e-input" @bind="_newMarket.Underwriter" />
+                    </div>
+                    <div class="sd-dlg-field">
+                        <label class="sd-dlg-lbl">Target Premium</label>
+                        <SfNumericTextBox TValue="decimal" @bind-Value="_newMarket.TargetPremium" Format="N0" />
+                    </div>
+                    <div class="sd-dlg-field">
+                        <label class="sd-dlg-lbl">Notes</label>
+                        <textarea class="e-input" rows="2" @bind="_newMarket.Notes"></textarea>
+                    </div>
+                </div>
+            </Content>
+            <FooterTemplate>
+                <button class="um-btn um-btn-ghost" @onclick='() => _showAddMarket = false'>Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="AddMarket">Add</button>
+            </FooterTemplate>
+        </DialogTemplates>
+    </SfDialog>
+
+    <!-- ── ADD QUOTE DIALOG ──────────────────────────────────────── -->
+    <SfDialog @bind-Visible="_showAddQuote" Width="560px" IsModal="true" ShowCloseIcon="true" Header="Enter Quote">
+        <DialogTemplates>
+            <Content>
+                <div class="sd-dlg-fields">
+                    <div class="sd-dlg-field">
+                        <label class="sd-dlg-lbl">Carrier</label>
+                        <input class="e-input" @bind="_newQuote.Carrier" />
+                    </div>
+                    <div class="sd-dlg-field">
+                        <label class="sd-dlg-lbl">Quote Number</label>
+                        <input class="e-input" @bind="_newQuote.QuoteNo" />
+                    </div>
+                    <div class="sd-dlg-field">
+                        <label class="sd-dlg-lbl">Annual Premium</label>
+                        <SfNumericTextBox TValue="decimal" @bind-Value="_newQuote.Premium" Format="N0" />
+                    </div>
+                    <div class="sd-dlg-field">
+                        <label class="sd-dlg-lbl">Occurrence Limit</label>
+                        <input class="e-input" @bind="_newQuote.OccLimit" placeholder="$1,000,000" />
+                    </div>
+                    <div class="sd-dlg-field">
+                        <label class="sd-dlg-lbl">Aggregate</label>
+                        <input class="e-input" @bind="_newQuote.Aggregate" placeholder="$2,000,000" />
+                    </div>
+                    <div class="sd-dlg-field">
+                        <label class="sd-dlg-lbl">Deductible</label>
+                        <input class="e-input" @bind="_newQuote.Deductible" placeholder="$0" />
+                    </div>
+                    <div class="sd-dlg-field">
+                        <label class="sd-dlg-lbl">Quote Effective</label>
+                        <SfDatePicker TValue="DateTime" @bind-Value="_newQuote.EffDate" Format="MM/dd/yyyy" />
+                    </div>
+                    <div class="sd-dlg-field">
+                        <label class="sd-dlg-lbl">Quote Expires</label>
+                        <SfDatePicker TValue="DateTime" @bind-Value="_newQuote.ExpDate" Format="MM/dd/yyyy" />
+                    </div>
+                    <div class="sd-dlg-field sd-dlg-full">
+                        <label class="sd-dlg-lbl">Notes / Conditions</label>
+                        <textarea class="e-input" rows="2" @bind="_newQuote.Notes"></textarea>
+                    </div>
+                </div>
+            </Content>
+            <FooterTemplate>
+                <button class="um-btn um-btn-ghost" @onclick='() => _showAddQuote = false'>Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveQuote">Save Quote</button>
+            </FooterTemplate>
+        </DialogTemplates>
+    </SfDialog>
+}
+
+@code {
+    [Parameter] public Guid SubmissionId { get; set; }
+
+    SfToast _toast = default!;
+
+    bool   _loading      = true;
+    int    _tab          = 0;
+    string _commFilter   = "All";
+    bool   _showActionDlg = false;
+    bool   _showAddMarket = false;
+    bool   _showAddQuote  = false;
+    bool   _showAddNote   = false;
+    string _actionMode   = "";
+    string _actionTitle  = "";
+    string _actionNotes  = "";
+
+    SubModel?     _sub      = null;
+    List<Market>  _markets  = new();
+    List<DocItem> _docs     = new();
+    List<UwQuestion> _questions = new();
+    List<QuoteItem> _quotes = new();
+    List<ActivityItem> _activity = new();
+    List<CommItem> _comms   = new();
+    IReadOnlyList<PolicyChangeTimeline.PolicyTimelineEvent> _timelineEvents = Array.Empty<PolicyChangeTimeline.PolicyTimelineEvent>();
+
+    Market  _newMarket = new();
+    QuoteItem _newQuote = new();
+
+    double QProgress => _questions.Count == 0 ? 0 : (double)_questions.Count(q => q.Answered) / _questions.Count * 100;
+
+    // ── Domain models ─────────────────────────────────────────────
+    sealed class SubModel
+    {
+        public string    SubmissionNo   { get; set; } = "";
+        public string    Account        { get; set; } = "";
+        public string    Insured        { get; set; } = "";
+        public string    Dba            { get; set; } = "";
+        public string    Fein           { get; set; } = "";
+        public string    Lob            { get; set; } = "";
+        public string    Status         { get; set; } = "";
+        public string    Priority       { get; set; } = "";
+        public string    Producer       { get; set; } = "";
+        public string    Csr            { get; set; } = "";
+        public string    ContactName    { get; set; } = "";
+        public string    ContactPhone   { get; set; } = "";
+        public string    ContactEmail   { get; set; } = "";
+        public string    Website        { get; set; } = "";
+        public string    Address        { get; set; } = "";
+        public string    RiskAddress    { get; set; } = "";
+        public string    EntityType     { get; set; } = "";
+        public string    YearFounded    { get; set; } = "";
+        public string    SicNaics       { get; set; } = "";
+        public string    BusinessDesc   { get; set; } = "";
+        public string    YearsInBusiness{ get; set; } = "";
+        public string    PriorCarrier   { get; set; } = "";
+        public decimal   PriorPremium   { get; set; }
+        public DateTime  EffDate        { get; set; }
+        public DateTime  SubmitDate     { get; set; }
+        public DateTime? DueDate        { get; set; }
+        public List<KeyValuePair<string,string>> Exposures { get; set; } = new();
+        public List<CovRequest> Coverages { get; set; } = new();
+        public List<LossYear>   LossHistory { get; set; } = new();
+    }
+
+    sealed class CovRequest
+    {
+        public string Name       { get; set; } = "";
+        public string OccLimit   { get; set; } = "";
+        public string Aggregate  { get; set; } = "";
+        public string Deductible { get; set; } = "";
+        public bool   Requested  { get; set; }
+    }
+
+    sealed class LossYear
+    {
+        public string  Year        { get; set; } = "";
+        public string  Carrier     { get; set; } = "";
+        public int     Claims      { get; set; }
+        public decimal Paid        { get; set; }
+        public decimal Reserved    { get; set; }
+        public string  Description { get; set; } = "";
+    }
+
+    sealed class Market
+    {
+        public string    Carrier       { get; set; } = "";
+        public string    Underwriter   { get; set; } = "";
+        public string    Status        { get; set; } = "Pending";
+        public DateTime? SubmitDate    { get; set; }
+        public DateTime? DueDate       { get; set; }
+        public string    QuoteRef      { get; set; } = "";
+        public string    Notes         { get; set; } = "";
+        public decimal   TargetPremium { get; set; }
+        public bool      Selected      { get; set; }
+    }
+
+    sealed class DocItem
+    {
+        public string   FileName     { get; set; } = "";
+        public string   DocType      { get; set; } = "";
+        public string   UploadedBy   { get; set; } = "";
+        public DateTime UploadedDate { get; set; }
+        public string   Size         { get; set; } = "";
+        public string   Version      { get; set; } = "";
+    }
+
+    sealed class UwQuestion
+    {
+        public int    Number     { get; set; }
+        public string Section    { get; set; } = "";
+        public string Text       { get; set; } = "";
+        public string AnswerType { get; set; } = "bool";
+        public bool   Required   { get; set; }
+        public bool   Answered   { get; set; }
+        public bool?  BoolAnswer { get; set; }
+        public string TextAnswer { get; set; } = "";
+        public string HelpText   { get; set; } = "";
+    }
+
+    sealed class QuoteItem
+    {
+        public string   Carrier    { get; set; } = "";
+        public string   QuoteNo    { get; set; } = "";
+        public decimal  Premium    { get; set; }
+        public string   OccLimit   { get; set; } = "";
+        public string   Aggregate  { get; set; } = "";
+        public string   Deductible { get; set; } = "";
+        public DateTime EffDate    { get; set; }
+        public DateTime ExpDate    { get; set; }
+        public string   Notes      { get; set; } = "";
+        public bool     Selected   { get; set; }
+        public bool     IsLowest   { get; set; }
+    }
+
+    sealed class ActivityItem
+    {
+        public string   User   { get; set; } = "";
+        public string   Action { get; set; } = "";
+        public string   Detail { get; set; } = "";
+        public string   Type   { get; set; } = "system";
+        public DateTime When   { get; set; }
+    }
+
+    sealed class CommItem
+    {
+        public string   Type          { get; set; } = "";
+        public string   Subject       { get; set; } = "";
+        public string   From          { get; set; } = "";
+        public string   To            { get; set; } = "";
+        public string   Body          { get; set; } = "";
+        public DateTime When          { get; set; }
+        public bool     HasAttachment { get; set; }
+    }
+
+    // ── Lifecycle ─────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home","/"), new("Submissions","/submissions"),
+            new("Detail", $"/submissions/{SubmissionId}"));
+        await Task.Delay(0);
+        BuildStub();
+        _loading = false;
+    }
+
+    // ── Stub data ─────────────────────────────────────────────────
+    void BuildStub()
+    {
+        _sub = new SubModel
+        {
+            SubmissionNo    = "SUB-2025-0042",
+            Account         = "Sullivan Mfg. LLC",
+            Insured         = "Sullivan Manufacturing, LLC",
+            Dba             = "Sullivan Fab Works",
+            Fein            = "47-1234567",
+            Lob             = "General Liability",
+            Status          = "Quoted",
+            Priority        = "High",
+            Producer        = "Thornton & Associates",
+            Csr             = "Maria Santos",
+            ContactName     = "Robert Sullivan",
+            ContactPhone    = "(713) 555-0142",
+            ContactEmail    = "rsullivan@sullivanmfg.com",
+            Website         = "www.sullivanmfg.com",
+            Address         = "14820 Industrial Pkwy, Houston TX 77015",
+            RiskAddress     = "14820 Industrial Pkwy, Houston TX 77015",
+            EntityType      = "LLC",
+            YearFounded     = "2007",
+            SicNaics        = "3490 / 332999",
+            BusinessDesc    = "Metal fabrication and structural steel manufacturing for commercial construction.",
+            YearsInBusiness = "18 years",
+            PriorCarrier    = "Zurich American",
+            PriorPremium    = 16_400m,
+            EffDate         = new DateTime(2025,7,1),
+            SubmitDate      = DateTime.Today.AddDays(-12),
+            DueDate         = DateTime.Today.AddDays(5),
+            Exposures       = new()
+            {
+                new("Annual Payroll",        "$3,100,000"),
+                new("Annual Revenue",        "$11,800,000"),
+                new("Gross Sales (Products)","$8,200,000"),
+                new("Employees (FTE)",       "64"),
+                new("Locations",             "3"),
+                new("Square Footage",        "42,000 sq ft"),
+                new("Years with Prior",      "4 years"),
+            },
+            Coverages = new()
+            {
+                new() { Name="Commercial General Liability", OccLimit="$2,000,000", Aggregate="$4,000,000", Deductible="$0",     Requested=true  },
+                new() { Name="Products / Completed Ops",     OccLimit="$2,000,000", Aggregate="$4,000,000", Deductible="$0",     Requested=true  },
+                new() { Name="Personal & Adv Injury",        OccLimit="$2,000,000", Aggregate="—",          Deductible="$0",     Requested=true  },
+                new() { Name="Hired & Non-Owned Auto",       OccLimit="$1,000,000", Aggregate="—",          Deductible="$1,000", Requested=true  },
+                new() { Name="Employee Benefits Liab.",      OccLimit="$1,000,000", Aggregate="$2,000,000", Deductible="$1,000", Requested=false },
+                new() { Name="Umbrella / Excess",            OccLimit="$5,000,000", Aggregate="$5,000,000", Deductible="$10,000",Requested=false },
+            },
+            LossHistory = new()
+            {
+                new() { Year="2024", Carrier="Zurich American", Claims=1, Paid=4_200m,  Reserved=0,     Description="Slip-and-fall — visitor" },
+                new() { Year="2023", Carrier="Zurich American", Claims=0, Paid=0,       Reserved=0,     Description="No losses" },
+                new() { Year="2022", Carrier="Zurich American", Claims=2, Paid=12_500m, Reserved=3_000m,Description="Products liability claim; property damage" },
+                new() { Year="2021", Carrier="Travelers",       Claims=1, Paid=1_800m,  Reserved=0,     Description="Minor property damage" },
+                new() { Year="2020", Carrier="Travelers",       Claims=0, Paid=0,       Reserved=0,     Description="No losses" },
+            },
+        };
+
+        _markets = new()
+        {
+            new() { Carrier="Travelers Indemnity",   Underwriter="Lisa Chen — UW",   Status="Quoted",          SubmitDate=DateTime.Today.AddDays(-10), DueDate=DateTime.Today.AddDays(5),  QuoteRef="TRV-2025-88421", Notes="Standard GL, preferred class." },
+            new() { Carrier="Hartford Fire & Cas.",  Underwriter="Mike Rosario — UW",Status="Awaiting Quote",  SubmitDate=DateTime.Today.AddDays(-9),  DueDate=DateTime.Today.AddDays(4),  Notes="" },
+            new() { Carrier="Liberty Mutual",        Underwriter="Jennifer Wu — UW", Status="Submitted",       SubmitDate=DateTime.Today.AddDays(-7),  DueDate=DateTime.Today.AddDays(8),  Notes="Requires loss runs going back 7 years." },
+            new() { Carrier="Zurich American",       Underwriter="Prior carrier",    Status="Declined",        SubmitDate=DateTime.Today.AddDays(-12), DueDate=null,                        Notes="Declined — products exposure too broad." },
+            new() { Carrier="CNA Commercial",        Underwriter="—",               Status="Pending",         SubmitDate=null,                        DueDate=null,                        Notes="" },
+        };
+
+        _docs = new()
+        {
+            new() { FileName="Sullivan_Loss_Runs_2020-2024.pdf",  DocType="Loss Runs",      UploadedBy="Maria Santos",  UploadedDate=DateTime.Today.AddDays(-11), Size="1.2 MB",  Version="1" },
+            new() { FileName="Sullivan_ACORD_125_Application.pdf",DocType="Application",    UploadedBy="James Patel",   UploadedDate=DateTime.Today.AddDays(-12), Size="856 KB",  Version="2" },
+            new() { FileName="Sullivan_ACORD_130_GL_Supp.pdf",    DocType="Application",    UploadedBy="James Patel",   UploadedDate=DateTime.Today.AddDays(-12), Size="420 KB",  Version="1" },
+            new() { FileName="Sullivan_FinancialStatements_2024.pdf",DocType="Financials",  UploadedBy="Robert Sullivan",UploadedDate=DateTime.Today.AddDays(-10),Size="3.4 MB",  Version="1" },
+            new() { FileName="Travelers_Quote_TRV-2025-88421.pdf",DocType="Quote",          UploadedBy="Lisa Chen",     UploadedDate=DateTime.Today.AddDays(-3),  Size="244 KB",  Version="1" },
+            new() { FileName="SUB-2025-0042_SubmissionLetter.docx",DocType="Correspondence",UploadedBy="Maria Santos",  UploadedDate=DateTime.Today.AddDays(-12), Size="78 KB",   Version="1" },
+        };
+
+        _questions = new()
+        {
+            // General
+            new() { Number=1,  Section="General Operations",   AnswerType="text",   Required=true,  Text="Describe the insured's primary business operations in detail.",                                                                                    HelpText="Include all products manufactured and services rendered." },
+            new() { Number=2,  Section="General Operations",   AnswerType="bool",   Required=true,  Text="Does the insured perform any work outside the listed premises?",                                                                                   Answered=true, BoolAnswer=false },
+            new() { Number=3,  Section="General Operations",   AnswerType="bool",   Required=true,  Text="Does the insured subcontract any work to others?",                                                                                                 Answered=true, BoolAnswer=true },
+            new() { Number=4,  Section="General Operations",   AnswerType="number", Required=false, Text="What percentage of revenue is from subcontracted work?",                                                                                           TextAnswer="12" , Answered=true },
+            // Products
+            new() { Number=5,  Section="Products Liability",   AnswerType="bool",   Required=true,  Text="Are any products sold to foreign countries?",                                                                                                      Answered=true, BoolAnswer=false },
+            new() { Number=6,  Section="Products Liability",   AnswerType="bool",   Required=true,  Text="Does the insured install, service, or repair products sold by others?",                                                                            Answered=true, BoolAnswer=false },
+            new() { Number=7,  Section="Products Liability",   AnswerType="text",   Required=true,  Text="List all products/goods manufactured, sold, or distributed. Include trade names.",                                                                 TextAnswer="Structural steel beams, custom metal fabrications, industrial brackets.", Answered=true },
+            // Property
+            new() { Number=8,  Section="Property & Premises",  AnswerType="bool",   Required=false, Text="Are any flammable liquids stored on premises?",                                                                                                    Answered=true, BoolAnswer=true },
+            new() { Number=9,  Section="Property & Premises",  AnswerType="number", Required=false, Text="What is the maximum value of inventory on premises at any one time ($)?",                                                                          TextAnswer="850000" , Answered=true },
+            new() { Number=10, Section="Property & Premises",  AnswerType="bool",   Required=false, Text="Is there a sprinkler system in all premises?",                                                                                                     Answered=true, BoolAnswer=true },
+            // Loss history
+            new() { Number=11, Section="Loss History",         AnswerType="bool",   Required=true,  Text="Has any policy been cancelled or non-renewed in the past 3 years?",                                                                                Answered=true, BoolAnswer=false },
+            new() { Number=12, Section="Loss History",         AnswerType="text",   Required=true,  Text="Describe all claims in the past 5 years not listed in the loss runs.",                                                                             TextAnswer="None additional.", Answered=true },
+        };
+
+        _quotes = new()
+        {
+            new() { Carrier="Travelers Indemnity", QuoteNo="TRV-2025-88421", Premium=17_250m, OccLimit="$2,000,000", Aggregate="$4,000,000", Deductible="$0",     EffDate=new DateTime(2025,7,1), ExpDate=new DateTime(2025,8,15), Notes="Standard GL package. No exclusions beyond standard.", IsLowest=true },
+            new() { Carrier="Hartford",            QuoteNo="HFD-2025-14822", Premium=18_900m, OccLimit="$2,000,000", Aggregate="$4,000,000", Deductible="$0",     EffDate=new DateTime(2025,7,1), ExpDate=new DateTime(2025,8,1),  Notes="Includes products-completed ops. Broad form." },
+        };
+        foreach (var q in _quotes) q.IsLowest = q.Premium == _quotes.Min(x => x.Premium);
+
+        _activity = new()
+        {
+            new() { User="System",      Action="Submission created",                Detail="SUB-2025-0042 created for Sullivan Mfg. LLC — General Liability",              Type="system",    When=DateTime.Today.AddDays(-12).AddHours(9)   },
+            new() { User="Maria Santos",Action="Submitted to Travelers",             Detail="Submission sent via portal to Lisa Chen (Travelers Indemnity)",                 Type="submit",    When=DateTime.Today.AddDays(-10).AddHours(10)  },
+            new() { User="Maria Santos",Action="Submitted to Hartford",              Detail="Submission sent to Mike Rosario (Hartford Fire & Casualty)",                    Type="submit",    When=DateTime.Today.AddDays(-9).AddHours(14)   },
+            new() { User="Maria Santos",Action="Submitted to Liberty Mutual",        Detail="Submission sent — requested 7-year loss runs",                                 Type="submit",    When=DateTime.Today.AddDays(-7).AddHours(11)   },
+            new() { User="Chen Li",     Action="Zurich declined",                    Detail="Zurich declined — products exposure outside appetite. Notes added.",            Type="decline",   When=DateTime.Today.AddDays(-6).AddHours(16)   },
+            new() { User="Lisa Chen",   Action="Quote received — Travelers",         Detail="Quote TRV-2025-88421 received. Premium: $17,250",                              Type="quote",     When=DateTime.Today.AddDays(-3).AddHours(10)   },
+            new() { User="Maria Santos",Action="Note added",                         Detail="Called Robert Sullivan — reviewing Travelers quote. Follow up Friday.",         Type="note",      When=DateTime.Today.AddDays(-2).AddHours(15)   },
+            new() { User="Mike Rosario",Action="Quote received — Hartford",          Detail="Quote HFD-2025-14822 received. Premium: $18,900",                              Type="quote",     When=DateTime.Today.AddDays(-1).AddHours(9)    },
+            new() { User="Maria Santos",Action="Status changed to Quoted",           Detail="2 quotes received. Submission status updated.",                                 Type="system",    When=DateTime.Today.AddDays(-1).AddHours(9)    },
+        };
+
+        _comms = new()
+        {
+            new() { Type="Email", Subject="SUB-2025-0042 — GL Submission for Sullivan Mfg.",      From="Maria Santos",    To="Lisa Chen (Travelers)",     Body="Hi Lisa, Please find attached the GL submission for Sullivan Manufacturing LLC…",               When=DateTime.Today.AddDays(-10).AddHours(10), HasAttachment=true },
+            new() { Type="Email", Subject="RE: SUB-2025-0042 — GL Submission for Sullivan Mfg.",  From="Lisa Chen",       To="Maria Santos",              Body="Hi Maria, I've reviewed the submission. I'll have a quote by end of week…",                  When=DateTime.Today.AddDays(-8).AddHours(14),  HasAttachment=false },
+            new() { Type="Call",  Subject="Call with Robert Sullivan — quote review",              From="Maria Santos",    To="Robert Sullivan",           Body="Discussed Travelers quote. Client wants to know if we can get premium below $17k.",           When=DateTime.Today.AddDays(-2).AddHours(15),  HasAttachment=false },
+            new() { Type="Email", Subject="Hartford Quote — SUB-2025-0042",                       From="Mike Rosario",    To="Maria Santos",              Body="Hi Maria, Attached is our quote for Sullivan Manufacturing. Premium: $18,900 annual.",       When=DateTime.Today.AddDays(-1).AddHours(9),   HasAttachment=true  },
+            new() { Type="Note",  Subject="Internal note — Zurich declination reason",            From="Chen Li",         To="",                          Body="Zurich declined due to products-completed ops exposure exceeding their per-account limit.",   When=DateTime.Today.AddDays(-6).AddHours(16),  HasAttachment=false },
+        };
+
+        _timelineEvents = new List<PolicyChangeTimeline.PolicyTimelineEvent>
+        {
+            new()
+            {
+                EventType   = "New Business",
+                Title       = "Submission created — General Liability",
+                Description = "SUB-2025-0042 created for Sullivan Mfg. LLC. Requested $2M/$4M GL limits.",
+                EventDate   = DateTime.Today.AddDays(-12),
+                PerformedBy = "James Patel",
+                PremiumDelta= 0,
+                RefNumber   = "SUB-2025-0042",
+                ExposureDeltas = new()
+                {
+                    PolicyChangeTimeline.ExposureDelta.Money("Annual Payroll",  0, 3_100_000),
+                    PolicyChangeTimeline.ExposureDelta.Money("Annual Revenue",  0, 11_800_000),
+                    PolicyChangeTimeline.ExposureDelta.Count("Employees",       0, 64),
+                    PolicyChangeTimeline.ExposureDelta.Money("Occ. Limit Req.", 0, 2_000_000),
+                }
+            },
+            new()
+            {
+                EventType   = "Remarket",
+                Title       = "Submitted to 4 markets",
+                Description = "Travelers, Hartford, Liberty Mutual submitted. Zurich declined.",
+                EventDate   = DateTime.Today.AddDays(-10),
+                PerformedBy = "Maria Santos",
+                PremiumDelta= 0,
+                ExposureDeltas = new()
+                {
+                    PolicyChangeTimeline.ExposureDelta.Text("Markets Targeted","0","4"),
+                    PolicyChangeTimeline.ExposureDelta.Text("Zurich","Targeted","Declined — appetite"),
+                }
+            },
+            new()
+            {
+                EventType   = "Endorsement",
+                Title       = "Quote received — Travelers $17,250",
+                Description = "Quote TRV-2025-88421 received from Travelers Indemnity. $2M/$4M limits, no exclusions.",
+                EventDate   = DateTime.Today.AddDays(-3),
+                PerformedBy = "Lisa Chen / Maria Santos",
+                PremiumDelta= 17_250m,
+                Carrier     = "Travelers Indemnity",
+                RefNumber   = "TRV-2025-88421",
+                ExposureDeltas = new()
+                {
+                    PolicyChangeTimeline.ExposureDelta.Money("Quoted Premium", 0, 17_250),
+                    PolicyChangeTimeline.ExposureDelta.Text("Occ. Limit","—","$2,000,000"),
+                    PolicyChangeTimeline.ExposureDelta.Text("Aggregate","—","$4,000,000"),
+                }
+            },
+            new()
+            {
+                EventType   = "Endorsement",
+                Title       = "Quote received — Hartford $18,900",
+                Description = "Quote HFD-2025-14822 received from Hartford. Broad form, products-completed ops included.",
+                EventDate   = DateTime.Today.AddDays(-1),
+                PerformedBy = "Mike Rosario / Maria Santos",
+                PremiumDelta= 18_900m,
+                Carrier     = "Hartford Fire & Casualty",
+                RefNumber   = "HFD-2025-14822",
+                ExposureDeltas = new()
+                {
+                    PolicyChangeTimeline.ExposureDelta.Money("Quoted Premium", 17_250, 18_900),
+                }
+            },
+        };
+    }
+
+    // ── Actions ───────────────────────────────────────────────────
+    void OpenAction(string mode)
+    {
+        _actionMode  = mode;
+        _actionTitle = mode switch
+        {
+            "submit"   => "Submit to Market",
+            "quote"    => "Request Quote",
+            "bind"     => "Bind",
+            "decline"  => "Decline Submission",
+            "copy"     => "Copy Submission",
+            "email"    => "Send Email",
+            "call"     => "Log Call",
+            "note"     => "Add Note",
+            _          => "Action"
+        };
+        _actionNotes = "";
+        _showActionDlg = true;
+    }
+
+    async Task ExecuteAction()
+    {
+        if (_actionMode == "submit")
+        {
+            foreach (var m in _markets.Where(m => m.Selected))
+            {
+                m.Status     = "Submitted";
+                m.SubmitDate = DateTime.Today;
+            }
+        }
+        else if (_actionMode == "decline" && _sub is not null)
+        {
+            _sub.Status = "Declined";
+        }
+
+        _showActionDlg = false;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "Done",
+            Content  = $"{_actionTitle} completed.",
+            CssClass = "e-toast-success"
+        });
+    }
+
+    void SelectQuote(QuoteItem q)
+    {
+        foreach (var qt in _quotes) qt.Selected = false;
+        q.Selected = true;
+        if (_sub is not null) _sub.Status = "Quoted";
+    }
+
+    async Task BindQuote(QuoteItem q)
+    {
+        SelectQuote(q);
+        if (_sub is not null) _sub.Status = "Bound";
+        _showActionDlg = false;
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "Bound",
+            Content  = $"Quote {q.QuoteNo} bound. Create a policy to complete.",
+            CssClass = "e-toast-success"
+        });
+    }
+
+    void AddMarket()
+    {
+        _markets.Add(_newMarket);
+        _newMarket     = new();
+        _showAddMarket = false;
+    }
+
+    void SaveQuote()
+    {
+        _quotes.Add(_newQuote);
+        foreach (var q in _quotes) q.IsLowest = q.Premium == _quotes.Min(x => x.Premium);
+        _newQuote     = new();
+        _showAddQuote = false;
+    }
+
+    void MarkAllAnswered()
+    {
+        foreach (var q in _questions) q.Answered = true;
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────
+    static string LobKey(string lob) => lob switch
+    {
+        "General Liability"   => "gl",
+        "Commercial Property" => "prop",
+        "Commercial Auto"     => "auto",
+        "Workers Comp"        => "wc",
+        "Umbrella / Excess"   => "umb",
+        _                     => "other"
+    };
+
+    static string LobIcon(string lob) => lob switch
+    {
+        "General Liability"   => "bi-shield",
+        "Commercial Property" => "bi-building",
+        "Commercial Auto"     => "bi-truck",
+        "Workers Comp"        => "bi-person-badge",
+        "Umbrella / Excess"   => "bi-umbrella",
+        _                     => "bi-shield-exclamation"
+    };
+
+    static string CssStatus(string s) => s.ToLower().Replace(" ","-");
+
+    static string CssMktStatus(string s) => s switch
+    {
+        "Quoted"         => "quoted",
+        "Awaiting Quote" => "awaiting",
+        "Submitted"      => "submitted",
+        "Declined"       => "declined",
+        _                => "pending"
+    };
+
+    static string ActivityIcon(string t) => t switch
+    {
+        "submit"  => "bi-send",
+        "quote"   => "bi-journal-text",
+        "decline" => "bi-x-circle",
+        "note"    => "bi-sticky",
+        "email"   => "bi-envelope",
+        _         => "bi-dot"
+    };
+
+    static string CommIcon(string t) => t switch
+    {
+        "Email" => "bi-envelope",
+        "Call"  => "bi-telephone",
+        "Note"  => "bi-sticky",
+        "SMS"   => "bi-chat-text",
+        _       => "bi-chat"
+    };
+
+    static string DocExt(string name)
+    {
+        var ext = System.IO.Path.GetExtension(name).ToLower().TrimStart('.');
+        return ext is "pdf" ? "pdf" : ext is "docx" or "doc" ? "word" : "file";
+    }
+
+    static string DocIcon(string name)
+    {
+        var ext = System.IO.Path.GetExtension(name).ToLower().TrimStart('.');
+        return ext is "pdf" ? "bi-file-earmark-pdf" : ext is "docx" or "doc" ? "bi-file-earmark-word" : "bi-file-earmark";
+    }
+
+    static void SubmitMarket(Market m)    { m.Status = "Submitted"; m.SubmitDate = DateTime.Today; }
+    static void EnterQuoteMarket(Market m) { m.Status = "Awaiting Quote"; }
+
+    RenderFragment FieldRow(string label, string val) =>
+        @<div class="sd-field-row">
+            <span class="sd-field-lbl">@label</span>
+            <span class="sd-field-val">@(string.IsNullOrEmpty(val) ? "—" : val)</span>
+        </div>;
+
+    RenderFragment KpiCard(string icon, string label, string val, string css) =>
+        @<div class="sd-kpi-card @css">
+            <div class="sd-kpi-val">@val</div>
+            <div class="sd-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </div>;
+}

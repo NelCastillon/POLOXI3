@@ -1,0 +1,414 @@
+@page "/quotes/compare/{SubmissionId:guid}"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Quote Comparison — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@if (_loading)
+{
+    <div class="qc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading quotes…</span></div>
+}
+else
+{
+    <!-- ── HEADER ─────────────────────────────────────────────────── -->
+    <div class="qc-header">
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="GoBack">
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back
+        </button>
+        <div class="qc-header-title">
+            <i class="bi bi-layout-split qc-title-icon" aria-hidden="true"></i>
+            <div>
+                <h1 class="qc-h1">Quote Comparison</h1>
+                <span class="qc-sub">@_submissionNo · @_account · @_lob</span>
+            </div>
+        </div>
+        <div class="qc-header-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportComparison">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm"
+                    @onclick='() => Nav.NavigateTo($"/quotes/proposal/{SubmissionId}")'>
+                <i class="bi bi-file-earmark-richtext" aria-hidden="true"></i> Build Proposal
+            </button>
+            <button class="um-btn um-btn-primary um-btn-sm"
+                    @onclick='() => Nav.NavigateTo("/quotes/bind")'>
+                <i class="bi bi-shield-check" aria-hidden="true"></i> Bind
+            </button>
+        </div>
+    </div>
+
+    <!-- ── RECOMMENDATION BANNER ─────────────────────────────────── -->
+    <div class="qc-rec-banner">
+        <div class="qc-rec-icon"><i class="bi bi-stars" aria-hidden="true"></i></div>
+        <div class="qc-rec-body">
+            <div class="qc-rec-title">Recommended: <strong>@_recommended?.Carrier</strong></div>
+            <div class="qc-rec-reason">Lowest premium · Best SLA · Highest bind ratio · Producer preferred · Full limits with no exclusions</div>
+        </div>
+        <button class="um-btn um-btn-success um-btn-sm" @onclick="() => BindRecommended()">
+            <i class="bi bi-shield-check" aria-hidden="true"></i> Bind Recommended
+        </button>
+    </div>
+
+    <!-- ── SUMMARY CARD ROW ───────────────────────────────────────── -->
+    <div class="qc-summary-row">
+        @foreach (var q in _quotes)
+        {
+            <div class="qc-summary-card @(q.IsRecommended ? "qc-recommended" : "") @(q.IsSelected ? "qc-selected" : "")">
+                @if (q.IsRecommended)
+                {
+                    <div class="qc-rec-badge"><i class="bi bi-trophy-fill" aria-hidden="true"></i> Recommended</div>
+                }
+                <div class="qc-sum-carrier">@q.Carrier</div>
+                <div class="qc-sum-premium">@q.Premium.ToString("C0")</div>
+                <div class="qc-sum-label">Annual Premium</div>
+                <div class="qc-sum-chips">
+                    @if (q.IsLowest) { <span class="qc-chip qc-chip-low"><i class="bi bi-arrow-down" aria-hidden="true"></i> Lowest</span> }
+                    @if (q.BestSla)  { <span class="qc-chip qc-chip-sla"><i class="bi bi-clock" aria-hidden="true"></i> Best SLA</span> }
+                    @if (q.FullLimits) { <span class="qc-chip qc-chip-lim"><i class="bi bi-shield" aria-hidden="true"></i> Full Limits</span> }
+                </div>
+                <div class="qc-sum-meta">Quote #@q.QuoteNo · Exp @q.ExpDate.ToString("MM/dd/yy")</div>
+                <div class="qc-sum-actions">
+                    <button class="um-btn @(q.IsSelected ? "um-btn-success" : "um-btn-ghost") um-btn-sm"
+                            @onclick="() => SelectQuote(q)">
+                        <i class="bi @(q.IsSelected ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i>
+                        @(q.IsSelected ? "Selected" : "Select")
+                    </button>
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => BindQuote(q)">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i> Bind
+                    </button>
+                </div>
+            </div>
+        }
+    </div>
+
+    <!-- ── TOGGLE VIEW TABS ───────────────────────────────────────── -->
+    <div class="qc-view-row">
+        @foreach (var v in new[]{"Coverage","Premium Breakdown","Market Intelligence","Notes"})
+        {
+            <button class="qc-view-btn @(_viewTab == v ? "qc-view-active" : "")"
+                    @onclick="() => _viewTab = v">@v</button>
+        }
+    </div>
+
+    <!-- ── COMPARISON TABLE ───────────────────────────────────────── -->
+    @if (_viewTab == "Coverage")
+    {
+        <div class="qc-table-wrap">
+            <table class="qc-table">
+                <thead>
+                    <tr>
+                        <th class="qc-th-field">Coverage Feature</th>
+                        @foreach (var q in _quotes)
+                        {
+                            <th class="qc-th-carrier @(q.IsRecommended ? "qc-th-rec" : "")">
+                                @q.Carrier
+                                @if (q.IsRecommended) { <span class="qc-th-rec-star">★</span> }
+                            </th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in _coverageRows)
+                    {
+                        @if (row.IsSection)
+                        {
+                            <tr class="qc-section-row">
+                                <td colspan="@(_quotes.Count+1)">@row.Field</td>
+                            </tr>
+                        }
+                        else
+                        {
+                            <tr class="qc-data-row @(row.IsHighlighted ? "qc-row-hl" : "")">
+                                <td class="qc-field-name">
+                                    @row.Field
+                                    @if (row.IsKey) { <span class="qc-key-dot" title="Key coverage field">●</span> }
+                                </td>
+                                @foreach (var q in _quotes)
+                                {
+                                    var val = q.CoverageValues.GetValueOrDefault(row.Field, "—");
+                                    var best = row.BestValue == q.Carrier;
+                                    <td class="qc-val-cell @(best ? "qc-best-val" : "") @(q.IsRecommended ? "qc-rec-col" : "")">
+                                        @if (val == "Yes")   { <span class="qc-yes"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span> }
+                                        else if (val == "No"){ <span class="qc-no"><i class="bi bi-x-circle" aria-hidden="true"></i></span> }
+                                        else                 { <span>@val</span> }
+                                        @if (best) { <i class="bi bi-star-fill qc-best-star" title="Best value" aria-hidden="true"></i> }
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else if (_viewTab == "Premium Breakdown")
+    {
+        <div class="qc-breakdown-wrap">
+            <table class="qc-table">
+                <thead>
+                    <tr>
+                        <th class="qc-th-field">Coverage Element</th>
+                        @foreach (var q in _quotes) { <th class="qc-th-carrier @(q.IsRecommended ? "qc-th-rec" : "")">@q.Carrier</th> }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var line in _premiumLines)
+                    {
+                        <tr class="qc-data-row @(line.IsTotalRow ? "qc-total-row" : "")">
+                            <td class="qc-field-name">@line.Label</td>
+                            @foreach (var q in _quotes)
+                            {
+                                var val = q.PremiumLines.GetValueOrDefault(line.Label, 0);
+                                var isLow = _quotes.Min(x => x.PremiumLines.GetValueOrDefault(line.Label, decimal.MaxValue)) == val && val > 0;
+                                <td class="qc-val-cell @(isLow && !line.IsTotalRow ? "qc-best-val" : "") @(line.IsTotalRow ? "qc-total-val" : "") @(q.IsRecommended ? "qc-rec-col" : "")">
+                                    @(val == 0 ? "—" : val.ToString("C0"))
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else if (_viewTab == "Market Intelligence")
+    {
+        <div class="qc-intel-wrap">
+            <table class="qc-table">
+                <thead>
+                    <tr>
+                        <th class="qc-th-field">Intelligence Metric</th>
+                        @foreach (var q in _quotes) { <th class="qc-th-carrier @(q.IsRecommended ? "qc-th-rec" : "")">@q.Carrier</th> }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in _intelRows)
+                    {
+                        <tr class="qc-data-row">
+                            <td class="qc-field-name">@row</td>
+                            @foreach (var q in _quotes)
+                            {
+                                var val = q.IntelValues.GetValueOrDefault(row, "—");
+                                <td class="qc-val-cell @(q.IsRecommended ? "qc-rec-col" : "")">@val</td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else
+    {
+        <div class="qc-notes-wrap">
+            @foreach (var q in _quotes)
+            {
+                <div class="qc-note-card @(q.IsRecommended ? "qc-note-rec" : "")">
+                    <div class="qc-note-carrier">@q.Carrier</div>
+                    <div class="qc-note-text">@q.Notes</div>
+                    @if (!string.IsNullOrEmpty(q.Exclusions))
+                    {
+                        <div class="qc-note-excl"><strong>Exclusions / Conditions:</strong> @q.Exclusions</div>
+                    }
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public Guid SubmissionId { get; set; }
+
+    SfToast _toast = default!;
+
+    bool   _loading     = true;
+    string _viewTab     = "Coverage";
+    string _submissionNo = "";
+    string _account      = "";
+    string _lob          = "";
+
+    sealed class QuoteModel
+    {
+        public string   Carrier        { get; set; } = "";
+        public string   QuoteNo        { get; set; } = "";
+        public decimal  Premium        { get; set; }
+        public DateTime ExpDate        { get; set; }
+        public bool     IsRecommended  { get; set; }
+        public bool     IsSelected     { get; set; }
+        public bool     IsLowest       { get; set; }
+        public bool     BestSla        { get; set; }
+        public bool     FullLimits     { get; set; }
+        public string   Notes          { get; set; } = "";
+        public string   Exclusions     { get; set; } = "";
+        public Dictionary<string,string>  CoverageValues { get; set; } = new();
+        public Dictionary<string,decimal> PremiumLines   { get; set; } = new();
+        public Dictionary<string,string>  IntelValues    { get; set; } = new();
+    }
+
+    sealed class CovRow
+    {
+        public string Field        { get; set; } = "";
+        public bool   IsSection    { get; set; }
+        public bool   IsKey        { get; set; }
+        public bool   IsHighlighted{ get; set; }
+        public string BestValue    { get; set; } = "";
+    }
+
+    sealed class PremLine
+    {
+        public string Label      { get; set; } = "";
+        public bool   IsTotalRow { get; set; }
+    }
+
+    List<QuoteModel> _quotes       = new();
+    List<CovRow>     _coverageRows = new();
+    List<PremLine>   _premiumLines = new();
+    List<string>     _intelRows    = new();
+    QuoteModel?      _recommended;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home","/"), new("Submissions","/submissions"),
+            new("Submission",$"/submissions/{SubmissionId}"),
+            new("Compare",$"/quotes/compare/{SubmissionId}"));
+        await Task.Delay(0);
+        BuildStub();
+        _loading = false;
+    }
+
+    void BuildStub()
+    {
+        _submissionNo = "SUB-2025-0042";
+        _account      = "Sullivan Mfg. LLC";
+        _lob          = "General Liability";
+
+        _quotes = new()
+        {
+            new QuoteModel
+            {
+                Carrier="Travelers Indemnity", QuoteNo="TRV-2025-88421", Premium=17_250m,
+                ExpDate=new DateTime(2025,8,15), IsRecommended=true, IsLowest=true, BestSla=true, FullLimits=true,
+                Notes="Standard GL package. No unusual exclusions. Preferred class account.",
+                Exclusions="Standard ISO exclusions only.",
+                CoverageValues=new()
+                {
+                    {"Occurrence Limit","$2,000,000"},{"Aggregate","$4,000,000"},{"Products/CO Limit","$2,000,000"},
+                    {"Personal & Adv Injury","$2,000,000"},{"Deductible","$0"},{"HNOA","Yes"},
+                    {"Waiver of Subrogation","Yes"},{"Additional Insured","Yes"},{"Primary & Non-Contributory","Yes"},
+                    {"Blanket AI Endorsement","Yes"},{"Contractual Liability","Yes"},{"Fire Legal Liability","$100,000"},
+                    {"Medical Payments","$5,000"},{"Products-Completed Ops","Included"},{"XCU Exclusion","No — Waived"},
+                },
+                PremiumLines=new()
+                {
+                    {"General Liability",8_500m},{"Products/Completed Ops",4_750m},{"HNOA",1_200m},
+                    {"Endorsements",600m},{"Policy Fee",200m},{"Total",17_250m}
+                },
+                IntelValues=new()
+                {
+                    {"Appetite Score","92 / 100"},{"Turnaround SLA","5 days"},{"Hit Ratio (this LOB)","78%"},
+                    {"Bind Ratio (this LOB)","64%"},{"Producer Preference","★★★★★"},{"Commission","16.5%"},{"AM Best Rating","A+ (XV)"},
+                }
+            },
+            new QuoteModel
+            {
+                Carrier="Hartford Fire & Cas.", QuoteNo="HFD-2025-14822", Premium=18_900m,
+                ExpDate=new DateTime(2025,8,1), IsLowest=false, BestSla=false, FullLimits=true,
+                Notes="Broad form package. Products-completed ops included. Slightly higher premium but broader grant.",
+                Exclusions="Absolute pollution exclusion applies.",
+                CoverageValues=new()
+                {
+                    {"Occurrence Limit","$2,000,000"},{"Aggregate","$4,000,000"},{"Products/CO Limit","$2,000,000"},
+                    {"Personal & Adv Injury","$2,000,000"},{"Deductible","$0"},{"HNOA","Yes"},
+                    {"Waiver of Subrogation","Yes"},{"Additional Insured","Yes"},{"Primary & Non-Contributory","Yes"},
+                    {"Blanket AI Endorsement","No"},{"Contractual Liability","Yes"},{"Fire Legal Liability","$300,000"},
+                    {"Medical Payments","$5,000"},{"Products-Completed Ops","Included"},{"XCU Exclusion","Applies"},
+                },
+                PremiumLines=new()
+                {
+                    {"General Liability",9_200m},{"Products/Completed Ops",5_400m},{"HNOA",1_500m},
+                    {"Endorsements",600m},{"Policy Fee",200m},{"Total",18_900m}
+                },
+                IntelValues=new()
+                {
+                    {"Appetite Score","85 / 100"},{"Turnaround SLA","7 days"},{"Hit Ratio (this LOB)","65%"},
+                    {"Bind Ratio (this LOB)","52%"},{"Producer Preference","★★★★☆"},{"Commission","15.0%"},{"AM Best Rating","A+ (XV)"},
+                }
+            },
+        };
+
+        _recommended = _quotes.FirstOrDefault(q => q.IsRecommended);
+
+        _coverageRows = new()
+        {
+            new() { Field="Limits & Deductibles", IsSection=true },
+            new() { Field="Occurrence Limit",    IsKey=true, BestValue="Travelers Indemnity" },
+            new() { Field="Aggregate",           IsKey=true },
+            new() { Field="Products/CO Limit",   IsKey=true },
+            new() { Field="Personal & Adv Injury" },
+            new() { Field="Deductible",          IsKey=true, BestValue="Travelers Indemnity", IsHighlighted=true },
+            new() { Field="Extensions", IsSection=true },
+            new() { Field="HNOA" },
+            new() { Field="Waiver of Subrogation" },
+            new() { Field="Additional Insured",  IsKey=true },
+            new() { Field="Primary & Non-Contributory", IsKey=true },
+            new() { Field="Blanket AI Endorsement",     IsHighlighted=true, BestValue="Travelers Indemnity" },
+            new() { Field="Contractual Liability" },
+            new() { Field="Fire Legal Liability",        BestValue="Hartford Fire & Cas." },
+            new() { Field="Medical Payments" },
+            new() { Field="Products / Coverage Detail", IsSection=true },
+            new() { Field="Products-Completed Ops" },
+            new() { Field="XCU Exclusion",       IsHighlighted=true, BestValue="Travelers Indemnity" },
+        };
+
+        _premiumLines = new()
+        {
+            new() { Label="General Liability" }, new() { Label="Products/Completed Ops" },
+            new() { Label="HNOA" },              new() { Label="Endorsements" },
+            new() { Label="Policy Fee" },        new() { Label="Total", IsTotalRow=true },
+        };
+
+        _intelRows = new()
+        {
+            "Appetite Score","Turnaround SLA","Hit Ratio (this LOB)","Bind Ratio (this LOB)",
+            "Producer Preference","Commission","AM Best Rating"
+        };
+    }
+
+    void SelectQuote(QuoteModel q)
+    {
+        foreach (var x in _quotes) x.IsSelected = false;
+        q.IsSelected = true;
+    }
+
+    async Task BindQuote(QuoteModel q)
+    {
+        SelectQuote(q);
+        Nav.NavigateTo("/quotes/bind");
+        await Task.CompletedTask;
+    }
+
+    void BindRecommended()
+    {
+        if (_recommended is not null)
+        {
+            SelectQuote(_recommended);
+            Nav.NavigateTo("/quotes/bind");
+        }
+    }
+
+    async Task ExportComparison()
+    {
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "Export",
+            Content  = "Quote comparison exported to PDF.",
+            CssClass = "e-toast-success"
+        });
+    }
+
+    void GoBack() => Nav.NavigateTo($"/submissions/{SubmissionId}");
+}

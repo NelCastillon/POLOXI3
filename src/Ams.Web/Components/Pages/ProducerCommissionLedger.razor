@@ -1,0 +1,211 @@
+@page "/commissions/producer-ledger"
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Producer Commission Ledger — AMS</PageTitle>
+
+<AppPageHeader Title="Producer Commission Ledger"
+               Subtitle="Full running ledger of commission credits, debits, clawbacks, and adjustments per producer with multi-producer split visibility"
+               Icon="bi-journal-text">
+    <Actions>
+        <button class="pl-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/statements")'>
+            <i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements
+        </button>
+        <button class="pl-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/splits")'>
+            <i class="bi bi-scissors" aria-hidden="true"></i> Split Rules
+        </button>
+        <button class="pl-btn-primary" @onclick="() => _showExport = true">
+            <i class="bi bi-download" aria-hidden="true"></i> Export Ledger
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="pl-kpi-strip">
+    @PlKpi("bi-people",            "Producers",       _producers.Count.ToString(),                              "pl-ki-blue")
+    @PlKpi("bi-currency-dollar",   "YTD Earned",      "$389,750",                                               "pl-ki-green")
+    @PlKpi("bi-arrow-down-circle", "YTD Clawbacks",   "$6,200",                                                 "pl-ki-red")
+    @PlKpi("bi-currency-dollar",   "YTD Net",         "$383,550",                                               "pl-ki-green")
+    @PlKpi("bi-graph-up",          "Top Producer",    _producers.OrderByDescending(p=>p.YtdNet).First().Name,   "pl-ki-blue")
+    @PlKpi("bi-scissors",          "Split Earners",   _producers.Count(p=>p.HasSplit).ToString()+" producers",  "pl-ki-purple")
+</div>
+
+<!-- Sub-nav -->
+<div class="pl-subnav">
+    <button class="pl-snav-btn pl-snav-active"><i class="bi bi-journal-text" aria-hidden="true"></i> Producer Ledger</button>
+    <button class="pl-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
+    <button class="pl-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/splits")'><i class="bi bi-scissors" aria-hidden="true"></i> Splits</button>
+    <button class="pl-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/plans")'><i class="bi bi-clipboard-check" aria-hidden="true"></i> Plans</button>
+    <button class="pl-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/exceptions")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions</button>
+    <button class="pl-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/forecast")'><i class="bi bi-graph-up" aria-hidden="true"></i> Forecast</button>
+    <button class="pl-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/planner")'><i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner</button>
+</div>
+
+<!-- Toolbar -->
+<div class="pl-toolbar">
+    <SfTextBox Placeholder="Search producer…" @bind-Value="_searchTerm" Width="240px"></SfTextBox>
+    <select class="e-input pl-sel" @bind="_filterPeriod">
+        <option value="">All Periods</option>
+        <option value="2025-02">Feb 2025</option>
+        <option value="2025-01">Jan 2025</option>
+        <option value="2024-12">Dec 2024</option>
+        <option value="YTD">YTD 2025</option>
+    </select>
+    <select class="e-input pl-sel" @bind="_filterProducer">
+        <option value="">All Producers</option>
+        @foreach (var p in _producers) { <option value="@p.Name">@p.Name</option> }
+    </select>
+    <select class="e-input pl-sel" @bind="_filterType">
+        <option value="">All Entry Types</option>
+        <option value="Credit">Credit</option>
+        <option value="Clawback">Clawback</option>
+        <option value="Adjustment">Adjustment</option>
+        <option value="Override">Override</option>
+        <option value="Bonus">Bonus</option>
+    </select>
+</div>
+
+<!-- Producer cards + ledger -->
+<div class="pl-body">
+    <!-- Producer selector sidebar -->
+    <div class="pl-sidebar">
+        <div class="pl-sidebar-hdr">Producers</div>
+        @foreach (var p in FilteredProducers)
+        {
+            <div class="pl-producer-card @(p.Name == _selectedProducer ? "pl-pc-selected" : "")"
+                 @onclick="() => SelectProducer(p.Name)">
+                <div class="pl-pc-avatar">@p.Name[0]</div>
+                <div class="pl-pc-info">
+                    <div class="pl-pc-name">@p.Name</div>
+                    <div class="pl-pc-plan">@p.Plan</div>
+                    <div class="pl-pc-net">@p.YtdNet.ToString("C0") YTD net</div>
+                </div>
+                @if (p.HasSplit) { <span class="pl-pc-badge">Split</span> }
+            </div>
+        }
+    </div>
+
+    <!-- Ledger entries for selected producer -->
+    <div class="pl-ledger">
+        @if (_selectedProducer is null)
+        {
+            <div class="pl-empty"><i class="bi bi-arrow-left-circle" aria-hidden="true"></i> Select a producer to view their ledger</div>
+        }
+        else
+        {
+            <div class="pl-ledger-hdr">
+                <span class="pl-ledger-name">@_selectedProducer — Commission Ledger</span>
+                <span class="pl-ledger-bal">Running Balance: <strong>@RunningBalance.ToString("C2")</strong></span>
+            </div>
+            <SfGrid DataSource="LedgerEntries" AllowSorting="true" AllowPaging="true" Height="460px">
+                <GridPageSettings PageSize="15"></GridPageSettings>
+                <GridColumns>
+                    <GridColumn Field="@nameof(LedgerEntry.Date)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+                    <GridColumn HeaderText="Type" Width="110">
+                        <Template>
+                            @{ var e = (LedgerEntry)context; }
+                            <span class="pl-entry-chip pl-e-@e.Type.ToLower()">@e.Type</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(LedgerEntry.Reference)" HeaderText="Reference" Width="150"></GridColumn>
+                    <GridColumn Field="@nameof(LedgerEntry.Description)" HeaderText="Description" Width="260"></GridColumn>
+                    <GridColumn Field="@nameof(LedgerEntry.Debit)" HeaderText="Debit" Format="C2" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+                    <GridColumn Field="@nameof(LedgerEntry.Credit)" HeaderText="Credit" Format="C2" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+                    <GridColumn Field="@nameof(LedgerEntry.Balance)" HeaderText="Balance" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+                </GridColumns>
+            </SfGrid>
+        }
+    </div>
+</div>
+
+<!-- Export Dialog -->
+<SfDialog @bind-Visible="_showExport" Width="440px" ShowCloseIcon="true" IsModal="true" Header="Export Producer Ledger">
+    <DialogTemplates>
+        <Content>
+            <div class="pl-dlg-body">
+                <div class="form-group mb-2"><label class="pl-lbl">Format</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"CSV","Excel","PDF"}' @bind-Value="_exportFmt" Width="100%"></SfDropDownList>
+                </div>
+                <div class="form-group mb-2"><label class="pl-lbl">Period</label>
+                    <SfDateRangePicker TValue="DateTime?" @bind-StartValue="_exportFrom" @bind-EndValue="_exportTo" Width="100%"></SfDateRangePicker>
+                </div>
+                <div class="form-group mb-2">
+                    <SfCheckBox Label="Include split allocation detail" @bind-Checked="_exportSplits"></SfCheckBox>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Export" IsPrimary="true" OnClick="() => _showExport = false"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showExport = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
+
+@code {
+    private string? _searchTerm, _filterPeriod, _filterProducer, _filterType, _selectedProducer;
+    private bool _showExport;
+    private string _exportFmt = "Excel";
+    private DateTime? _exportFrom, _exportTo;
+    private bool _exportSplits = true;
+
+    private readonly List<ProducerSummary> _producers =
+    [
+        new("Sarah Chen",    "Standard Plan 2025", 156_000m, 2_100m, 153_900m, true),
+        new("Marcus Webb",   "Standard Plan 2025",  98_400m, 1_200m,  97_200m, true),
+        new("Linda Torres",  "Senior Producer 2025",72_800m,   800m,  72_000m, false),
+        new("James Holloway","Senior Producer 2025",64_500m, 1_800m,  62_700m, false),
+        new("Priya Patel",   "Standard Plan 2025",  45_200m,   300m,  44_900m, false),
+        new("Tom Harris",    "Referral Plan",        21_100m,   150m,  20_950m, false),
+        new("Naomi Price",   "Standard Plan 2025",  31_750m,     0m,  31_750m, true),
+    ];
+
+    private IEnumerable<ProducerSummary> FilteredProducers => _producers.Where(p =>
+        string.IsNullOrEmpty(_filterProducer) || p.Name == _filterProducer).Where(p =>
+        string.IsNullOrEmpty(_searchTerm) || p.Name.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase));
+
+    private readonly Dictionary<string, List<LedgerEntry>> _allLedgers = new()
+    {
+        ["Sarah Chen"] =
+        [
+            new(new DateTime(2025,2,1),  "Credit",    "STM-2025-0041","New biz commission — POL-2025-00182",   0m,    4_500m, 18_400m),
+            new(new DateTime(2025,2,5),  "Credit",    "STM-2025-0041","New biz commission — POL-2025-00211",   0m,    3_100m, 21_500m),
+            new(new DateTime(2025,2,8),  "Clawback",  "CLW-2025-0011","Policy cancellation — POL-2024-07415",350m,       0m, 21_150m),
+            new(new DateTime(2025,2,10), "Credit",    "STM-2025-0041","Renewal — POL-2024-09912",              0m,    2_240m, 23_390m),
+            new(new DateTime(2025,2,15), "Clawback",  "CLW-2025-0012","NSF chargeback — POL-2025-00095",      50m,       0m, 23_340m),
+            new(new DateTime(2025,2,20), "Override",  "OVR-2025-0004","Branch override credit",                0m,    1_650m, 24_990m),
+            new(new DateTime(2025,2,28), "Adjustment","ADJ-2025-0002","Period-end reconciliation adj.",       200m,       0m, 24_790m),
+        ],
+        ["Marcus Webb"] =
+        [
+            new(new DateTime(2025,2,1),  "Credit",  "STM-2025-0039","Split share — POL-2025-00182",0m, 2_250m, 11_250m),
+            new(new DateTime(2025,2,5),  "Credit",  "STM-2025-0039","Split share — POL-2025-00211",0m, 1_550m, 12_800m),
+            new(new DateTime(2025,2,10), "Credit",  "STM-2025-0039","Split share — renewal",       0m, 1_120m, 13_920m),
+            new(new DateTime(2025,2,8),  "Clawback","CLW-2025-0011","Clawback share POL-2024-07415",175m, 0m, 13_745m),
+        ],
+    };
+
+    private List<LedgerEntry> LedgerEntries => _selectedProducer is not null && _allLedgers.TryGetValue(_selectedProducer, out var l)
+        ? l.Where(e => string.IsNullOrEmpty(_filterType) || e.Type == _filterType).ToList()
+        : [];
+
+    private decimal RunningBalance => LedgerEntries.LastOrDefault()?.Balance ?? 0m;
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Producer Ledger",""));
+        _selectedProducer = _producers.First().Name;
+    }
+
+    void SelectProducer(string name) => _selectedProducer = name;
+
+    RenderFragment PlKpi(string icon, string label, string val, string color) => __builder =>
+    {
+        <div class="pl-kpi-card @color">
+            <i class="bi @icon pl-kpi-icon" aria-hidden="true"></i>
+            <div><div class="pl-kpi-val">@val</div><div class="pl-kpi-lbl">@label</div></div>
+        </div>
+    };
+
+    record ProducerSummary(string Name, string Plan, decimal YtdGross, decimal YtdClawbacks, decimal YtdNet, bool HasSplit);
+    record LedgerEntry(DateTime Date, string Type, string Reference, string Description, decimal Debit, decimal Credit, decimal Balance);
+}

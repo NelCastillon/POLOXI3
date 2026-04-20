@@ -1,47 +1,182 @@
 @page "/commissions/accruals"
+@page "/commissions/forecast"
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Commission Accruals</PageTitle>
+<PageTitle>Commission Forecast &amp; Accruals — AMS</PageTitle>
 
-<h1>Commission Accruals</h1>
+<AppPageHeader Title="Commission Forecast &amp; Accruals"
+               Subtitle="Project earned commissions, manage accrual entries, and track period reversals across producers and plans"
+               Icon="bi-graph-up">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/planner")'>
+            <i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/statements")'>
+            <i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showPost = true">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> Post Accrual
+        </button>
+    </Actions>
+</AppPageHeader>
 
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+<!-- Forecast summary tiles -->
+<div class="cf-forecast-strip">
+    <div class="cf-fc-card cf-fc-blue">
+        <div class="cf-fc-lbl">Projected This Month</div>
+        <div class="cf-fc-val">$142,300</div>
+        <div class="cf-fc-sub">▲ 4.2% vs prior month</div>
+    </div>
+    <div class="cf-fc-card cf-fc-green">
+        <div class="cf-fc-lbl">YTD Earned</div>
+        <div class="cf-fc-val">$389,750</div>
+        <div class="cf-fc-sub">68% of annual plan</div>
+    </div>
+    <div class="cf-fc-card cf-fc-amber">
+        <div class="cf-fc-lbl">Pending Accruals</div>
+        <div class="cf-fc-val">$28,100</div>
+        <div class="cf-fc-sub">14 entries not yet reversed</div>
+    </div>
+    <div class="cf-fc-card cf-fc-purple">
+        <div class="cf-fc-lbl">New Biz vs Renewal</div>
+        <div class="cf-fc-val">58% / 42%</div>
+        <div class="cf-fc-sub">New biz outpacing forecast</div>
+    </div>
+    <div class="cf-fc-card cf-fc-red">
+        <div class="cf-fc-lbl">Clawback Risk</div>
+        <div class="cf-fc-val">$18,400</div>
+        <div class="cf-fc-sub">Policies within 90-day window</div>
+    </div>
 </div>
+
+<!-- KPI strip -->
+<div class="cf-kpi-strip">
+    @CfKpi("bi-graph-up",          "Accrual Entries",  (_items?.Count ?? 0).ToString(),                                          "cf-ki-blue")
+    @CfKpi("bi-currency-dollar",   "Accrued",          Fmt(_items?.Sum(x=>x.AccruedAmount)),                                     "cf-ki-blue")
+    @CfKpi("bi-arrow-counterclockwise","Reversed",     Fmt(_items?.Sum(x=>x.ReversedAmount)),                                    "cf-ki-amber")
+    @CfKpi("bi-check-circle",      "Settled",          (_items?.Count(x=>x.StatusCode=="Settled") ?? 0).ToString(),              "cf-ki-green")
+    @CfKpi("bi-hourglass",         "Pending",          (_items?.Count(x=>x.StatusCode=="Pending") ?? 0).ToString(),              "cf-ki-amber")
+    @CfKpi("bi-calendar-x",        "Overdue Reversals",(_items?.Count(x=>x.ReversalDate!=null && x.ReversalDate<DateOnly.FromDateTime(DateTime.Today) && x.ReversedAmount==0) ?? 0).ToString(), "cf-ki-red")
+</div>
+
+<!-- Sub-nav -->
+<div class="cf-subnav">
+    <button class="cf-snav-btn cf-snav-active"><i class="bi bi-graph-up" aria-hidden="true"></i> Forecast &amp; Accruals</button>
+    <button class="cf-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
+    <button class="cf-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><i class="bi bi-journal-text" aria-hidden="true"></i> Producer Ledger</button>
+    <button class="cf-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/exceptions")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions</button>
+    <button class="cf-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/clawbacks")'><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Clawbacks</button>
+    <button class="cf-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/planner")'><i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner</button>
+</div>
+
+<!-- Toolbar -->
+<div class="cf-toolbar">
+    <SfTextBox Placeholder="Search…" @bind-Value="_searchTerm" Width="270px"></SfTextBox>
+    <select class="e-input cf-sel" @bind="_filterStatus">
+        <option value="">All Statuses</option>
+        <option value="Pending">Pending</option>
+        <option value="Posted">Posted</option>
+        <option value="Reversed">Reversed</option>
+        <option value="Settled">Settled</option>
+    </select>
+</div>
+
+<!-- Post Accrual Dialog -->
+<SfDialog Width="480px" IsModal="true" @bind-Visible="_showPost" Header="Post Accrual Entry" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Content>
+            <div class="cf-dlg-body">
+                <div class="form-group mb-2"><label class="cf-lbl">Accrual Date</label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_postDate" Width="100%"></SfDatePicker>
+                </div>
+                <div class="form-group mb-2"><label class="cf-lbl">Accrued Amount</label>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_postAmount" Format="C2" Width="100%"></SfNumericTextBox>
+                </div>
+                <div class="form-group mb-2"><label class="cf-lbl">Expected Reversal Date</label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_postReversalDate" Width="100%"></SfDatePicker>
+                </div>
+                <div class="form-group mb-2"><label class="cf-lbl">Notes</label>
+                    <SfTextBox @bind-Value="_postNotes" Multiline="true"></SfTextBox>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+    <DialogButtons>
+        <DialogButton Content="Post" IsPrimary="true" OnClick="() => _showPost = false"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="() => _showPost = false"></DialogButton>
+    </DialogButtons>
+</SfDialog>
 
 @if (_items is null)
 {
-    <p>Loading...</p>
+    <div style="padding:2rem"><SfSpinner Visible="true" /></div>
 }
 else
 {
-    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridPageSettings PageSize="10"></GridPageSettings>
+<div class="cf-grid-wrap">
+    <SfGrid DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="480px">
+        <GridPageSettings PageSize="15"></GridPageSettings>
         <GridColumns>
-            <GridColumn Field="@nameof(CommissionAccrualEntryDto.AccrualDate)" HeaderText="Accrual Date" Type="ColumnType.Date" Format="d" Width="150"></GridColumn>
-            <GridColumn Field="@nameof(CommissionAccrualEntryDto.AccruedAmount)" HeaderText="Accrued Amount" Format="C2" Width="160"></GridColumn>
-            <GridColumn Field="@nameof(CommissionAccrualEntryDto.ReversalDate)" HeaderText="Reversal Date" Type="ColumnType.Date" Format="d" Width="150"></GridColumn>
-            <GridColumn Field="@nameof(CommissionAccrualEntryDto.ReversedAmount)" HeaderText="Reversed Amount" Format="C2" Width="160"></GridColumn>
-            <GridColumn Field="@nameof(CommissionAccrualEntryDto.StatusCode)" HeaderText="Status" Width="120"></GridColumn>
-            <GridColumn Field="@nameof(CommissionAccrualEntryDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="180"></GridColumn>
+            <GridColumn Field="@nameof(CommissionAccrualEntryDto.AccrualDate)" HeaderText="Accrual Date" Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
+            <GridColumn Field="@nameof(CommissionAccrualEntryDto.AccruedAmount)" HeaderText="Accrued" Format="C2" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(CommissionAccrualEntryDto.ReversalDate)" HeaderText="Reversal Date" Type="ColumnType.Date" Format="d" Width="120">
+                <Template>
+                    @{ var a = (CommissionAccrualEntryDto)context; }
+                    @if (a.ReversalDate.HasValue)
+                    {
+                        var overdue = a.ReversalDate.Value < DateOnly.FromDateTime(DateTime.Today) && a.ReversedAmount == 0;
+                        <span class="@(overdue?"cf-overdue":"")">@a.ReversalDate.Value.ToString("MMM d, yyyy")</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CommissionAccrualEntryDto.ReversedAmount)" HeaderText="Reversed" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn HeaderText="Status" Width="110">
+                <Template>
+                    @{ var a2 = (CommissionAccrualEntryDto)context; }
+                    <span class="cf-status-chip cf-st-@a2.StatusCode.ToLower()">@a2.StatusCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(CommissionAccrualEntryDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="110"></GridColumn>
         </GridColumns>
     </SfGrid>
+</div>
 }
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string? _searchTerm;
+    private string _filterStatus = "";
+    private bool _showPost;
+    private DateTime _postDate = DateTime.Today;
+    private DateTime _postReversalDate = DateTime.Today.AddMonths(1);
+    private decimal _postAmount;
+    private string? _postNotes;
     private List<CommissionAccrualEntryDto>? _items;
+
+    private IEnumerable<CommissionAccrualEntryDto> FilteredItems => (_items ?? []).Where(x =>
+        string.IsNullOrEmpty(_filterStatus) || x.StatusCode == _filterStatus);
 
     protected override async Task OnInitializedAsync()
     {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Forecast & Accruals",""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         var result = await Api.SearchCommissionAccrualEntriesAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? new List<CommissionAccrualEntryDto>();
+        _items = result?.Items.ToList() ?? [];
     }
+
+    static string Fmt(decimal? v) => v.HasValue ? v.Value.ToString("C0") : "$0";
+
+    RenderFragment CfKpi(string icon, string label, string val, string color) => __builder =>
+    {
+        <div class="cf-kpi-card @color">
+            <i class="bi @icon cf-kpi-icon" aria-hidden="true"></i>
+            <div><div class="cf-kpi-val">@val</div><div class="cf-kpi-lbl">@label</div></div>
+        </div>
+    };
 }

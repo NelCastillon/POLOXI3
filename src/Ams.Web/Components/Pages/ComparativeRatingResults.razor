@@ -1,0 +1,407 @@
+@page "/quotes/rating-results"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Comparative Rating Results — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Comparative Rating Results"
+               Subtitle="Side-by-side premium and coverage comparison across rated markets"
+               Icon="bi-graph-up">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "rr-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/quotes/bind")'>
+            <i class="bi bi-shield-check" aria-hidden="true"></i> Bind
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── SUBMISSION SELECTOR ───────────────────────────────────────── -->
+<div class="rr-sub-bar">
+    <div class="rr-sub-info">
+        <span class="rr-sub-label">Submission:</span>
+        <select class="e-input rr-sub-sel" @bind="_selectedSub">
+            @foreach (var s in _submissions) { <option value="@s.Id">@s.Label</option> }
+        </select>
+    </div>
+    <div class="rr-sub-chips">
+        <span class="rr-sub-chip"><i class="bi bi-layers" aria-hidden="true"></i>@_submissions.FirstOrDefault(s=>s.Id==_selectedSub)?.Lob</span>
+        <span class="rr-sub-chip"><i class="bi bi-building" aria-hidden="true"></i>@_submissions.FirstOrDefault(s=>s.Id==_selectedSub)?.Account</span>
+        <span class="rr-sub-chip"><i class="bi bi-calendar" aria-hidden="true"></i>Eff @_submissions.FirstOrDefault(s=>s.Id==_selectedSub)?.EffDate</span>
+    </div>
+    <button class="um-btn um-btn-primary um-btn-sm" @onclick="RunRating">
+        <i class="bi bi-play-fill" aria-hidden="true"></i> Run Rating
+    </button>
+</div>
+
+@if (_loading)
+{
+    <div class="rr-running">
+        <div class="rr-running-icon"><i class="bi bi-calculator" aria-hidden="true"></i></div>
+        <div class="rr-running-text">Rating in progress across @_ratingCarriers.Count markets…</div>
+        <div class="rr-progress-track"><div class="rr-progress-fill"></div></div>
+    </div>
+}
+else
+{
+    <!-- ── PREMIUM CHART ─────────────────────────────────────────── -->
+    <div class="rr-chart-section">
+        <div class="rr-chart-head">
+            <h2 class="rr-chart-title">Premium Comparison</h2>
+            <span class="rr-chart-sub">Annual premium across rated carriers · LOB: @_currentLob</span>
+        </div>
+        <div class="rr-bar-chart">
+            @{ var maxPrem = _results.Any() ? _results.Max(r => r.TotalPremium) : 1; }
+            @foreach (var r in _results.OrderBy(r => r.TotalPremium))
+            {
+                var pct  = maxPrem > 0 ? (double)r.TotalPremium / (double)maxPrem * 100 : 0;
+                var isLow = r.TotalPremium == _results.Min(x => x.TotalPremium);
+                <div class="rr-bar-row">
+                    <div class="rr-bar-carrier">@r.Carrier</div>
+                    <div class="rr-bar-track">
+                        <div class="rr-bar-fill @(isLow ? "rr-bar-lowest" : "") @(r.IsSelected ? "rr-bar-selected" : "")"
+                             style="width:@pct.ToString("F1")%"></div>
+                    </div>
+                    <div class="rr-bar-prem @(isLow ? "rr-prem-low" : "")">
+                        @r.TotalPremium.ToString("C0")
+                        @if (isLow) { <span class="rr-low-badge">Lowest</span> }
+                    </div>
+                    <div class="rr-bar-actions">
+                        <button class="um-btn @(r.IsSelected ? "um-btn-success" : "um-btn-ghost") um-btn-xs"
+                                @onclick="() => SelectResult(r)">
+                            <i class="bi @(r.IsSelected ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-primary um-btn-xs"
+                                @onclick='() => Nav.NavigateTo("/quotes/bind")'>Bind</button>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- ── KPI STRIP ─────────────────────────────────────────────── -->
+    <div class="rr-kpi-strip">
+        @KpiCard("bi-buildings",   "Carriers Rated",     _results.Count.ToString(),                                          "rr-kpi-total")
+        @KpiCard("bi-arrow-down",  "Lowest Premium",     (_results.Any() ? _results.Min(r=>r.TotalPremium).ToString("C0") : "—"), "rr-kpi-low")
+        @KpiCard("bi-arrow-up",    "Highest Premium",    (_results.Any() ? _results.Max(r=>r.TotalPremium).ToString("C0") : "—"), "rr-kpi-high")
+        @KpiCard("bi-calculator",  "Avg Premium",        (_results.Any() ? _results.Average(r=>(double)r.TotalPremium).ToString("C0") : "—"), "rr-kpi-avg")
+        @KpiCard("bi-graph-down",  "Best Coverage Score",(_results.Any() ? _results.Max(r=>r.CoverageScore) + "/100" : "—"),  "rr-kpi-cov")
+        @KpiCard("bi-star",        "Best Value Score",   (_results.Any() ? _results.Max(r=>r.ValueScore) + "/100" : "—"),    "rr-kpi-val")
+    </div>
+
+    <!-- ── VIEW TABS ─────────────────────────────────────────────── -->
+    <div class="rr-view-row">
+        @foreach (var v in new[]{"Comparison Table","Premium Breakdown","Coverage Scoring","Rating Factors"})
+        {
+            <button class="rr-view-btn @(_viewTab==v?"rr-view-active":"")" @onclick="() => _viewTab = v">@v</button>
+        }
+    </div>
+
+    @if (_viewTab == "Comparison Table")
+    {
+        <!-- Full comparison table -->
+        <div class="rr-table-wrap">
+            <table class="rr-table">
+                <thead>
+                    <tr>
+                        <th class="rr-th-field">Coverage / Factor</th>
+                        @foreach (var r in _results.OrderBy(r => r.TotalPremium))
+                        {
+                            <th class="rr-th-carrier @(r.IsSelected ? "rr-th-sel" : "")">
+                                @r.Carrier
+                                @if (r.TotalPremium == _results.Min(x => x.TotalPremium))
+                                { <div class="rr-th-low">Lowest</div> }
+                            </th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="rr-section-row"><td colspan="@(_results.Count+1)">Annual Premium</td></tr>
+                    <tr class="rr-total-row">
+                        <td class="rr-field-name">Total Premium</td>
+                        @foreach (var r in _results.OrderBy(r=>r.TotalPremium))
+                        {
+                            var isLow = r.TotalPremium == _results.Min(x=>x.TotalPremium);
+                            <td class="rr-val-cell @(isLow ? "rr-val-best" : "") @(r.IsSelected ? "rr-col-sel" : "")">
+                                @r.TotalPremium.ToString("C0")
+                            </td>
+                        }
+                    </tr>
+                    <tr class="rr-section-row"><td colspan="@(_results.Count+1)">Coverage Limits</td></tr>
+                    @foreach (var field in _coverageFields)
+                    {
+                        <tr class="rr-data-row">
+                            <td class="rr-field-name">@field</td>
+                            @foreach (var r in _results.OrderBy(r=>r.TotalPremium))
+                            {
+                                var val  = r.CoverageValues.GetValueOrDefault(field,"—");
+                                var best = _results.OrderBy(x=>x.TotalPremium).Where(x=>x.CoverageValues.GetValueOrDefault(field,"")!="No" && x.CoverageValues.GetValueOrDefault(field,"")!="—").FirstOrDefault()?.Carrier == r.Carrier;
+                                <td class="rr-val-cell @(best?"rr-val-best":"") @(r.IsSelected?"rr-col-sel":"")">
+                                    @if (val=="Yes")     { <i class="bi bi-check-circle-fill rr-yes" aria-hidden="true"></i> }
+                                    else if (val=="No")  { <i class="bi bi-x-circle rr-no" aria-hidden="true"></i> }
+                                    else                 { @val }
+                                </td>
+                            }
+                        </tr>
+                    }
+                    <tr class="rr-section-row"><td colspan="@(_results.Count+1)">Scores</td></tr>
+                    <tr class="rr-data-row">
+                        <td class="rr-field-name">Coverage Score</td>
+                        @foreach (var r in _results.OrderBy(r=>r.TotalPremium))
+                        {
+                            <td class="rr-val-cell @(r.IsSelected?"rr-col-sel":"")">
+                                <span class="rr-score-badge rr-scb-@ScoreBand(r.CoverageScore)">@r.CoverageScore/100</span>
+                            </td>
+                        }
+                    </tr>
+                    <tr class="rr-data-row">
+                        <td class="rr-field-name">Value Score</td>
+                        @foreach (var r in _results.OrderBy(r=>r.TotalPremium))
+                        {
+                            <td class="rr-val-cell @(r.IsSelected?"rr-col-sel":"")">
+                                <span class="rr-score-badge rr-scb-@ScoreBand(r.ValueScore)">@r.ValueScore/100</span>
+                            </td>
+                        }
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    }
+    else if (_viewTab == "Premium Breakdown")
+    {
+        <div class="rr-table-wrap">
+            <table class="rr-table">
+                <thead>
+                    <tr>
+                        <th class="rr-th-field">Coverage Element</th>
+                        @foreach (var r in _results.OrderBy(r=>r.TotalPremium))
+                        {
+                            <th class="rr-th-carrier @(r.IsSelected?"rr-th-sel":"")">@r.Carrier</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var line in _premiumLineLabels)
+                    {
+                        <tr class="rr-data-row @(line=="Total" ? "rr-total-row" : "")">
+                            <td class="rr-field-name">@line</td>
+                            @foreach (var r in _results.OrderBy(r=>r.TotalPremium))
+                            {
+                                var v   = r.PremiumLines.GetValueOrDefault(line,0);
+                                var low = _results.Min(x=>x.PremiumLines.GetValueOrDefault(line,0)) == v && v > 0;
+                                <td class="rr-val-cell @(low&&line!="Total"?"rr-val-best":"") @(line=="Total"?"rr-total-val":"") @(r.IsSelected?"rr-col-sel":"")">
+                                    @(v==0?"—":v.ToString("C0"))
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else if (_viewTab == "Coverage Scoring")
+    {
+        <div class="rr-scoring-wrap">
+            @foreach (var r in _results.OrderByDescending(r=>r.CoverageScore))
+            {
+                <div class="rr-score-card @(r.IsSelected ? "rr-score-card-sel" : "")">
+                    <div class="rr-sc-head">
+                        <div class="rr-sc-carrier">@r.Carrier</div>
+                        <div class="rr-sc-total-prem">@r.TotalPremium.ToString("C0")</div>
+                    </div>
+                    <div class="rr-sc-scores">
+                        <div class="rr-sc-score-item">
+                            <span class="rr-sc-lbl">Coverage Score</span>
+                            <div class="rr-sc-bar-wrap">
+                                <div class="rr-sc-bar rr-sc-@ScoreBand(r.CoverageScore)" style="width:@r.CoverageScore%"></div>
+                            </div>
+                            <span class="rr-sc-val">@r.CoverageScore/100</span>
+                        </div>
+                        <div class="rr-sc-score-item">
+                            <span class="rr-sc-lbl">Value Score</span>
+                            <div class="rr-sc-bar-wrap">
+                                <div class="rr-sc-bar rr-sc-@ScoreBand(r.ValueScore)" style="width:@r.ValueScore%"></div>
+                            </div>
+                            <span class="rr-sc-val">@r.ValueScore/100</span>
+                        </div>
+                        <div class="rr-sc-score-item">
+                            <span class="rr-sc-lbl">Market Intel</span>
+                            <div class="rr-sc-bar-wrap">
+                                <div class="rr-sc-bar rr-sc-@ScoreBand(r.IntelScore)" style="width:@r.IntelScore%"></div>
+                            </div>
+                            <span class="rr-sc-val">@r.IntelScore/100</span>
+                        </div>
+                    </div>
+                    @foreach (var hl in r.ScoreHighlights)
+                    {
+                        <div class="rr-sc-hl @(hl.Positive ? "rr-hl-pos" : "rr-hl-neg")">
+                            <i class="bi @(hl.Positive ? "bi-plus-circle" : "bi-dash-circle")" aria-hidden="true"></i>
+                            @hl.Text
+                        </div>
+                    }
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => SelectResult(r)">
+                        <i class="bi @(r.IsSelected ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i>
+                        @(r.IsSelected ? "Selected" : "Select for Binding")
+                    </button>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <!-- Rating Factors -->
+        <div class="rr-factors-wrap">
+            <table class="rr-table">
+                <thead>
+                    <tr>
+                        <th class="rr-th-field">Rating Factor</th>
+                        @foreach (var r in _results.OrderBy(r=>r.TotalPremium))
+                        {
+                            <th class="rr-th-carrier @(r.IsSelected?"rr-th-sel":"")">@r.Carrier</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var factor in _ratingFactors)
+                    {
+                        <tr class="rr-data-row">
+                            <td class="rr-field-name">@factor</td>
+                            @foreach (var r in _results.OrderBy(r=>r.TotalPremium))
+                            {
+                                <td class="rr-val-cell @(r.IsSelected?"rr-col-sel":"")">
+                                    @r.RatingFactors.GetValueOrDefault(factor,"—")
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@code {
+    SfToast _toast = default!;
+
+    bool   _loading   = false;
+    string _viewTab   = "Comparison Table";
+    string _selectedSub = "sub1";
+    string _currentLob  = "General Liability";
+
+    sealed class SubOption { public string Id{get;set;}=""; public string Label{get;set;}=""; public string Lob{get;set;}=""; public string Account{get;set;}=""; public string EffDate{get;set;}=""; }
+
+    sealed class RatingResult
+    {
+        public string  Carrier       { get; set; } = "";
+        public decimal TotalPremium  { get; set; }
+        public int     CoverageScore { get; set; }
+        public int     ValueScore    { get; set; }
+        public int     IntelScore    { get; set; }
+        public bool    IsSelected    { get; set; }
+        public Dictionary<string,string>  CoverageValues { get; set; } = new();
+        public Dictionary<string,decimal> PremiumLines   { get; set; } = new();
+        public Dictionary<string,string>  RatingFactors  { get; set; } = new();
+        public List<ScoreHighlight> ScoreHighlights { get; set; } = new();
+    }
+
+    sealed class ScoreHighlight { public string Text{get;set;}=""; public bool Positive{get;set;} }
+
+    readonly List<SubOption> _submissions = new()
+    {
+        new() { Id="sub1", Label="SUB-2025-0042 — Sullivan Mfg. GL",    Lob="General Liability",   Account="Sullivan Mfg. LLC",    EffDate="07/01/2025" },
+        new() { Id="sub2", Label="SUB-2025-0038 — Metro Freight Auto",   Lob="Commercial Auto",     Account="Metro Freight Co.",    EffDate="06/15/2025" },
+        new() { Id="sub3", Label="SUB-2025-0031 — Bridgewater Hotels GL",Lob="General Liability",   Account="Bridgewater Hotels",   EffDate="08/01/2025" },
+    };
+
+    readonly List<string> _ratingCarriers = new() { "Travelers Indemnity","Hartford Fire & Cas.","Liberty Mutual","CNA Commercial" };
+    readonly List<string> _coverageFields   = new() { "Occurrence Limit","Aggregate","Products/CO Limit","HNOA","Waiver of Subrogation","Additional Insured","Primary & Non-Contributory","Blanket AI Endorsement","XCU Exclusion Waived" };
+    readonly List<string> _premiumLineLabels = new() { "General Liability","Products/Completed Ops","HNOA","Endorsements","Policy Fee","Total" };
+    readonly List<string> _ratingFactors    = new() { "Base Rate","Class Factor","Territory Factor","Experience Modifier","Schedule Debit/Credit","Premium Discount","Min Premium Applied","Surcharges" };
+
+    List<RatingResult> _results = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Quotes","/quotes/appetite"), new("Rating Results","/quotes/rating-results"));
+        await Task.Delay(0);
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _results = new()
+        {
+            new RatingResult
+            {
+                Carrier="Travelers Indemnity", TotalPremium=17_250m, CoverageScore=88, ValueScore=91, IntelScore=92, IsSelected=true,
+                CoverageValues=new(){ {"Occurrence Limit","$2,000,000"},{"Aggregate","$4,000,000"},{"Products/CO Limit","$2,000,000"},{"HNOA","Yes"},{"Waiver of Subrogation","Yes"},{"Additional Insured","Yes"},{"Primary & Non-Contributory","Yes"},{"Blanket AI Endorsement","Yes"},{"XCU Exclusion Waived","Yes"} },
+                PremiumLines=new(){ {"General Liability",8_500m},{"Products/Completed Ops",4_750m},{"HNOA",1_200m},{"Endorsements",600m},{"Policy Fee",200m},{"Total",17_250m} },
+                RatingFactors=new(){ {"Base Rate","$0.78 per $1,000 payroll"},{"Class Factor","1.05"},{"Territory Factor","0.95"},{"Experience Modifier","0.88"},{"Schedule Debit/Credit","-5%"},{"Premium Discount","3%"},{"Min Premium Applied","No"},{"Surcharges","None"} },
+                ScoreHighlights=new(){ new(){Text="Lowest total premium",Positive=true},new(){Text="No XCU exclusion",Positive=true},new(){Text="Blanket AI included",Positive=true},new(){Text="Best SLA (5 days)",Positive=true} }
+            },
+            new RatingResult
+            {
+                Carrier="Hartford Fire & Cas.", TotalPremium=18_900m, CoverageScore=84, ValueScore=76, IntelScore=85,
+                CoverageValues=new(){ {"Occurrence Limit","$2,000,000"},{"Aggregate","$4,000,000"},{"Products/CO Limit","$2,000,000"},{"HNOA","Yes"},{"Waiver of Subrogation","Yes"},{"Additional Insured","Yes"},{"Primary & Non-Contributory","Yes"},{"Blanket AI Endorsement","No"},{"XCU Exclusion Waived","No"} },
+                PremiumLines=new(){ {"General Liability",9_200m},{"Products/Completed Ops",5_400m},{"HNOA",1_500m},{"Endorsements",600m},{"Policy Fee",200m},{"Total",18_900m} },
+                RatingFactors=new(){ {"Base Rate","$0.84 per $1,000 payroll"},{"Class Factor","1.08"},{"Territory Factor","0.97"},{"Experience Modifier","0.88"},{"Schedule Debit/Credit","0%"},{"Premium Discount","2%"},{"Min Premium Applied","No"},{"Surcharges","None"} },
+                ScoreHighlights=new(){ new(){Text="Broad form coverage",Positive=true},new(){Text="XCU exclusion applies",Positive=false},new(){Text="No blanket AI endorsement",Positive=false},new(){Text="$1,650 higher than best",Positive=false} }
+            },
+            new RatingResult
+            {
+                Carrier="Liberty Mutual", TotalPremium=21_100m, CoverageScore=80, ValueScore=65, IntelScore=78,
+                CoverageValues=new(){ {"Occurrence Limit","$2,000,000"},{"Aggregate","$4,000,000"},{"Products/CO Limit","$1,000,000"},{"HNOA","Yes"},{"Waiver of Subrogation","Yes"},{"Additional Insured","Yes"},{"Primary & Non-Contributory","No"},{"Blanket AI Endorsement","No"},{"XCU Exclusion Waived","No"} },
+                PremiumLines=new(){ {"General Liability",10_800m},{"Products/Completed Ops",6_300m},{"HNOA",1_800m},{"Endorsements",1_000m},{"Policy Fee",200m},{"Total",21_100m} },
+                RatingFactors=new(){ {"Base Rate","$0.96 per $1,000 payroll"},{"Class Factor","1.12"},{"Territory Factor","1.00"},{"Experience Modifier","0.88"},{"Schedule Debit/Credit","+5%"},{"Premium Discount","1%"},{"Min Premium Applied","No"},{"Surcharges","$500 products surcharge"} },
+                ScoreHighlights=new(){ new(){Text="Lower products/CO limit ($1M)",Positive=false},new(){Text="No Primary & Non-Contributory",Positive=false},new(){Text="$3,850 above lowest",Positive=false} }
+            },
+        };
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(1200);
+        BuildStub();
+        _loading = false;
+    }
+
+    async Task RunRating()
+    {
+        _loading = true;
+        await Task.Delay(1500);
+        BuildStub();
+        _loading = false;
+    }
+
+    void SelectResult(RatingResult r)
+    {
+        foreach (var x in _results) x.IsSelected = false;
+        r.IsSelected = true;
+    }
+
+    async Task ExportAsync()
+    {
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title="Exported", Content="Rating comparison exported.",CssClass="e-toast-success"
+        });
+    }
+
+    static string ScoreBand(int s) => s >= 80 ? "high" : s >= 60 ? "ok" : "low";
+
+    RenderFragment KpiCard(string icon, string label, string val, string css) =>
+        @<div class="rr-kpi-card @css">
+            <div class="rr-kpi-val">@val</div>
+            <div class="rr-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </div>;
+}

@@ -1,0 +1,393 @@
+@page "/admin/reference/download-mappings"
+@namespace Ams.Web.Components.Pages.ReferenceAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Download / Import Mappings — Reference Data</PageTitle>
+
+<AppPageHeader Title="Download / Import Mappings"
+               Subtitle="Field mapping configurations for carrier download feeds and data import pipelines"
+               Icon="bi-arrow-down-up">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="TestMappingAsync" title="Test selected mapping">
+            <i class="bi bi-play-circle" aria-hidden="true"></i> Test Mapping
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Mapping
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="dm-kpi-strip">
+    <div class="dm-kpi-card">
+        <span class="dm-kpi-icon dm-kpi-icon--total"><i class="bi bi-arrow-down-up" aria-hidden="true"></i></span>
+        <div><div class="dm-kpi-value">@_totalCount</div><div class="dm-kpi-label">Total Mappings</div></div>
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
+        <span class="dm-kpi-icon dm-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="dm-kpi-value">@_activeCount</div><div class="dm-kpi-label">Active</div></div>
+        @if (_kpiActive == 2) { <span class="dm-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0">
+        <span class="dm-kpi-icon dm-kpi-icon--download"><i class="bi bi-cloud-download" aria-hidden="true"></i></span>
+        <div><div class="dm-kpi-value">@_downloadCount</div><div class="dm-kpi-label">Download Feeds</div></div>
+        @if (_kpiActive == 3) { <span class="dm-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass4" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0">
+        <span class="dm-kpi-icon dm-kpi-icon--import"><i class="bi bi-file-earmark-arrow-up" aria-hidden="true"></i></span>
+        <div><div class="dm-kpi-value">@_importCount</div><div class="dm-kpi-label">Import Pipelines</div></div>
+        @if (_kpiActive == 4) { <span class="dm-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search mapping name or carrier…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_feedTypeOptions"
+                        Placeholder="All Types"
+                        ShowClearButton="true"
+                        Width="170px"
+                        Value="_filterFeedType"
+                        ValueChanged="@((string v) => { _filterFeedType = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_formatOptions"
+                        Placeholder="All Formats"
+                        ShowClearButton="true"
+                        Width="150px"
+                        Value="_filterFormat"
+                        ValueChanged="@((string v) => { _filterFormat = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <label class="dm-toggle-label">
+            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
+            Active only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="MappingEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(MappingEntry.MappingName)" HeaderText="Mapping" Width="220">
+                <Template>
+                    @{ var e = (MappingEntry)context; }
+                    <div class="dm-name-cell">
+                        <span class="dm-mapping-icon @FeedTypeBg(e.FeedType)" aria-hidden="true">
+                            <i class="@FeedTypeIcon(e.FeedType)"></i>
+                        </span>
+                        <div>
+                            <div class="dm-mapping-name">@e.MappingName</div>
+                            <div class="dm-carrier-sub">@e.CarrierName</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(MappingEntry.FeedType)" HeaderText="Type" Width="140">
+                <Template>
+                    @{ var e = (MappingEntry)context; }
+                    <span class="@FeedTypeBadgeClass(e.FeedType)">@e.FeedType</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(MappingEntry.FileFormat)" HeaderText="Format" Width="110">
+                <Template>
+                    @{ var e = (MappingEntry)context; }
+                    <span class="dm-format-badge">@e.FileFormat</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(MappingEntry.FieldCount)" HeaderText="Fields" Width="90" />
+            <GridColumn Field="@nameof(MappingEntry.LastRunDate)" HeaderText="Last Run" Width="140">
+                <Template>
+                    @{ var e = (MappingEntry)context; }
+                    <span>@(e.LastRunDate.HasValue ? e.LastRunDate.Value.ToString("g") : "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(MappingEntry.LastRunStatus)" HeaderText="Last Status" Width="130">
+                <Template>
+                    @{ var e = (MappingEntry)context; }
+                    @if (!string.IsNullOrEmpty(e.LastRunStatus))
+                    {
+                        <AppStatusBadge Status="@(e.LastRunStatus == "Success" ? "Active" : "Pending")"
+                                        Label="@e.LastRunStatus" />
+                    }
+                    else
+                    {
+                        <span class="dm-no-run">Never run</span>
+                    }
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(MappingEntry.IsActive)" HeaderText="Status" Width="100">
+                <Template>
+                    @{ var e = (MappingEntry)context; }
+                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (MappingEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.MappingId == Guid.Empty ? "Add Mapping" : "Edit Mapping")"
+               OnSave="SaveAsync"
+               OnCancel="CloseDrawer">
+    <Body>
+        <div class="dm-form">
+            <label class="dm-form-label">Mapping Name *</label>
+            <input class="um-input" @bind="_editModel.MappingName" />
+
+            <label class="dm-form-label">Carrier Name</label>
+            <input class="um-input" @bind="_editModel.CarrierName" />
+
+            <label class="dm-form-label">Feed Type</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_feedTypeOptions"
+                            @bind-Value="_editModel.FeedType"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="dm-form-label">File Format</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_formatOptions"
+                            @bind-Value="_editModel.FileFormat"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="dm-form-label">Source Path / URL</label>
+            <input class="um-input dm-mono" @bind="_editModel.SourcePath" placeholder="/feeds/carrier/… or https://…" />
+
+            <label class="dm-form-label">Schedule (Cron)</label>
+            <input class="um-input dm-mono" @bind="_editModel.CronSchedule" placeholder="0 6 * * *" />
+
+            <label class="dm-form-label">Notes</label>
+            <textarea class="um-input" rows="3" @bind="_editModel.Notes"></textarea>
+
+            <label class="dm-form-label">Active</label>
+            <SfSwitch @bind-Checked="_editModel.IsActive" />
+        </div>
+    </Body>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<MappingEntry> _allEntries = [];
+    private List<MappingEntry> _entries    = [];
+
+    private bool _loading    = false;
+    private bool _showDrawer = false;
+
+    private string _search           = string.Empty;
+    private string _filterFeedType   = string.Empty;
+    private string _filterFormat     = string.Empty;
+    private bool   _filterActiveOnly = false;
+    private int    _kpiActive        = 0;
+
+    private int _totalCount    = 0;
+    private int _activeCount   = 0;
+    private int _downloadCount = 0;
+    private int _importCount   = 0;
+
+    private string KpiClass2 => "dm-kpi-card" + (_kpiActive == 2 ? " dm-kpi-card--active" : "");
+    private string KpiClass3 => "dm-kpi-card" + (_kpiActive == 3 ? " dm-kpi-card--active" : "");
+    private string KpiClass4 => "dm-kpi-card" + (_kpiActive == 4 ? " dm-kpi-card--active" : "");
+
+    private static readonly List<LabelValue> _feedTypeOptions =
+    [
+        new("Download",   "Carrier Download"),
+        new("Import",     "Data Import"),
+        new("Export",     "Data Export"),
+        new("Bi-directional", "Bi-directional"),
+    ];
+
+    private static readonly List<LabelValue> _formatOptions =
+    [
+        new("CSV",   "CSV"),
+        new("XML",   "XML"),
+        new("JSON",  "JSON"),
+        new("ACORD", "ACORD"),
+        new("EDI",   "EDI"),
+        new("Fixed", "Fixed Width"),
+    ];
+
+    private MappingEntry _editModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",               "/"),
+            new("Reference Data",     "/admin/reference/carriers"),
+            new("Download Mappings",  "/admin/reference/download-mappings"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: Api.GetDownloadMappingsAsync(_tenantId)
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterFeedType) || e.FeedType == _filterFeedType) &&
+            (string.IsNullOrEmpty(_filterFormat)   || e.FileFormat == _filterFormat) &&
+            (!_filterActiveOnly || e.IsActive) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.MappingName.Contains(_search,  StringComparison.OrdinalIgnoreCase) ||
+             e.CarrierName.Contains(_search,  StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        if (_kpiActive == 2) _entries = _entries.Where(e => e.IsActive).ToList();
+        if (_kpiActive == 3) _entries = _entries.Where(e => e.FeedType == "Download").ToList();
+        if (_kpiActive == 4) _entries = _entries.Where(e => e.FeedType == "Import").ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive      = _kpiActive == n ? 0 : n;
+        _filterFeedType = string.Empty;
+        _filterActiveOnly = false;
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount    = _allEntries.Count;
+        _activeCount   = _allEntries.Count(e => e.IsActive);
+        _downloadCount = _allEntries.Count(e => e.FeedType == "Download");
+        _importCount   = _allEntries.Count(e => e.FeedType == "Import");
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(MappingEntry e)
+    {
+        _editModel = new MappingEntry
+        {
+            MappingId    = e.MappingId,
+            MappingName  = e.MappingName,
+            CarrierName  = e.CarrierName,
+            FeedType     = e.FeedType,
+            FileFormat   = e.FileFormat,
+            SourcePath   = e.SourcePath,
+            CronSchedule = e.CronSchedule,
+            Notes        = e.Notes,
+            IsActive     = e.IsActive,
+        };
+        _showDrawer = true;
+    }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveAsync()
+    {
+        await Task.Delay(0);
+        _showDrawer = false;
+        await LoadAsync();
+        await ShowToastAsync("Mapping saved.", "e-toast-success");
+    }
+
+    private async Task TestMappingAsync() =>
+        await ShowToastAsync("Test mapping: not yet implemented.", "e-toast-info");
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string FeedTypeBadgeClass(string t) => t switch
+    {
+        "Download"      => "dm-type-badge dm-type-badge--download",
+        "Import"        => "dm-type-badge dm-type-badge--import",
+        "Export"        => "dm-type-badge dm-type-badge--export",
+        "Bi-directional"=> "dm-type-badge dm-type-badge--bidi",
+        _               => "dm-type-badge",
+    };
+
+    private static string FeedTypeIcon(string t) => t switch
+    {
+        "Download"      => "bi bi-cloud-download",
+        "Import"        => "bi bi-file-earmark-arrow-up",
+        "Export"        => "bi bi-file-earmark-arrow-down",
+        "Bi-directional"=> "bi bi-arrow-left-right",
+        _               => "bi bi-arrow-down-up",
+    };
+
+    private static string FeedTypeBg(string t) => t switch
+    {
+        "Download"      => "dm-mapping-icon--download",
+        "Import"        => "dm-mapping-icon--import",
+        "Export"        => "dm-mapping-icon--export",
+        _               => "dm-mapping-icon--bidi",
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class MappingEntry
+    {
+        public Guid      MappingId     { get; set; } = Guid.Empty;
+        public string    MappingName   { get; set; } = string.Empty;
+        public string    CarrierName   { get; set; } = string.Empty;
+        public string    FeedType      { get; set; } = "Download";
+        public string    FileFormat    { get; set; } = "CSV";
+        public string    SourcePath    { get; set; } = string.Empty;
+        public string    CronSchedule  { get; set; } = string.Empty;
+        public int       FieldCount    { get; set; }
+        public DateTime? LastRunDate   { get; set; }
+        public string    LastRunStatus { get; set; } = string.Empty;
+        public string?   Notes        { get; set; }
+        public bool      IsActive      { get; set; } = true;
+    }
+}

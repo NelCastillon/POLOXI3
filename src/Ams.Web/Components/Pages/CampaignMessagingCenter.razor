@@ -1,0 +1,551 @@
+@page "/communications/campaigns"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Campaign Messaging Center — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── CREATE / EDIT CAMPAIGN DIALOG ─────────────────────────────── -->
+<SfDialog @bind-Visible="_showCampaignDlg" Width="660px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header>
+            <div class="pd-dlg-hdr">
+                <i class="bi bi-megaphone" aria-hidden="true"></i>
+                @(_editCampaign?.Id == Guid.Empty ? "Create Campaign" : "Edit Campaign")
+            </div>
+        </Header>
+        <Content>
+            @if (_editCampaign is not null)
+            {
+                <div class="pd-dlg-body">
+                    <div class="pd-dlg-grid">
+                        <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Campaign Name *</label>
+                            <SfTextBox @bind-Value="_editCampaign.Name" Placeholder="e.g. Q3 Renewal Reminder Blast" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Channel *</label>
+                            <SfDropDownList TValue="string" TItem="string"
+                                            DataSource="@(new[]{"Email","SMS","Both"})"
+                                            @bind-Value="_editCampaign.Channel" Placeholder="Select channel" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Type</label>
+                            <SfDropDownList TValue="string" TItem="string"
+                                            DataSource="@(new[]{"Renewal","Marketing","Claims Follow-Up","Policy Service","CAT Outreach","Payment Reminder","Win-Back","Survey"})"
+                                            @bind-Value="_editCampaign.Type" Placeholder="Select type" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Audience Segment</label>
+                            <SfDropDownList TValue="string" TItem="string"
+                                            DataSource="@_segments"
+                                            @bind-Value="_editCampaign.Segment" Placeholder="Select segment" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Template</label>
+                            <SfDropDownList TValue="string" TItem="string"
+                                            DataSource="@_templates"
+                                            @bind-Value="_editCampaign.Template" Placeholder="Select template" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Scheduled Date</label>
+                            <SfDatePicker TValue="DateTime?" @bind-Value="_editCampaign.ScheduledAt" Placeholder="MM/DD/YYYY" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Send Time</label>
+                            <SfTimePicker TValue="DateTime?" @bind-Value="_editCampaign.SendTime" Placeholder="HH:MM AM/PM" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Assigned Producer</label>
+                            <SfDropDownList TValue="string" TItem="string"
+                                            DataSource="@_producers"
+                                            @bind-Value="_editCampaign.Producer" Placeholder="Select producer" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Assigned CSR</label>
+                            <SfDropDownList TValue="string" TItem="string"
+                                            DataSource="@_csrs"
+                                            @bind-Value="_editCampaign.CsrOwner" Placeholder="Select CSR" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Target Branch</label>
+                            <SfDropDownList TValue="string" TItem="string"
+                                            DataSource="@_branches"
+                                            @bind-Value="_editCampaign.Branch" Placeholder="All branches" />
+                        </div>
+                        <div><label class="cd-dlg-lbl">Batch Size</label>
+                            <SfNumericTextBox TValue="int" @bind-Value="_editCampaign.BatchSize" Min="1" Placeholder="e.g. 500" />
+                        </div>
+                        <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Message Preview / Subject *</label>
+                            <SfTextBox @bind-Value="_editCampaign.MessagePreview" Placeholder="Email subject or SMS preview text…" />
+                        </div>
+                        <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Message Body *</label>
+                            <SfTextBox @bind-Value="_editCampaign.MessageBody" Placeholder="Campaign message body…" Multiline="true"
+                                       HtmlAttributes='@(new() {{"rows","5"}})' />
+                        </div>
+                        <div style="grid-column:1/-1">
+                            <label class="cd-dlg-lbl">Opt-Out Compliance</label>
+                            <div class="cmc-opt-row">
+                                <SfCheckBox @bind-Checked="_editCampaign.HonorOptOut" Label="Automatically exclude opted-out contacts" />
+                                <SfCheckBox @bind-Checked="_editCampaign.IncludeUnsubLink" Label="Include unsubscribe link (Email)" />
+                                <SfCheckBox @bind-Checked="_editCampaign.TcpaCompliant" Label="TCPA consent verified for SMS list" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showCampaignDlg = false">Cancel</button>
+                <button class="um-btn um-btn-ghost" @onclick="SaveDraft">
+                    <i class="bi bi-floppy" aria-hidden="true"></i> Save Draft
+                </button>
+                <button class="um-btn um-btn-primary" @onclick="ScheduleCampaign">
+                    <i class="bi bi-calendar-check" aria-hidden="true"></i>
+                    @(_editCampaign?.Id == Guid.Empty ? "Schedule Campaign" : "Update Campaign")
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── LAUNCH CONFIRM DIALOG ─────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showLaunchDlg" Width="420px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-send" aria-hidden="true"></i> Launch Campaign Now</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                @if (_launchTarget is not null)
+                {
+                    <p style="font-size:.85rem;color:var(--um-text,#1e293b);">
+                        You are about to send <strong>@_launchTarget.Name</strong> to
+                        <strong>@_launchTarget.Audience</strong> recipients via <strong>@_launchTarget.Channel</strong>.
+                        This action cannot be undone.
+                    </p>
+                    <div style="margin-top:.75rem;display:flex;flex-direction:column;gap:.35rem;">
+                        @if (!_launchTarget.HonorOptOut)
+                        {
+                            <div class="cmc-warn-row"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>Opt-out filter is NOT enabled for this campaign.</div>
+                        }
+                        @if (!_launchTarget.TcpaCompliant && _launchTarget.Channel is "SMS" or "Both")
+                        {
+                            <div class="cmc-warn-row"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>TCPA compliance not confirmed for SMS recipients.</div>
+                        }
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showLaunchDlg = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ConfirmLaunch">
+                    <i class="bi bi-send" aria-hidden="true"></i> Launch Now
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<AppPageHeader Title="Campaign Messaging Center"
+               Subtitle="Batch email, SMS and multi-channel campaigns — scheduled and automated"
+               Icon="bi-megaphone">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/inbox")'>
+            <i class="bi bi-inbox" aria-hidden="true"></i> Inbox
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/templates")'>
+            <i class="bi bi-layout-text-sidebar" aria-hidden="true"></i> Templates
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Campaign
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI STRIP ─────────────────────────────────────────────────── -->
+<div class="cmc-kpi-strip">
+    @Kpi("bi-collection",   "Total",       _campaigns.Count.ToString(),                                  "cmc-ki-blue")
+    @Kpi("bi-play-circle",  "Active",      _campaigns.Count(c => c.Status == "Active").ToString(),       "cmc-ki-green")
+    @Kpi("bi-clock",        "Scheduled",   _campaigns.Count(c => c.Status == "Scheduled").ToString(),    "cmc-ki-amber")
+    @Kpi("bi-send",         "Sent",        _campaigns.Sum(c => c.Sent).ToString("N0"),                   "cmc-ki-blue")
+    @Kpi("bi-envelope-open","Opened",      $"{(_campaigns.Sum(c=>c.Sent)>0 ? _campaigns.Sum(c=>c.Opened)*100/_campaigns.Sum(c=>c.Sent) : 0)}%","cmc-ki-purple")
+    @Kpi("bi-reply",        "Responded",   $"{(_campaigns.Sum(c=>c.Sent)>0 ? _campaigns.Sum(c=>c.Responded)*100/_campaigns.Sum(c=>c.Sent) : 0)}%","cmc-ki-green")
+    @Kpi("bi-slash-circle", "Opt-Outs",    _campaigns.Sum(c => c.OptOuts).ToString(),                    "cmc-ki-red")
+    @Kpi("bi-graph-up",     "Avg Response","6.8%",                                                        "cmc-ki-gray")
+</div>
+
+<!-- ── FILTER BAR ─────────────────────────────────────────────────── -->
+<div class="cmc-toolbar">
+    <input class="e-input cmc-search" @bind="_search" @bind:event="oninput" placeholder="Search campaigns…" />
+    <select class="e-input cmc-sel" @bind="_statusFilter">
+        <option value="">All Status</option>
+        <option>Draft</option><option>Scheduled</option><option>Active</option><option>Sent</option><option>Paused</option>
+    </select>
+    <select class="e-input cmc-sel" @bind="_channelFilter">
+        <option value="">All Channels</option>
+        <option>Email</option><option>SMS</option><option>Both</option>
+    </select>
+    <select class="e-input cmc-sel" @bind="_typeFilter">
+        <option value="">All Types</option>
+        <option>Renewal</option><option>Marketing</option><option>Claims Follow-Up</option>
+        <option>Policy Service</option><option>CAT Outreach</option><option>Payment Reminder</option>
+        <option>Win-Back</option><option>Survey</option>
+    </select>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+        <i class="bi bi-x" aria-hidden="true"></i>
+    </button>
+    <div style="margin-left:auto;font-size:.75rem;color:var(--um-muted,#64748b);">
+        <strong>@FilteredCampaigns.Count()</strong> campaign(s)
+    </div>
+</div>
+
+<!-- ── CAMPAIGNS TABLE ───────────────────────────────────────────── -->
+<div class="cmc-table-wrap">
+    <table class="cmc-table">
+        <thead>
+            <tr>
+                <th>Campaign</th>
+                <th>Type</th>
+                <th>Channel</th>
+                <th>Segment</th>
+                <th>Audience</th>
+                <th>Scheduled</th>
+                <th>Status</th>
+                <th>Sent</th>
+                <th>Opened</th>
+                <th>Responded</th>
+                <th>Opt-Outs</th>
+                <th>CSR / Producer</th>
+                <th>Compliance</th>
+                <th class="cmc-th-actions">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (!FilteredCampaigns.Any())
+            {
+                <tr><td colspan="14" class="cmc-empty">No campaigns match the current filters.</td></tr>
+            }
+            @foreach (var c in FilteredCampaigns.OrderByDescending(c => c.ScheduledAt))
+            {
+                <tr class="@(c.Status=="Active" ? "cmc-tr-active" : "") @(_expanded == c.Id ? "cmc-tr-expanded" : "")">
+                    <td>
+                        <div class="cmc-name-cell">
+                            <button class="cmc-expand-btn" @onclick="() => ToggleExpand(c.Id)">
+                                <i class="bi @(_expanded == c.Id ? "bi-chevron-down" : "bi-chevron-right")" aria-hidden="true"></i>
+                            </button>
+                            <div>
+                                <div class="cmc-name">@c.Name</div>
+                                <div class="cmc-sub">@c.MessagePreview</div>
+                            </div>
+                        </div>
+                    </td>
+                    <td><span class="cmc-type-chip">@c.Type</span></td>
+                    <td>
+                        <span class="ci-ch-icon ci-ch-@(c.Channel=="SMS"?"sms":c.Channel=="Email"?"email":"gen") cmc-ch-sm" title="@c.Channel">
+                            <i class="bi @(c.Channel=="Email"?"bi-envelope":c.Channel=="SMS"?"bi-phone":"bi-layers")" aria-hidden="true"></i>
+                        </span>
+                        @c.Channel
+                    </td>
+                    <td class="cmc-td-sm">@c.Segment</td>
+                    <td class="cmc-num">@c.Audience.ToString("N0")</td>
+                    <td class="cmc-td-sm">@(c.ScheduledAt.HasValue ? c.ScheduledAt.Value.ToString("MM/dd/yy h:mm tt") : "—")</td>
+                    <td><span class="cmc-status-badge cmc-st-@c.Status.ToLower()">@c.Status</span></td>
+                    <td class="cmc-num">@c.Sent.ToString("N0")</td>
+                    <td class="cmc-num @(c.Sent > 0 && c.Opened * 100 / c.Sent > 20 ? "cmc-good" : "")">
+                        @(c.Sent > 0 ? $"{c.Opened * 100 / c.Sent}%" : "—")
+                    </td>
+                    <td class="cmc-num @(c.Sent > 0 && c.Responded * 100 / c.Sent > 5 ? "cmc-good" : "")">
+                        @(c.Sent > 0 ? $"{c.Responded * 100 / c.Sent}%" : "—")
+                    </td>
+                    <td class="cmc-num @(c.OptOuts > 10 ? "cmc-bad" : "")">@c.OptOuts</td>
+                    <td class="cmc-td-sm">
+                        @if (!string.IsNullOrEmpty(c.CsrOwner))
+                        { <span class="ci-meta-chip ci-mc-csr" style="font-size:.65rem"><i class="bi bi-headset" aria-hidden="true"></i>@c.CsrOwner</span> }
+                        @if (!string.IsNullOrEmpty(c.Producer))
+                        { <span class="ci-meta-chip" style="font-size:.65rem;margin-top:.15rem"><i class="bi bi-person-badge" aria-hidden="true"></i>@c.Producer</span> }
+                    </td>
+                    <td>
+                        <div class="cmc-comp-cell">
+                            @CompBadge("Opt-Out", c.HonorOptOut)
+                            @CompBadge("TCPA",    c.TcpaCompliant)
+                            @CompBadge("Unsub",   c.IncludeUnsubLink)
+                        </div>
+                    </td>
+                    <td class="cmc-actions-cell">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(c)" title="Edit">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        @if (c.Status is "Draft" or "Scheduled" or "Paused")
+                        {
+                            <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => OpenLaunch(c)" title="Launch">
+                                <i class="bi bi-send" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (c.Status == "Active")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => PauseCampaign(c)" title="Pause">
+                                <i class="bi bi-pause-circle" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => CloneCampaign(c)" title="Clone">
+                            <i class="bi bi-copy" aria-hidden="true"></i>
+                        </button>
+                    </td>
+                </tr>
+
+                @if (_expanded == c.Id)
+                {
+                    <tr class="cmc-detail-row">
+                        <td colspan="14">
+                            <div class="cmc-detail-panel">
+                                <!-- Stats bar -->
+                                <div class="cmc-detail-stats">
+                                    @DetailStat("bi-send",         "Sent",       c.Sent.ToString("N0"),     "")
+                                    @DetailStat("bi-envelope-open","Opened",     c.Sent > 0 ? $"{c.Opened} ({c.Opened*100/c.Sent}%)" : "—", c.Sent > 0 && c.Opened*100/c.Sent > 20 ? "cmc-ds-good" : "")
+                                    @DetailStat("bi-reply",        "Responded",  c.Sent > 0 ? $"{c.Responded} ({c.Responded*100/c.Sent}%)" : "—", c.Sent > 0 && c.Responded*100/c.Sent > 5 ? "cmc-ds-good" : "")
+                                    @DetailStat("bi-slash-circle", "Opt-Outs",   c.OptOuts.ToString(),      c.OptOuts > 10 ? "cmc-ds-bad" : "")
+                                    @DetailStat("bi-people",       "Audience",   c.Audience.ToString("N0"), "")
+                                    @DetailStat("bi-calendar",     "Scheduled",  c.ScheduledAt.HasValue ? c.ScheduledAt.Value.ToString("MM/dd/yy") : "—", "")
+                                    @DetailStat("bi-diagram-2",    "Branch",     string.IsNullOrEmpty(c.Branch) ? "All" : c.Branch, "")
+                                </div>
+                                <!-- Message preview -->
+                                <div class="cmc-detail-body">
+                                    <div class="cmc-detail-section-lbl">Message Preview</div>
+                                    <div class="cmc-msg-preview-box">
+                                        <div class="cmc-msg-subject">@c.MessagePreview</div>
+                                        <div class="cmc-msg-body">@c.MessageBody</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    SfToast _toast = default!;
+    string _search        = "";
+    string _statusFilter  = "";
+    string _channelFilter = "";
+    string _typeFilter    = "";
+    Guid?  _expanded;
+
+    bool      _showCampaignDlg = false;
+    bool      _showLaunchDlg   = false;
+    Campaign? _editCampaign;
+    Campaign? _launchTarget;
+
+    readonly string[] _segments  = { "All Active Accounts","Renewal — 60 Days","Renewal — 30 Days","Renewal — 90 Days","At-Risk / Retention","Lapsed — Win-Back","Commercial Lines","Personal Lines","Gulf Coast Branch","North Texas Branch","By Producer — Santos","By Producer — Yamamoto" };
+    readonly string[] _templates = { "Policy Renewal Reminder","Claim Acknowledgement","Certificate Request Confirmation","Payment Due Reminder","CAT Event Check-In","Coverage Review Invitation","Welcome — New Client","Win-Back Offer","Survey — Satisfaction" };
+    readonly string[] _producers = { "Maria Santos","Robert Yamamoto","Diana Perez","James Park" };
+    readonly string[] _csrs      = { "Sarah Kim","Kevin Obi","Lisa Chen","James Park" };
+    readonly string[] _branches  = { "Gulf Coast","North Texas","Northeast","Central TX","Southwest" };
+
+    sealed class Campaign
+    {
+        public Guid     Id             { get; set; }
+        public string   Name           { get; set; } = "";
+        public string   Type           { get; set; } = "";
+        public string   Channel        { get; set; } = "";
+        public string   Segment        { get; set; } = "";
+        public string   Template       { get; set; } = "";
+        public string   Status         { get; set; } = "Draft";
+        public string   MessagePreview { get; set; } = "";
+        public string   MessageBody    { get; set; } = "";
+        public string   Producer       { get; set; } = "";
+        public string   CsrOwner       { get; set; } = "";
+        public string   Branch         { get; set; } = "";
+        public int      Audience       { get; set; }
+        public int      BatchSize      { get; set; } = 500;
+        public int      Sent           { get; set; }
+        public int      Opened         { get; set; }
+        public int      Responded      { get; set; }
+        public int      OptOuts        { get; set; }
+        public bool     HonorOptOut    { get; set; } = true;
+        public bool     IncludeUnsubLink{ get; set; } = true;
+        public bool     TcpaCompliant  { get; set; } = true;
+        public DateTime? ScheduledAt   { get; set; }
+        public DateTime? SendTime      { get; set; }
+    }
+
+    List<Campaign> _campaigns = new();
+
+    IEnumerable<Campaign> FilteredCampaigns => _campaigns.Where(c =>
+        (string.IsNullOrEmpty(_search) || c.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.Segment.Contains(_search, StringComparison.OrdinalIgnoreCase))
+     && (string.IsNullOrEmpty(_statusFilter)  || c.Status  == _statusFilter)
+     && (string.IsNullOrEmpty(_channelFilter) || c.Channel == _channelFilter)
+     && (string.IsNullOrEmpty(_typeFilter)    || c.Type    == _typeFilter));
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Communications","/communications/inbox"), new("Campaigns",""));
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _campaigns = new List<Campaign>
+        {
+            new() { Id=Guid.NewGuid(), Name="Q3 GL Renewal Reminder", Type="Renewal", Channel="Email",
+                Segment="Renewal — 60 Days", Template="Policy Renewal Reminder", Status="Sent",
+                MessagePreview="Your General Liability policy is renewing soon — review your coverage",
+                MessageBody="Dear [Client Name],\n\nYour GL policy is renewing on [Date]. Please review the attached proposal and contact us to confirm or make changes before the renewal date.\n\nBest regards,\n[Agent Name]",
+                Producer="Maria Santos", CsrOwner="Sarah Kim", Branch="Gulf Coast",
+                Audience=312, BatchSize=500, Sent=298, Opened=189, Responded=41, OptOuts=3,
+                HonorOptOut=true, IncludeUnsubLink=true, TcpaCompliant=true,
+                ScheduledAt=DateTime.Now.AddDays(-14) },
+
+            new() { Id=Guid.NewGuid(), Name="CAT Harvey Follow-Up SMS", Type="CAT Outreach", Channel="SMS",
+                Segment="Gulf Coast Branch", Template="CAT Event Check-In", Status="Sent",
+                MessagePreview="AMS: We're checking in after the recent storm — do you have damage to report?",
+                MessageBody="Hi [Client Name], this is AMS Insurance. We're reaching out after the recent weather event in your area. If you have property damage, text CLAIM to this number or call us at (800) 555-AMS1. We're here to help.",
+                Producer="Diana Perez", CsrOwner="Kevin Obi", Branch="Gulf Coast",
+                Audience=847, BatchSize=500, Sent=847, Opened=0, Responded=213, OptOuts=8,
+                HonorOptOut=true, IncludeUnsubLink=false, TcpaCompliant=true,
+                ScheduledAt=DateTime.Now.AddDays(-7) },
+
+            new() { Id=Guid.NewGuid(), Name="Commercial Auto Renewal — North TX", Type="Renewal", Channel="Both",
+                Segment="North Texas Branch", Template="Policy Renewal Reminder", Status="Active",
+                MessagePreview="Your commercial auto policy renews in 30 days — let's review your fleet coverage",
+                MessageBody="Dear [Client Name],\n\nYour commercial auto policy is renewing in 30 days. We'd like to schedule a brief review to ensure your fleet is properly covered. Reply to this email or text YES to schedule a call.\n\n[Agent Name] | AMS Insurance",
+                Producer="Robert Yamamoto", CsrOwner="James Park", Branch="North Texas",
+                Audience=198, BatchSize=200, Sent=142, Opened=97, Responded=22, OptOuts=1,
+                HonorOptOut=true, IncludeUnsubLink=true, TcpaCompliant=true,
+                ScheduledAt=DateTime.Now.AddDays(-2) },
+
+            new() { Id=Guid.NewGuid(), Name="Win-Back — Lapsed Accounts Q2", Type="Win-Back", Channel="Email",
+                Segment="Lapsed — Win-Back", Template="Win-Back Offer", Status="Scheduled",
+                MessagePreview="We miss you — exclusive rate offer inside for returning clients",
+                MessageBody="Dear [Client Name],\n\nWe noticed your coverage lapsed and we'd love to earn your business back. For a limited time, we're offering preferred rates for returning clients. Call us or click below to get a new quote.\n\n[Agent Name] | AMS Insurance",
+                Producer="Maria Santos", CsrOwner="Lisa Chen", Branch="",
+                Audience=127, BatchSize=200, Sent=0, Opened=0, Responded=0, OptOuts=0,
+                HonorOptOut=true, IncludeUnsubLink=true, TcpaCompliant=true,
+                ScheduledAt=DateTime.Now.AddDays(5) },
+
+            new() { Id=Guid.NewGuid(), Name="Payment Due Reminder — Personal Lines", Type="Payment Reminder", Channel="SMS",
+                Segment="Personal Lines", Template="Payment Due Reminder", Status="Scheduled",
+                MessagePreview="AMS: Your policy payment is due in 7 days — pay now to avoid lapse",
+                MessageBody="Hi [Client Name], your AMS Insurance premium of $[Amount] is due on [Date]. To avoid a lapse in coverage, please pay by the due date. Visit [Portal URL] or call (800) 555-AMS1.",
+                Producer="Robert Yamamoto", CsrOwner="Sarah Kim", Branch="",
+                Audience=504, BatchSize=500, Sent=0, Opened=0, Responded=0, OptOuts=0,
+                HonorOptOut=true, IncludeUnsubLink=false, TcpaCompliant=true,
+                ScheduledAt=DateTime.Now.AddDays(2) },
+
+            new() { Id=Guid.NewGuid(), Name="Client Satisfaction Survey — 2025", Type="Survey", Channel="Email",
+                Segment="All Active Accounts", Template="Survey — Satisfaction", Status="Draft",
+                MessagePreview="We'd love your feedback — 2-minute satisfaction survey",
+                MessageBody="Dear [Client Name],\n\nWe are continuously working to improve our service. Please take 2 minutes to complete our annual satisfaction survey. Your feedback is deeply valued.\n\n[Survey Link]\n\n[Agent Name] | AMS Insurance",
+                Producer="Diana Perez", CsrOwner="Kevin Obi", Branch="",
+                Audience=1840, BatchSize=500, Sent=0, Opened=0, Responded=0, OptOuts=0,
+                HonorOptOut=true, IncludeUnsubLink=true, TcpaCompliant=false,
+                ScheduledAt=null },
+
+            new() { Id=Guid.NewGuid(), Name="Claims Follow-Up — Open 30+ Days", Type="Claims Follow-Up", Channel="Email",
+                Segment="All Active Accounts", Template="Claim Acknowledgement", Status="Paused",
+                MessagePreview="Update on your open claim — we're here to help resolve it quickly",
+                MessageBody="Dear [Client Name],\n\nWe wanted to check in on your open claim [Claim #]. If you need any assistance or have questions about the status, please don't hesitate to reach out. We're committed to resolving this as quickly as possible.\n\n[Agent Name] | AMS Insurance",
+                Producer="Maria Santos", CsrOwner="Lisa Chen", Branch="",
+                Audience=63, BatchSize=100, Sent=38, Opened=22, Responded=9, OptOuts=0,
+                HonorOptOut=true, IncludeUnsubLink=true, TcpaCompliant=true,
+                ScheduledAt=DateTime.Now.AddDays(-10) },
+        };
+    }
+
+    void OpenCreate()
+    {
+        _editCampaign    = new Campaign { Id = Guid.Empty, HonorOptOut = true, IncludeUnsubLink = true, TcpaCompliant = true, BatchSize = 500 };
+        _showCampaignDlg = true;
+    }
+
+    void OpenEdit(Campaign c)
+    {
+        _editCampaign    = new Campaign
+        {
+            Id=c.Id, Name=c.Name, Type=c.Type, Channel=c.Channel, Segment=c.Segment, Template=c.Template,
+            MessagePreview=c.MessagePreview, MessageBody=c.MessageBody, Status=c.Status,
+            Producer=c.Producer, CsrOwner=c.CsrOwner, Branch=c.Branch,
+            Audience=c.Audience, BatchSize=c.BatchSize, ScheduledAt=c.ScheduledAt, SendTime=c.SendTime,
+            HonorOptOut=c.HonorOptOut, IncludeUnsubLink=c.IncludeUnsubLink, TcpaCompliant=c.TcpaCompliant
+        };
+        _showCampaignDlg = true;
+    }
+
+    void OpenLaunch(Campaign c)  { _launchTarget = c; _showLaunchDlg = true; }
+    void ToggleExpand(Guid id)   { _expanded = _expanded == id ? null : id; }
+    void ResetFilters()          { _search = ""; _statusFilter = ""; _channelFilter = ""; _typeFilter = ""; }
+
+    async Task ScheduleCampaign()
+    {
+        if (_editCampaign is null || string.IsNullOrWhiteSpace(_editCampaign.Name)) return;
+        if (_editCampaign.Id == Guid.Empty)
+        {
+            _editCampaign.Id = Guid.NewGuid();
+            _editCampaign.Status = _editCampaign.ScheduledAt.HasValue ? "Scheduled" : "Draft";
+            _campaigns.Insert(0, _editCampaign);
+        }
+        else
+        {
+            var idx = _campaigns.FindIndex(c => c.Id == _editCampaign.Id);
+            if (idx >= 0) _campaigns[idx] = _editCampaign;
+        }
+        _showCampaignDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title = "Campaign Saved", Content = $"{_editCampaign.Name} saved.", CssClass = "e-toast-success" });
+    }
+
+    async Task SaveDraft()
+    {
+        if (_editCampaign is null) return;
+        _editCampaign.Status = "Draft";
+        await ScheduleCampaign();
+    }
+
+    async Task ConfirmLaunch()
+    {
+        if (_launchTarget is null) return;
+        _launchTarget.Status = "Active";
+        _launchTarget.ScheduledAt = DateTime.Now;
+        _showLaunchDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title = "Campaign Launched", Content = $"{_launchTarget.Name} is now sending.", CssClass = "e-toast-success" });
+    }
+
+    async Task PauseCampaign(Campaign c)
+    {
+        c.Status = "Paused";
+        await _toast.ShowAsync(new ToastModel { Title = "Campaign Paused", Content = $"{c.Name} paused.", CssClass = "e-toast-warning" });
+    }
+
+    async Task CloneCampaign(Campaign c)
+    {
+        var clone = new Campaign
+        {
+            Id=Guid.NewGuid(), Name=$"Copy of {c.Name}", Type=c.Type, Channel=c.Channel,
+            Segment=c.Segment, Template=c.Template, MessagePreview=c.MessagePreview,
+            MessageBody=c.MessageBody, Status="Draft", Producer=c.Producer,
+            CsrOwner=c.CsrOwner, Branch=c.Branch, Audience=c.Audience, BatchSize=c.BatchSize,
+            HonorOptOut=c.HonorOptOut, IncludeUnsubLink=c.IncludeUnsubLink, TcpaCompliant=c.TcpaCompliant
+        };
+        _campaigns.Insert(0, clone);
+        await _toast.ShowAsync(new ToastModel { Title = "Cloned", Content = $"Draft copy of {c.Name} created.", CssClass = "e-toast-info" });
+    }
+
+    RenderFragment Kpi(string icon, string label, string val, string color) => __builder =>
+    {
+        <div class="cmc-kpi-card @color">
+            <i class="bi @icon cmc-kpi-icon" aria-hidden="true"></i>
+            <div><div class="cmc-kpi-val">@val</div><div class="cmc-kpi-lbl">@label</div></div>
+        </div>
+    };
+
+    RenderFragment CompBadge(string label, bool ok) => __builder =>
+    {
+        <span class="cmc-comp-badge @(ok ? "cmc-cb-ok" : "cmc-cb-fail")">
+            <i class="bi @(ok ? "bi-check" : "bi-x")" aria-hidden="true"></i>@label
+        </span>
+    };
+
+    RenderFragment DetailStat(string icon, string label, string val, string cls) => __builder =>
+    {
+        <div class="cmc-ds-card @cls">
+            <i class="bi @icon" aria-hidden="true"></i>
+            <div><div class="cmc-ds-val">@val</div><div class="cmc-ds-lbl">@label</div></div>
+        </div>
+    };
+}

@@ -1,0 +1,324 @@
+@page "/policies/cancellations"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Cancellation &amp; Reinstatement Center — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
+    <MenuFieldSettings Text="Text" IconCss="IconCss" />
+</SfContextMenu>
+
+<AppPageHeader Title="Cancellation &amp; Reinstatement Center"
+               Subtitle="Manage policy cancellations, flat cancellations, and reinstatements"
+               Icon="bi-slash-circle">
+    <Actions>
+        <button class="um-btn um-btn-danger" @onclick='() => OpenAction("cancel")'>
+            <i class="bi bi-slash-circle" aria-hidden="true"></i> Request Cancellation
+        </button>
+        <button class="um-btn um-btn-success" @onclick='() => OpenAction("reinstate")'>
+            <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reinstate Policy
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="cc-kpi-strip">
+    @KpiCard("bi-hourglass-split",        "Pending",        _cancels.Count(r=>r.Status=="Pending").ToString(),      "cc-kpi-pending")
+    @KpiCard("bi-slash-circle",           "Active Cancels", _cancels.Count(r=>r.Status=="Cancelled").ToString(),    "cc-kpi-active")
+    @KpiCard("bi-arrow-counterclockwise", "Reinstated",     _reinstate.Count(r=>r.Status=="Reinstated").ToString(), "cc-kpi-reinstate")
+    @KpiCard("bi-cash-coin",              "Flat Cancels",   _cancels.Count(r=>r.CancelType=="Flat").ToString(),     "cc-kpi-flat")
+    @KpiCard("bi-receipt",                "Return Premium", _cancels.Where(r=>r.Status=="Cancelled").Sum(r=>r.ReturnPremium).ToString("C0"), "cc-kpi-return")
+</div>
+
+<!-- Tab toggle -->
+<div class="cc-tabs">
+    <button class="cc-tab @(_tab==0?"cc-tab-active":"")" @onclick='() => _tab = 0'>
+        <i class="bi bi-slash-circle" aria-hidden="true"></i> Cancellations
+        <span class="cc-tab-badge">@_cancels.Count</span>
+    </button>
+    <button class="cc-tab @(_tab==1?"cc-tab-active":"")" @onclick='() => _tab = 1'>
+        <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reinstatements
+        <span class="cc-tab-badge">@_reinstate.Count</span>
+    </button>
+</div>
+
+<div class="cc-grid-wrap">
+    @if (_tab == 0)
+    {
+        <SfGrid DataSource="@_cancels" AllowSorting="true" AllowPaging="true" AllowResizing="true" RowHeight="40">
+            <GridPageSettings PageSize="20" />
+            <GridColumns>
+                <GridColumn Field="PolicyNo"      HeaderText="Policy #"          Width="140" />
+                <GridColumn Field="Account"       HeaderText="Account"           Width="180" />
+                <GridColumn Field="Lob"           HeaderText="LOB"               Width="120" />
+                <GridColumn Field="CancelReason"  HeaderText="Reason"            Width="180" />
+                <GridColumn Field="CancelType"    HeaderText="Type"              Width="100"
+                            Template="@(ctx => TypeChip(((CancelRow)ctx).CancelType))" />
+                <GridColumn Field="RequestDate"   HeaderText="Requested"         Width="115" Format="MM/dd/yyyy" />
+                <GridColumn Field="EffectiveDate" HeaderText="Cancel Effective"  Width="130" Format="MM/dd/yyyy" />
+                <GridColumn Field="ReturnPremium" HeaderText="Return Premium"    Width="130"
+                            Template="@(ctx => ReturnPremCell(((CancelRow)ctx).ReturnPremium))" />
+                <GridColumn Field="Status"        HeaderText="Status"            Width="110"
+                            Template="@(ctx => StatusChip(((CancelRow)ctx).Status))" />
+                <GridColumn HeaderText="" Width="50" AllowSorting="false"
+                            Template="@(ctx => CtxBtnC((CancelRow)ctx))" />
+            </GridColumns>
+        </SfGrid>
+    }
+    else
+    {
+        <SfGrid DataSource="@_reinstate" AllowSorting="true" AllowPaging="true" AllowResizing="true" RowHeight="40">
+            <GridPageSettings PageSize="20" />
+            <GridColumns>
+                <GridColumn Field="PolicyNo"         HeaderText="Policy #"          Width="140" />
+                <GridColumn Field="Account"          HeaderText="Account"           Width="180" />
+                <GridColumn Field="Lob"              HeaderText="LOB"               Width="120" />
+                <GridColumn Field="CancelDate"       HeaderText="Cancelled"         Width="115" Format="MM/dd/yyyy" />
+                <GridColumn Field="ReinstateDate"    HeaderText="Reinstated"        Width="115" Format="MM/dd/yyyy" />
+                <GridColumn Field="LapseDays"        HeaderText="Lapse Days"        Width="100" />
+                <GridColumn Field="PremiumDue"       HeaderText="Premium Due"       Width="120"
+                            Template="@(ctx => ReturnPremCell(((ReinstateRow)ctx).PremiumDue))" />
+                <GridColumn Field="ReinstatedBy"     HeaderText="Reinstated By"     Width="140" />
+                <GridColumn Field="Status"           HeaderText="Status"            Width="110"
+                            Template="@(ctx => StatusChip(((ReinstateRow)ctx).Status))" />
+            </GridColumns>
+        </SfGrid>
+    }
+</div>
+
+<!-- Action dialog -->
+<SfDialog @bind-Visible="_showDlg" Width="500px" IsModal="true" ShowCloseIcon="true" Header="@_dlgTitle">
+    <DialogTemplates>
+        <Content>
+            <div class="cc-dlg-fields">
+                <div class="cc-dlg-field cc-dlg-full">
+                    <label class="cc-dlg-lbl">Policy Number <span class="cc-req">*</span></label>
+                    <input class="e-input" @bind="_dlgPolicyNo" placeholder="Enter policy number…" />
+                </div>
+                @if (_dlgMode == "cancel")
+                {
+                    <div class="cc-dlg-field">
+                        <label class="cc-dlg-lbl">Cancellation Reason <span class="cc-req">*</span></label>
+                        <SfDropDownList TItem="string" TValue="string" DataSource="@_cancelReasons" @bind-Value="_dlgReason" />
+                    </div>
+                    <div class="cc-dlg-field">
+                        <label class="cc-dlg-lbl">Cancellation Type</label>
+                        <SfDropDownList TItem="string" TValue="string" DataSource="@_cancelTypes" @bind-Value="_dlgType" />
+                    </div>
+                    <div class="cc-dlg-field">
+                        <label class="cc-dlg-lbl">Effective Date <span class="cc-req">*</span></label>
+                        <SfDatePicker TValue="DateTime" @bind-Value="_dlgDate" Format="MM/dd/yyyy" />
+                    </div>
+                }
+                else
+                {
+                    <div class="cc-dlg-field">
+                        <label class="cc-dlg-lbl">Reinstatement Date</label>
+                        <SfDatePicker TValue="DateTime" @bind-Value="_dlgDate" Format="MM/dd/yyyy" />
+                    </div>
+                    <div class="cc-dlg-field">
+                        <label class="cc-dlg-lbl">Premium Due ($)</label>
+                        <SfNumericTextBox TValue="decimal" @bind-Value="_dlgPremium" Format="N0" />
+                    </div>
+                }
+                <div class="cc-dlg-field cc-dlg-full">
+                    <label class="cc-dlg-lbl">Notes</label>
+                    <textarea class="e-input" rows="2" @bind="_dlgNotes"></textarea>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <button class="um-btn um-btn-ghost" @onclick='() => _showDlg = false'>Cancel</button>
+            <button class="um-btn @(_dlgMode=="cancel" ? "um-btn-danger" : "um-btn-success")"
+                    @onclick="SubmitAction">
+                @(_dlgMode == "cancel" ? "Request Cancellation" : "Reinstate")
+            </button>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    SfToast _toast = default!;
+    SfContextMenu<CtxItem> _ctx = default!;
+
+    int    _tab     = 0;
+    bool   _showDlg = false;
+    string _dlgMode = "cancel";
+    string _dlgTitle= "";
+    string _dlgPolicyNo = "";
+    string _dlgReason   = "";
+    string _dlgType     = "Pro-Rata";
+    string _dlgNotes    = "";
+    decimal _dlgPremium = 0;
+    DateTime _dlgDate   = DateTime.Today;
+
+    CancelRow    _selC = new();
+    ReinstateRow _selR = new();
+
+    readonly string[] _cancelReasons = new[]
+    { "Non-Payment","Underwriting","Insured Request","Fraud","Material Misrepresentation","Risk Ineligible","Business Closed" };
+    readonly string[] _cancelTypes   = new[]{ "Flat","Pro-Rata","Short Rate" };
+
+    sealed class CancelRow
+    {
+        public string   PolicyNo      { get; set; } = "";
+        public string   Account       { get; set; } = "";
+        public string   Lob           { get; set; } = "";
+        public string   CancelReason  { get; set; } = "";
+        public string   CancelType    { get; set; } = "";
+        public DateTime RequestDate   { get; set; }
+        public DateTime EffectiveDate { get; set; }
+        public decimal  ReturnPremium { get; set; }
+        public string   Status        { get; set; } = "";
+    }
+
+    sealed class ReinstateRow
+    {
+        public string   PolicyNo      { get; set; } = "";
+        public string   Account       { get; set; } = "";
+        public string   Lob           { get; set; } = "";
+        public DateTime CancelDate    { get; set; }
+        public DateTime ReinstateDate { get; set; }
+        public int      LapseDays     { get; set; }
+        public decimal  PremiumDue    { get; set; }
+        public string   ReinstatedBy  { get; set; } = "";
+        public string   Status        { get; set; } = "";
+    }
+
+    sealed record CtxItem(string Text, string IconCss);
+
+    List<CtxItem> _ctxItems = new()
+    {
+        new("View Policy",  "bi bi-shield"         ),
+        new("Approve",      "bi bi-check-lg"       ),
+        new("Deny",         "bi bi-x-lg"           ),
+        new("Rescind",      "bi bi-arrow-undo"     ),
+    };
+
+    readonly List<CancelRow>    _cancels    = new();
+    readonly List<ReinstateRow> _reinstate  = new();
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Policies","/policies"), new("Cancellations","/policies/cancellations"));
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        var rng      = new Random(11);
+        var lobs     = new[]{"General Liability","Commercial Property","Commercial Auto","Workers Comp"};
+        var accounts = new[]{"Sullivan Mfg. LLC","Bridgewater Hotels","Metro Freight Co.","PineCrest Builders"};
+        var reasons  = _cancelReasons;
+        var types    = _cancelTypes;
+        var statuses = new[]{"Pending","Cancelled","Rescinded"};
+        var people   = new[]{"Maria Santos","James Patel","Chen Li","Aisha Williams"};
+
+        for (int i = 1; i <= 30; i++)
+        {
+            var effDate = DateTime.Today.AddDays(rng.Next(-90, 30));
+            _cancels.Add(new CancelRow
+            {
+                PolicyNo      = $"POL-2025-{rng.Next(10000,99999)}",
+                Account       = accounts[rng.Next(accounts.Length)],
+                Lob           = lobs[rng.Next(lobs.Length)],
+                CancelReason  = reasons[rng.Next(reasons.Length)],
+                CancelType    = types[rng.Next(types.Length)],
+                RequestDate   = effDate.AddDays(-rng.Next(5,20)),
+                EffectiveDate = effDate,
+                ReturnPremium = (decimal)rng.Next(0, 8000),
+                Status        = statuses[rng.Next(statuses.Length)],
+            });
+        }
+
+        for (int i = 1; i <= 15; i++)
+        {
+            var cancelDate = DateTime.Today.AddDays(-rng.Next(10,120));
+            var lapse      = rng.Next(3, 45);
+            _reinstate.Add(new ReinstateRow
+            {
+                PolicyNo      = $"POL-2025-{rng.Next(10000,99999)}",
+                Account       = accounts[rng.Next(accounts.Length)],
+                Lob           = lobs[rng.Next(lobs.Length)],
+                CancelDate    = cancelDate,
+                ReinstateDate = cancelDate.AddDays(lapse),
+                LapseDays     = lapse,
+                PremiumDue    = (decimal)rng.Next(500, 4000),
+                ReinstatedBy  = people[rng.Next(people.Length)],
+                Status        = rng.Next(2)==0 ? "Reinstated" : "Pending",
+            });
+        }
+    }
+
+    void OpenAction(string mode)
+    {
+        _dlgMode  = mode;
+        _dlgTitle = mode == "cancel" ? "Request Cancellation" : "Reinstate Policy";
+        _dlgPolicyNo = "";
+        _dlgReason   = "";
+        _dlgType     = "Pro-Rata";
+        _dlgDate     = DateTime.Today;
+        _dlgPremium  = 0;
+        _dlgNotes    = "";
+        _showDlg     = true;
+    }
+
+    void SubmitAction()
+    {
+        if (_dlgMode == "cancel")
+            _cancels.Insert(0, new CancelRow
+            {
+                PolicyNo = _dlgPolicyNo, Account = "—", Lob = "—",
+                CancelReason = _dlgReason, CancelType = _dlgType,
+                RequestDate = DateTime.Today, EffectiveDate = _dlgDate,
+                ReturnPremium = 0, Status = "Pending",
+            });
+        else
+            _reinstate.Insert(0, new ReinstateRow
+            {
+                PolicyNo = _dlgPolicyNo, Account = "—", Lob = "—",
+                CancelDate = _dlgDate.AddDays(-30), ReinstateDate = _dlgDate,
+                LapseDays = 30, PremiumDue = _dlgPremium,
+                ReinstatedBy = "Current User", Status = "Pending",
+            });
+        _showDlg = false;
+    }
+
+    void OnCtxSelected(MenuEventArgs<CtxItem> args)
+    {
+        if (args.Item.Text == "View Policy") Nav.NavigateTo($"/policies/{Guid.NewGuid()}");
+        if (args.Item.Text is "Approve" && _tab == 0) _selC.Status = "Cancelled";
+        if (args.Item.Text is "Deny"    && _tab == 0) _selC.Status = "Rescinded";
+        if (args.Item.Text is "Approve" && _tab == 1) _selR.Status = "Reinstated";
+    }
+
+    RenderFragment ReturnPremCell(decimal v) =>
+        @<span class="cc-return">@v.ToString("C0")</span>;
+
+    RenderFragment TypeChip(string t)
+    {
+        var css = t == "Flat" ? "cc-type-flat" : t == "Short Rate" ? "cc-type-short" : "cc-type-pro";
+        return @<span class="cc-type-chip @css">@t</span>;
+    }
+
+    RenderFragment StatusChip(string s) =>
+        @<span class="cc-status cc-status-@s.ToLower().Replace(" ","-")">@s</span>;
+
+    RenderFragment CtxBtnC(CancelRow row) =>
+        @<button class="um-btn um-btn-ghost um-btn-xs"
+                 @onclick:stopPropagation="true"
+                 @onclick="(e) => { _selC = row; _ctx.Open(e.ClientX, e.ClientY); }">
+            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+        </button>;
+
+    RenderFragment KpiCard(string icon, string label, string val, string css) =>
+        @<div class="cc-kpi-card @css">
+            <div class="cc-kpi-val">@val</div>
+            <div class="cc-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </div>;
+}

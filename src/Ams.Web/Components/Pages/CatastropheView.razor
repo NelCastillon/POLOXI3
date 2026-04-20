@@ -1,0 +1,957 @@
+@page "/claims/catastrophe"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Catastrophe &amp; Event View — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="5000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── DECLARE CAT EVENT DIALOG ─────────────────────────────────── -->
+<SfDialog @bind-Visible="_showNewEventDlg" Width="560px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-cloud-lightning" aria-hidden="true"></i> Declare CAT Event</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="pd-dlg-grid">
+                    <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Event Name *</label><SfTextBox @bind-Value="_newEvent.Name" Placeholder="e.g. Texas May 2025 Hailstorm" /></div>
+                    <div><label class="cd-dlg-lbl">Event Type *</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@_eventTypes" @bind-Value="_newEvent.EventType" Placeholder="Select type" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Severity</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"Critical","High","Medium","Low"})" @bind-Value="_newEvent.Severity" Placeholder="High" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Start Date *</label><SfDatePicker TValue="DateTime?" @bind-Value="_newEvent.StartDate" Placeholder="MM/DD/YYYY" /></div>
+                    <div><label class="cd-dlg-lbl">End Date</label><SfDatePicker TValue="DateTime?" @bind-Value="_newEvent.EndDate" Placeholder="MM/DD/YYYY" /></div>
+                    <div><label class="cd-dlg-lbl">Affected States</label><SfTextBox @bind-Value="_newEvent.AffectedStates" Placeholder="e.g. TX, LA, OK" /></div>
+                    <div><label class="cd-dlg-lbl">CAT Code *</label><SfTextBox @bind-Value="_newEvent.CatCode" Placeholder="e.g. CAT-2025-TX-001" /></div>
+                    <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Description</label>
+                        <SfTextBox @bind-Value="_newEvent.Description" Placeholder="Brief description of the event…" Multiline="true" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showNewEventDlg = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveNewEvent">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Declare Event
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── CAMPAIGN BLAST DIALOG ────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showBlastDlg" Width="580px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-megaphone" aria-hidden="true"></i> Campaign Blast — @_selectedEvent?.Name</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="cat-blast-target">
+                    <i class="bi bi-people-fill" aria-hidden="true"></i>
+                    <span><strong>@_blastTargetCount</strong> insured(s) selected — @_blastChannelSummary</span>
+                </div>
+                <div class="pd-dlg-grid" style="margin-top:.75rem;">
+                    <div><label class="cd-dlg-lbl">Channel *</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"Email","SMS","Email + SMS","Portal Notification","Letter"})" @bind-Value="_blast.Channel" Placeholder="Select channel" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Template</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@_blastTemplates" @bind-Value="_blast.Template" Placeholder="Select template" />
+                    </div>
+                    <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Subject *</label>
+                        <SfTextBox @bind-Value="_blast.Subject" Placeholder="Message subject or headline…" />
+                    </div>
+                    <div style="grid-column:1/-1"><label class="cd-dlg-lbl">Message Body</label>
+                        <SfTextBox @bind-Value="_blast.Body" Placeholder="Message body…" Multiline="true"
+                                   HtmlAttributes='@(new() {{"rows","5"}})' />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Schedule</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"Send Now","Schedule for Later"})" @bind-Value="_blast.Schedule" Placeholder="Send Now" />
+                    </div>
+                    @if (_blast.Schedule == "Schedule for Later")
+                    {
+                        <div><label class="cd-dlg-lbl">Send At</label>
+                            <SfDateTimePicker TValue="DateTime" @bind-Value="_blast.ScheduledAt" />
+                        </div>
+                    }
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showBlastDlg = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SendBlast">
+                    <i class="bi bi-send" aria-hidden="true"></i>
+                    @(_blast.Schedule == "Schedule for Later" ? "Schedule Blast" : "Send Now")
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── GEO-TAG DIALOG ────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showGeoTagDlg" Width="520px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-geo-alt" aria-hidden="true"></i> Geo-Tag Affected Insureds</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <p class="cat-geo-desc">Select the geographic footprint of <strong>@_selectedEvent?.Name</strong> to identify and tag affected insureds.</p>
+                <div class="pd-dlg-grid">
+                    <div><label class="cd-dlg-lbl">Filter by State(s)</label>
+                        <SfTextBox @bind-Value="_geoTag.States" Placeholder="e.g. TX, OK, LA" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">ZIP Code Range / List</label>
+                        <SfTextBox @bind-Value="_geoTag.Zips" Placeholder="e.g. 77001-77099 or 77001,77025" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">County List</label>
+                        <SfTextBox @bind-Value="_geoTag.Counties" Placeholder="e.g. Harris, Fort Bend, Montgomery" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Radius from Epicenter (miles)</label>
+                        <SfNumericTextBox TValue="int?" @bind-Value="_geoTag.RadiusMiles" Placeholder="50" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Line of Business Filter</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@_lobOpts" @bind-Value="_geoTag.LobFilter" Placeholder="All LOBs" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Minimum TIV Threshold</label>
+                        <SfNumericTextBox TValue="decimal?" @bind-Value="_geoTag.MinTiv" Format="C0" Placeholder="$0" />
+                    </div>
+                </div>
+                <div class="cat-geo-preview">
+                    <i class="bi bi-map" aria-hidden="true"></i>
+                    <span>Preview: <strong>@_geoTag.PreviewCount</strong> insured(s) match these criteria</span>
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="PreviewGeoTag">
+                        <i class="bi bi-search" aria-hidden="true"></i> Preview
+                    </button>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showGeoTagDlg = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ApplyGeoTag">
+                    <i class="bi bi-geo-alt" aria-hidden="true"></i> Tag @_geoTag.PreviewCount Insured(s)
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── FAST FNOL DIALOG ──────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showFastFnolDlg" Width="480px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header><div class="pd-dlg-hdr"><i class="bi bi-clipboard-plus" aria-hidden="true"></i> Fast FNOL — @_selectedEvent?.CatCode</div></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="cat-fast-fnol-hint">
+                    <i class="bi bi-lightning-fill" aria-hidden="true"></i>
+                    Streamlined intake for high-volume CAT events. Full FNOL details captured post-triage.
+                </div>
+                <div class="pd-dlg-grid-1" style="margin-top:.75rem;">
+                    <div><label class="cd-dlg-lbl">Policy Number *</label>
+                        <SfTextBox @bind-Value="_fastFnol.PolicyNumber" Placeholder="Policy number" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Insured / Contact Name *</label>
+                        <SfTextBox @bind-Value="_fastFnol.InsuredName" Placeholder="Insured or contact name" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Contact Phone *</label>
+                        <SfTextBox @bind-Value="_fastFnol.Phone" Placeholder="(555) 000-0000" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Loss Type</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@_catLossTypes" @bind-Value="_fastFnol.LossType" Placeholder="Select loss type" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Estimated Damage</label>
+                        <SfDropDownList TValue="string" TItem="string" DataSource="@(new[]{"< $10K","$10K – $50K","$50K – $100K","$100K – $500K","> $500K","Unknown"})" @bind-Value="_fastFnol.EstimatedRange" Placeholder="Unknown" />
+                    </div>
+                    <div><label class="cd-dlg-lbl">Brief Description</label>
+                        <SfTextBox @bind-Value="_fastFnol.Description" Placeholder="Brief loss description…" Multiline="true" />
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showFastFnolDlg = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SubmitFastFnol">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Submit FNOL
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<AppPageHeader Title="Catastrophe &amp; Event View"
+               Subtitle="Mass event management — geo-tag insureds, campaign blast, fast FNOL intake and surge dashboard"
+               Icon="bi-cloud-lightning">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/claims")'>
+            <i class="bi bi-list-ul" aria-hidden="true"></i> Claims Register
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => { _newEvent = new(); _showNewEventDlg = true; }">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Declare CAT Event
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── CAT EVENT SELECTOR STRIP ─────────────────────────────────── -->
+<div class="cat-event-strip">
+    <div class="cat-event-strip-lbl">Active CAT Events</div>
+    <div class="cat-event-list">
+        @foreach (var ev in _events)
+        {
+            <button class="cat-ev-btn @(ev.CatCode == _selectedEvent?.CatCode ? "cat-ev-active" : "") cat-ev-@SeverityCss(ev.Severity)"
+                    @onclick="() => SelectEvent(ev)">
+                <i class="bi @EventIcon(ev.EventType)" aria-hidden="true"></i>
+                <div>
+                    <div class="cat-ev-name">@ev.Name</div>
+                    <div class="cat-ev-meta">@ev.CatCode · @ev.AffectedStates · @ev.StartDate.ToString("MM/dd/yy")</div>
+                </div>
+                <span class="cat-ev-sev cat-sev-@SeverityCss(ev.Severity)">@ev.Severity</span>
+            </button>
+        }
+    </div>
+</div>
+
+@if (_selectedEvent is null)
+{
+    <div class="cat-no-selection">
+        <i class="bi bi-cloud-lightning cat-ns-icon" aria-hidden="true"></i>
+        <h3>Select a CAT event above to view the surge dashboard</h3>
+        <p>Or declare a new event using the button in the top right.</p>
+    </div>
+}
+else
+{
+    <!-- ── SURGE DASHBOARD KPI ────────────────────────────────────── -->
+    <div class="cat-surge-header">
+        <div class="cat-surge-title">
+            <i class="bi @EventIcon(_selectedEvent.EventType) cat-sth-icon" aria-hidden="true"></i>
+            <div>
+                <h2 class="cat-sth-name">@_selectedEvent.Name</h2>
+                <div class="cat-sth-meta">
+                    <span class="cat-ev-sev cat-sev-@SeverityCss(_selectedEvent.Severity)">@_selectedEvent.Severity</span>
+                    <span class="cat-sth-chip"><i class="bi bi-geo-alt" aria-hidden="true"></i>@_selectedEvent.AffectedStates</span>
+                    <span class="cat-sth-chip"><i class="bi bi-calendar-event" aria-hidden="true"></i>@_selectedEvent.StartDate.ToString("MM/dd/yyyy")@(_selectedEvent.EndDate.HasValue ? " – " + _selectedEvent.EndDate.Value.ToString("MM/dd/yyyy") : " — ongoing")</span>
+                    <span class="cat-sth-chip"><i class="bi bi-tag" aria-hidden="true"></i>@_selectedEvent.CatCode</span>
+                </div>
+            </div>
+        </div>
+        <!-- Mass workflow action bar -->
+        <div class="cat-mass-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showGeoTagDlg = true">
+                <i class="bi bi-geo-alt" aria-hidden="true"></i> Geo-Tag Insureds
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenBlast">
+                <i class="bi bi-megaphone" aria-hidden="true"></i> Campaign Blast
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _fastFnol = new(); _showFastFnolDlg = true; }">
+                <i class="bi bi-clipboard-plus" aria-hidden="true"></i> Fast FNOL
+            </button>
+            <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/claims/new")'>
+                <i class="bi bi-clipboard-check" aria-hidden="true"></i> Full FNOL
+            </button>
+        </div>
+    </div>
+
+    <!-- Surge KPI cards -->
+    <div class="cat-kpi-grid">
+        @CatKpi("bi-people-fill",        "Affected Insureds",    _ev.AffectedInsureds.ToString("N0"),   "cat-ki-blue",   "Insureds affected by event footprint")
+        @CatKpi("bi-geo-alt-fill",        "Geo-Tagged",           _ev.GeoTagged.ToString("N0"),          "cat-ki-purple", "Insureds tagged in this event")
+        @CatKpi("bi-clipboard-plus",      "FNOLs Received",       _ev.FnolReceived.ToString("N0"),       "cat-ki-amber",  "First notices of loss filed")
+        @CatKpi("bi-telephone-fill",      "Pending Contact",      _ev.PendingContact.ToString("N0"),     "cat-ki-red",    "Tagged insureds not yet contacted")
+        @CatKpi("bi-exclamation-circle",  "Claims Opened",        _ev.ClaimsOpened.ToString("N0"),       "cat-ki-red",    "Claims created under this event")
+        @CatKpi("bi-safe",                "Est. TIV at Risk",     _ev.EstTivAtRisk.ToString("C0"),       "cat-ki-amber",  "Total insured value in event footprint")
+        @CatKpi("bi-currency-dollar",     "Projected Incurred",   _ev.ProjectedIncurred.ToString("C0"),  "cat-ki-red",    "Aggregate projected loss estimate")
+        @CatKpi("bi-calculator",          "Avg Claim Amount",     _ev.AvgClaimAmount.ToString("C0"),     "cat-ki-gray",   "Average claim incurred to date")
+        @CatKpi("bi-person-gear",         "CAT Team Assigned",    _ev.CatTeamCount.ToString(),           "cat-ki-blue",   "Handlers assigned to this event")
+        @CatKpi("bi-megaphone",           "Campaigns Sent",       _ev.CampaignsSent.ToString(),          "cat-ki-purple", "Outbound communications sent")
+        @CatKpi("bi-envelope-check",      "Blast Reach",          _ev.BlastReach.ToString("N0"),         "cat-ki-blue",   "Insureds reached via campaign blast")
+        @CatKpi("bi-graph-up-arrow",      "Daily Intake Peak",    _ev.DailyIntakePeak.ToString("N0") + "/day", "cat-ki-amber", "Peak FNOL intake rate")
+    </div>
+
+    <!-- Surge alert -->
+    @if (_ev.SurgeAlert)
+    {
+        <div class="cat-surge-alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+            <div>
+                <strong>SURGE ALERT:</strong> FNOL intake is at <strong>@_ev.DailyIntakePeak/day</strong> — exceeding handler capacity threshold of @_ev.CapacityThreshold/day.
+                Recommend activating overflow team or TPA escalation.
+            </div>
+            <button class="um-btn um-btn-danger um-btn-sm" @onclick="EscalateSurge">Escalate to TPA</button>
+        </div>
+    }
+
+    <!-- ── 4-TAB BODY ────────────────────────────────────────────── -->
+    <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="t => _tab = t">
+        <Tabs>
+
+            <!-- TAB 0 — AFFECTED INSUREDS ──────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Affected Insureds" IconCss="bi bi-people" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="cat-ins-toolbar">
+                            <div class="cat-ins-filter-row">
+                                <input class="e-input cat-ins-search" @bind="_insuredSearch" @bind:event="oninput" placeholder="Search name, ZIP, county, policy #…" />
+                                <select class="e-input cat-ins-sel" @bind="_insuredLobFilter">
+                                    <option value="">All LOBs</option>
+                                    @foreach (var l in _lobOpts) { <option>@l</option> }
+                                </select>
+                                <select class="e-input cat-ins-sel" @bind="_insuredTagFilter">
+                                    <option value="">All</option>
+                                    <option value="Tagged">Geo-Tagged</option>
+                                    <option value="Contacted">Contacted</option>
+                                    <option value="FNOL Filed">FNOL Filed</option>
+                                    <option value="No Contact">No Contact</option>
+                                </select>
+                                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetInsuredFilters">Reset</button>
+                                <span class="cr-filter-count">@FilteredInsureds.Count() insured(s)</span>
+                            </div>
+                            <div class="cat-ins-actions">
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showGeoTagDlg = true">
+                                    <i class="bi bi-geo-alt" aria-hidden="true"></i> Geo-Tag
+                                </button>
+                                <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenBlast">
+                                    <i class="bi bi-megaphone" aria-hidden="true"></i> Blast Selected
+                                </button>
+                            </div>
+                        </div>
+
+                        <SfGrid TValue="AffectedInsured" DataSource="@FilteredInsureds.ToList()"
+                                AllowSorting="true" AllowPaging="true" AllowResizing="true"
+                                AllowFiltering="true" EnableHover="true" RowHeight="58">
+                            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+                            <GridPageSettings PageSize="20" />
+                            <GridColumns>
+                                <GridColumn Field="@nameof(AffectedInsured.AccountName)" HeaderText="Insured / Account" MinWidth="190">
+                                    <Template>
+                                        @{ var a = (AffectedInsured)context; }
+                                        <div class="cr-acct-cell">
+                                            <button class="cr-acct-link" @onclick='() => Nav.NavigateTo($"/accounts/{a.AccountId}")'>@a.AccountName</button>
+                                            <div class="cr-acct-meta">@a.PolicyNumber · @a.Lob</div>
+                                        </div>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(AffectedInsured.ContactStatus)" HeaderText="Status" Width="130">
+                                    <Template>
+                                        @{ var a = (AffectedInsured)context; }
+                                        <span class="cat-ins-status cat-iss-@ContactStatusCss(a.ContactStatus)">@a.ContactStatus</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(AffectedInsured.GeoTagged)" HeaderText="Tagged" Width="90">
+                                    <Template>
+                                        @{ var a = (AffectedInsured)context; }
+                                        <i class="bi @(a.GeoTagged ? "bi-geo-alt-fill cat-geo-yes" : "bi-geo-alt cat-geo-no")" aria-hidden="true"></i>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(AffectedInsured.County)"     HeaderText="County"  Width="130" />
+                                <GridColumn Field="@nameof(AffectedInsured.ZipCode)"    HeaderText="ZIP"     Width="90" />
+                                <GridColumn Field="@nameof(AffectedInsured.Lob)"        HeaderText="LOB"     Width="160" />
+                                <GridColumn Field="@nameof(AffectedInsured.TivAtRisk)"  HeaderText="TIV at Risk" Width="135"
+                                            TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>
+                                        @{ var a = (AffectedInsured)context; }
+                                        <span class="pd-mono @(a.TivAtRisk > 500_000 ? "pd-viol-warn" : "")">@a.TivAtRisk.ToString("C0")</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(AffectedInsured.FnolFiled)"  HeaderText="FNOL Filed" Width="105">
+                                    <Template>
+                                        @{ var a = (AffectedInsured)context; }
+                                        <i class="bi @(a.FnolFiled ? "bi-check-circle-fill pd-chk-yes" : "bi-dash-circle pd-chk-no")" aria-hidden="true"></i>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(AffectedInsured.BlastSent)"  HeaderText="Blast Sent" Width="105">
+                                    <Template>
+                                        @{ var a = (AffectedInsured)context; }
+                                        <i class="bi @(a.BlastSent ? "bi-envelope-check-fill pd-chk-yes" : "bi-envelope pd-chk-no")" aria-hidden="true"></i>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(AffectedInsured.Handler)"    HeaderText="Handler" Width="140" />
+                                <GridColumn HeaderText="Actions" Width="165" AllowSorting="false" AllowFiltering="false">
+                                    <Template>
+                                        @{ var a = (AffectedInsured)context; }
+                                        <div class="rdb-row-actions">
+                                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenFastFnol(a.PolicyNumber)" title="Fast FNOL">
+                                                <i class="bi bi-clipboard-plus" aria-hidden="true"></i> FNOL
+                                            </button>
+                                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => MarkContacted(a)" title="Mark contacted">
+                                                <i class="bi bi-telephone-fill" aria-hidden="true"></i>
+                                            </button>
+                                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo($"/accounts/{a.AccountId}")' title="Open account">
+                                                <i class="bi bi-arrow-right-circle" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                    </Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+
+                        <!-- Geo heatmap summary by county -->
+                        <div class="cat-county-hdr" style="margin-top:1rem;">
+                            <i class="bi bi-map" aria-hidden="true"></i> County / ZIP Concentration
+                        </div>
+                        <div class="cat-county-grid">
+                            @foreach (var grp in _affectedInsureds.GroupBy(a => a.County).OrderByDescending(g => g.Count()))
+                            {
+                                var pct = (double)grp.Count() / Math.Max(_affectedInsureds.Count,1) * 100;
+                                <div class="cat-county-row">
+                                    <span class="cat-county-name">@grp.Key</span>
+                                    <div class="cat-county-bar-wrap">
+                                        <div class="cat-county-bar" style="width:@pct.ToString("F0")%"></div>
+                                    </div>
+                                    <span class="cat-county-count">@grp.Count()</span>
+                                    <span class="cat-county-tiv pd-mono">@grp.Sum(a => a.TivAtRisk).ToString("C0")</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- TAB 1 — FNOL TRACKER ─────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="FNOL Tracker" IconCss="bi bi-clipboard-pulse" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <!-- Pipeline stages -->
+                        <div class="cat-pipeline">
+                            @foreach (var stage in _fnolStages)
+                            {
+                                var count = _catClaims.Count(c => c.Stage == stage.Key);
+                                <div class="cat-pipe-col">
+                                    <div class="cat-pipe-hdr cat-pipe-@stage.Value">
+                                        <span class="cat-pipe-label">@stage.Key</span>
+                                        <span class="cat-pipe-count">@count</span>
+                                    </div>
+                                    @foreach (var c in _catClaims.Where(cl => cl.Stage == stage.Key))
+                                    {
+                                        <div class="cat-pipe-card" @onclick="() => GoToClaim(c.ClaimId)">
+                                            <div class="cat-pc-num">@c.ClaimNumber</div>
+                                            <div class="cat-pc-acct">@c.AccountName</div>
+                                            <div class="cat-pc-meta">@c.LossType · @c.DaysOpen d</div>
+                                            <div class="cat-pc-incurred pd-mono">@c.TotalIncurred.ToString("C0")</div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+
+                        <!-- FNOL grid -->
+                        <div class="pd-tab-toolbar" style="margin-top:1rem;">
+                            <span class="pd-tab-count">@_catClaims.Count FNOL(s) under @_selectedEvent!.CatCode</span>
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => { _fastFnol = new(); _showFastFnolDlg = true; }">
+                                <i class="bi bi-clipboard-plus" aria-hidden="true"></i> Fast FNOL
+                            </button>
+                        </div>
+                        <SfGrid TValue="CatClaimRow" DataSource="_catClaims"
+                                AllowSorting="true" AllowFiltering="true" AllowResizing="true" EnableHover="true" RowHeight="54">
+                            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+                            <GridColumns>
+                                <GridColumn Field="@nameof(CatClaimRow.ClaimNumber)" HeaderText="Claim #" Width="155">
+                                    <Template>
+                                        @{ var c = (CatClaimRow)context; }
+                                        <button class="cr-claim-link" @onclick="() => GoToClaim(c.ClaimId)">@c.ClaimNumber</button>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CatClaimRow.AccountName)"  HeaderText="Account"     MinWidth="180" />
+                                <GridColumn Field="@nameof(CatClaimRow.Stage)"         HeaderText="Stage"       Width="140">
+                                    <Template>
+                                        @{ var c = (CatClaimRow)context; }
+                                        <span class="cat-stage-chip cat-stage-@_fnolStages.GetValueOrDefault(c.Stage,"gen")">@c.Stage</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CatClaimRow.LossType)"     HeaderText="Loss Type"   Width="155" />
+                                <GridColumn Field="@nameof(CatClaimRow.DateOfLoss)"   HeaderText="Date of Loss" Width="125">
+                                    <Template>@{ var c = (CatClaimRow)context; }<span class="pd-mono">@c.DateOfLoss.ToString("MM/dd/yyyy")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CatClaimRow.DaysOpen)"      HeaderText="Days Open"   Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                                <GridColumn Field="@nameof(CatClaimRow.TotalIncurred)" HeaderText="Incurred"    Width="125" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var c = (CatClaimRow)context; }<span class="pd-mono">@c.TotalIncurred.ToString("C0")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CatClaimRow.AssignedHandler)" HeaderText="Handler"  Width="140" />
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- TAB 2 — CAMPAIGN BLAST ──────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Campaign Blast" IconCss="bi bi-megaphone" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">@_campaigns.Count campaign(s) for this event</span>
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenBlast">
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> New Blast
+                            </button>
+                        </div>
+                        @foreach (var camp in _campaigns.OrderByDescending(c => c.SentAt))
+                        {
+                            <div class="cat-camp-card">
+                                <div class="cat-camp-top">
+                                    <div class="cat-camp-info">
+                                        <div class="cat-camp-subject">@camp.Subject</div>
+                                        <div class="cat-camp-meta">
+                                            <span class="cat-camp-channel cat-ch-@camp.Channel.ToLower().Replace(" ","").Replace("+","")">@camp.Channel</span>
+                                            <span>@camp.SentAt.ToString("MM/dd/yyyy h:mm tt")</span>
+                                            <span>by @camp.SentBy</span>
+                                            <span class="cat-camp-status cat-cst-@camp.Status.ToLower()">@camp.Status</span>
+                                        </div>
+                                    </div>
+                                    <div class="cat-camp-stats">
+                                        @CampStat("bi-send", camp.TotalSent.ToString("N0"), "Sent")
+                                        @CampStat("bi-envelope-check", camp.Delivered.ToString("N0"), "Delivered")
+                                        @CampStat("bi-eye", camp.Opened.ToString("N0"), "Opened")
+                                        @CampStat("bi-cursor", camp.Responded.ToString("N0"), "Responded")
+                                    </div>
+                                </div>
+                                <div class="cat-camp-bar-wrap">
+                                    <div class="cat-camp-bar" style="width:@((double)camp.Delivered/Math.Max(camp.TotalSent,1)*100)%"></div>
+                                </div>
+                                <div class="cat-camp-rates">
+                                    <span>Delivery rate: <strong>@(((double)camp.Delivered/Math.Max(camp.TotalSent,1)*100).ToString("F0"))%</strong></span>
+                                    <span>Open rate: <strong>@(((double)camp.Opened/Math.Max(camp.Delivered,1)*100).ToString("F0"))%</strong></span>
+                                    <span>Response rate: <strong>@(((double)camp.Responded/Math.Max(camp.Delivered,1)*100).ToString("F0"))%</strong></span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- TAB 3 — TEAM & RESOURCES ────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Team &amp; Resources" IconCss="bi bi-people-fill" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <!-- Daily intake chart proxy -->
+                        <div class="cat-intake-hdr"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Daily FNOL Intake vs Capacity</div>
+                        <div class="cat-intake-chart">
+                            @foreach (var day in _dailyIntake)
+                            {
+                                var pct     = (double)day.FnolCount / Math.Max(_ev.CapacityThreshold, 1) * 100;
+                                var overCap = day.FnolCount > _ev.CapacityThreshold;
+                                <div class="cat-day-col">
+                                    <div class="cat-day-bar-wrap">
+                                        <div class="cat-cap-line" style="bottom:@(Math.Min(100,100))%"></div>
+                                        <div class="cat-day-bar @(overCap ? "cat-day-over" : "")"
+                                             style="height:@Math.Min(pct,100).ToString("F0")%"
+                                             title="@day.Date.ToString("MM/dd"): @day.FnolCount FNOLs">
+                                        </div>
+                                    </div>
+                                    <div class="cat-day-lbl">@day.Date.ToString("M/d")</div>
+                                    <div class="cat-day-num @(overCap ? "cat-day-over-txt" : "")">@day.FnolCount</div>
+                                </div>
+                            }
+                            <div class="cat-cap-legend">
+                                <span class="cat-cap-line-lbl">— Capacity (@_ev.CapacityThreshold/day)</span>
+                            </div>
+                        </div>
+
+                        <!-- Team roster -->
+                        <div class="pd-tab-toolbar" style="margin-top:1rem;">
+                            <div class="cat-intake-hdr" style="margin:0;">
+                                <i class="bi bi-people-fill" aria-hidden="true"></i> CAT Team Roster
+                            </div>
+                        </div>
+                        <div class="cat-team-grid">
+                            @foreach (var member in _catTeam)
+                            {
+                                var assignedCount = _catClaims.Count(c => c.AssignedHandler == member.Name);
+                                var capacityPct   = (double)assignedCount / Math.Max(member.DailyCapacity, 1) * 100;
+                                <div class="cat-team-card">
+                                    <div class="cat-tm-avatar">@member.Name[0]</div>
+                                    <div class="cat-tm-info">
+                                        <div class="cat-tm-name">@member.Name</div>
+                                        <div class="cat-tm-role">@member.Role</div>
+                                        <div class="cat-tm-loc"><i class="bi bi-geo-alt" aria-hidden="true"></i>@member.Location</div>
+                                    </div>
+                                    <div class="cat-tm-stats">
+                                        <div class="cat-tm-stat">
+                                            <span class="cat-tm-st-val @(capacityPct > 90 ? "cat-day-over-txt" : "")">@assignedCount</span>
+                                            <span class="cat-tm-st-lbl">Assigned</span>
+                                        </div>
+                                        <div class="cat-tm-stat">
+                                            <span class="cat-tm-st-val">@member.DailyCapacity</span>
+                                            <span class="cat-tm-st-lbl">Daily Cap</span>
+                                        </div>
+                                        <div class="cat-tm-stat">
+                                            <span class="cat-tm-st-val">@member.Region</span>
+                                            <span class="cat-tm-st-lbl">Region</span>
+                                        </div>
+                                    </div>
+                                    <div class="cat-tm-bar-wrap" title="@capacityPct.ToString("F0")% capacity">
+                                        <div class="cat-tm-bar @(capacityPct > 90 ? "cat-tm-bar-over" : "")"
+                                             style="width:@Math.Min(capacityPct,100).ToString("F0")%"></div>
+                                    </div>
+                                    <div class="cat-tm-type">
+                                        <span class="cat-type-chip cat-type-@member.AdjusterType.ToLower().Replace(" ","-")">@member.AdjusterType</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+        </Tabs>
+    </AppDetailTabs>
+}
+
+@code {
+    SfToast _toast = default!;
+    int     _tab   = 0;
+
+    bool          _showNewEventDlg = false;
+    bool          _showBlastDlg    = false;
+    bool          _showGeoTagDlg   = false;
+    bool          _showFastFnolDlg = false;
+
+    string _insuredSearch    = "";
+    string _insuredLobFilter = "";
+    string _insuredTagFilter = "";
+
+    CatEvent?      _selectedEvent = null;
+    CatEventStats  _ev            = new();
+
+    // ── Form objects ─────────────────────────────────────────────
+    NewEventForm  _newEvent  = new();
+    BlastForm     _blast     = new();
+    GeoTagForm    _geoTag    = new();
+    FastFnolForm  _fastFnol  = new();
+
+    int    _blastTargetCount    = 0;
+    string _blastChannelSummary = "";
+
+    // ── Lookup data ───────────────────────────────────────────────
+    readonly string[] _eventTypes    = { "Hurricane","Wildfire","Hailstorm","Winter Storm","Flooding","Tornado","Earthquake","Tsunami","Other" };
+    readonly string[] _lobOpts       = { "All","Commercial Property","Commercial Auto","General Liability","Workers Comp","Home/Dwelling","Personal Auto","Umbrella" };
+    readonly string[] _catLossTypes  = { "Wind/Hail","Fire","Water/Flood","Vehicle Damage","Building Damage","Debris Removal","Loss of Use","Other" };
+    readonly string[] _blastTemplates= { "CAT Acknowledgement — Property","CAT Check-In — Auto","Disaster Relief Contacts","File a Claim — Next Steps","CAT Team Introduction","Emergency Hotline Notice" };
+
+    readonly Dictionary<string,string> _fnolStages = new()
+    {
+        { "FNOL Received",     "received" },
+        { "Acknowledged",      "ack"      },
+        { "Field Inspection",  "inspect"  },
+        { "Reserved",          "reserved" },
+        { "Closed",            "closed"   },
+    };
+
+    // ── Data ─────────────────────────────────────────────────────
+    List<CatEvent>        _events          = new();
+    List<AffectedInsured> _affectedInsureds= new();
+    List<CatClaimRow>     _catClaims       = new();
+    List<CampaignEntry>   _campaigns       = new();
+    List<CatTeamMember>   _catTeam         = new();
+    List<DailyIntakeRow>  _dailyIntake     = new();
+
+    // ── Models ────────────────────────────────────────────────────
+    sealed class CatEvent
+    {
+        public string    Name           { get; set; } = "";
+        public string    CatCode        { get; set; } = "";
+        public string    EventType      { get; set; } = "";
+        public string    Severity       { get; set; } = "";
+        public string    AffectedStates { get; set; } = "";
+        public DateTime  StartDate      { get; set; }
+        public DateTime? EndDate        { get; set; }
+        public string    Description    { get; set; } = "";
+    }
+
+    sealed class CatEventStats
+    {
+        public int     AffectedInsureds  { get; set; }
+        public int     GeoTagged         { get; set; }
+        public int     FnolReceived      { get; set; }
+        public int     PendingContact    { get; set; }
+        public int     ClaimsOpened      { get; set; }
+        public decimal EstTivAtRisk      { get; set; }
+        public decimal ProjectedIncurred { get; set; }
+        public decimal AvgClaimAmount    { get; set; }
+        public int     CatTeamCount      { get; set; }
+        public int     CampaignsSent     { get; set; }
+        public int     BlastReach        { get; set; }
+        public int     DailyIntakePeak   { get; set; }
+        public int     CapacityThreshold { get; set; }
+        public bool    SurgeAlert        { get; set; }
+    }
+
+    sealed class AffectedInsured
+    {
+        public Guid    AccountId      { get; set; }
+        public string  AccountName    { get; set; } = "";
+        public string  PolicyNumber   { get; set; } = "";
+        public string  Lob            { get; set; } = "";
+        public string  County         { get; set; } = "";
+        public string  ZipCode        { get; set; } = "";
+        public decimal TivAtRisk      { get; set; }
+        public bool    GeoTagged      { get; set; }
+        public bool    FnolFiled      { get; set; }
+        public bool    BlastSent      { get; set; }
+        public string  ContactStatus  { get; set; } = "";
+        public string  Handler        { get; set; } = "";
+    }
+
+    sealed class CatClaimRow
+    {
+        public Guid    ClaimId         { get; set; }
+        public string  ClaimNumber     { get; set; } = "";
+        public string  AccountName     { get; set; } = "";
+        public string  LossType        { get; set; } = "";
+        public string  Stage           { get; set; } = "";
+        public DateTime DateOfLoss     { get; set; }
+        public int     DaysOpen        { get; set; }
+        public decimal TotalIncurred   { get; set; }
+        public string  AssignedHandler { get; set; } = "";
+    }
+
+    sealed class CampaignEntry
+    {
+        public string   Subject    { get; set; } = "";
+        public string   Channel    { get; set; } = "";
+        public string   Status     { get; set; } = "";
+        public DateTime SentAt     { get; set; }
+        public string   SentBy     { get; set; } = "";
+        public int      TotalSent  { get; set; }
+        public int      Delivered  { get; set; }
+        public int      Opened     { get; set; }
+        public int      Responded  { get; set; }
+    }
+
+    sealed class CatTeamMember
+    {
+        public string Name          { get; set; } = "";
+        public string Role          { get; set; } = "";
+        public string AdjusterType  { get; set; } = "";
+        public string Location      { get; set; } = "";
+        public string Region        { get; set; } = "";
+        public int    DailyCapacity { get; set; }
+    }
+
+    sealed class DailyIntakeRow { public DateTime Date; public int FnolCount; }
+
+    sealed class NewEventForm { public string Name=""; public string EventType=""; public string Severity="High"; public DateTime? StartDate; public DateTime? EndDate; public string AffectedStates=""; public string CatCode=""; public string Description=""; }
+    sealed class BlastForm    { public string Channel="Email"; public string Template=""; public string Subject=""; public string Body=""; public string Schedule="Send Now"; public DateTime ScheduledAt=DateTime.Now.AddHours(1); }
+    sealed class GeoTagForm   { public string States=""; public string Zips=""; public string Counties=""; public int? RadiusMiles; public string LobFilter=""; public decimal? MinTiv; public int PreviewCount; }
+    sealed class FastFnolForm { public string PolicyNumber=""; public string InsuredName=""; public string Phone=""; public string LossType=""; public string EstimatedRange="Unknown"; public string Description=""; }
+
+    IEnumerable<AffectedInsured> FilteredInsureds => _affectedInsureds.Where(a =>
+        (string.IsNullOrEmpty(_insuredSearch) ||
+         a.AccountName.Contains(_insuredSearch,StringComparison.OrdinalIgnoreCase) ||
+         a.PolicyNumber.Contains(_insuredSearch,StringComparison.OrdinalIgnoreCase) ||
+         a.County.Contains(_insuredSearch,StringComparison.OrdinalIgnoreCase) ||
+         a.ZipCode.Contains(_insuredSearch,StringComparison.OrdinalIgnoreCase))
+     && (string.IsNullOrEmpty(_insuredLobFilter) || _insuredLobFilter=="All" || a.Lob == _insuredLobFilter)
+     && (_insuredTagFilter == "" ||
+        (_insuredTagFilter == "Tagged"    && a.GeoTagged) ||
+        (_insuredTagFilter == "Contacted" && a.ContactStatus == "Contacted") ||
+        (_insuredTagFilter == "FNOL Filed"&& a.FnolFiled) ||
+        (_insuredTagFilter == "No Contact"&& a.ContactStatus == "No Contact")));
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Claims","/claims"), new("Catastrophe View",""));
+        BuildStub();
+        SelectEvent(_events.First());
+    }
+
+    void BuildStub()
+    {
+        _events.Clear();
+        _events.AddRange(new[]
+        {
+            new CatEvent { Name="Texas May 2025 Hailstorm",      CatCode="CAT-2025-TX-Hail",   EventType="Hailstorm",    Severity="Critical", AffectedStates="TX, OK", StartDate=DateTime.Today.AddDays(-12), EndDate=DateTime.Today.AddDays(-10), Description="Severe hailstorm across DFW and Houston metro areas." },
+            new CatEvent { Name="Louisiana Spring 2025 Flood",   CatCode="CAT-2025-LA-Flood",  EventType="Flooding",     Severity="High",     AffectedStates="LA, MS", StartDate=DateTime.Today.AddDays(-6),  EndDate=null, Description="Sustained flooding from heavy rainfall in south Louisiana." },
+            new CatEvent { Name="California Wildfire — Kincade", CatCode="CAT-2025-CA-Wildfire",EventType="Wildfire",    Severity="High",     AffectedStates="CA",      StartDate=DateTime.Today.AddDays(-20), EndDate=null, Description="Active wildfire in Sonoma County." },
+            new CatEvent { Name="Hurricane Miriam 2024",          CatCode="CAT-2024-FL-Hurricane",EventType="Hurricane",  Severity="Critical", AffectedStates="FL, GA, SC",StartDate=new DateTime(2024,9,15), EndDate=new DateTime(2024,9,20), Description="Category 3 hurricane landfall near Tampa Bay." },
+        });
+    }
+
+    void SelectEvent(CatEvent ev)
+    {
+        _selectedEvent = ev;
+        _tab           = 0;
+        BuildEventData(ev);
+    }
+
+    void BuildEventData(CatEvent ev)
+    {
+        _ev = new CatEventStats
+        {
+            AffectedInsureds=142, GeoTagged=118, FnolReceived=67, PendingContact=24,
+            ClaimsOpened=67, EstTivAtRisk=38_400_000m, ProjectedIncurred=4_850_000m,
+            AvgClaimAmount=72_388m, CatTeamCount=6, CampaignsSent=3, BlastReach=1_640,
+            DailyIntakePeak=ev.CatCode.Contains("2025") ? 22 : 15,
+            CapacityThreshold=18,
+            SurgeAlert=ev.CatCode.Contains("TX-Hail") || ev.CatCode.Contains("LA-Flood")
+        };
+
+        _affectedInsureds.Clear();
+        _affectedInsureds.AddRange(new[]
+        {
+            new AffectedInsured { AccountId=Guid.NewGuid(), AccountName="Sullivan Mfg. LLC",     PolicyNumber="TRV-GL-2024-00421", Lob="General Liability",  County="Harris",     ZipCode="77002", TivAtRisk=1_200_000m, GeoTagged=true,  FnolFiled=true,  BlastSent=true,  ContactStatus="Contacted",  Handler="Sarah Kim"    },
+            new AffectedInsured { AccountId=Guid.NewGuid(), AccountName="Greenleaf Nurseries",   PolicyNumber="TRV-CP-2024-62011", Lob="Commercial Property",County="Fort Bend",  ZipCode="77478", TivAtRisk=850_000m,  GeoTagged=true,  FnolFiled=true,  BlastSent=true,  ContactStatus="FNOL Filed", Handler="Lisa Chen"    },
+            new AffectedInsured { AccountId=Guid.NewGuid(), AccountName="Metro Freight Co.",     PolicyNumber="HFD-CA-2024-14822", Lob="Commercial Auto",    County="Harris",     ZipCode="77029", TivAtRisk=320_000m,  GeoTagged=true,  FnolFiled=false, BlastSent=true,  ContactStatus="Contacted",  Handler="James Park"   },
+            new AffectedInsured { AccountId=Guid.NewGuid(), AccountName="Pacific Coast Builders",PolicyNumber="LIB-GL-2024-77210", Lob="General Liability",  County="Galveston",  ZipCode="77550", TivAtRisk=2_100_000m, GeoTagged=true,  FnolFiled=false, BlastSent=false, ContactStatus="No Contact", Handler="Kevin Obi"    },
+            new AffectedInsured { AccountId=Guid.NewGuid(), AccountName="Harbor View Marina",    PolicyNumber="ZUR-CP-2024-44100", Lob="Commercial Property",County="Galveston",  ZipCode="77551", TivAtRisk=4_500_000m, GeoTagged=true,  FnolFiled=true,  BlastSent=true,  ContactStatus="FNOL Filed", Handler="Lisa Chen"    },
+            new AffectedInsured { AccountId=Guid.NewGuid(), AccountName="Laredo Steel Works",    PolicyNumber="ZUR-GL-2023-18820", Lob="General Liability",  County="Webb",       ZipCode="78040", TivAtRisk=780_000m,  GeoTagged=true,  FnolFiled=false, BlastSent=true,  ContactStatus="No Contact", Handler="Maria Santos" },
+            new AffectedInsured { AccountId=Guid.NewGuid(), AccountName="Dallas Roofing LLC",    PolicyNumber="CNA-WC-2024-55102", Lob="Workers Comp",       County="Dallas",     ZipCode="75201", TivAtRisk=450_000m,  GeoTagged=false, FnolFiled=false, BlastSent=false, ContactStatus="No Contact", Handler="Kevin Obi"    },
+            new AffectedInsured { AccountId=Guid.NewGuid(), AccountName="Sunrise Healthcare",    PolicyNumber="MKL-PL-2024-28004", Lob="Professional Liab.", County="Harris",     ZipCode="77030", TivAtRisk=0m,        GeoTagged=true,  FnolFiled=false, BlastSent=true,  ContactStatus="Contacted",  Handler="Maria Santos" },
+            new AffectedInsured { AccountId=Guid.NewGuid(), AccountName="Rio Grande Transport",  PolicyNumber="HFD-CA-2024-90100", Lob="Commercial Auto",    County="Bexar",      ZipCode="78201", TivAtRisk=220_000m,  GeoTagged=false, FnolFiled=false, BlastSent=false, ContactStatus="No Contact", Handler="James Park"   },
+            new AffectedInsured { AccountId=Guid.NewGuid(), AccountName="Pioneer Automotive",    PolicyNumber="TRV-CA-2024-90221", Lob="Commercial Auto",    County="Tarrant",    ZipCode="76101", TivAtRisk=560_000m,  GeoTagged=true,  FnolFiled=true,  BlastSent=true,  ContactStatus="FNOL Filed", Handler="Sarah Kim"    },
+        });
+
+        _catClaims.Clear();
+        _catClaims.AddRange(new[]
+        {
+            new CatClaimRow { ClaimId=Guid.NewGuid(), ClaimNumber="CLM-2025-00133", AccountName="Bridgewater Hotels",  LossType="Water/Flood",  Stage="Reserved",         DateOfLoss=DateTime.Today.AddDays(-12), DaysOpen=12, TotalIncurred=42_000m,  AssignedHandler="Kevin Obi"    },
+            new CatClaimRow { ClaimId=Guid.NewGuid(), ClaimNumber="CLM-2025-00172", AccountName="Harbor View Marina",  LossType="Wind/Hail",    Stage="Field Inspection",  DateOfLoss=DateTime.Today.AddDays(-11), DaysOpen=11, TotalIncurred=115_000m, AssignedHandler="Lisa Chen"    },
+            new CatClaimRow { ClaimId=Guid.NewGuid(), ClaimNumber="CLM-2025-00174", AccountName="Greenleaf Nurseries", LossType="Wind/Hail",    Stage="Acknowledged",      DateOfLoss=DateTime.Today.AddDays(-10), DaysOpen=10, TotalIncurred=28_000m,  AssignedHandler="Lisa Chen"    },
+            new CatClaimRow { ClaimId=Guid.NewGuid(), ClaimNumber="CLM-2025-00178", AccountName="Sullivan Mfg. LLC",   LossType="Property Damage", Stage="FNOL Received", DateOfLoss=DateTime.Today.AddDays(-8),  DaysOpen=8,  TotalIncurred=9_500m,   AssignedHandler="Sarah Kim"    },
+            new CatClaimRow { ClaimId=Guid.NewGuid(), ClaimNumber="CLM-2025-00181", AccountName="Pioneer Automotive",  LossType="Vehicle Damage",  Stage="Acknowledged",  DateOfLoss=DateTime.Today.AddDays(-7),  DaysOpen=7,  TotalIncurred=18_200m,  AssignedHandler="Sarah Kim"    },
+            new CatClaimRow { ClaimId=Guid.NewGuid(), ClaimNumber="CLM-2025-00185", AccountName="Metro Freight Co.",   LossType="Auto Collision",  Stage="FNOL Received", DateOfLoss=DateTime.Today.AddDays(-5),  DaysOpen=5,  TotalIncurred=0m,       AssignedHandler="James Park"   },
+            new CatClaimRow { ClaimId=Guid.NewGuid(), ClaimNumber="CLM-2024-00991", AccountName="Greenleaf Nurseries", LossType="Fire",          Stage="Closed",            DateOfLoss=DateTime.Today.AddDays(-25), DaysOpen=0,  TotalIncurred=98_000m,  AssignedHandler="Sarah Kim"    },
+        });
+
+        _campaigns.Clear();
+        _campaigns.AddRange(new[]
+        {
+            new CampaignEntry { Subject="Urgent: Is Your Property Affected by this CAT Event?", Channel="Email",      Status="Delivered",  SentAt=DateTime.Today.AddDays(-11), SentBy="Sarah Kim",   TotalSent=118, Delivered=112, Opened=88,  Responded=42 },
+            new CampaignEntry { Subject="CAT Team Contact — File Your Claim Today",                       Channel="SMS",        Status="Delivered",  SentAt=DateTime.Today.AddDays(-10), SentBy="Kevin Obi",   TotalSent=118, Delivered=115, Opened=115, Responded=38 },
+            new CampaignEntry { Subject="Claim Status & Next Steps — CAT Event Support",                  Channel="Email + SMS",Status="In Progress",SentAt=DateTime.Today.AddDays(-3),  SentBy="Maria Santos",TotalSent=72,  Delivered=68,  Opened=41,  Responded=19 },
+        });
+
+        _catTeam.Clear();
+        _catTeam.AddRange(new[]
+        {
+            new CatTeamMember { Name="Sarah Kim",   Role="Lead Handler",    AdjusterType="Staff Adjuster",  Location="Houston, TX",     Region="Gulf Coast",  DailyCapacity=20 },
+            new CatTeamMember { Name="Kevin Obi",   Role="Handler",         AdjusterType="Staff Adjuster",  Location="Houston, TX",     Region="Gulf Coast",  DailyCapacity=18 },
+            new CatTeamMember { Name="Lisa Chen",   Role="Property Specialist",AdjusterType="Staff Adjuster",Location="Dallas, TX",     Region="North TX",    DailyCapacity=15 },
+            new CatTeamMember { Name="James Park",  Role="Handler",         AdjusterType="Staff Adjuster",  Location="San Antonio, TX", Region="Central TX",  DailyCapacity=18 },
+            new CatTeamMember { Name="Maria Santos",Role="Supervisor",      AdjusterType="Supervisor",      Location="Austin, TX",      Region="All",         DailyCapacity=8  },
+            new CatTeamMember { Name="TPA — Crawford",Role="Field Adjuster",AdjusterType="TPA",            Location="Field — TX",      Region="Statewide",   DailyCapacity=30 },
+        });
+
+        _dailyIntake.Clear();
+        for (int i = 14; i >= 0; i--)
+            _dailyIntake.Add(new DailyIntakeRow { Date=DateTime.Today.AddDays(-i), FnolCount=i switch { 14=>2,13=>5,12=>22,11=>19,10=>18,9=>14,8=>11,7=>9,6=>7,5=>5,4=>4,3=>6,2=>3,1=>2,0=>1,_=>0 } });
+    }
+
+    void OpenBlast()
+    {
+        _blastTargetCount    = _affectedInsureds.Count(a => a.GeoTagged);
+        _blastChannelSummary = $"{_blastTargetCount} geo-tagged insured(s)";
+        _blast               = new();
+        _showBlastDlg        = true;
+    }
+
+    void PreviewGeoTag()
+    {
+        _geoTag.PreviewCount = string.IsNullOrEmpty(_geoTag.States) && string.IsNullOrEmpty(_geoTag.Counties)
+            ? 142 : new Random().Next(30,120);
+    }
+
+    async Task ApplyGeoTag()
+    {
+        foreach (var a in _affectedInsureds) a.GeoTagged = true;
+        _showGeoTagDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title="Geo-Tagged", Content=$"{_geoTag.PreviewCount} insured(s) tagged under {_selectedEvent?.CatCode}.", CssClass="e-toast-success" });
+    }
+
+    async Task MarkContacted(AffectedInsured a)
+    {
+        a.ContactStatus = "Contacted";
+        await _toast.ShowAsync(new ToastModel { Title="Marked Contacted", Content=$"{a.AccountName} marked as contacted.", CssClass="e-toast-success" });
+    }
+
+    async Task SendBlast()
+    {
+        if (string.IsNullOrEmpty(_blast.Subject)) return;
+        _campaigns.Insert(0, new CampaignEntry
+        {
+            Subject=_blast.Subject, Channel=_blast.Channel,
+            Status=_blast.Schedule=="Send Now" ? "Delivered" : "Scheduled",
+            SentAt=_blast.Schedule=="Send Now" ? DateTime.Now : _blast.ScheduledAt,
+            SentBy="Current User", TotalSent=_blastTargetCount,
+            Delivered=_blast.Schedule=="Send Now" ? (int)(_blastTargetCount*.96) : 0,
+            Opened=0, Responded=0
+        });
+        _ev.CampaignsSent++;
+        _showBlastDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title="Blast Sent", Content=$"Campaign sent to {_blastTargetCount} insured(s).", CssClass="e-toast-success" });
+    }
+
+    async Task SubmitFastFnol()
+    {
+        if (string.IsNullOrEmpty(_fastFnol.PolicyNumber)) return;
+        var claimNum = $"CLM-{DateTime.Today.Year}-{new Random().Next(10000,99999)}";
+        _catClaims.Insert(0, new CatClaimRow { ClaimId=Guid.NewGuid(), ClaimNumber=claimNum, AccountName=_fastFnol.InsuredName, LossType=_fastFnol.LossType, Stage="FNOL Received", DateOfLoss=DateTime.Today, DaysOpen=0, TotalIncurred=0m, AssignedHandler="Sarah Kim" });
+        _ev.FnolReceived++;
+        _ev.ClaimsOpened++;
+        _showFastFnolDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title="Fast FNOL Submitted", Content=$"Claim {claimNum} created under {_selectedEvent?.CatCode}.", CssClass="e-toast-success" });
+    }
+
+    async Task SaveNewEvent()
+    {
+        if (string.IsNullOrEmpty(_newEvent.Name)) return;
+        _events.Insert(0, new CatEvent { Name=_newEvent.Name, CatCode=_newEvent.CatCode, EventType=_newEvent.EventType, Severity=_newEvent.Severity, AffectedStates=_newEvent.AffectedStates, StartDate=_newEvent.StartDate??DateTime.Today, EndDate=_newEvent.EndDate, Description=_newEvent.Description });
+        _showNewEventDlg = false;
+        await _toast.ShowAsync(new ToastModel { Title="CAT Event Declared", Content=$"{_newEvent.Name} ({_newEvent.CatCode}) declared.", CssClass="e-toast-success" });
+    }
+
+    async Task EscalateSurge()
+    {
+        _ev.SurgeAlert = false;
+        await _toast.ShowAsync(new ToastModel { Title="Escalated to TPA", Content="Overflow escalation sent to Crawford TPA.", CssClass="e-toast-warning" });
+    }
+
+    void Refresh() { if (_selectedEvent is not null) BuildEventData(_selectedEvent); }
+
+    void GoToClaim(Guid id)      => Nav.NavigateTo($"/claims/{id}");
+    void ResetInsuredFilters()   { _insuredSearch=""; _insuredLobFilter=""; _insuredTagFilter=""; }
+    void OpenFastFnol(string policyNumber) { _fastFnol = new() { PolicyNumber=policyNumber }; _showFastFnolDlg = true; }
+
+    // ── Render helpers ────────────────────────────────────────────
+    RenderFragment CatKpi(string icon, string label, string val, string color, string tooltip) => __builder =>
+    {
+        <div class="cat-kpi-card @color" title="@tooltip">
+            <i class="bi @icon cat-kpi-icon" aria-hidden="true"></i>
+            <div>
+                <div class="cat-kpi-val">@val</div>
+                <div class="cat-kpi-lbl">@label</div>
+            </div>
+        </div>
+    };
+
+    RenderFragment CampStat(string icon, string val, string label) => __builder =>
+    {
+        <div class="cat-camp-stat">
+            <i class="bi @icon" aria-hidden="true"></i>
+            <div class="cat-camp-sv">@val</div>
+            <div class="cat-camp-sl">@label</div>
+        </div>
+    };
+
+    static string SeverityCss(string s) => s.ToLower();
+    static string ContactStatusCss(string s) => s.ToLower().Replace(" ","-").Replace("/","-");
+    static string EventIcon(string t) => t switch
+    {
+        "Hurricane"    => "bi-tornado",
+        "Wildfire"     => "bi-fire",
+        "Hailstorm"    => "bi-cloud-hail",
+        "Winter Storm" => "bi-snow2",
+        "Flooding"     => "bi-water",
+        "Tornado"      => "bi-tornado",
+        "Earthquake"   => "bi-activity",
+        _              => "bi-cloud-lightning"
+    };
+}

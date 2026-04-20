@@ -10,8 +10,8 @@
                Subtitle="Master list of all tenants provisioned on the platform"
                Icon="bi-buildings">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "tl-spin" : "")" aria-hidden="true"></i> Refresh
         </button>
         <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
             <i class="bi bi-download" aria-hidden="true"></i> Export
@@ -21,6 +21,102 @@
         </button>
     </Actions>
 </AppPageHeader>
+
+@* ── KPI strip ──────────────────────────────────────────── *@
+<div class="tl-kpi-row">
+    <AppMetricCard Label="Total Tenants"
+                   Value="@_kpiTotal.ToString()"
+                   Icon="bi-buildings"
+                   Variant="blue"
+                   Loading="@_loading" />
+
+    <AppMetricCard Label="Active"
+                   Value="@_kpiActive.ToString()"
+                   Icon="bi-building-check"
+                   Variant="green"
+                   SubLabel="@($"{_kpiActiveRate}% of total")"
+                   Loading="@_loading"
+                   OnClick="@(() => QuickFilterStatus("Active"))">
+        <Footer>
+            <div class="tl-progress-bar">
+                <div class="tl-progress-fill tl-progress-fill--green" style="width:@_kpiActiveRate%"></div>
+            </div>
+        </Footer>
+    </AppMetricCard>
+
+    <AppMetricCard Label="Suspended"
+                   Value="@_kpiSuspended.ToString()"
+                   Icon="bi-building-exclamation"
+                   Variant="amber"
+                   Loading="@_loading"
+                   OnClick="@(() => QuickFilterStatus("Suspended"))" />
+
+    <AppMetricCard Label="Terminated"
+                   Value="@_kpiTerminated.ToString()"
+                   Icon="bi-building-x"
+                   Variant="red"
+                   Loading="@_loading"
+                   OnClick="@(() => QuickFilterStatus("Terminated"))" />
+
+    <AppMetricCard Label="Total Active Users"
+                   Value="@_kpiUsers.ToString("N0")"
+                   Icon="bi-people"
+                   Variant="blue"
+                   Loading="@_loading" />
+
+    <AppMetricCard Label="Dedicated Tenants"
+                   Value="@_kpiDedicated.ToString()"
+                   Icon="bi-hdd-rack"
+                   Variant="purple"
+                   SubLabel="@($"{_all.Count - _kpiDedicated} shared")"
+                   Loading="@_loading" />
+</div>
+
+@* ── Region / Plan breakdown strip ─────────────────────── *@
+@if (!_loading && _all.Count > 0)
+{
+    <div class="tl-breakdown-bar">
+        <div class="tl-breakdown-group">
+            <span class="tl-breakdown-label"><i class="bi bi-geo-alt"></i> By Region</span>
+            @foreach (var grp in _all.GroupBy(x => x.RegionCode).OrderByDescending(g => g.Count()))
+            {
+                var pct = (int)Math.Round(grp.Count() * 100.0 / _all.Count);
+                <span class="tl-breakdown-chip">
+                    <span class="tl-breakdown-chip-dot tl-dot--blue"></span>
+                    @grp.Key
+                    <span class="tl-breakdown-chip-count">@grp.Count()</span>
+                </span>
+            }
+        </div>
+        <div class="tl-breakdown-sep"></div>
+        <div class="tl-breakdown-group">
+            <span class="tl-breakdown-label"><i class="bi bi-award"></i> By Plan</span>
+            @foreach (var grp in _all.GroupBy(x => string.IsNullOrWhiteSpace(x.PlanCode) ? "—" : x.PlanCode).OrderByDescending(g => g.Count()))
+            {
+                <span class="tl-breakdown-chip">
+                    <span class="tl-breakdown-chip-dot tl-dot--purple"></span>
+                    @grp.Key
+                    <span class="tl-breakdown-chip-count">@grp.Count()</span>
+                </span>
+            }
+        </div>
+        @if (_filtered.Count != _all.Count)
+        {
+            <div class="tl-breakdown-sep"></div>
+            <div class="tl-breakdown-group">
+                <span class="tl-breakdown-label tl-breakdown-label--filter">
+                    <i class="bi bi-funnel-fill"></i> Filter active
+                </span>
+                <span class="tl-breakdown-chip tl-breakdown-chip--active">
+                    Showing @_filtered.Count of @_all.Count
+                </span>
+                <button class="tl-clear-filter" @onclick="ClearFilters">
+                    <i class="bi bi-x-circle"></i> Clear
+                </button>
+            </div>
+        }
+    </div>
+}
 
 <!-- Filter toolbar -->
 <AppFilterPanel @bind-SearchValue="_search"
@@ -108,10 +204,10 @@
         <GridColumns>
             <GridColumn Field="@nameof(TenantDto.TenantCode)"    HeaderText="Code"           Width="110" />
             <GridColumn Field="@nameof(TenantDto.TenantName)"    HeaderText="Name"           Width="190" />
-            <GridColumn Field="@nameof(TenantDto.StatusCode)"    HeaderText="Status"         Width="110">
+            <GridColumn Field="@nameof(TenantDto.StatusCode)"    HeaderText="Status"         Width="120">
                 <Template>
                     @{ var row = (TenantDto)context; }
-                    <span class="@StatusPillClass(row.StatusCode)">@row.StatusCode</span>
+                    <span class="@StatusBadgeClass(row.StatusCode)">@row.StatusCode</span>
                 </Template>
             </GridColumn>
             <GridColumn Field="@nameof(TenantDto.RegionCode)"    HeaderText="Region"         Width="110" />
@@ -145,6 +241,10 @@
                                 @onclick='() => Nav.NavigateTo($"/platform/subscriptions?tenantId={row.TenantId}")'>
                             <i class="bi bi-card-checklist" aria-hidden="true"></i>
                         </button>
+                        <button class="um-btn um-btn-xs um-btn-ghost" title="Impersonate Admin"
+                                @onclick="() => OpenImpersonate(row)">
+                            <i class="bi bi-person-fill-gear" aria-hidden="true"></i>
+                        </button>
                         @if (row.StatusCode == "Active")
                         {
                             <button class="um-btn um-btn-xs um-btn-warning" title="Suspend"
@@ -166,47 +266,73 @@
     </SfGrid>
 </div>
 
-<!-- Toolbar actions requiring selection -->
+@* ── Contextual SfToolbar (shown when a row is selected) ── *@
 @if (_selected is not null)
 {
-    <div class="tl-selection-bar">
-        <span><i class="bi bi-check2-square" aria-hidden="true"></i> @_selected.TenantName selected</span>
-        <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => OpenView(_selected)">
-            <i class="bi bi-eye" aria-hidden="true"></i> View
-        </button>
-        <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => OpenEdit(_selected)">
-            <i class="bi bi-pencil" aria-hidden="true"></i> Edit
-        </button>
-        @if (_selected.StatusCode != "Terminated")
-        {
-            <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => OpenUpgradePlan(_selected)">
-                <i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Upgrade Plan
-            </button>
-            <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => OpenMoveRegion(_selected)">
-                <i class="bi bi-geo-alt" aria-hidden="true"></i> Move Region
-            </button>
-        }
-        @if (_selected.StatusCode == "Active")
-        {
-            <button class="um-btn um-btn-sm um-btn-warning" @onclick="() => OpenSuspend(_selected)">
-                <i class="bi bi-pause-circle" aria-hidden="true"></i> Suspend
-            </button>
-        }
-        else if (_selected.StatusCode == "Suspended")
-        {
-            <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => OpenActivate(_selected)">
-                <i class="bi bi-play-circle" aria-hidden="true"></i> Activate
-            </button>
-        }
-        @if (_selected.StatusCode != "Terminated")
-        {
-            <button class="um-btn um-btn-sm um-btn-danger" @onclick="() => OpenTerminate(_selected)">
-                <i class="bi bi-x-octagon" aria-hidden="true"></i> Terminate
-            </button>
-        }
-        <button class="um-btn um-btn-sm um-btn-ghost" @onclick="ExportAsync">
-            <i class="bi bi-download" aria-hidden="true"></i> Export
-        </button>
+    <div class="tl-sfbar-wrap">
+        <div class="tl-sfbar-context">
+            <i class="bi bi-check2-square" aria-hidden="true"></i>
+            <strong>@_selected.TenantName</strong>
+            <span class="@StatusBadgeClass(_selected.StatusCode)">@_selected.StatusCode</span>
+        </div>
+        <SfToolbar CssClass="tl-action-toolbar">
+            <ToolbarEvents Clicked="OnToolbarClick" />
+            <ToolbarItems>
+                <ToolbarItem Id="tb-view"
+                             Text="View"
+                             TooltipText="Open detail"
+                             PrefixIcon="e-icons e-eye" />
+                <ToolbarItem Id="tb-edit"
+                             Text="Edit"
+                             TooltipText="Edit tenant"
+                             PrefixIcon="e-icons e-edit" />
+                <ToolbarItem Type="ItemType.Separator" />
+                <ToolbarItem Id="tb-plan"
+                             Text="Assign Plan"
+                             TooltipText="Assign or upgrade plan"
+                             PrefixIcon="e-icons e-award"
+                             Disabled="@(_selected.StatusCode == "Terminated")" />
+                <ToolbarItem Id="tb-region"
+                             Text="Move Region"
+                             TooltipText="Move to another region"
+                             PrefixIcon="e-icons e-location"
+                             Disabled="@(_selected.StatusCode == "Terminated")" />
+                <ToolbarItem Id="tb-usage"
+                             Text="View Usage"
+                             TooltipText="View tenant usage dashboard"
+                             PrefixIcon="e-icons e-chart" />
+                <ToolbarItem Type="ItemType.Separator" />
+                <ToolbarItem Id="tb-impersonate"
+                             Text="Impersonate Admin"
+                             TooltipText="Start impersonation session for this tenant's admin"
+                             PrefixIcon="e-icons e-user"
+                             CssClass="tl-tb-impersonate"
+                             Disabled="@(_selected.StatusCode != "Active")" />
+                <ToolbarItem Type="ItemType.Separator" />
+                <ToolbarItem Id="tb-suspend"
+                             Text="Suspend"
+                             TooltipText="Suspend tenant"
+                             PrefixIcon="e-icons e-pause"
+                             CssClass="tl-tb-warn"
+                             Disabled="@(_selected.StatusCode != "Active")" />
+                <ToolbarItem Id="tb-activate"
+                             Text="Activate"
+                             TooltipText="Reactivate suspended tenant"
+                             PrefixIcon="e-icons e-play"
+                             Disabled="@(_selected.StatusCode != "Suspended")" />
+                <ToolbarItem Id="tb-terminate"
+                             Text="Terminate"
+                             TooltipText="Permanently terminate tenant"
+                             PrefixIcon="e-icons e-close"
+                             CssClass="tl-tb-danger"
+                             Disabled="@(_selected.StatusCode == "Terminated")" />
+                <ToolbarItem Type="ItemType.Separator" />
+                <ToolbarItem Id="tb-export"
+                             Text="Export"
+                             TooltipText="Export filtered list"
+                             PrefixIcon="e-icons e-export" />
+            </ToolbarItems>
+        </SfToolbar>
     </div>
 }
 
@@ -289,6 +415,59 @@
     </Content>
 </AppCrudDrawer>
 
+<!-- Impersonate Admin dialog -->
+<SfDialog @bind-Visible="_showImpersonate"
+          Width="460px"
+          IsModal="true"
+          ShowCloseIcon="true"
+          CssClass="tl-impersonate-dialog">
+    <DialogEvents OnOverlayModalClick="() => _showImpersonate = false" />
+    <DialogTemplates>
+        <Header>
+            <span class="tl-dlg-header">
+                <i class="bi bi-person-fill-gear" aria-hidden="true"></i>
+                Impersonate Admin
+            </span>
+        </Header>
+        <Content>
+            <div class="tl-dlg-body">
+                <div class="tl-dlg-warning-banner">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    <div>
+                        <strong>You are about to impersonate the admin of <em>@_actionTarget?.TenantName</em>.</strong>
+                        <p>All actions during this session will be logged to the audit trail. Only proceed with a valid support justification.</p>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label class="form-label">Reason <span class="form-required">*</span></label>
+                    <textarea class="form-control tl-dlg-reason"
+                              rows="3"
+                              placeholder="Briefly describe the reason for impersonation…"
+                              @bind="_impersonateReason"
+                              maxlength="500"></textarea>
+                    <span class="form-hint">@_impersonateReason.Length / 500 characters</span>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <button class="um-btn um-btn-ghost"
+                    @onclick="() => _showImpersonate = false"
+                    disabled="@_impersonating">
+                Cancel
+            </button>
+            <button class="um-btn um-btn-danger"
+                    @onclick="ExecuteImpersonateAsync"
+                    disabled="@(_impersonating || string.IsNullOrWhiteSpace(_impersonateReason))">
+                @if (_impersonating)
+                {
+                    <span class="um-spinner-xs" aria-hidden="true"></span>
+                }
+                <i class="bi bi-person-fill-gear" aria-hidden="true"></i> Start Impersonation
+            </button>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
 <!-- Toast -->
 <SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
     <ToastPosition X="Right" Y="Bottom" />
@@ -304,6 +483,15 @@
     private List<TenantDto> _filtered = [];
     private TenantDto?      _selected;
 
+    // ── KPI computed props (derived from _all after load) ─────────────────────
+    private int    _kpiTotal      => _all.Count;
+    private int    _kpiActive     => _all.Count(x => x.StatusCode == "Active");
+    private int    _kpiSuspended  => _all.Count(x => x.StatusCode == "Suspended");
+    private int    _kpiTerminated => _all.Count(x => x.StatusCode == "Terminated");
+    private int    _kpiUsers      => _all.Sum(x => x.ActiveUsers);
+    private int    _kpiDedicated  => _all.Count(x => x.IsolationMode == "Dedicated");
+    private int    _kpiActiveRate => _kpiTotal == 0 ? 0 : (int)Math.Round(_kpiActive * 100.0 / _kpiTotal);
+
     // ── Loading / busy ─────────────────────────────────────────────────────────
     private bool _loading    = false;
     private bool _confirming = false;
@@ -315,6 +503,11 @@
     private bool _showTerminate    = false;
     private bool _showUpgradePlan  = false;
     private bool _showMoveRegion   = false;
+    private bool _showImpersonate  = false;
+
+    // ── Impersonation ──────────────────────────────────────────────────────────
+    private bool   _impersonating     = false;
+    private string _impersonateReason = string.Empty;
 
     // ── Active targets ─────────────────────────────────────────────────────────
     private TenantDto? _editTarget;
@@ -436,6 +629,26 @@
     {
         ApplyFilters();
         await Task.CompletedTask;
+    }
+
+    private void QuickFilterStatus(string status)
+    {
+        _filterStatus = _filterStatus == status ? string.Empty : status;
+        ApplyFilters();
+    }
+
+    private void ClearFilters()
+    {
+        _search              = string.Empty;
+        _filterStatus        = string.Empty;
+        _filterRegion        = string.Empty;
+        _filterIsolation     = string.Empty;
+        _filterPlan          = string.Empty;
+        _filterBillingStatus = string.Empty;
+        _filterCreatedFrom   = null;
+        _filterCreatedTo     = null;
+        _filterSuspendedOnly = false;
+        ApplyFilters();
     }
 
     // ── Row selection ──────────────────────────────────────────────────────────
@@ -588,6 +801,50 @@
         finally { _confirming = false; }
     }
 
+    // ── Impersonation ──────────────────────────────────────────────────────────
+    private void OpenImpersonate(TenantDto t)
+    {
+        _actionTarget     = t;
+        _impersonateReason = string.Empty;
+        _showImpersonate  = true;
+    }
+
+    private async Task ExecuteImpersonateAsync()
+    {
+        if (_actionTarget is null || string.IsNullOrWhiteSpace(_impersonateReason)) return;
+        _impersonating = true;
+        try
+        {
+            // TODO: wire to Api.ImpersonateTenantAdminAsync when endpoint is available
+            await Task.Delay(500); // placeholder for the API call
+            _showImpersonate = false;
+            await ShowToastAsync(
+                $"Impersonation session started for \"{_actionTarget.TenantName}\". Session is fully audited.",
+                "Impersonation Active");
+        }
+        catch { await ShowToastAsync("Failed to start impersonation session.", "Error"); }
+        finally { _impersonating = false; }
+    }
+
+    // ── SfToolbar handler ──────────────────────────────────────────────────────
+    private void OnToolbarClick(Syncfusion.Blazor.Navigations.ClickEventArgs args)
+    {
+        if (_selected is null) return;
+        switch (args.Item.Id)
+        {
+            case "tb-view":        OpenView(_selected);                                                              break;
+            case "tb-edit":        OpenEdit(_selected);                                                              break;
+            case "tb-plan":        OpenUpgradePlan(_selected);                                                       break;
+            case "tb-region":      OpenMoveRegion(_selected);                                                        break;
+            case "tb-usage":       Nav.NavigateTo($"/platform/usage?tenantId={_selected.TenantId}");                 break;
+            case "tb-impersonate": OpenImpersonate(_selected);                                                       break;
+            case "tb-suspend":     OpenSuspend(_selected);                                                           break;
+            case "tb-activate":    OpenActivate(_selected);                                                          break;
+            case "tb-terminate":   OpenTerminate(_selected);                                                         break;
+            case "tb-export":      _ = ExportAsync();                                                                break;
+        }
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────────
     private static string StatusPillClass(string status) => status switch
     {
@@ -595,6 +852,14 @@
         "Suspended"  => "tl-status-pill tl-status-pill--suspended",
         "Terminated" => "tl-status-pill tl-status-pill--terminated",
         _            => "tl-status-pill",
+    };
+
+    private static string StatusBadgeClass(string status) => status switch
+    {
+        "Active"     => "e-badge e-badge-pill e-badge-success",
+        "Suspended"  => "e-badge e-badge-pill e-badge-warning",
+        "Terminated" => "e-badge e-badge-pill e-badge-danger",
+        _            => "e-badge e-badge-pill",
     };
 
     private async Task ShowToastAsync(string message, string title)

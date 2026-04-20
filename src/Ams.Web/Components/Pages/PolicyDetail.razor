@@ -1,0 +1,1590 @@
+@page "/policies/{PolicyId:guid}"
+@namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>@(_policy is null ? "Policy" : _policy.PolicyNumber) — Policy Detail</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@if (_loading)
+{
+    <div class="pd-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading policy…</span></div>
+}
+else if (_policy is null)
+{
+    <div class="pd-not-found">
+        <i class="bi bi-shield-x pd-nf-icon" aria-hidden="true"></i>
+        <h2>Policy not found</h2>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Policies
+        </button>
+    </div>
+}
+else
+{
+    <!-- ── HEADER ───────────────────────────────────────────────────────── -->
+    <div class="pd-header">
+        <div class="pd-header-left">
+            <div class="pd-lob-icon pd-lob-@LobKey(_policy.Lob)">
+                <i class="bi @LobIcon(_policy.Lob)" aria-hidden="true"></i>
+            </div>
+            <div class="pd-header-info">
+                <div class="pd-title-row">
+                    <h1 class="pd-pol-num">@_policy.PolicyNumber</h1>
+                    <span class="pd-status pd-status-@_policy.Status.ToLower()">@_policy.Status</span>
+                    <span class="pd-lob-badge pd-lob-@LobKey(_policy.Lob)">@_policy.Lob</span>
+                </div>
+                <div class="pd-sub-row">
+                    <button class="pd-acct-link" @onclick='() => Nav.NavigateTo($"/accounts/{_policy.AccountId}")'>
+                        <i class="bi bi-building" aria-hidden="true"></i>@_policy.Account
+                    </button>
+                    <span class="pd-sub-chip"><i class="bi bi-building-fill" aria-hidden="true"></i>@_policy.Carrier</span>
+                    <span class="pd-sub-chip"><i class="bi bi-calendar" aria-hidden="true"></i>@_policy.EffDate.ToString("MM/dd/yyyy") – @_policy.ExpDate.ToString("MM/dd/yyyy")</span>
+                    <span class="pd-sub-chip @ExpChipCss(_policy.ExpDate)">
+                        <i class="bi bi-clock" aria-hidden="true"></i>
+                        @DaysLabel(_policy.ExpDate)
+                    </span>
+                </div>
+            </div>
+        </div>
+        <div class="pd-header-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("endorse")'>
+                <i class="bi bi-pen" aria-hidden="true"></i> Endorse
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("remarket")'>
+                <i class="bi bi-arrow-left-right" aria-hidden="true"></i> Remarket
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("rewrite")'>
+                <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Rewrite
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("certificate")'>
+                <i class="bi bi-award" aria-hidden="true"></i> Issue Cert
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("esign")'>
+                <i class="bi bi-pen-fill" aria-hidden="true"></i> E-Sign
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("message")'>
+                <i class="bi bi-chat" aria-hidden="true"></i> Message
+            </button>
+            @if (_policy.Status == "Cancelled")
+            {
+                <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => OpenAction("reinstate")'>
+                    <i class="bi bi-shield-check" aria-hidden="true"></i> Reinstate
+                </button>
+            }
+            else
+            {
+                <button class="um-btn um-btn-danger um-btn-sm" @onclick='() => OpenAction("cancel")'>
+                    <i class="bi bi-x-circle" aria-hidden="true"></i> Cancel
+                </button>
+            }
+        </div>
+    </div>
+
+    <!-- ── KPI BAR ───────────────────────────────────────────────────────── -->
+    <div class="pd-kpi-bar">
+        @PdKpi("Written Premium",   _policy.WrittenPremium.ToString("C0"),  "bi-cash-stack",       "pd-ki--blue")
+        @PdKpi("Annual Premium",    _policy.AnnualPremium.ToString("C0"),   "bi-calendar-check",   "pd-ki--blue")
+        @PdKpi("Balance Due",       _policy.BalanceDue.ToString("C0"),      "bi-receipt",          _policy.BalanceDue > 0 ? "pd-ki--red" : "pd-ki--green")
+        @PdKpi("Open Claims",       _policy.OpenClaims.ToString(),          "bi-exclamation-circle", _policy.OpenClaims > 0 ? "pd-ki--amber" : "pd-ki--green")
+        @PdKpi("Endorsements",      _endorsements.Count.ToString(),         "bi-pen",              "pd-ki--gray")
+        @PdKpi("YTD Commission",    _commissions.Sum(c => c.AgencyAmt).ToString("C0"), "bi-percent", "pd-ki--purple")
+        @PdKpi("Producer",          _policy.Producer,                       "bi-person-badge",     "pd-ki--gray")
+        @PdKpi("CSR",               _policy.Csr,                            "bi-headset",          "pd-ki--gray")
+    </div>
+
+    <!-- ── 13-TAB BODY ──────────────────────────────────────────────────── -->
+    <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="t => _tab = t">
+        <Tabs>
+
+            <!-- 0 ── SUMMARY ─────────────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Summary" IconCss="bi bi-clipboard-data" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-summary-grid">
+
+                            <div class="pd-info-card">
+                                <h3 class="pd-card-hdr">Policy Identity</h3>
+                                <div class="pd-field-grid">
+                                    @F("Policy Number",   _policy.PolicyNumber)
+                                    @F("Line of Business",_policy.Lob)
+                                    @F("Carrier",         _policy.Carrier)
+                                    @F("Program",         _policy.Program)
+                                    @F("Status",          _policy.Status)
+                                    @F("Policy Type",     _policy.PolicyType)
+                                    @F("Package",         _policy.IsPackage ? "Yes" : "No")
+                                    @F("Master Policy",   _policy.MasterPolicy ?? "—")
+                                </div>
+                            </div>
+
+                            <div class="pd-info-card">
+                                <h3 class="pd-card-hdr">Dates &amp; Term</h3>
+                                <div class="pd-field-grid">
+                                    @F("Effective Date",   _policy.EffDate.ToString("MM/dd/yyyy"))
+                                    @F("Expiration Date",  _policy.ExpDate.ToString("MM/dd/yyyy"))
+                                    @F("Issue Date",       _policy.IssueDate?.ToString("MM/dd/yyyy") ?? "—")
+                                    @F("Bind Date",        _policy.BindDate?.ToString("MM/dd/yyyy") ?? "—")
+                                    @F("Cancel Date",      _policy.CancelDate?.ToString("MM/dd/yyyy") ?? "—")
+                                    @F("Reinstate Date",   _policy.ReinstateDate?.ToString("MM/dd/yyyy") ?? "—")
+                                    @F("Days to Expiry",   DaysLabel(_policy.ExpDate))
+                                    @F("Term (months)",    _policy.TermMonths.ToString())
+                                </div>
+                            </div>
+
+                            <div class="pd-info-card">
+                                <h3 class="pd-card-hdr">Premium &amp; Billing</h3>
+                                <div class="pd-field-grid">
+                                    @F("Written Premium",  _policy.WrittenPremium.ToString("C2"))
+                                    @F("Annual Premium",   _policy.AnnualPremium.ToString("C2"))
+                                    @F("Agency Fee",       _policy.AgencyFee.ToString("C2"))
+                                    @F("Taxes &amp; Fees", _policy.TaxesFees.ToString("C2"))
+                                    @F("Total Cost",       (_policy.WrittenPremium + _policy.AgencyFee + _policy.TaxesFees).ToString("C2"))
+                                    @F("Balance Due",      _policy.BalanceDue.ToString("C2"))
+                                    @F("Billing Plan",     _policy.BillingPlan)
+                                    @F("Payment Method",   _policy.PaymentMethod)
+                                </div>
+                            </div>
+
+                            <div class="pd-info-card">
+                                <h3 class="pd-card-hdr">Named Insured</h3>
+                                <div class="pd-field-grid">
+                                    @F("Primary Insured",  _policy.PrimaryInsured)
+                                    @F("Insured Type",     _policy.InsuredType)
+                                    @F("Address",          _policy.InsuredAddress)
+                                    @F("City / State",     $"{_policy.InsuredCity}, {_policy.InsuredState} {_policy.InsuredZip}")
+                                    @F("FEIN / SSN",       _policy.InsuredTaxId ?? "—")
+                                    @F("DBA",              _policy.InsuredDba ?? "—")
+                                    @F("Entity Type",      _policy.EntityType ?? "—")
+                                    @F("SIC Code",         _policy.SicCode ?? "—")
+                                </div>
+                            </div>
+
+                            <div class="pd-info-card">
+                                <h3 class="pd-card-hdr">Service Assignment</h3>
+                                <div class="pd-field-grid">
+                                    @F("Producer",         _policy.Producer)
+                                    @F("CSR",              _policy.Csr)
+                                    @F("Branch",           _policy.Branch)
+                                    @F("Account Manager",  _policy.AccountManager ?? "—")
+                                    @F("Underwriter",      _policy.Underwriter ?? "—")
+                                    @F("UW Contact Email", _policy.UwEmail ?? "—")
+                                    @F("UW Phone",         _policy.UwPhone ?? "—")
+                                </div>
+                            </div>
+
+                            <div class="pd-info-card">
+                                <h3 class="pd-card-hdr">Submission &amp; Source</h3>
+                                <div class="pd-field-grid">
+                                    @F("Source",           _policy.Source)
+                                    @F("Sub Ref #",        _policy.SubmissionRef ?? "—")
+                                    @F("Prior Carrier",    _policy.PriorCarrier ?? "—")
+                                    @F("Prior Premium",    _policy.PriorPremium?.ToString("C0") ?? "—")
+                                    @F("Quote #",          _policy.QuoteNumber ?? "—")
+                                    @F("ACORD Form",       _policy.AcordForm ?? "—")
+                                    @F("Created By",       _policy.CreatedBy)
+                                    @F("Created",          _policy.CreatedAt.ToString("MM/dd/yyyy"))
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 1 ── COVERAGES ───────────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Coverages" IconCss="bi bi-shield-half" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">@_coverages.Count coverage(s)</span>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _editCov = new(); _showCovForm = true; }">
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Coverage
+                            </button>
+                        </div>
+                        <SfGrid TValue="CoverageRow" DataSource="_coverages"
+                                AllowSorting="true" EnableHover="true" RowHeight="50">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(CoverageRow.CovCode)"    HeaderText="Code"         Width="110" />
+                                <GridColumn Field="@nameof(CoverageRow.CovName)"    HeaderText="Coverage"     MinWidth="180" />
+                                <GridColumn Field="@nameof(CoverageRow.CovType)"    HeaderText="Type"         Width="120">
+                                    <Template>@{ var c = (CoverageRow)context; }<span class="pd-cov-type">@c.CovType</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CoverageRow.Limit)"      HeaderText="Limit"        Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var c = (CoverageRow)context; }<span class="pd-mono">@(c.Limit.HasValue ? c.Limit.Value.ToString("C0") : "Occurrence")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CoverageRow.Deductible)" HeaderText="Deductible"   Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var c = (CoverageRow)context; }<span class="pd-mono">@(c.Deductible.HasValue ? c.Deductible.Value.ToString("C0") : "—")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CoverageRow.Premium)"    HeaderText="Premium"      Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var c = (CoverageRow)context; }<span class="pd-mono">@c.Premium.ToString("C2")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CoverageRow.Sublimit)"   HeaderText="Sub-Limit"    Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var c = (CoverageRow)context; }<span class="pd-mono">@(c.Sublimit.HasValue ? c.Sublimit.Value.ToString("C0") : "—")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CoverageRow.IsIncluded)" HeaderText="Incl." Width="80">
+                                    <Template>@{ var c = (CoverageRow)context; }<i class="bi @(c.IsIncluded ? "bi-check-circle-fill pd-chk-yes" : "bi-dash-circle pd-chk-no")" aria-hidden="true"></i></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CoverageRow.Notes)"      HeaderText="Notes"        MinWidth="160" />
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 2 ── RISK ITEMS ──────────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Risk Items" IconCss="bi bi-boxes" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">@_riskItems.Count item(s)</span>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _editRisk = new(); _showRiskForm = true; }">
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Item
+                            </button>
+                        </div>
+                        <SfGrid TValue="RiskItem" DataSource="_riskItems"
+                                AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="50">
+                            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+                            <GridColumns>
+                                <GridColumn Field="@nameof(RiskItem.ItemType)"    HeaderText="Type"       Width="130">
+                                    <Template>@{ var r = (RiskItem)context; }<span class="pd-risk-type">@r.ItemType</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(RiskItem.Description)" HeaderText="Description" MinWidth="200" />
+                                <GridColumn Field="@nameof(RiskItem.Year)"        HeaderText="Year"        Width="80" />
+                                <GridColumn Field="@nameof(RiskItem.Make)"        HeaderText="Make/Model"  Width="150" />
+                                <GridColumn Field="@nameof(RiskItem.Vin)"         HeaderText="VIN / Serial" Width="165" />
+                                <GridColumn Field="@nameof(RiskItem.Value)"       HeaderText="Value"       Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var r = (RiskItem)context; }<span class="pd-mono">@(r.Value.HasValue ? r.Value.Value.ToString("C0") : "—")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(RiskItem.Location)"    HeaderText="Location"    Width="150" />
+                                <GridColumn Field="@nameof(RiskItem.IsActive)"    HeaderText="Active"      Width="80">
+                                    <Template>@{ var r = (RiskItem)context; }<i class="bi @(r.IsActive ? "bi-check-circle-fill pd-chk-yes" : "bi-x-circle pd-chk-no")" aria-hidden="true"></i></Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 3 ── DRIVERS / LOCATIONS ─────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Drivers / Locations" IconCss="bi bi-geo-alt" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-dl-tabs">
+                            <button class="pd-dl-tab @(_dlTab=="drivers"?"pd-dl-tab--active":"")" @onclick='()=>_dlTab="drivers"'>
+                                <i class="bi bi-person-badge" aria-hidden="true"></i> Drivers (@_drivers.Count)
+                            </button>
+                            <button class="pd-dl-tab @(_dlTab=="locations"?"pd-dl-tab--active":"")" @onclick='()=>_dlTab="locations"'>
+                                <i class="bi bi-pin-map" aria-hidden="true"></i> Locations (@_locations.Count)
+                            </button>
+                        </div>
+
+                        @if (_dlTab == "drivers")
+                        {
+                            <SfGrid TValue="DriverRow" DataSource="_drivers"
+                                    AllowSorting="true" EnableHover="true" RowHeight="50">
+                                <GridColumns>
+                                    <GridColumn Field="@nameof(DriverRow.Name)"        HeaderText="Name"        MinWidth="160" />
+                                    <GridColumn Field="@nameof(DriverRow.LicenseNum)"  HeaderText="License #"   Width="150" />
+                                    <GridColumn Field="@nameof(DriverRow.State)"       HeaderText="State"       Width="80" />
+                                    <GridColumn Field="@nameof(DriverRow.Dob)"         HeaderText="DOB"         Width="115">
+                                        <Template>@{ var d = (DriverRow)context; }<span class="pd-mono">@d.Dob.ToString("MM/dd/yyyy")</span></Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(DriverRow.YearsExp)"    HeaderText="Exp (yrs)"   Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                                    <GridColumn Field="@nameof(DriverRow.Type)"        HeaderText="Driver Type" Width="140" />
+                                    <GridColumn Field="@nameof(DriverRow.Violations)"  HeaderText="Violations"  Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                        <Template>@{ var d = (DriverRow)context; }
+                                            <span class="@(d.Violations > 0 ? "pd-viol-warn" : "pd-mono")">@d.Violations</span>
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(DriverRow.IsExcluded)"  HeaderText="Excluded"    Width="100">
+                                        <Template>@{ var d = (DriverRow)context; }<i class="bi @(d.IsExcluded ? "bi-x-circle pd-chk-no" : "bi-check-circle-fill pd-chk-yes")" aria-hidden="true"></i></Template>
+                                    </GridColumn>
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                        else
+                        {
+                            <SfGrid TValue="LocationRow" DataSource="_locations"
+                                    AllowSorting="true" EnableHover="true" RowHeight="50">
+                                <GridColumns>
+                                    <GridColumn Field="@nameof(LocationRow.LocNumber)"  HeaderText="#"           Width="60" />
+                                    <GridColumn Field="@nameof(LocationRow.Description)" HeaderText="Description" MinWidth="180" />
+                                    <GridColumn Field="@nameof(LocationRow.Address)"    HeaderText="Address"     Width="200" />
+                                    <GridColumn Field="@nameof(LocationRow.City)"       HeaderText="City"        Width="130" />
+                                    <GridColumn Field="@nameof(LocationRow.State)"      HeaderText="ST"          Width="60" />
+                                    <GridColumn Field="@nameof(LocationRow.Zip)"        HeaderText="ZIP"         Width="90" />
+                                    <GridColumn Field="@nameof(LocationRow.Building)"   HeaderText="Bldg Value"  Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                        <Template>@{ var l = (LocationRow)context; }<span class="pd-mono">@(l.Building.HasValue ? l.Building.Value.ToString("C0") : "—")</span></Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(LocationRow.Contents)"   HeaderText="Contents"    Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                        <Template>@{ var l = (LocationRow)context; }<span class="pd-mono">@(l.Contents.HasValue ? l.Contents.Value.ToString("C0") : "—")</span></Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(LocationRow.IsPrimary)"  HeaderText="Primary"     Width="90">
+                                        <Template>@{ var l = (LocationRow)context; }<i class="bi @(l.IsPrimary ? "bi-star-fill pd-star" : "bi-star")" aria-hidden="true"></i></Template>
+                                    </GridColumn>
+                                </GridColumns>
+                            </SfGrid>
+                        }
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 4 ── DOCUMENTS ───────────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Documents" IconCss="bi bi-folder2" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">@_documents.Count document(s)</span>
+                            <button class="um-btn um-btn-ghost um-btn-sm">
+                                <i class="bi bi-upload" aria-hidden="true"></i> Upload
+                            </button>
+                        </div>
+                        <div class="pd-doc-grid">
+                            @foreach (var doc in _documents)
+                            {
+                                <div class="pd-doc-card">
+                                    <div class="pd-doc-icon pd-doc-@doc.FileType.ToLower()">
+                                        <i class="bi @DocIcon(doc.FileType)" aria-hidden="true"></i>
+                                    </div>
+                                    <div class="pd-doc-info">
+                                        <div class="pd-doc-name">@doc.Name</div>
+                                        <div class="pd-doc-meta">@doc.Category · @doc.UploadedAt.ToString("MM/dd/yyyy") · @doc.FileSize</div>
+                                        <div class="pd-doc-uploader">@doc.UploadedBy</div>
+                                    </div>
+                                    <div class="pd-doc-actions">
+                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Download"><i class="bi bi-download" aria-hidden="true"></i></button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Preview"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 5 ── ACTIVITIES ──────────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Activities" IconCss="bi bi-lightning" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">@_activities.Count activity(ies)</span>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _actForm = new(); _showActForm = true; }">
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Log Activity
+                            </button>
+                        </div>
+                        <div class="pd-timeline">
+                            @foreach (var a in _activities.OrderByDescending(a => a.ActivityDate))
+                            {
+                                <div class="pd-tl-item">
+                                    <div class="pd-tl-dot pd-tl-@a.Category.ToLower()">
+                                        <i class="bi @ActivityIcon(a.Category)" aria-hidden="true"></i>
+                                    </div>
+                                    <div class="pd-tl-line"></div>
+                                    <div class="pd-tl-body">
+                                        <div class="pd-tl-header">
+                                            <span class="pd-tl-title">@a.Subject</span>
+                                            <span class="pd-tl-cat pd-cat-@a.Category.ToLower()">@a.Category</span>
+                                            <span class="pd-tl-date">@a.ActivityDate.ToString("MM/dd/yyyy hh:mm tt")</span>
+                                        </div>
+                                        <div class="pd-tl-meta">
+                                            <span>@a.Channel</span>
+                                            <span>@a.Outcome</span>
+                                            <span>by @a.CreatedBy</span>
+                                        </div>
+                                        @if (!string.IsNullOrEmpty(a.Notes))
+                                        {
+                                            <div class="pd-tl-notes">@a.Notes</div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 6 ── COMMUNICATIONS ──────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Communications" IconCss="bi bi-envelope" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">@_comms.Count message(s)</span>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _commForm = new(); _showCommForm = true; }">
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> New Message
+                            </button>
+                        </div>
+                        <SfGrid TValue="CommRow" DataSource="_comms"
+                                AllowSorting="true" EnableHover="true" RowHeight="52">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(CommRow.SentAt)"    HeaderText="Date"      Width="140">
+                                    <Template>@{ var c = (CommRow)context; }<span class="pd-mono">@c.SentAt.ToString("MM/dd/yyyy")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CommRow.Channel)"   HeaderText="Channel"   Width="110">
+                                    <Template>@{ var c = (CommRow)context; }<span class="pd-comm-chip pd-comm-@c.Channel.ToLower()">@c.Channel</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CommRow.Direction)" HeaderText="Dir."      Width="90">
+                                    <Template>@{ var c = (CommRow)context; }
+                                        <span class="pd-dir-chip @(c.Direction=="Inbound"?"pd-dir-in":"pd-dir-out")">@c.Direction</span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CommRow.Subject)"   HeaderText="Subject"   MinWidth="200" />
+                                <GridColumn Field="@nameof(CommRow.From)"      HeaderText="From"      Width="170" />
+                                <GridColumn Field="@nameof(CommRow.To)"        HeaderText="To"        Width="170" />
+                                <GridColumn Field="@nameof(CommRow.Status)"    HeaderText="Status"    Width="110">
+                                    <Template>@{ var c = (CommRow)context; }<span class="pd-comm-status pd-cstat-@c.Status.ToLower()">@c.Status</span></Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 7 ── BILLING ─────────────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Billing" IconCss="bi bi-receipt" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-billing-summary">
+                            <div class="pd-bill-kpi pd-bill-kpi--prem">
+                                <div class="pd-bill-val">@_policy.WrittenPremium.ToString("C2")</div>
+                                <div class="pd-bill-lbl">Total Billed</div>
+                            </div>
+                            <div class="pd-bill-kpi pd-bill-kpi--paid">
+                                <div class="pd-bill-val">@_invoices.Where(i => i.Status == "Paid").Sum(i => i.Amount).ToString("C2")</div>
+                                <div class="pd-bill-lbl">Total Paid</div>
+                            </div>
+                            <div class="pd-bill-kpi @(_policy.BalanceDue > 0 ? "pd-bill-kpi--due" : "pd-bill-kpi--ok")">
+                                <div class="pd-bill-val">@_policy.BalanceDue.ToString("C2")</div>
+                                <div class="pd-bill-lbl">Balance Due</div>
+                            </div>
+                            <div class="pd-bill-kpi">
+                                <div class="pd-bill-val">@_policy.BillingPlan</div>
+                                <div class="pd-bill-lbl">Billing Plan</div>
+                            </div>
+                        </div>
+
+                        <h4 class="pd-section-hdr2">Installment Schedule</h4>
+                        <SfGrid TValue="InvoiceRow" DataSource="_invoices"
+                                AllowSorting="true" EnableHover="true" RowHeight="48">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(InvoiceRow.InvoiceNum)" HeaderText="Invoice #"    Width="130" />
+                                <GridColumn Field="@nameof(InvoiceRow.DueDate)"    HeaderText="Due Date"     Width="120">
+                                    <Template>@{ var i = (InvoiceRow)context; }<span class="pd-mono @(i.Status == "Overdue" ? "pd-exp-30" : "")">@i.DueDate.ToString("MM/dd/yyyy")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(InvoiceRow.Amount)"     HeaderText="Amount"       Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var i = (InvoiceRow)context; }<span class="pd-mono">@i.Amount.ToString("C2")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(InvoiceRow.AmountPaid)" HeaderText="Paid"         Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var i = (InvoiceRow)context; }<span class="pd-mono">@i.AmountPaid.ToString("C2")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(InvoiceRow.Balance)"    HeaderText="Balance"      Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var i = (InvoiceRow)context; }<span class="pd-mono @(i.Balance > 0 ? "pd-bill-red" : "")">@i.Balance.ToString("C2")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(InvoiceRow.Status)"     HeaderText="Status"       Width="110">
+                                    <Template>@{ var i = (InvoiceRow)context; }<span class="pd-inv-status pd-inv-@i.Status.ToLower()">@i.Status</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(InvoiceRow.PaidDate)"   HeaderText="Paid Date"    Width="120">
+                                    <Template>@{ var i = (InvoiceRow)context; }<span class="pd-mono">@(i.PaidDate.HasValue ? i.PaidDate.Value.ToString("MM/dd/yyyy") : "—")</span></Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 8 ── CLAIMS ──────────────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Claims" IconCss="bi bi-exclamation-circle" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">@_claims.Count claim(s) · @_claims.Count(c => c.Status == "Open") open</span>
+                            <button class="um-btn um-btn-ghost um-btn-sm">
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> Report Claim
+                            </button>
+                        </div>
+                        <SfGrid TValue="ClaimRow" DataSource="_claims"
+                                AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="52">
+                            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+                            <GridColumns>
+                                <GridColumn Field="@nameof(ClaimRow.ClaimNum)"    HeaderText="Claim #"      Width="140" />
+                                <GridColumn Field="@nameof(ClaimRow.LossDate)"    HeaderText="Loss Date"    Width="120">
+                                    <Template>@{ var c = (ClaimRow)context; }<span class="pd-mono">@c.LossDate.ToString("MM/dd/yyyy")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(ClaimRow.LossType)"    HeaderText="Loss Type"    Width="150" />
+                                <GridColumn Field="@nameof(ClaimRow.Description)" HeaderText="Description"  MinWidth="200" />
+                                <GridColumn Field="@nameof(ClaimRow.Status)"      HeaderText="Status"       Width="110">
+                                    <Template>@{ var c = (ClaimRow)context; }<span class="pd-claim-status pd-cs-@c.Status.ToLower()">@c.Status</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(ClaimRow.Reserve)"     HeaderText="Reserve"      Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var c = (ClaimRow)context; }<span class="pd-mono">@c.Reserve.ToString("C0")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(ClaimRow.Paid)"        HeaderText="Paid"         Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var c = (ClaimRow)context; }<span class="pd-mono">@c.Paid.ToString("C0")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(ClaimRow.Adjuster)"    HeaderText="Adjuster"     Width="150" />
+                                <GridColumn Field="@nameof(ClaimRow.ClosedDate)"  HeaderText="Closed"       Width="115">
+                                    <Template>@{ var c = (ClaimRow)context; }<span class="pd-mono">@(c.ClosedDate.HasValue ? c.ClosedDate.Value.ToString("MM/dd/yyyy") : "—")</span></Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 9 ── ENDORSEMENTS ────────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Endorsements" IconCss="bi bi-pen" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">@_endorsements.Count endorsement(s)</span>
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => OpenAction("endorse")'>
+                                <i class="bi bi-plus-lg" aria-hidden="true"></i> New Endorsement
+                            </button>
+                        </div>
+                        <SfGrid TValue="EndorsementRow" DataSource="_endorsements"
+                                AllowSorting="true" EnableHover="true" RowHeight="50">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(EndorsementRow.EndNum)"    HeaderText="Endorse #"   Width="130" />
+                                <GridColumn Field="@nameof(EndorsementRow.EffDate)"   HeaderText="Eff Date"    Width="115">
+                                    <Template>@{ var e = (EndorsementRow)context; }<span class="pd-mono">@e.EffDate.ToString("MM/dd/yyyy")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(EndorsementRow.Type)"      HeaderText="Type"        Width="160" />
+                                <GridColumn Field="@nameof(EndorsementRow.Description)" HeaderText="Description" MinWidth="200" />
+                                <GridColumn Field="@nameof(EndorsementRow.PremChange)" HeaderText="Prem Δ"     Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>
+                                        @{ var e = (EndorsementRow)context; }
+                                        <span class="pd-mono @(e.PremChange > 0 ? "pd-prem-up" : e.PremChange < 0 ? "pd-prem-dn" : "")">
+                                            @(e.PremChange >= 0 ? "+" : "")@e.PremChange.ToString("C2")
+                                        </span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(EndorsementRow.Status)"    HeaderText="Status"      Width="110">
+                                    <Template>@{ var e = (EndorsementRow)context; }<span class="pd-end-status pd-es-@e.Status.ToLower()">@e.Status</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(EndorsementRow.IssuedBy)"  HeaderText="Issued By"   Width="140" />
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 10 ── RENEWALS ───────────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Renewals" IconCss="bi bi-arrow-repeat" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        @if (_renewal is not null)
+                        {
+                            <div class="pd-renewal-banner pd-renewal-@RenewalUrgency(_policy.ExpDate)">
+                                <div class="pd-ren-info">
+                                    <i class="bi bi-arrow-repeat pd-ren-icon" aria-hidden="true"></i>
+                                    <div>
+                                        <div class="pd-ren-title">Renewal Due @_policy.ExpDate.ToString("MMMM dd, yyyy")</div>
+                                        <div class="pd-ren-sub">@DaysLabel(_policy.ExpDate) · Status: <strong>@_renewal.Status</strong></div>
+                                    </div>
+                                </div>
+                                <div class="pd-ren-actions">
+                                    <button class="um-btn um-btn-ghost um-btn-sm">
+                                        <i class="bi bi-arrow-left-right" aria-hidden="true"></i> Remarket
+                                    </button>
+                                    <button class="um-btn um-btn-primary um-btn-sm">
+                                        <i class="bi bi-check-lg" aria-hidden="true"></i> Bind Renewal
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="pd-summary-grid" style="margin-top:1rem">
+                                <div class="pd-info-card">
+                                    <h3 class="pd-card-hdr">Renewal Pipeline</h3>
+                                    <div class="pd-field-grid">
+                                        @F("Status",           _renewal.Status)
+                                        @F("Quoted Premium",   _renewal.QuotedPremium?.ToString("C0") ?? "—")
+                                        @F("Expiring Premium", _policy.WrittenPremium.ToString("C0"))
+                                        @F("Change",           _renewal.QuotedPremium.HasValue ? $"{(_renewal.QuotedPremium.Value - _policy.WrittenPremium):+#,##0.00;-#,##0.00;$0}" : "—")
+                                        @F("Remarketed",       _renewal.Remarketed ? "Yes" : "No")
+                                        @F("Carriers Quoted",  _renewal.CarriersQuoted.ToString())
+                                        @F("Follow-Up Date",   _renewal.FollowUpDate?.ToString("MM/dd/yyyy") ?? "—")
+                                        @F("Assigned To",      _renewal.AssignedTo)
+                                    </div>
+                                </div>
+                            </div>
+                        }
+
+                        <h4 class="pd-section-hdr2" style="margin-top:1.5rem">Renewal History</h4>
+                        <SfGrid TValue="RenewalHistRow" DataSource="_renewalHistory"
+                                AllowSorting="true" EnableHover="true" RowHeight="48">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(RenewalHistRow.PolicyNum)"   HeaderText="Policy #"        Width="160" />
+                                <GridColumn Field="@nameof(RenewalHistRow.EffDate)"     HeaderText="Eff Date"        Width="115">
+                                    <Template>@{ var r = (RenewalHistRow)context; }<span class="pd-mono">@r.EffDate.ToString("MM/dd/yyyy")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(RenewalHistRow.ExpDate)"     HeaderText="Exp Date"        Width="115">
+                                    <Template>@{ var r = (RenewalHistRow)context; }<span class="pd-mono">@r.ExpDate.ToString("MM/dd/yyyy")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(RenewalHistRow.Carrier)"     HeaderText="Carrier"         Width="155" />
+                                <GridColumn Field="@nameof(RenewalHistRow.Premium)"     HeaderText="Premium"         Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var r = (RenewalHistRow)context; }<span class="pd-mono">@r.Premium.ToString("C0")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(RenewalHistRow.Change)"      HeaderText="Δ vs Prior"      Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var r = (RenewalHistRow)context; }
+                                        <span class="pd-mono @(r.Change > 0 ? "pd-prem-up" : r.Change < 0 ? "pd-prem-dn" : "")">
+                                            @(r.Change >= 0 ? "+" : "")@r.Change.ToString("C0")
+                                        </span>
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(RenewalHistRow.Outcome)"     HeaderText="Outcome"         Width="120">
+                                    <Template>@{ var r = (RenewalHistRow)context; }<span class="pd-end-status pd-es-@r.Outcome.ToLower()">@r.Outcome</span></Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 11 ── COMMISSIONS ────────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Commissions" IconCss="bi bi-percent" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-billing-summary">
+                            <div class="pd-bill-kpi pd-bill-kpi--prem">
+                                <div class="pd-bill-val">@_commissions.Sum(c => c.GrossAmt).ToString("C2")</div>
+                                <div class="pd-bill-lbl">Gross Commission</div>
+                            </div>
+                            <div class="pd-bill-kpi pd-bill-kpi--paid">
+                                <div class="pd-bill-val">@_commissions.Sum(c => c.AgencyAmt).ToString("C2")</div>
+                                <div class="pd-bill-lbl">Agency Net</div>
+                            </div>
+                            <div class="pd-bill-kpi">
+                                <div class="pd-bill-val">@_commissions.Sum(c => c.ProducerAmt).ToString("C2")</div>
+                                <div class="pd-bill-lbl">Producer Split</div>
+                            </div>
+                            <div class="pd-bill-kpi">
+                                <div class="pd-bill-val">@(_commissions.Count > 0 ? $"{_commissions.Average(c => c.CommPct):P1}" : "—")</div>
+                                <div class="pd-bill-lbl">Avg Comm %</div>
+                            </div>
+                        </div>
+
+                        <SfGrid TValue="CommissionRow" DataSource="_commissions"
+                                AllowSorting="true" EnableHover="true" RowHeight="50">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(CommissionRow.Period)"      HeaderText="Period"      Width="120" />
+                                <GridColumn Field="@nameof(CommissionRow.Type)"        HeaderText="Type"        Width="120" />
+                                <GridColumn Field="@nameof(CommissionRow.Producer)"    HeaderText="Producer"    Width="155" />
+                                <GridColumn Field="@nameof(CommissionRow.CommPct)"     HeaderText="Comm %"      Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var c = (CommissionRow)context; }<span class="pd-mono">@c.CommPct.ToString("P1")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CommissionRow.GrossAmt)"    HeaderText="Gross"       Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var c = (CommissionRow)context; }<span class="pd-mono">@c.GrossAmt.ToString("C2")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CommissionRow.AgencyAmt)"   HeaderText="Agency Net"  Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var c = (CommissionRow)context; }<span class="pd-mono">@c.AgencyAmt.ToString("C2")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CommissionRow.ProducerAmt)" HeaderText="Producer"    Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <Template>@{ var c = (CommissionRow)context; }<span class="pd-mono">@c.ProducerAmt.ToString("C2")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CommissionRow.Status)"      HeaderText="Status"      Width="110">
+                                    <Template>@{ var c = (CommissionRow)context; }<span class="pd-inv-status pd-inv-@c.Status.ToLower()">@c.Status</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(CommissionRow.PaidDate)"    HeaderText="Paid Date"   Width="120">
+                                    <Template>@{ var c = (CommissionRow)context; }<span class="pd-mono">@(c.PaidDate.HasValue ? c.PaidDate.Value.ToString("MM/dd/yyyy") : "—")</span></Template>
+                                </GridColumn>
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+            <!-- 12 ── AUDIT ──────────────────────────────────────────────── -->
+            <TabItem>
+                <ChildContent><TabHeader Text="Audit" IconCss="bi bi-journal-text" /></ChildContent>
+                <ContentTemplate>
+                    <div class="pd-tab-body">
+                        <div class="pd-tab-toolbar">
+                            <span class="pd-tab-count">@_auditLog.Count event(s)</span>
+                        </div>
+                        <SfGrid TValue="AuditEntry" DataSource="_auditLog"
+                                AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="50">
+                            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+                            <GridColumns>
+                                <GridColumn Field="@nameof(AuditEntry.Timestamp)"  HeaderText="Timestamp"  Width="155">
+                                    <Template>@{ var a = (AuditEntry)context; }<span class="pd-mono">@a.Timestamp.ToString("MM/dd/yy hh:mm tt")</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(AuditEntry.Action)"     HeaderText="Action"     Width="160">
+                                    <Template>@{ var a = (AuditEntry)context; }<span class="pd-audit-action pd-aa-@a.Action.ToLower().Replace(" ","-")">@a.Action</span></Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(AuditEntry.Field)"      HeaderText="Field"      Width="170" />
+                                <GridColumn Field="@nameof(AuditEntry.OldValue)"   HeaderText="Old Value"  MinWidth="160" />
+                                <GridColumn Field="@nameof(AuditEntry.NewValue)"   HeaderText="New Value"  MinWidth="160" />
+                                <GridColumn Field="@nameof(AuditEntry.ChangedBy)"  HeaderText="Changed By" Width="145" />
+                                <GridColumn Field="@nameof(AuditEntry.IpAddress)"  HeaderText="IP"         Width="130" />
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                </ContentTemplate>
+            </TabItem>
+
+        </Tabs>
+    </AppDetailTabs>
+}
+
+<!-- ── ACTION DIALOGS ──────────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showActionDlg" Width="480px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="pd-dlg-hdr"><i class="bi @_actionIcon" aria-hidden="true"></i> @_actionTitle</span></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <p class="pd-dlg-lead">@_actionDesc</p>
+                @if (_activeAction is "endorse" or "rewrite" or "remarket" or "cancel" or "reinstate")
+                {
+                    <div class="pd-dlg-grid">
+                        @if (_activeAction is "endorse" or "rewrite")
+                        {
+                            <SfDatePicker TValue="DateTime" Placeholder="Effective date" @bind-Value="_actionDate" />
+                            <SfNumericTextBox TValue="decimal" Placeholder="Premium change ($)" Format="C2" @bind-Value="_actionPremDelta" />
+                        }
+                        @if (_activeAction == "cancel")
+                        {
+                            <SfDatePicker TValue="DateTime" Placeholder="Cancellation date" @bind-Value="_actionDate" />
+                            <SfDropDownList TValue="string" TItem="PdLv" DataSource="_cancelReasonOpts"
+                                            Placeholder="Cancellation reason *" Width="100%" @bind-Value="_actionReason">
+                                <DropDownListFieldSettings Value="Value" Text="Label" />
+                            </SfDropDownList>
+                        }
+                        @if (_activeAction == "reinstate")
+                        {
+                            <SfDatePicker TValue="DateTime" Placeholder="Reinstatement date" @bind-Value="_actionDate" />
+                        }
+                    </div>
+                }
+                @if (_activeAction is "certificate")
+                {
+                    <div class="pd-dlg-grid">
+                        <SfTextBox Placeholder="Certificate holder name *" @bind-Value="_actionCertHolder" />
+                        <SfTextBox Placeholder="Certificate holder address" @bind-Value="_actionCertAddr" />
+                        <SfDropDownList TValue="string" TItem="PdLv" DataSource="_certTypeOpts"
+                                        Placeholder="Certificate type" Width="100%" @bind-Value="_actionReason">
+                            <DropDownListFieldSettings Value="Value" Text="Label" />
+                        </SfDropDownList>
+                        <SfDatePicker TValue="DateTime" Placeholder="Effective date" @bind-Value="_actionDate" />
+                    </div>
+                }
+                @if (_activeAction is "esign")
+                {
+                    <div class="pd-dlg-grid">
+                        <SfTextBox Placeholder="Signer name *" @bind-Value="_actionCertHolder" />
+                        <SfTextBox Placeholder="Signer email *" @bind-Value="_actionCertAddr" />
+                        <SfDropDownList TValue="string" TItem="PdLv" DataSource="_esignDocOpts"
+                                        Placeholder="Document to sign" Width="100%" @bind-Value="_actionReason">
+                            <DropDownListFieldSettings Value="Value" Text="Label" />
+                        </SfDropDownList>
+                    </div>
+                }
+                @if (_activeAction == "message")
+                {
+                    <div class="pd-dlg-grid-1">
+                        <SfDropDownList TValue="string" TItem="PdLv" DataSource="_msgChannelOpts"
+                                        Placeholder="Channel" Width="100%" @bind-Value="_actionReason">
+                            <DropDownListFieldSettings Value="Value" Text="Label" />
+                        </SfDropDownList>
+                        <SfTextBox Placeholder="To (email / phone)" @bind-Value="_actionCertHolder" />
+                        <SfTextBox Placeholder="Subject" @bind-Value="_actionCertAddr" />
+                        <SfTextBox Placeholder="Message body…" Multiline="true"
+                                   HtmlAttributes='@(new() {{"rows","4"}})' @bind-Value="_actionNote" />
+                    </div>
+                }
+                <SfTextBox Placeholder="Notes / reason" Multiline="true"
+                           HtmlAttributes='@(new() {{"rows","2"}})' @bind-Value="_actionNote" />
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showActionDlg = false">Cancel</button>
+                <button class="um-btn @(_activeAction == "cancel" ? "um-btn-danger" : "um-btn-primary")"
+                        @onclick="ExecuteActionAsync">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Confirm
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- Log Activity Dialog -->
+<SfDialog @bind-Visible="_showActForm" Width="520px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="pd-dlg-hdr"><i class="bi bi-lightning" aria-hidden="true"></i> Log Activity</span></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="pd-dlg-grid">
+                    <SfTextBox Placeholder="Subject *" @bind-Value="_actForm.Subject" />
+                    <SfDropDownList TValue="string" TItem="PdLv" DataSource="_actCategoryOpts"
+                                    Placeholder="Category" Width="100%" @bind-Value="_actForm.Category">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="PdLv" DataSource="_actChannelOpts"
+                                    Placeholder="Channel" Width="100%" @bind-Value="_actForm.Channel">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="PdLv" DataSource="_actOutcomeOpts"
+                                    Placeholder="Outcome" Width="100%" @bind-Value="_actForm.Outcome">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                    <SfDateTimePicker TValue="DateTime" Placeholder="Date / time" @bind-Value="_actForm.ActivityDate" />
+                </div>
+                <SfTextBox Placeholder="Notes" Multiline="true" HtmlAttributes='@(new() {{"rows","3"}})' @bind-Value="_actForm.Notes" />
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showActForm = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveActivityAsync">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- Compose Message Dialog -->
+<SfDialog @bind-Visible="_showCommForm" Width="520px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="pd-dlg-hdr"><i class="bi bi-envelope" aria-hidden="true"></i> New Message</span></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="pd-dlg-grid">
+                    <SfDropDownList TValue="string" TItem="PdLv" DataSource="_msgChannelOpts"
+                                    Placeholder="Channel" Width="100%" @bind-Value="_commForm.Channel">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                    <SfTextBox Placeholder="To" @bind-Value="_commForm.To" />
+                    <SfTextBox Placeholder="Subject" @bind-Value="_commForm.Subject" />
+                </div>
+                <SfTextBox Placeholder="Message…" Multiline="true" HtmlAttributes='@(new() {{"rows","5"}})' @bind-Value="_commForm.Body" />
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showCommForm = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SendMessageAsync">
+                    <i class="bi bi-send" aria-hidden="true"></i> Send
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid PolicyId { get; set; }
+
+    // ── Component refs & state ──────────────────────────────────────────────
+    private SfToast? _toast;
+    private bool     _loading = true;
+    private int      _tab     = 0;
+    private string   _dlTab   = "drivers";
+
+    // ── Data ────────────────────────────────────────────────────────────────
+    private PolicyRecord?           _policy;
+    private List<CoverageRow>       _coverages      = [];
+    private List<RiskItem>          _riskItems      = [];
+    private List<DriverRow>         _drivers        = [];
+    private List<LocationRow>       _locations      = [];
+    private List<DocRow>            _documents      = [];
+    private List<ActivityRow>       _activities     = [];
+    private List<CommRow>           _comms          = [];
+    private List<InvoiceRow>        _invoices       = [];
+    private List<ClaimRow>          _claims         = [];
+    private List<EndorsementRow>    _endorsements   = [];
+    private RenewalPipeline?        _renewal;
+    private List<RenewalHistRow>    _renewalHistory = [];
+    private List<CommissionRow>     _commissions    = [];
+    private List<AuditEntry>        _auditLog       = [];
+
+    // ── Action dialog ───────────────────────────────────────────────────────
+    private bool    _showActionDlg  = false;
+    private string  _activeAction   = string.Empty;
+    private string  _actionTitle    = string.Empty;
+    private string  _actionDesc     = string.Empty;
+    private string  _actionIcon     = string.Empty;
+    private string  _actionNote     = string.Empty;
+    private string  _actionReason   = string.Empty;
+    private string  _actionCertHolder = string.Empty;
+    private string  _actionCertAddr   = string.Empty;
+    private decimal _actionPremDelta  = 0m;
+    private DateTime _actionDate      = DateTime.Today;
+
+    // ── Sub-form state ──────────────────────────────────────────────────────
+    private bool         _showCovForm  = false;
+    private bool         _showRiskForm = false;
+    private bool         _showActForm  = false;
+    private bool         _showCommForm = false;
+    private CoverageRow  _editCov      = new();
+    private RiskItem     _editRisk     = new();
+    private ActivityForm _actForm      = new();
+    private CommForm     _commForm     = new();
+
+    // ── Dropdown options ────────────────────────────────────────────────────
+    private static readonly List<PdLv> _cancelReasonOpts =
+    [
+        new("insured-request","Insured Request"), new("non-payment","Non-Payment"),
+        new("underwriting","Underwriting"), new("fraud","Fraud / Misrepresentation"),
+        new("other","Other"),
+    ];
+    private static readonly List<PdLv> _certTypeOpts =
+    [
+        new("acord25","ACORD 25 — Liability"), new("acord27","ACORD 27 — Property"),
+        new("acord28","ACORD 28 — Commercial Property"), new("acord75","ACORD 75 — Workers Comp"),
+    ];
+    private static readonly List<PdLv> _esignDocOpts =
+    [
+        new("app","Application"), new("bind","Bind Request"), new("cancel","Notice of Cancellation"),
+        new("cert","Certificate Request"), new("change","Change Request"),
+    ];
+    private static readonly List<PdLv> _msgChannelOpts =
+    [
+        new("Email","Email"), new("SMS","SMS"), new("Phone","Phone"), new("Letter","Letter"), new("Portal","Portal"),
+    ];
+    private static readonly List<PdLv> _actCategoryOpts =
+    [
+        new("Call","Call"), new("Email","Email"), new("Note","Note"), new("Meeting","Meeting"),
+        new("Renewal","Renewal"), new("Claim","Claim"), new("Endorsement","Endorsement"),
+    ];
+    private static readonly List<PdLv> _actChannelOpts =
+    [
+        new("Phone","Phone"), new("Email","Email"), new("In-Person","In-Person"), new("Portal","Portal"),
+    ];
+    private static readonly List<PdLv> _actOutcomeOpts =
+    [
+        new("Completed","Completed"), new("Left Voicemail","Left Voicemail"), new("No Answer","No Answer"),
+        new("Pending","Pending"), new("Follow-Up Required","Follow-Up Required"),
+    ];
+
+    // ── Lifecycle ───────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home", "/"), new("Policies", "/policies"),
+            new("Policy Detail", $"/policies/{PolicyId}"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; StateHasChanged();
+        await Task.Delay(0);
+        BuildStubData();
+        _loading = false;
+    }
+
+    // ── Action handling ─────────────────────────────────────────────────────
+    private void OpenAction(string action)
+    {
+        _activeAction    = action;
+        _actionNote      = string.Empty;
+        _actionReason    = string.Empty;
+        _actionCertHolder = string.Empty;
+        _actionCertAddr  = string.Empty;
+        _actionPremDelta = 0m;
+        _actionDate      = DateTime.Today;
+
+        (_actionTitle, _actionDesc, _actionIcon) = action switch
+        {
+            "endorse"     => ("Endorse Policy",      $"Create an endorsement on policy {_policy?.PolicyNumber}.",           "bi-pen"),
+            "remarket"    => ("Remarket Policy",     $"Start a remarket submission for {_policy?.PolicyNumber}.",           "bi-arrow-left-right"),
+            "rewrite"     => ("Rewrite Policy",      $"Rewrite policy {_policy?.PolicyNumber} with a new carrier or terms.","bi-arrow-repeat"),
+            "cancel"      => ("Cancel Policy",       $"Cancel policy {_policy?.PolicyNumber}. This action cannot be undone.","bi-x-circle"),
+            "reinstate"   => ("Reinstate Policy",    $"Reinstate cancelled policy {_policy?.PolicyNumber}.",                "bi-shield-check"),
+            "certificate" => ("Issue Certificate",   $"Generate an ACORD certificate for {_policy?.PolicyNumber}.",         "bi-award"),
+            "esign"       => ("Request E-Signature", $"Send a document for electronic signature.",                          "bi-pen-fill"),
+            "message"     => ("Send Message",        $"Send a message related to policy {_policy?.PolicyNumber}.",          "bi-chat"),
+            _             => (action, string.Empty, "bi-lightning"),
+        };
+        _showActionDlg = true;
+    }
+
+    private async Task ExecuteActionAsync()
+    {
+        if (_policy is null) return;
+        switch (_activeAction)
+        {
+            case "cancel":
+                _policy.Status     = "Cancelled";
+                _policy.CancelDate = _actionDate;
+                AddAuditEntry("Policy Cancelled", "Status", "Active", "Cancelled");
+                break;
+            case "reinstate":
+                _policy.Status        = "Active";
+                _policy.ReinstateDate = _actionDate;
+                AddAuditEntry("Policy Reinstated", "Status", "Cancelled", "Active");
+                break;
+            case "endorse":
+                _endorsements.Insert(0, new EndorsementRow
+                {
+                    EndNum = $"END-{_endorsements.Count + 1:000}",
+                    EffDate = _actionDate, Type = "Change Endorsement",
+                    Description = string.IsNullOrWhiteSpace(_actionNote) ? "Policy endorsement" : _actionNote,
+                    PremChange = _actionPremDelta, Status = "Issued", IssuedBy = "System User",
+                });
+                AddAuditEntry("Endorsement Issued", "Endorsement", "—", $"END-{_endorsements.Count:000}");
+                break;
+        }
+        _showActionDlg = false;
+        await ShowToast($"{_actionTitle} — recorded successfully.");
+    }
+
+    private async Task SaveActivityAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_actForm.Subject)) return;
+        _activities.Insert(0, new ActivityRow
+        {
+            Subject = _actForm.Subject, Category = _actForm.Category,
+            Channel = _actForm.Channel, Outcome = _actForm.Outcome,
+            ActivityDate = _actForm.ActivityDate, Notes = _actForm.Notes, CreatedBy = "Current User",
+        });
+        _showActForm = false;
+        await ShowToast("Activity logged.");
+    }
+
+    private async Task SendMessageAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_commForm.To)) return;
+        _comms.Insert(0, new CommRow
+        {
+            SentAt = DateTime.Now, Channel = _commForm.Channel, Direction = "Outbound",
+            Subject = _commForm.Subject, From = "Agency", To = _commForm.To, Status = "Sent",
+        });
+        _showCommForm = false;
+        await ShowToast("Message sent.");
+    }
+
+    private void AddAuditEntry(string action, string field, string oldVal, string newVal)
+    {
+        _auditLog.Insert(0, new AuditEntry
+        {
+            Timestamp = DateTime.Now, Action = action, Field = field,
+            OldValue = oldVal, NewValue = newVal, ChangedBy = "Current User", IpAddress = "10.0.0.1",
+        });
+    }
+
+    private async Task ShowToast(string msg)
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "e-toast-success" });
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────────
+    private static int  DaysToExp(DateTime exp)   => (int)(exp.Date - DateTime.Today).TotalDays;
+    private static string DaysLabel(DateTime exp)
+    {
+        var d = DaysToExp(exp);
+        return d < 0 ? $"Expired {-d}d ago" : d == 0 ? "Expires today" : $"{d}d remaining";
+    }
+    private static string ExpChipCss(DateTime exp)
+    {
+        var d = DaysToExp(exp);
+        return d < 0 ? "pd-sub-chip--expired" : d <= 30 ? "pd-sub-chip--exp30" : d <= 60 ? "pd-sub-chip--exp60" : string.Empty;
+    }
+    private static string RenewalUrgency(DateTime exp)
+    {
+        var d = DaysToExp(exp);
+        return d < 0 ? "past" : d <= 30 ? "urgent" : d <= 60 ? "soon" : "normal";
+    }
+    private static string LobKey(string lob) => lob.ToLower().Replace(" ", "-").Replace("&", "").Replace("  ", "-");
+    private static string LobIcon(string lob) => lob switch
+    {
+        "Commercial Auto"          => "bi-truck",
+        "Commercial Property"      => "bi-building",
+        "General Liability"        => "bi-shield",
+        "Workers Comp"             => "bi-person-bandage",
+        "Professional Liability"   => "bi-briefcase",
+        "Umbrella"                 => "bi-umbrella",
+        "Cyber"                    => "bi-cpu",
+        "Directors & Officers"     => "bi-person-badge",
+        "Personal Auto"            => "bi-car-front",
+        "Homeowners"               => "bi-house",
+        _                          => "bi-shield-check",
+    };
+    private static string DocIcon(string ft) => ft switch
+    {
+        "PDF" => "bi-file-earmark-pdf", "DOCX" => "bi-file-earmark-word",
+        "XLSX" => "bi-file-earmark-excel", "JPG" or "PNG" => "bi-file-earmark-image",
+        _ => "bi-file-earmark",
+    };
+    private static string ActivityIcon(string cat) => cat switch
+    {
+        "Call"        => "bi-telephone",
+        "Email"       => "bi-envelope",
+        "Note"        => "bi-sticky",
+        "Meeting"     => "bi-people",
+        "Renewal"     => "bi-arrow-repeat",
+        "Claim"       => "bi-exclamation-circle",
+        "Endorsement" => "bi-pen",
+        _             => "bi-lightning",
+    };
+
+    // Field label helper
+    private RenderFragment F(string label, string value) => __builder =>
+    {
+        __builder.OpenElement(0, "div"); __builder.AddAttribute(1, "class", "pd-field-row");
+        __builder.OpenElement(2, "span"); __builder.AddAttribute(3, "class", "pd-field-lbl"); __builder.AddContent(4, label); __builder.CloseElement();
+        __builder.OpenElement(5, "span"); __builder.AddAttribute(6, "class", "pd-field-val"); __builder.AddContent(7, value); __builder.CloseElement();
+        __builder.CloseElement();
+    };
+
+    // KPI helper
+    private RenderFragment PdKpi(string label, string value, string icon, string colorCss) => __builder =>
+    {
+        __builder.OpenElement(0, "div"); __builder.AddAttribute(1, "class", $"pd-kpi-card {colorCss}");
+        __builder.OpenElement(2, "div"); __builder.AddAttribute(3, "class", "pd-kpi-icon");
+        __builder.OpenElement(4, "i");   __builder.AddAttribute(5, "class", $"bi {icon}"); __builder.CloseElement();
+        __builder.CloseElement();
+        __builder.OpenElement(6, "div");
+        __builder.OpenElement(7, "div"); __builder.AddAttribute(8, "class", "pd-kpi-val"); __builder.AddContent(9, value); __builder.CloseElement();
+        __builder.OpenElement(10, "div"); __builder.AddAttribute(11, "class", "pd-kpi-lbl"); __builder.AddContent(12, label); __builder.CloseElement();
+        __builder.CloseElement();
+        __builder.CloseElement();
+    };
+
+    // ── Stub data ────────────────────────────────────────────────────────────
+    private void BuildStubData()
+    {
+        _policy = new PolicyRecord
+        {
+            PolicyNumber    = "POL-2024-001847",
+            Account         = "Sullivan Manufacturing LLC",
+            AccountId       = PolicyId,
+            Carrier         = "Travelers Insurance",
+            Lob             = "General Liability",
+            Status          = "Active",
+            PolicyType      = "Occurrence",
+            Program         = "Commercial Lines Package",
+            IsPackage       = true,
+            EffDate         = new DateTime(2024, 6, 1),
+            ExpDate         = new DateTime(2025, 6, 1),
+            IssueDate       = new DateTime(2024, 5, 28),
+            BindDate        = new DateTime(2024, 5, 26),
+            TermMonths      = 12,
+            WrittenPremium  = 42_500m,
+            AnnualPremium   = 42_500m,
+            AgencyFee       = 250m,
+            TaxesFees       = 1_870m,
+            BalanceDue      = 4_250m,
+            BillingPlan     = "10-Pay",
+            PaymentMethod   = "ACH",
+            PrimaryInsured  = "Sullivan Manufacturing LLC",
+            InsuredType     = "Commercial",
+            InsuredAddress  = "1422 Industrial Blvd",
+            InsuredCity     = "Chicago",
+            InsuredState    = "IL",
+            InsuredZip      = "60601",
+            InsuredTaxId    = "36-2987441",
+            EntityType      = "LLC",
+            SicCode         = "3462",
+            Producer        = "James Miller",
+            Csr             = "Amy Scott",
+            Branch          = "Midwest",
+            AccountManager  = "Sarah Chen",
+            Underwriter     = "Mark Reynolds",
+            UwEmail         = "mreynolds@travelers.com",
+            UwPhone         = "(800) 555-0142",
+            Source          = "Direct Solicitation",
+            SubmissionRef   = "SUB-2024-09812",
+            PriorCarrier    = "Hartford Insurance",
+            PriorPremium    = 39_200m,
+            QuoteNumber     = "QT-2024-04412",
+            AcordForm       = "ACORD 125",
+            CreatedBy       = "James Miller",
+            CreatedAt       = new DateTime(2024, 5, 10),
+            OpenClaims      = 1,
+        };
+
+        _coverages =
+        [
+            new() { CovCode="GL-OCCUR",  CovName="General Liability — Occurrence",   CovType="Primary",   Limit=1_000_000m,  Deductible=0m,      Premium=18_400m, IsIncluded=true  },
+            new() { CovCode="GL-AGG",    CovName="General Aggregate",                 CovType="Primary",   Limit=2_000_000m,  Deductible=null,    Premium=0m,       IsIncluded=true,  Notes="Included in GL" },
+            new() { CovCode="PROD-COMP", CovName="Products / Completed Operations",   CovType="Primary",   Limit=2_000_000m,  Deductible=null,    Premium=4_200m,   IsIncluded=true  },
+            new() { CovCode="PI-AGG",    CovName="Personal &amp; Advertising Injury", CovType="Primary",   Limit=1_000_000m,  Deductible=null,    Premium=0m,       IsIncluded=true,  Notes="Included in GL" },
+            new() { CovCode="MED-PAY",   CovName="Medical Payments",                  CovType="Supplemental", Limit=10_000m, Deductible=null,    Premium=350m,     IsIncluded=true  },
+            new() { CovCode="FIRE-DMG",  CovName="Fire Damage Legal Liability",       CovType="Supplemental", Limit=100_000m,Deductible=null,    Premium=0m,       IsIncluded=true,  Notes="Included" },
+            new() { CovCode="HIRED-NBO", CovName="Hired &amp; Non-Owned Auto",        CovType="Endorsement",  Limit=1_000_000m,Deductible=1_000m, Premium=2_150m,  IsIncluded=true  },
+            new() { CovCode="EMP-BENE",  CovName="Employee Benefits Liability",       CovType="Endorsement",  Limit=1_000_000m,Deductible=1_000m, Premium=1_800m,  IsIncluded=true  },
+            new() { CovCode="POLL-LIAB", CovName="Pollution Liability",               CovType="Excluded",     Limit=null,      Deductible=null,   Premium=0m,       IsIncluded=false, Notes="Excluded — see separate policy" },
+        ];
+
+        _riskItems =
+        [
+            new() { ItemType="Equipment",  Description="CNC Milling Machine #1",  Year=2019, Make="Haas VF-2",     Vin="HM-019-4421", Value=125_000m, Location="Plant A", IsActive=true },
+            new() { ItemType="Equipment",  Description="CNC Milling Machine #2",  Year=2021, Make="Haas VF-4",     Vin="HM-021-6109", Value=148_000m, Location="Plant A", IsActive=true },
+            new() { ItemType="Equipment",  Description="Forklift — Clark C30",    Year=2018, Make="Clark C30",     Vin="CLK-018-8812", Value=28_000m, Location="Warehouse", IsActive=true },
+            new() { ItemType="Vehicle",    Description="Delivery Van",            Year=2022, Make="Ford Transit",  Vin="1FTBR1Y82NKA12345", Value=38_500m, Location="Fleet", IsActive=true },
+            new() { ItemType="Location",   Description="Primary Manufacturing Plant", Year=null, Make=null, Vin=null, Value=2_400_000m, Location="1422 Industrial Blvd", IsActive=true },
+            new() { ItemType="Location",   Description="Warehouse & Distribution",   Year=null, Make=null, Vin=null, Value=850_000m,   Location="1600 Commerce Dr",     IsActive=true },
+        ];
+
+        _drivers =
+        [
+            new() { Name="Robert Sullivan", LicenseNum="S612-4891-20", State="IL", Dob=new DateTime(1968,4,12), YearsExp=35, Type="Primary",     Violations=0, IsExcluded=false },
+            new() { Name="Mike Torres",     LicenseNum="T312-8821-19", State="IL", Dob=new DateTime(1985,9,22), YearsExp=18, Type="Fleet Driver", Violations=1, IsExcluded=false },
+            new() { Name="Sandra Webb",     LicenseNum="W221-4419-21", State="IL", Dob=new DateTime(1991,3,7),  YearsExp=12, Type="Fleet Driver", Violations=0, IsExcluded=false },
+        ];
+
+        _locations =
+        [
+            new() { LocNumber=1, Description="Primary Manufacturing Plant",  Address="1422 Industrial Blvd", City="Chicago", State="IL", Zip="60601", Building=2_400_000m, Contents=650_000m, IsPrimary=true  },
+            new() { LocNumber=2, Description="Warehouse & Distribution Hub", Address="1600 Commerce Dr",     City="Chicago", State="IL", Zip="60607", Building=850_000m,   Contents=320_000m, IsPrimary=false },
+            new() { LocNumber=3, Description="Administrative Office",        Address="200 N LaSalle St",     City="Chicago", State="IL", Zip="60601", Building=null,        Contents=85_000m,  IsPrimary=false },
+        ];
+
+        _documents =
+        [
+            new() { Name="Dec Page — GL Policy",           Category="Dec Page",    FileType="PDF",  FileSize="412 KB", UploadedAt=new DateTime(2024,6,1),  UploadedBy="System" },
+            new() { Name="ACORD 125 — Commercial App",     Category="Application", FileType="PDF",  FileSize="1.2 MB", UploadedAt=new DateTime(2024,5,26), UploadedBy="James Miller" },
+            new() { Name="Bind Confirmation",              Category="Bind",        FileType="PDF",  FileSize="98 KB",  UploadedAt=new DateTime(2024,5,26), UploadedBy="James Miller" },
+            new() { Name="Certificate of Insurance #1001", Category="Certificate", FileType="PDF",  FileSize="145 KB", UploadedAt=new DateTime(2024,6,15), UploadedBy="Amy Scott" },
+            new() { Name="Endorsement END-001",            Category="Endorsement", FileType="PDF",  FileSize="210 KB", UploadedAt=new DateTime(2024,8,10), UploadedBy="Amy Scott" },
+            new() { Name="Loss Runs — Prior 5 Years",      Category="Loss Runs",   FileType="PDF",  FileSize="3.1 MB", UploadedAt=new DateTime(2024,5,10), UploadedBy="James Miller" },
+            new() { Name="Schedule of Values",             Category="Valuation",   FileType="XLSX", FileSize="88 KB",  UploadedAt=new DateTime(2024,5,15), UploadedBy="James Miller" },
+        ];
+
+        var today = DateTime.Today;
+        _activities =
+        [
+            new() { Subject="Renewal review call",           Category="Call",        Channel="Phone",  Outcome="Completed",         ActivityDate=today.AddDays(-5),  Notes="Discussed upcoming renewal. Client wants to remarket Workers Comp.", CreatedBy="Amy Scott" },
+            new() { Subject="Sent renewal questionnaire",    Category="Email",       Channel="Email",  Outcome="Completed",         ActivityDate=today.AddDays(-12), Notes="ACORD 125 renewal questionnaire sent to insured.",                   CreatedBy="Amy Scott" },
+            new() { Subject="Claim follow-up CLM-2024-0312", Category="Claim",       Channel="Phone",  Outcome="Pending",           ActivityDate=today.AddDays(-18), Notes="Adjuster update pending. Reserve set at $18,500.",                   CreatedBy="Amy Scott" },
+            new() { Subject="Certificate issued #1001",      Category="Endorsement", Channel="Portal", Outcome="Completed",         ActivityDate=today.AddDays(-30), Notes="ACORD 25 certificate issued for ABC Contractor.",                    CreatedBy="Amy Scott" },
+            new() { Subject="Mid-term review meeting",       Category="Meeting",     Channel="In-Person", Outcome="Completed",      ActivityDate=today.AddDays(-60), Notes="Reviewed coverage adequacy. Recommended umbrella limit increase.",   CreatedBy="James Miller" },
+            new() { Subject="Policy bound",                  Category="Note",        Channel="Portal", Outcome="Completed",         ActivityDate=new DateTime(2024,5,26), Notes="Policy bound with Travelers. Binder issued.",                  CreatedBy="James Miller" },
+        ];
+
+        _comms =
+        [
+            new() { SentAt=today.AddDays(-5),  Channel="Email", Direction="Outbound", Subject="Renewal Questionnaire",          From="amy.scott@agency.com",          To="rsullivan@sullivanmfg.com", Status="Delivered" },
+            new() { SentAt=today.AddDays(-12), Channel="Email", Direction="Inbound",  Subject="RE: Certificate Request",        From="rsullivan@sullivanmfg.com",      To="amy.scott@agency.com",     Status="Read" },
+            new() { SentAt=today.AddDays(-18), Channel="SMS",   Direction="Outbound", Subject="Claim status update",            From="+13125550142",                   To="+13125550198",             Status="Delivered" },
+            new() { SentAt=today.AddDays(-30), Channel="Email", Direction="Outbound", Subject="Certificate of Insurance #1001", From="amy.scott@agency.com",          To="rsullivan@sullivanmfg.com", Status="Delivered" },
+            new() { SentAt=today.AddDays(-90), Channel="Letter",Direction="Outbound", Subject="Policy Issuance Package",        From="Agency",                         To="1422 Industrial Blvd, Chicago IL 60601", Status="Sent" },
+        ];
+
+        decimal installAmt = Math.Round(_policy.WrittenPremium / 10, 2);
+        _invoices = Enumerable.Range(0, 10).Select(i =>
+        {
+            var due   = _policy.EffDate.AddMonths(i);
+            var isPaid= i < 9;
+            return new InvoiceRow
+            {
+                InvoiceNum = $"INV-{2024:0000}-{i + 1:000}",
+                DueDate    = due,
+                Amount     = installAmt,
+                AmountPaid = isPaid ? installAmt : 0m,
+                Balance    = isPaid ? 0m : installAmt,
+                Status     = due < today && !isPaid ? "Overdue" : isPaid ? "Paid" : due == today ? "Due" : "Scheduled",
+                PaidDate   = isPaid ? due.AddDays(2) : null,
+            };
+        }).ToList();
+
+        _claims =
+        [
+            new() { ClaimNum="CLM-2024-0312", LossDate=new DateTime(2024,10,4), LossType="General Liability", Description="Slip and fall — visitor on premises",  Status="Open",   Reserve=45_000m, Paid=12_500m, Adjuster="TravClaims-Unit4", ClosedDate=null },
+            new() { ClaimNum="CLM-2023-1148", LossDate=new DateTime(2023,7,18), LossType="Property Damage",   Description="Fire suppression system activation",   Status="Closed", Reserve=0m,      Paid=28_400m, Adjuster="TravClaims-Unit2", ClosedDate=new DateTime(2024,1,12) },
+            new() { ClaimNum="CLM-2022-0891", LossDate=new DateTime(2022,3,2),  LossType="General Liability", Description="Third-party property damage — loading", Status="Closed", Reserve=0m,      Paid=9_200m,  Adjuster="TravClaims-Unit4", ClosedDate=new DateTime(2022,9,30) },
+        ];
+
+        _endorsements =
+        [
+            new() { EndNum="END-001", EffDate=new DateTime(2024,8,1),  Type="Add Additional Insured",   Description="Added ABC Contractor as Additional Insured",      PremChange=0m,     Status="Issued",  IssuedBy="Amy Scott"    },
+            new() { EndNum="END-002", EffDate=new DateTime(2024,9,15), Type="Schedule Change",          Description="Added CNC Milling Machine #2 to Schedule of Items",PremChange=1_200m, Status="Issued",  IssuedBy="Amy Scott"    },
+            new() { EndNum="END-003", EffDate=new DateTime(2024,11,1), Type="Coverage Change",          Description="Added Hired & Non-Owned Auto endorsement",         PremChange=2_150m, Status="Pending", IssuedBy="James Miller" },
+        ];
+
+        _renewal = new RenewalPipeline
+        {
+            Status         = "In Progress",
+            QuotedPremium  = null,
+            Remarketed     = false,
+            CarriersQuoted = 0,
+            FollowUpDate   = today.AddDays(14),
+            AssignedTo     = "Amy Scott",
+        };
+
+        _renewalHistory =
+        [
+            new() { PolicyNum="POL-2023-001847", EffDate=new DateTime(2023,6,1), ExpDate=new DateTime(2024,6,1), Carrier="Travelers Insurance",    Premium=39_200m, Change=0m,     Outcome="Renewed" },
+            new() { PolicyNum="POL-2022-001847", EffDate=new DateTime(2022,6,1), ExpDate=new DateTime(2023,6,1), Carrier="Travelers Insurance",    Premium=36_800m, Change=2_400m, Outcome="Renewed" },
+            new() { PolicyNum="POL-2021-001847", EffDate=new DateTime(2021,6,1), ExpDate=new DateTime(2022,6,1), Carrier="Hartford Insurance",     Premium=34_200m, Change=-2_600m,Outcome="Renewed" },
+            new() { PolicyNum="POL-2020-001847", EffDate=new DateTime(2020,6,1), ExpDate=new DateTime(2021,6,1), Carrier="Hartford Insurance",     Premium=36_800m, Change=0m,     Outcome="Renewed" },
+        ];
+
+        _commissions = Enumerable.Range(0, 10).Select(i =>
+        {
+            var gross = Math.Round(_policy.WrittenPremium / 10 * 0.12m, 2);
+            return new CommissionRow
+            {
+                Period      = _policy.EffDate.AddMonths(i).ToString("MMM yyyy"),
+                Type        = i == 0 ? "New Business" : "Renewal",
+                Producer    = _policy.Producer,
+                CommPct     = 0.12m,
+                GrossAmt    = gross,
+                AgencyAmt   = Math.Round(gross * 0.6m, 2),
+                ProducerAmt = Math.Round(gross * 0.4m, 2),
+                Status      = i < 9 ? "Paid" : "Pending",
+                PaidDate    = i < 9 ? _policy.EffDate.AddMonths(i).AddDays(15) : null,
+            };
+        }).ToList();
+
+        _auditLog =
+        [
+            new() { Timestamp=today.AddDays(-5),  Action="Activity Logged",  Field="Activities",     OldValue="—",       NewValue="Renewal review call",          ChangedBy="Amy Scott",    IpAddress="10.0.1.42" },
+            new() { Timestamp=today.AddDays(-30), Action="Endorsement Added",Field="Endorsements",   OldValue="1",       NewValue="2",                            ChangedBy="Amy Scott",    IpAddress="10.0.1.42" },
+            new() { Timestamp=today.AddDays(-60), Action="Coverage Changed", Field="Limit (GL-OCCUR)",OldValue="$500,000",NewValue="$1,000,000",                  ChangedBy="James Miller", IpAddress="10.0.1.11" },
+            new() { Timestamp=new DateTime(2024,5,26), Action="Policy Bound",Field="Status",          OldValue="Quoted",  NewValue="Active",                      ChangedBy="James Miller", IpAddress="10.0.1.11" },
+            new() { Timestamp=new DateTime(2024,5,10), Action="Policy Created",Field="—",             OldValue="—",       NewValue="POL-2024-001847",             ChangedBy="James Miller", IpAddress="10.0.1.11" },
+        ];
+    }
+
+    // ── Models ───────────────────────────────────────────────────────────────
+    private sealed class PolicyRecord
+    {
+        public string   PolicyNumber  { get; set; } = string.Empty;
+        public string   Account       { get; set; } = string.Empty;
+        public Guid     AccountId     { get; set; }
+        public string   Carrier       { get; set; } = string.Empty;
+        public string   Lob           { get; set; } = string.Empty;
+        public string   Status        { get; set; } = "Active";
+        public string   PolicyType    { get; set; } = string.Empty;
+        public string   Program       { get; set; } = string.Empty;
+        public bool     IsPackage     { get; set; }
+        public string?  MasterPolicy  { get; set; }
+        public DateTime EffDate       { get; set; }
+        public DateTime ExpDate       { get; set; }
+        public DateTime? IssueDate    { get; set; }
+        public DateTime? BindDate     { get; set; }
+        public DateTime? CancelDate   { get; set; }
+        public DateTime? ReinstateDate{ get; set; }
+        public int      TermMonths    { get; set; }
+        public decimal  WrittenPremium{ get; set; }
+        public decimal  AnnualPremium { get; set; }
+        public decimal  AgencyFee     { get; set; }
+        public decimal  TaxesFees     { get; set; }
+        public decimal  BalanceDue    { get; set; }
+        public string   BillingPlan   { get; set; } = string.Empty;
+        public string   PaymentMethod { get; set; } = string.Empty;
+        public string   PrimaryInsured{ get; set; } = string.Empty;
+        public string   InsuredType   { get; set; } = string.Empty;
+        public string   InsuredAddress{ get; set; } = string.Empty;
+        public string   InsuredCity   { get; set; } = string.Empty;
+        public string   InsuredState  { get; set; } = string.Empty;
+        public string   InsuredZip    { get; set; } = string.Empty;
+        public string?  InsuredTaxId  { get; set; }
+        public string?  InsuredDba    { get; set; }
+        public string?  EntityType    { get; set; }
+        public string?  SicCode       { get; set; }
+        public string   Producer      { get; set; } = string.Empty;
+        public string   Csr           { get; set; } = string.Empty;
+        public string   Branch        { get; set; } = string.Empty;
+        public string?  AccountManager{ get; set; }
+        public string?  Underwriter   { get; set; }
+        public string?  UwEmail       { get; set; }
+        public string?  UwPhone       { get; set; }
+        public string   Source        { get; set; } = string.Empty;
+        public string?  SubmissionRef { get; set; }
+        public string?  PriorCarrier  { get; set; }
+        public decimal? PriorPremium  { get; set; }
+        public string?  QuoteNumber   { get; set; }
+        public string?  AcordForm     { get; set; }
+        public string   CreatedBy     { get; set; } = string.Empty;
+        public DateTime CreatedAt     { get; set; }
+        public int      OpenClaims    { get; set; }
+    }
+
+    private sealed class CoverageRow
+    {
+        public string   CovCode    { get; set; } = string.Empty;
+        public string   CovName    { get; set; } = string.Empty;
+        public string   CovType    { get; set; } = string.Empty;
+        public decimal? Limit      { get; set; }
+        public decimal? Deductible { get; set; }
+        public decimal  Premium    { get; set; }
+        public decimal? Sublimit   { get; set; }
+        public bool     IsIncluded { get; set; }
+        public string?  Notes      { get; set; }
+    }
+
+    private sealed class RiskItem
+    {
+        public string   ItemType    { get; set; } = string.Empty;
+        public string   Description { get; set; } = string.Empty;
+        public int?     Year        { get; set; }
+        public string?  Make        { get; set; }
+        public string?  Vin         { get; set; }
+        public decimal? Value       { get; set; }
+        public string?  Location    { get; set; }
+        public bool     IsActive    { get; set; }
+    }
+
+    private sealed class DriverRow
+    {
+        public string   Name       { get; set; } = string.Empty;
+        public string   LicenseNum { get; set; } = string.Empty;
+        public string   State      { get; set; } = string.Empty;
+        public DateTime Dob        { get; set; }
+        public int      YearsExp   { get; set; }
+        public string   Type       { get; set; } = string.Empty;
+        public int      Violations { get; set; }
+        public bool     IsExcluded { get; set; }
+    }
+
+    private sealed class LocationRow
+    {
+        public int      LocNumber   { get; set; }
+        public string   Description { get; set; } = string.Empty;
+        public string   Address     { get; set; } = string.Empty;
+        public string   City        { get; set; } = string.Empty;
+        public string   State       { get; set; } = string.Empty;
+        public string   Zip         { get; set; } = string.Empty;
+        public decimal? Building    { get; set; }
+        public decimal? Contents    { get; set; }
+        public bool     IsPrimary   { get; set; }
+    }
+
+    private sealed class DocRow
+    {
+        public string   Name       { get; set; } = string.Empty;
+        public string   Category   { get; set; } = string.Empty;
+        public string   FileType   { get; set; } = string.Empty;
+        public string   FileSize   { get; set; } = string.Empty;
+        public DateTime UploadedAt { get; set; }
+        public string   UploadedBy { get; set; } = string.Empty;
+    }
+
+    private sealed class ActivityRow
+    {
+        public string   Subject      { get; set; } = string.Empty;
+        public string   Category     { get; set; } = string.Empty;
+        public string   Channel      { get; set; } = string.Empty;
+        public string   Outcome      { get; set; } = string.Empty;
+        public DateTime ActivityDate { get; set; } = DateTime.Now;
+        public string?  Notes        { get; set; }
+        public string   CreatedBy    { get; set; } = string.Empty;
+    }
+
+    private sealed class CommRow
+    {
+        public DateTime SentAt    { get; set; }
+        public string   Channel   { get; set; } = string.Empty;
+        public string   Direction { get; set; } = string.Empty;
+        public string   Subject   { get; set; } = string.Empty;
+        public string   From      { get; set; } = string.Empty;
+        public string   To        { get; set; } = string.Empty;
+        public string   Status    { get; set; } = string.Empty;
+    }
+
+    private sealed class InvoiceRow
+    {
+        public string    InvoiceNum { get; set; } = string.Empty;
+        public DateTime  DueDate    { get; set; }
+        public decimal   Amount     { get; set; }
+        public decimal   AmountPaid { get; set; }
+        public decimal   Balance    { get; set; }
+        public string    Status     { get; set; } = string.Empty;
+        public DateTime? PaidDate   { get; set; }
+    }
+
+    private sealed class ClaimRow
+    {
+        public string    ClaimNum   { get; set; } = string.Empty;
+        public DateTime  LossDate   { get; set; }
+        public string    LossType   { get; set; } = string.Empty;
+        public string    Description{ get; set; } = string.Empty;
+        public string    Status     { get; set; } = string.Empty;
+        public decimal   Reserve    { get; set; }
+        public decimal   Paid       { get; set; }
+        public string    Adjuster   { get; set; } = string.Empty;
+        public DateTime? ClosedDate { get; set; }
+    }
+
+    private sealed class EndorsementRow
+    {
+        public string   EndNum      { get; set; } = string.Empty;
+        public DateTime EffDate     { get; set; }
+        public string   Type        { get; set; } = string.Empty;
+        public string   Description { get; set; } = string.Empty;
+        public decimal  PremChange  { get; set; }
+        public string   Status      { get; set; } = string.Empty;
+        public string   IssuedBy    { get; set; } = string.Empty;
+    }
+
+    private sealed class RenewalPipeline
+    {
+        public string    Status        { get; set; } = string.Empty;
+        public decimal?  QuotedPremium { get; set; }
+        public bool      Remarketed    { get; set; }
+        public int       CarriersQuoted{ get; set; }
+        public DateTime? FollowUpDate  { get; set; }
+        public string    AssignedTo    { get; set; } = string.Empty;
+    }
+
+    private sealed class RenewalHistRow
+    {
+        public string   PolicyNum { get; set; } = string.Empty;
+        public DateTime EffDate   { get; set; }
+        public DateTime ExpDate   { get; set; }
+        public string   Carrier   { get; set; } = string.Empty;
+        public decimal  Premium   { get; set; }
+        public decimal  Change    { get; set; }
+        public string   Outcome   { get; set; } = string.Empty;
+    }
+
+    private sealed class CommissionRow
+    {
+        public string    Period      { get; set; } = string.Empty;
+        public string    Type        { get; set; } = string.Empty;
+        public string    Producer    { get; set; } = string.Empty;
+        public decimal   CommPct     { get; set; }
+        public decimal   GrossAmt    { get; set; }
+        public decimal   AgencyAmt   { get; set; }
+        public decimal   ProducerAmt { get; set; }
+        public string    Status      { get; set; } = string.Empty;
+        public DateTime? PaidDate    { get; set; }
+    }
+
+    private sealed class AuditEntry
+    {
+        public DateTime Timestamp  { get; set; }
+        public string   Action     { get; set; } = string.Empty;
+        public string   Field      { get; set; } = string.Empty;
+        public string   OldValue   { get; set; } = string.Empty;
+        public string   NewValue   { get; set; } = string.Empty;
+        public string   ChangedBy  { get; set; } = string.Empty;
+        public string   IpAddress  { get; set; } = string.Empty;
+    }
+
+    private sealed class ActivityForm
+    {
+        public string   Subject      { get; set; } = string.Empty;
+        public string   Category     { get; set; } = "Call";
+        public string   Channel      { get; set; } = "Phone";
+        public string   Outcome      { get; set; } = "Completed";
+        public DateTime ActivityDate { get; set; } = DateTime.Now;
+        public string   Notes        { get; set; } = string.Empty;
+    }
+
+    private sealed class CommForm
+    {
+        public string Channel { get; set; } = "Email";
+        public string To      { get; set; } = string.Empty;
+        public string Subject { get; set; } = string.Empty;
+        public string Body    { get; set; } = string.Empty;
+    }
+
+    private sealed record PdLv(string Value, string Label);
+}

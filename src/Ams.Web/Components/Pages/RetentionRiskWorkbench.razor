@@ -1,0 +1,460 @@
+@page "/renewals/risk"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Retention Risk Workbench — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Retention Risk Workbench"
+               Subtitle="AI-powered churn scoring across premium, claims, sentiment, outreach, payments, service, and coverage signals"
+               Icon="bi-shield-exclamation">
+    <Actions>
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="RunAiScoring"
+                title="Re-run AI scoring engine">
+            <i class="bi bi-cpu" aria-hidden="true"></i> Re-score All
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── AI SCORING LEGEND ─────────────────────────────────────────── -->
+<div class="rrw-legend-bar">
+    <div class="rrw-legend-title"><i class="bi bi-cpu" aria-hidden="true"></i> AI Scoring Signals</div>
+    @foreach (var sig in _signals)
+    {
+        <div class="rrw-legend-item" title="@sig.Description">
+            <span class="rrw-sig-pill rrw-sig-@sig.Key">
+                <i class="bi @sig.Icon" aria-hidden="true"></i> @sig.Label
+            </span>
+            <span class="rrw-sig-weight">@sig.Weight%</span>
+        </div>
+    }
+    <div class="rrw-legend-note">
+        <i class="bi bi-info-circle" aria-hidden="true"></i>
+        Score 0–100 · Higher = higher churn risk
+    </div>
+</div>
+
+<!-- ── TIER OVERVIEW CARDS ───────────────────────────────────────── -->
+<div class="rrw-tier-strip">
+    <div class="rrw-tier-card rrw-tier-high">
+        <div class="rrw-tier-icon"><i class="bi bi-shield-fill-x" aria-hidden="true"></i></div>
+        <div>
+            <div class="rrw-tier-val">@_accounts.Count(a => a.CompositeScore >= 70)</div>
+            <div class="rrw-tier-lbl">High Risk (≥70)</div>
+            <div class="rrw-tier-prem">@_accounts.Where(a => a.CompositeScore >= 70).Sum(a => a.Premium).ToString("C0") at stake</div>
+        </div>
+    </div>
+    <div class="rrw-tier-card rrw-tier-med">
+        <div class="rrw-tier-icon"><i class="bi bi-shield-fill-exclamation" aria-hidden="true"></i></div>
+        <div>
+            <div class="rrw-tier-val">@_accounts.Count(a => a.CompositeScore is >= 40 and < 70)</div>
+            <div class="rrw-tier-lbl">Medium Risk (40–69)</div>
+            <div class="rrw-tier-prem">@_accounts.Where(a => a.CompositeScore is >= 40 and < 70).Sum(a => a.Premium).ToString("C0") at stake</div>
+        </div>
+    </div>
+    <div class="rrw-tier-card rrw-tier-low">
+        <div class="rrw-tier-icon"><i class="bi bi-shield-fill-check" aria-hidden="true"></i></div>
+        <div>
+            <div class="rrw-tier-val">@_accounts.Count(a => a.CompositeScore < 40)</div>
+            <div class="rrw-tier-lbl">Low Risk (&lt;40)</div>
+            <div class="rrw-tier-prem">@_accounts.Where(a => a.CompositeScore < 40).Sum(a => a.Premium).ToString("C0") projected retained</div>
+        </div>
+    </div>
+    <div class="rrw-tier-card rrw-tier-total">
+        <div class="rrw-tier-icon"><i class="bi bi-currency-dollar" aria-hidden="true"></i></div>
+        <div>
+            <div class="rrw-tier-val">@_accounts.Sum(a => a.Premium).ToString("C0")</div>
+            <div class="rrw-tier-lbl">Total Premium in Pipeline</div>
+            <div class="rrw-tier-prem">
+                Est. retention:
+                <strong class="rrw-ret-pct">@EstimatedRetentionPct%</strong>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── HEAT MAP BY LOB ───────────────────────────────────────────── -->
+<div class="rrw-heatmap-section">
+    <div class="rrw-section-hdr">
+        <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> Risk Heat Map — by Line of Business
+    </div>
+    <div class="rrw-heatmap">
+        @foreach (var lob in _accounts.Select(a => a.Lob).Distinct().OrderBy(x => x))
+        {
+            var lobAccts = _accounts.Where(a => a.Lob == lob).ToList();
+            var avgScore = lobAccts.Any() ? (int)lobAccts.Average(a => a.CompositeScore) : 0;
+            <div class="rrw-hm-cell rrw-hm-@HeatCss(avgScore)">
+                <div class="rrw-hm-lob">@lob</div>
+                <div class="rrw-hm-score">@avgScore</div>
+                <div class="rrw-hm-count">@lobAccts.Count acct(s)</div>
+            </div>
+        }
+    </div>
+</div>
+
+<!-- ── FILTER BAR ────────────────────────────────────────────────── -->
+<div class="rrw-filter-bar">
+    <input class="e-input rrw-search" @bind="_search" @bind:event="oninput"
+           placeholder="Search account, producer, carrier…" />
+    <select class="e-input rrw-filter-sel" @bind="_lobFilter">
+        <option value="">All Lines</option>
+        @foreach (var l in _accounts.Select(a => a.Lob).Distinct().OrderBy(x => x)) { <option>@l</option> }
+    </select>
+    <select class="e-input rrw-filter-sel" @bind="_producerFilter">
+        <option value="">All Producers</option>
+        @foreach (var p in _accounts.Select(a => a.Producer).Distinct().OrderBy(x => x)) { <option>@p</option> }
+    </select>
+    <div class="rrw-tier-pills">
+        @foreach (var t in new[]{ ("all","All"), ("high","High"), ("med","Medium"), ("low","Low") })
+        {
+            <button class="rrw-pill @(_tierFilter == t.Item1 ? "rrw-pill-active" : "")"
+                    @onclick="() => _tierFilter = t.Item1">@t.Item2</button>
+        }
+    </div>
+    <select class="e-input rrw-filter-sel" @bind="_sortBy">
+        <option value="score">Sort: Score ↓</option>
+        <option value="premium">Sort: Premium ↓</option>
+        <option value="days">Sort: Days to Expiry ↑</option>
+        <option value="account">Sort: Account A–Z</option>
+    </select>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+        <i class="bi bi-x" aria-hidden="true"></i> Reset
+    </button>
+    <span class="rrw-filter-count">@Filtered.Count() account(s)</span>
+</div>
+
+<!-- ── ACCOUNT CARDS ─────────────────────────────────────────────── -->
+<div class="rrw-card-grid">
+    @foreach (var acct in Filtered)
+    {
+        <div class="rrw-acct-card rrw-tier-border-@RiskCss(acct.CompositeScore)">
+
+            <!-- Card header -->
+            <div class="rrw-acct-head">
+                <div class="rrw-acct-name-row">
+                    <button class="rrw-acct-link" @onclick="() => OpenRenewal(acct)">@acct.AccountName</button>
+                    <span class="rrw-acct-pol">@acct.PolicyNumber</span>
+                </div>
+                <div class="rrw-acct-meta-row">
+                    <span class="rrw-lob-chip">@acct.Lob</span>
+                    <span class="rrw-sub-chip"><i class="bi bi-building-fill" aria-hidden="true"></i>@acct.Carrier</span>
+                    <span class="rrw-days-chip rrw-days-@DaysCss(acct.DaysToExpiry)">
+                        <i class="bi bi-clock" aria-hidden="true"></i>@DaysLabel(acct.DaysToExpiry)
+                    </span>
+                    <span class="rrw-prem-chip"><i class="bi bi-cash" aria-hidden="true"></i>@acct.Premium.ToString("C0")</span>
+                </div>
+            </div>
+
+            <!-- Composite AI score gauge -->
+            <div class="rrw-score-row">
+                <div class="rrw-score-gauge rrw-gauge-@RiskCss(acct.CompositeScore)">
+                    <div class="rrw-gauge-val">@acct.CompositeScore</div>
+                    <div class="rrw-gauge-lbl">AI Risk</div>
+                </div>
+                <div class="rrw-score-bars">
+                    @foreach (var sig in acct.Signals)
+                    {
+                        <div class="rrw-sig-row">
+                            <span class="rrw-sig-lbl" title="@sig.Description">
+                                <i class="bi @sig.Icon" aria-hidden="true"></i>@sig.Label
+                            </span>
+                            <div class="rrw-sig-bar-wrap">
+                                <div class="rrw-sig-bar rrw-sigb-@SignalCss(sig.Score)"
+                                     style="width:@sig.Score%"></div>
+                            </div>
+                            <span class="rrw-sig-score rrw-sigs-@SignalCss(sig.Score)">@sig.Score</span>
+                            @if (!string.IsNullOrEmpty(sig.Flag))
+                            {
+                                <span class="rrw-sig-flag rrw-flag-@SignalCss(sig.Score)" title="@sig.Flag">
+                                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                                </span>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- Retention probability -->
+            <div class="rrw-ret-row">
+                <span class="rrw-ret-lbl">Est. Retention Probability:</span>
+                <div class="rrw-ret-bar-wrap">
+                    <div class="rrw-ret-bar" style="width:@acct.RetentionProbability%"></div>
+                </div>
+                <span class="rrw-ret-val @(acct.RetentionProbability >= 75 ? "rrw-ret-high" : acct.RetentionProbability >= 50 ? "rrw-ret-med" : "rrw-ret-low")">
+                    @acct.RetentionProbability%
+                </span>
+            </div>
+
+            <!-- Top risk driver -->
+            @if (!string.IsNullOrEmpty(acct.TopRiskDriver))
+            {
+                <div class="rrw-driver-row">
+                    <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+                    <span>@acct.TopRiskDriver</span>
+                </div>
+            }
+
+            <!-- Recommended action -->
+            <div class="rrw-rec-row">
+                <span class="rrw-rec-chip rrw-rec-@acct.RecActionType.ToLower().Replace(" ","")">
+                    <i class="bi @acct.RecActionIcon" aria-hidden="true"></i> @acct.RecActionType
+                </span>
+                <span class="rrw-rec-text">@acct.RecAction</span>
+            </div>
+
+            <!-- Footer -->
+            <div class="rrw-acct-footer">
+                <span class="rrw-footer-prod">
+                    <i class="bi bi-person-badge" aria-hidden="true"></i>@acct.Producer
+                </span>
+                <div class="rrw-footer-actions">
+                    <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => OpenRenewal(acct)">
+                        <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Open Renewal
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-xs"
+                            @onclick='() => Nav.NavigateTo("/renewals/remarket")'>
+                        <i class="bi bi-arrow-left-right" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    SfToast _toast = default!;
+
+    string _search         = "";
+    string _lobFilter      = "";
+    string _producerFilter = "";
+    string _tierFilter     = "all";
+    string _sortBy         = "score";
+
+    // ── Signal definition ─────────────────────────────────────────
+    sealed record SignalDef(string Key, string Icon, string Label, int Weight, string Description);
+    readonly SignalDef[] _signals =
+    {
+        new("prem",    "bi-graph-up-arrow",      "Premium Increase",      20, "Year-over-year premium change vs. account's stated budget tolerance."),
+        new("claims",  "bi-exclamation-circle",   "Claims History",        18, "Open claims, incurred losses, and 5-year loss ratio trend."),
+        new("sentiment","bi-chat-heart",          "Comm. Sentiment",       15, "NLP analysis of inbound email/call tone and satisfaction signals."),
+        new("outreach","bi-envelope-x",           "Unanswered Outreach",   15, "Number of outbound touches with no response in the last 30 days."),
+        new("payments","bi-credit-card",          "Payment Issues",        14, "Late payments, NSFs, or payment plan delinquencies in current term."),
+        new("backlog", "bi-stack",                "Service Backlog",       10, "Open service requests, unresolved endorsements, pending certificates."),
+        new("covgaps", "bi-shield-minus",         "Coverage Gaps",         8,  "Identified underinsured exposures or coverage not aligned with risk."),
+    };
+
+    // ── Account model ─────────────────────────────────────────────
+    sealed class SignalScore
+    {
+        public string Key         { get; set; } = "";
+        public string Icon        { get; set; } = "";
+        public string Label       { get; set; } = "";
+        public int    Score       { get; set; }
+        public string Description { get; set; } = "";
+        public string Flag        { get; set; } = "";
+    }
+
+    sealed class RiskAccount
+    {
+        public Guid     RenewalId            { get; set; }
+        public Guid     PolicyId             { get; set; }
+        public string   AccountName          { get; set; } = "";
+        public string   PolicyNumber         { get; set; } = "";
+        public string   Lob                  { get; set; } = "";
+        public string   Carrier              { get; set; } = "";
+        public int      DaysToExpiry         { get; set; }
+        public decimal  Premium              { get; set; }
+        public string   Producer             { get; set; } = "";
+        public int      CompositeScore       { get; set; }
+        public int      RetentionProbability { get; set; }
+        public string   TopRiskDriver        { get; set; } = "";
+        public string   RecAction            { get; set; } = "";
+        public string   RecActionType        { get; set; } = "";
+        public string   RecActionIcon        { get; set; } = "";
+        public List<SignalScore> Signals     { get; set; } = new();
+    }
+
+    readonly List<RiskAccount> _accounts = new();
+
+    int EstimatedRetentionPct
+    {
+        get
+        {
+            if (!_accounts.Any()) return 0;
+            return (int)_accounts.Average(a => a.RetentionProbability);
+        }
+    }
+
+    IEnumerable<RiskAccount> Filtered
+    {
+        get
+        {
+            var q = _accounts.AsEnumerable();
+            if (!string.IsNullOrEmpty(_search))
+                q = q.Where(a =>
+                    a.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+                    a.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+                    a.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrEmpty(_lobFilter))
+                q = q.Where(a => a.Lob == _lobFilter);
+            if (!string.IsNullOrEmpty(_producerFilter))
+                q = q.Where(a => a.Producer == _producerFilter);
+            q = _tierFilter switch
+            {
+                "high" => q.Where(a => a.CompositeScore >= 70),
+                "med"  => q.Where(a => a.CompositeScore is >= 40 and < 70),
+                "low"  => q.Where(a => a.CompositeScore < 40),
+                _      => q
+            };
+            q = _sortBy switch
+            {
+                "premium" => q.OrderByDescending(a => a.Premium),
+                "days"    => q.OrderBy(a => a.DaysToExpiry),
+                "account" => q.OrderBy(a => a.AccountName),
+                _         => q.OrderByDescending(a => a.CompositeScore)
+            };
+            return q;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Renewals","/renewals"), new("Risk Workbench","/renewals/risk"));
+        await Task.Delay(0);
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _accounts.Clear();
+        _accounts.AddRange(new[]
+        {
+            MakeAccount("Bridgewater Hotels",    "LIB-GL-2024-77210","General Liability",  "Liberty Mutual",       37, 24_800m, "Maria Santos",
+                new[]{82,71,60,85,40,55,70},
+                "71% loss ratio and 85 unanswered outreach score are primary churn drivers.",
+                "Schedule executive meeting and present retention proposal.", "Relationship", "bi-handshake"),
+
+            MakeAccount("Crestview Elementary",  "LIB-GL-2023-44008","General Liability",  "Liberty Mutual",       -5, 7_400m,  "Maria Santos",
+                new[]{90,62,75,95,55,70,80},
+                "No response to 4 outreach attempts. Competitor known to have submitted quote.",
+                "Immediate outbound call — escalate to producer.", "Urgent Outreach", "bi-telephone-fill"),
+
+            MakeAccount("Laredo Steel Works",    "ZUR-GL-2023-18820","General Liability",  "Zurich American",     -15, 22_100m, "Kevin Obi",
+                new[]{78,85,65,80,45,60,70},
+                "85% loss ratio — carrier likely to non-renew or apply major surcharge.",
+                "Present E&S alternative markets now.", "Remarketing", "bi-arrow-left-right"),
+
+            MakeAccount("Coastal Seafood Dist.", "CNA-GL-2024-71004","General Liability",  "CNA Commercial",       88, 11_600m, "Kevin Obi",
+                new[]{72,44,55,80,35,65,60},
+                "Sentiment analysis shows frustration in last 3 emails re: certificate delays.",
+                "Resolve open service backlog before initiating renewal conversation.", "Service", "bi-tools"),
+
+            MakeAccount("Sullivan Mfg. LLC",     "TRV-GL-2024-00421","General Liability",  "Travelers Indemnity",  18, 17_250m, "Maria Santos",
+                new[]{65,28,20,70,10,30,40},
+                "9.2% premium increase exceeds client's stated budget threshold.",
+                "Negotiate with UW for sub-8% increase; compare Cincinnati Financial quote.", "Negotiation", "bi-chat-dots"),
+
+            MakeAccount("Apex Medical Group",    "MKL-PL-2024-28004","Professional Liab.", "Markel Corporation",   61, 14_200m, "Maria Santos",
+                new[]{48,5,30,55,25,60,35},
+                "High service backlog (60): 3 open certificate requests, 2 pending endorsements.",
+                "Clear service backlog before renewal outreach begins.", "Service", "bi-tools"),
+
+            MakeAccount("Dallas Roofing LLC",    "CNA-WC-2024-55102","Workers Comp",       "CNA Commercial",       45,  9_400m, "Kevin Obi",
+                new[]{55,33,25,60,20,45,30},
+                "Unanswered outreach score of 60 — 2 emails, 1 call unreturned since notice.",
+                "Try text/portal outreach as alternate channel.", "Outreach", "bi-envelope"),
+
+            MakeAccount("Harbor Tech Inc.",      "TRV-CP-2024-18801","Commercial Property","Travelers Indemnity",  28, 13_500m, "James Park",
+                new[]{60,38,40,55,20,35,45},
+                "Coverage gap identified: new equipment not scheduled on policy.",
+                "Initiate coverage review — propose inland marine floater.", "Coverage", "bi-shield-plus"),
+
+            MakeAccount("Metro Freight Co.",     "HFD-CA-2024-14822","Commercial Auto",    "Hartford Fire & Cas.", 24, 31_500m, "James Park",
+                new[]{40,55,35,20,15,10,25},
+                "55 claims history score: 2 at-fault accidents in 2023.",
+                "Prepare loss mitigation narrative for UW; safety program documentation.", "Underwriting", "bi-file-earmark-text"),
+
+            MakeAccount("Sun Valley Resort",     "HFD-UMB-2024-38810","Umbrella",          "Hartford Fire & Cas.", 75,  8_200m, "James Park",
+                new[]{35,0,20,30,10,20,15},
+                "Low risk across all signals — strong relationship, clean loss history.",
+                "Standard renewal process — send notice and confirm coverage adequacy.", "Standard", "bi-check-circle"),
+
+            MakeAccount("Greenleaf Nurseries",   "TRV-CP-2024-62011","Commercial Property","Travelers Indemnity",  52,  6_750m, "Sarah Kim",
+                new[]{20,12,10,15,5,10,8},
+                "Low risk. Premium increase minimal, no claims, positive client sentiment.",
+                "Confirm renewal terms and issue binder.", "Standard", "bi-check-circle"),
+
+            MakeAccount("Pioneer Automotive",    "TRV-CA-2024-90221","Commercial Auto",    "Travelers Indemnity",  95, 19_800m, "Sarah Kim",
+                new[]{28,22,15,20,5,10,12},
+                "Low risk. Early in renewal cycle — begin pre-renewal application gathering.",
+                "Send pre-renewal questionnaire and schedule application call.", "Standard", "bi-file-earmark"),
+        });
+    }
+
+    static RiskAccount MakeAccount(string acct, string polNum, string lob, string carrier,
+        int days, decimal prem, string producer, int[] scores,
+        string topDriver, string recAction, string recType, string recIcon)
+    {
+        var defs = new[] {
+            ("prem",    "bi-graph-up-arrow",    "Prem. Increase",  "Year-over-year premium change."),
+            ("claims",  "bi-exclamation-circle","Claims History",   "5-year loss ratio and open claims."),
+            ("sentiment","bi-chat-heart",       "Sentiment",       "Communication tone analysis."),
+            ("outreach","bi-envelope-x",        "Outreach",        "Unanswered outreach attempts."),
+            ("payments","bi-credit-card",       "Payments",        "Late payments or NSFs."),
+            ("backlog", "bi-stack",             "Svc Backlog",     "Open service requests."),
+            ("covgaps", "bi-shield-minus",      "Cov. Gaps",       "Underinsured exposures identified."),
+        };
+        var signals = defs.Select((d, i) => new SignalScore
+        {
+            Key = d.Item1, Icon = d.Item2, Label = d.Item3, Score = scores[i],
+            Description = d.Item4,
+            Flag = scores[i] >= 70 ? "Elevated — review immediately" : ""
+        }).ToList();
+
+        var composite = (int)(
+            scores[0] * .20 + scores[1] * .18 + scores[2] * .15 +
+            scores[3] * .15 + scores[4] * .14 + scores[5] * .10 + scores[6] * .08);
+
+        return new RiskAccount
+        {
+            RenewalId = Guid.NewGuid(), PolicyId = Guid.NewGuid(),
+            AccountName = acct, PolicyNumber = polNum, Lob = lob, Carrier = carrier,
+            DaysToExpiry = days, Premium = prem, Producer = producer,
+            CompositeScore = composite,
+            RetentionProbability = Math.Max(5, 100 - composite),
+            TopRiskDriver = topDriver,
+            RecAction = recAction, RecActionType = recType, RecActionIcon = recIcon,
+            Signals = signals
+        };
+    }
+
+    void ResetFilters() { _search=""; _lobFilter=""; _producerFilter=""; _tierFilter="all"; _sortBy="score"; }
+
+    void OpenRenewal(RiskAccount a) => Nav.NavigateTo($"/renewals/{a.RenewalId}");
+
+    async Task RunAiScoring()
+    {
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "AI Scoring Complete",
+            Content  = $"All {_accounts.Count} accounts re-scored successfully.",
+            CssClass = "e-toast-success"
+        });
+    }
+
+    async Task ExportAsync() =>
+        await _toast.ShowAsync(new ToastModel { Title="Exported", Content="Risk workbench exported.", CssClass="e-toast-success" });
+
+    static string RiskCss(int score)    => score >= 70 ? "high" : score >= 40 ? "med" : "low";
+    static string SignalCss(int score)  => score >= 70 ? "high" : score >= 40 ? "med" : "low";
+    static string HeatCss(int score)    => score >= 70 ? "red" : score >= 50 ? "amber" : score >= 30 ? "yellow" : "green";
+    static string DaysCss(int days)     => days <= 0 ? "expired" : days <= 30 ? "red" : days <= 60 ? "amber" : "blue";
+    static string DaysLabel(int days)   => days <= 0 ? $"Expired {Math.Abs(days)}d ago" : $"{days}d left";
+}

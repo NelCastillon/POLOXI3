@@ -1,0 +1,1295 @@
+@page "/crm/leads"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Leads</PageTitle>
+
+<AppPageHeader Title="Leads"
+               Subtitle="Track, score and convert every prospect — grid, Kanban, source funnel and producer breakdown"
+               Icon="bi-person-plus-fill">
+    <Actions>
+        <!-- View switcher -->
+        <div class="ld-view-toggle" role="group" aria-label="View mode">
+            @foreach (var v in _views)
+            {
+                <button class="ld-view-btn @(_view == v.Id ? "ld-view-btn--active" : "")"
+                        @onclick="() => SetView(v.Id)"
+                        title="@v.Label"
+                        aria-pressed="@(_view == v.Id)">
+                    <i class="bi @v.Icon" aria-hidden="true"></i>
+                    <span class="ld-view-label">@v.Label</span>
+                </button>
+            }
+        </div>
+
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ld-spin" : "")" aria-hidden="true"></i>
+        </button>
+
+        <button class="um-btn um-btn-ghost" @onclick="() => _showImport = true">
+            <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Import
+        </button>
+
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/crm/leads/new")'>
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Lead
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
+<div class="ld-kpi-strip">
+    <div class="ld-kpi-card">
+        <span class="ld-kpi-icon ld-kpi-i1"><i class="bi bi-person-plus-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="ld-kpi-val">@_kpi.TotalLeads</div>
+            <div class="ld-kpi-lbl">Total Leads</div>
+        </div>
+    </div>
+    <div class="ld-kpi-card">
+        <span class="ld-kpi-icon ld-kpi-i2"><i class="bi bi-fire" aria-hidden="true"></i></span>
+        <div>
+            <div class="ld-kpi-val">@_kpi.Hot</div>
+            <div class="ld-kpi-lbl">Hot</div>
+        </div>
+    </div>
+    <div class="ld-kpi-card">
+        <span class="ld-kpi-icon ld-kpi-i3"><i class="bi bi-trophy-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="ld-kpi-val">@_kpi.Converted</div>
+            <div class="ld-kpi-lbl">Converted</div>
+        </div>
+    </div>
+    <div class="ld-kpi-card">
+        <span class="ld-kpi-icon ld-kpi-i4"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
+        <div>
+            <div class="ld-kpi-val">@_kpi.ConversionRate.ToString("F1")%</div>
+            <div class="ld-kpi-lbl">Conversion Rate</div>
+        </div>
+    </div>
+    <div class="ld-kpi-card">
+        <span class="ld-kpi-icon ld-kpi-i5"><i class="bi bi-calendar-x" aria-hidden="true"></i></span>
+        <div>
+            <div class="ld-kpi-val @(_kpi.Stale > 0 ? "ld-kpi-val--warn" : "")">@_kpi.Stale</div>
+            <div class="ld-kpi-lbl">Stale (&gt;30 d)</div>
+        </div>
+    </div>
+    <div class="ld-kpi-card">
+        <span class="ld-kpi-icon ld-kpi-i1"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+        <div>
+            <div class="ld-kpi-val">@_kpi.EstPipeline.ToString("C0")</div>
+            <div class="ld-kpi-lbl">Est. Pipeline</div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Filter / search bar ───────────────────────────────────────────────── -->
+<div class="ld-filter-bar">
+    <div class="ld-search-wrap">
+        <i class="bi bi-search ld-search-icon" aria-hidden="true"></i>
+        <input class="ld-search-input" type="search" placeholder="Search leads…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
+    </div>
+
+    <SfDropDownList TValue="string" TItem="LabelValue"
+                    DataSource="_stageOptions"
+                    Placeholder="All Stages"
+                    ShowClearButton="true"
+                    Width="145px"
+                    Value="_filterStage"
+                    ValueChanged="@((string v) => { _filterStage = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+
+    <SfDropDownList TValue="string" TItem="LabelValue"
+                    DataSource="_sourceOptions"
+                    Placeholder="All Sources"
+                    ShowClearButton="true"
+                    Width="145px"
+                    Value="_filterSource"
+                    ValueChanged="@((string v) => { _filterSource = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+
+    <SfDropDownList TValue="string" TItem="LabelValue"
+                    DataSource="_ownerOptions"
+                    Placeholder="All Owners"
+                    ShowClearButton="true"
+                    Width="145px"
+                    Value="_filterOwner"
+                    ValueChanged="@((string v) => { _filterOwner = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+
+    <SfDropDownList TValue="string" TItem="LabelValue"
+                    DataSource="_ratingOptions"
+                    Placeholder="All Ratings"
+                    ShowClearButton="true"
+                    Width="130px"
+                    Value="_filterRating"
+                    ValueChanged="@((string v) => { _filterRating = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+
+    @if (_selected.Count > 0)
+    {
+        <div class="ld-bulk-actions">
+            <span class="ld-bulk-count">@_selected.Count selected</span>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showAssign = true">
+                <i class="bi bi-person-check" aria-hidden="true"></i> Assign
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showMerge = true">
+                <i class="bi bi-intersect" aria-hidden="true"></i> Merge
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ConvertToOpportunityAsync">
+                <i class="bi bi-trophy" aria-hidden="true"></i> Convert
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showCampaign = true">
+                <i class="bi bi-megaphone" aria-hidden="true"></i> Campaign
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm ld-deselect-btn" @onclick="ClearSelection">
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+            </button>
+        </div>
+    }
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: GRID
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "grid")
+{
+    @if (_loading)
+    {
+        <div class="ld-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading leads…</span></div>
+    }
+    else
+    {
+        <div class="ld-grid-card app-datagrid">
+            <SfGrid @ref="_grid"
+                    TValue="LeadRow"
+                    DataSource="_filtered"
+                    AllowPaging="true"
+                    AllowSorting="true"
+                    AllowFiltering="true"
+                    AllowSelection="true"
+                    EnableHover="true"
+                    RowHeight="56">
+                <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+                <GridSelectionSettings Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
+                <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
+                <GridEvents TValue="LeadRow" RowSelected="OnRowSelected" RowDeselected="OnRowDeselected" />
+                <GridColumns>
+                    <GridColumn Type="ColumnType.CheckBox" Width="48" />
+                    <GridColumn HeaderText="Rating" Width="100" AllowFiltering="false" AllowSorting="true" Field="@nameof(LeadRow.Rating)">
+                        <Template>
+                            @{ var r = (LeadRow)context; }
+                            <span class="@RatingBadge(r.Rating)">@r.Rating</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Lead" Width="220" Field="@nameof(LeadRow.FullName)">
+                        <Template>
+                            @{ var r = (LeadRow)context; }
+                            <div class="ld-name-cell">
+                                <div class="ld-avatar @AvatarColor(r.FullName)">@Initials(r.FullName)</div>
+                                <div>
+                                    <div class="ld-item-name">@r.FullName</div>
+                                    <div class="ld-item-sub">@r.CompanyName</div>
+                                </div>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(LeadRow.Stage)" HeaderText="Stage" Width="140">
+                        <Template>
+                            @{ var r = (LeadRow)context; }
+                            <span class="@StageBadge(r.Stage)">@r.Stage</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(LeadRow.Source)" HeaderText="Source" Width="130">
+                        <Template>
+                            @{ var r = (LeadRow)context; }
+                            <span class="ld-source-badge">
+                                <i class="bi @SourceIcon(r.Source)" aria-hidden="true"></i> @r.Source
+                            </span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(LeadRow.Owner)" HeaderText="Owner" Width="140" />
+                    <GridColumn Field="@nameof(LeadRow.EstPremium)" HeaderText="Est. Premium" Width="140" TextAlign="TextAlign.Right">
+                        <Template>
+                            @{ var r = (LeadRow)context; }
+                            <span class="ld-mono ld-bold">@r.EstPremium.ToString("C0")</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(LeadRow.Score)" HeaderText="Score" Width="120">
+                        <Template>
+                            @{ var r = (LeadRow)context; }
+                            <div class="ld-score-wrap">
+                                <div class="ld-score-bar" style="width:@r.Score%;background:@ScoreColor(r.Score)"></div>
+                                <span class="ld-score-num">@r.Score</span>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(LeadRow.LastActivity)" HeaderText="Last Activity" Width="130">
+                        <Template>
+                            @{ var r = (LeadRow)context; }
+                            <span class="@(r.DaysSinceActivity > 30 ? "ld-stale" : "")">
+                                @(r.LastActivity.HasValue ? r.LastActivity.Value.ToString("d") : "—")
+                            </span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(LeadRow.CreatedAt)" HeaderText="Created" Width="120">
+                        <Template>@{ var r = (LeadRow)context; }<span class="ld-mono">@r.CreatedAt.ToString("d")</span></Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="" Width="90" AllowFiltering="false" AllowSorting="false" TextAlign="TextAlign.Right">
+                        <Template>
+                            @{ var r = (LeadRow)context; }
+                            <div class="ld-row-actions">
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenDetail(r)" title="View">
+                                    <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                </button>
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenRowMenu(r)" title="More">
+                                    <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        </div>
+    }
+}
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: KANBAN
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "kanban")
+{
+    @if (_loading)
+    {
+        <div class="ld-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <div class="ld-kanban-wrap">
+            <SfKanban TValue="LeadRow"
+                      KeyField="@nameof(LeadRow.Stage)"
+                      DataSource="_filtered">
+                <KanbanColumns>
+                    @foreach (var col in _kanbanColumns)
+                    {
+                        <KanbanColumn HeaderText="@col.Label"
+                                      KeyField="@(new List<string> { col.Key })"
+                                      AllowDrop="true"
+                                      AllowDrag="true"
+                                      ShowItemCount="true" />
+                    }
+                </KanbanColumns>
+                <KanbanCardSettings HeaderField="@nameof(LeadRow.LeadId)"
+                                    ContentField="@nameof(LeadRow.FullName)">
+                    <Template>
+                        @{ var r = (LeadRow)context; }
+                        <div class="ld-card" @onclick="() => OpenDetail(r)">
+                            <div class="ld-card-hdr">
+                                <span class="@RatingBadge(r.Rating)">@r.Rating</span>
+                                <span class="ld-card-score" style="color:@ScoreColor(r.Score)" title="Lead score">@r.Score</span>
+                            </div>
+                            <div class="ld-card-name">@r.FullName</div>
+                            <div class="ld-card-company">@r.CompanyName</div>
+                            <div class="ld-card-meta">
+                                <span class="ld-source-badge">
+                                    <i class="bi @SourceIcon(r.Source)" aria-hidden="true"></i> @r.Source
+                                </span>
+                                <span class="ld-mono">@r.EstPremium.ToString("C0")</span>
+                            </div>
+                            <div class="ld-card-footer">
+                                <span class="ld-card-owner"><i class="bi bi-person" aria-hidden="true"></i> @r.Owner</span>
+                                @if (r.DaysSinceActivity > 30)
+                                {
+                                    <span class="ld-stale-chip" title="No activity for @r.DaysSinceActivity days">
+                                        <i class="bi bi-clock" aria-hidden="true"></i> @r.DaysSinceActivity d
+                                    </span>
+                                }
+                            </div>
+                        </div>
+                    </Template>
+                </KanbanCardSettings>
+                <KanbanSwimlaneSettings KeyField="@(_swimByOwner ? nameof(LeadRow.Owner) : string.Empty)"
+                                        ShowEmptyRow="false" />
+            </SfKanban>
+        </div>
+        <div class="ld-kanban-toolbar">
+            <label class="ld-toggle-label">
+                <input type="checkbox" @bind="_swimByOwner" />
+                Swimlanes by owner
+            </label>
+        </div>
+    }
+}
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: SOURCE FUNNEL
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "funnel")
+{
+    <div class="ld-funnel-layout">
+
+        <!-- Left: funnel visual -->
+        <div class="ld-funnel-chart-wrap">
+            <h3 class="ld-section-hdr">Leads by Source</h3>
+            <div class="ld-funnel-bars">
+                @foreach (var s in _sourceFunnel)
+                {
+                    var pct = _sourceFunnel.Max(x => x.Total) == 0 ? 0
+                              : (double)s.Total / _sourceFunnel.Max(x => x.Total) * 100;
+                    <div class="ld-funnel-row @(_funnelSource == s.Source ? "ld-funnel-row--active" : "")"
+                         @onclick="() => SelectFunnelSource(s.Source)"
+                         role="button" tabindex="0">
+                        <div class="ld-funnel-lbl">
+                            <i class="bi @SourceIcon(s.Source)" aria-hidden="true"></i>
+                            <span>@s.Source</span>
+                        </div>
+                        <div class="ld-funnel-bar-track">
+                            <div class="ld-funnel-bar-fill" style="width:@pct.ToString("F1",System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                        </div>
+                        <div class="ld-funnel-nums">
+                            <span class="ld-funnel-total">@s.Total</span>
+                            <span class="ld-funnel-conv @(s.ConvPct >= 20 ? "ld-conv--good" : s.ConvPct >= 10 ? "ld-conv--mid" : "ld-conv--low")">
+                                @s.ConvPct.ToString("F0")% conv.
+                            </span>
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <!-- Stage breakdown for selected source -->
+            @if (!string.IsNullOrEmpty(_funnelSource))
+            {
+                var stages = _filtered.Where(x => x.Source == _funnelSource)
+                                      .GroupBy(x => x.Stage)
+                                      .Select(g => (Stage: g.Key, Count: g.Count()))
+                                      .OrderBy(x => StageOrder(x.Stage))
+                                      .ToList();
+                <div class="ld-funnel-stages">
+                    <h4 class="ld-funnel-stages-hdr">@_funnelSource — Stage Breakdown</h4>
+                    <div class="ld-funnel-stage-bars">
+                        @foreach (var sg in stages)
+                        {
+                            var maxC = stages.Max(s => s.Count);
+                            var sp = maxC == 0 ? 0 : (double)sg.Count / maxC * 100;
+                            <div class="ld-fstage-row">
+                                <span class="@StageBadge(sg.Stage)" style="min-width:90px">@sg.Stage</span>
+                                <div class="ld-fstage-track">
+                                    <div class="ld-fstage-fill @StageFill(sg.Stage)" style="width:@sp.ToString("F1",System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                                </div>
+                                <span class="ld-fstage-count">@sg.Count</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+
+        <!-- Right: source table -->
+        <div class="ld-funnel-table-wrap">
+            <h3 class="ld-section-hdr">Source Performance</h3>
+            <SfGrid TValue="SourceRow"
+                    DataSource="_sourceFunnel"
+                    AllowSorting="true"
+                    EnableHover="true"
+                    RowHeight="48">
+                <GridColumns>
+                    <GridColumn Field="@nameof(SourceRow.Source)" HeaderText="Source" Width="160">
+                        <Template>
+                            @{ var s = (SourceRow)context; }
+                            <span class="ld-source-badge">
+                                <i class="bi @SourceIcon(s.Source)" aria-hidden="true"></i> @s.Source
+                            </span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(SourceRow.Total)"     HeaderText="Total"    Width="80"  TextAlign="TextAlign.Right" />
+                    <GridColumn Field="@nameof(SourceRow.Converted)" HeaderText="Conv."    Width="80"  TextAlign="TextAlign.Right" />
+                    <GridColumn Field="@nameof(SourceRow.ConvPct)"   HeaderText="Conv. %"  Width="90"  TextAlign="TextAlign.Right">
+                        <Template>
+                            @{ var s = (SourceRow)context; }
+                            <span class="@(s.ConvPct >= 20 ? "ld-conv--good" : s.ConvPct >= 10 ? "ld-conv--mid" : "ld-conv--low")">
+                                @s.ConvPct.ToString("F1")%
+                            </span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(SourceRow.AvgScore)"    HeaderText="Avg Score" Width="100" TextAlign="TextAlign.Right" />
+                    <GridColumn Field="@nameof(SourceRow.AvgPremium)"  HeaderText="Avg Premium" Width="130" TextAlign="TextAlign.Right">
+                        <Template>
+                            @{ var s = (SourceRow)context; }
+                            <span class="ld-mono">@s.AvgPremium.ToString("C0")</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(SourceRow.TotalPipeline)" HeaderText="Pipeline" Width="130" TextAlign="TextAlign.Right">
+                        <Template>
+                            @{ var s = (SourceRow)context; }
+                            <span class="ld-mono ld-bold">@s.TotalPipeline.ToString("C0")</span>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        </div>
+    </div>
+}
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: BY PRODUCER
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "producer")
+{
+    <div class="ld-producer-layout">
+
+        <!-- Producer leaderboard -->
+        <div class="ld-producer-board">
+            <h3 class="ld-section-hdr">Producer Leaderboard</h3>
+            <div class="ld-producer-list">
+                @{ int rank = 0; }
+                @foreach (var p in _producerRows.OrderByDescending(x => x.Pipeline))
+                {
+                    rank++;
+                    var maxPipe = _producerRows.Max(x => x.Pipeline);
+                    var barPct  = maxPipe == 0 ? 0 : (double)p.Pipeline / (double)maxPipe * 100;
+                    <div class="ld-producer-row @(_producerFilter == p.Owner ? "ld-producer-row--active" : "")"
+                         @onclick="() => SelectProducer(p.Owner)"
+                         role="button" tabindex="0">
+                        <span class="ld-rank @(rank == 1 ? "ld-rank--gold" : rank == 2 ? "ld-rank--silver" : rank == 3 ? "ld-rank--bronze" : "")">
+                            @rank
+                        </span>
+                        <div class="ld-producer-info">
+                            <div class="ld-producer-name">@p.Owner</div>
+                            <div class="ld-producer-bar-track">
+                                <div class="ld-producer-bar-fill" style="width:@barPct.ToString("F1",System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                            </div>
+                        </div>
+                        <div class="ld-producer-stats">
+                            <div class="ld-pstat">
+                                <span class="ld-pstat-val">@p.Total</span>
+                                <span class="ld-pstat-lbl">leads</span>
+                            </div>
+                            <div class="ld-pstat">
+                                <span class="ld-pstat-val">@p.ConvPct.ToString("F0")%</span>
+                                <span class="ld-pstat-lbl">conv.</span>
+                            </div>
+                            <div class="ld-pstat">
+                                <span class="ld-pstat-val ld-mono">@p.Pipeline.ToString("C0")</span>
+                                <span class="ld-pstat-lbl">pipeline</span>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Right: producer detail grid -->
+        <div class="ld-producer-detail">
+            <h3 class="ld-section-hdr">
+                @if (!string.IsNullOrEmpty(_producerFilter))
+                {
+                    <span>@_producerFilter's Leads</span>
+                    <button class="um-btn um-btn-ghost um-btn-sm" style="margin-left:.5rem" @onclick="() => _producerFilter = string.Empty">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i>
+                    </button>
+                }
+                else
+                {
+                    <span>All Producer Leads</span>
+                }
+            </h3>
+            <div class="ld-grid-card app-datagrid">
+                <SfGrid TValue="LeadRow"
+                        DataSource="@ProducerFiltered()"
+                        AllowPaging="true"
+                        AllowSorting="true"
+                        EnableHover="true"
+                        RowHeight="52">
+                    <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
+                    <GridColumns>
+                        <GridColumn HeaderText="Rating" Width="90" Field="@nameof(LeadRow.Rating)">
+                            <Template>@{ var r = (LeadRow)context; }<span class="@RatingBadge(r.Rating)">@r.Rating</span></Template>
+                        </GridColumn>
+                        <GridColumn HeaderText="Lead" Width="200" Field="@nameof(LeadRow.FullName)">
+                            <Template>
+                                @{ var r = (LeadRow)context; }
+                                <div class="ld-name-cell">
+                                    <div class="ld-avatar @AvatarColor(r.FullName)">@Initials(r.FullName)</div>
+                                    <div>
+                                        <div class="ld-item-name">@r.FullName</div>
+                                        <div class="ld-item-sub">@r.CompanyName</div>
+                                    </div>
+                                </div>
+                            </Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(LeadRow.Stage)"      HeaderText="Stage"    Width="130">
+                            <Template>@{ var r = (LeadRow)context; }<span class="@StageBadge(r.Stage)">@r.Stage</span></Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(LeadRow.Source)"     HeaderText="Source"   Width="120">
+                            <Template>@{ var r = (LeadRow)context; }<span class="ld-source-badge"><i class="bi @SourceIcon(r.Source)" aria-hidden="true"></i> @r.Source</span></Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(LeadRow.EstPremium)" HeaderText="Est. Premium" Width="130" TextAlign="TextAlign.Right">
+                            <Template>@{ var r = (LeadRow)context; }<span class="ld-mono ld-bold">@r.EstPremium.ToString("C0")</span></Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(LeadRow.Score)"      HeaderText="Score"    Width="80"  TextAlign="TextAlign.Right" />
+                        <GridColumn Field="@nameof(LeadRow.LastActivity)" HeaderText="Last Activity" Width="130">
+                            <Template>
+                                @{ var r = (LeadRow)context; }
+                                <span class="@(r.DaysSinceActivity > 30 ? "ld-stale" : "")">
+                                    @(r.LastActivity.HasValue ? r.LastActivity.Value.ToString("d") : "—")
+                                </span>
+                            </Template>
+                        </GridColumn>
+                        <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                            <Template>
+                                @{ var r = (LeadRow)context; }
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenDetail(r)">
+                                    <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                </button>
+                            </Template>
+                        </GridColumn>
+                    </GridColumns>
+                </SfGrid>
+            </div>
+        </div>
+
+    </div>
+}
+
+<!-- ── Detail slide-over ─────────────────────────────────────────────────── -->
+@if (_detail is not null)
+{
+    <div class="ld-overlay" @onclick="() => _detail = null" role="button" tabindex="-1" aria-label="Close"></div>
+    <div class="ld-detail-panel" role="complementary" aria-label="Lead detail">
+        <div class="ld-detail-hdr">
+            <span class="@RatingBadge(_detail.Rating)">@_detail.Rating</span>
+            <span class="@StageBadge(_detail.Stage)">@_detail.Stage</span>
+            <button class="um-btn um-btn-ghost um-btn-sm" style="margin-left:auto" @onclick="() => _detail = null">
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+            </button>
+        </div>
+        <div class="ld-detail-identity">
+            <div class="ld-detail-avatar @AvatarColor(_detail.FullName)">@Initials(_detail.FullName)</div>
+            <div>
+                <h2 class="ld-detail-name">@_detail.FullName</h2>
+                <div class="ld-detail-company">@_detail.CompanyName</div>
+            </div>
+        </div>
+        <div class="ld-detail-body">
+            @DetailRow("Source",      @<span class="ld-source-badge"><i class="bi @SourceIcon(_detail.Source)" aria-hidden="true"></i> @_detail.Source</span>)
+            @DetailRow("Owner",       @<span>@_detail.Owner</span>)
+            @DetailRow("Email",       @<span class="ld-mono">@_detail.Email</span>)
+            @DetailRow("Phone",       @<span class="ld-mono">@_detail.Phone</span>)
+            @DetailRow("Est. Premium",@<span class="ld-mono ld-bold">@_detail.EstPremium.ToString("C0")</span>)
+            @DetailRow("Score",       @<div class="ld-score-wrap" style="max-width:120px"><div class="ld-score-bar" style="width:@_detail.Score%;background:@ScoreColor(_detail.Score)"></div><span class="ld-score-num">@_detail.Score</span></div>)
+            @DetailRow("Created",     @<span class="ld-mono">@_detail.CreatedAt.ToString("d")</span>)
+            @DetailRow("Last Activity",@<span class="@(_detail.DaysSinceActivity > 30 ? "ld-stale" : "ld-mono")">@(_detail.LastActivity.HasValue ? _detail.LastActivity.Value.ToString("d") : "—")</span>)
+            @if (!string.IsNullOrEmpty(_detail.Notes)) { @DetailRow("Notes", @<p class="ld-detail-notes">@_detail.Notes</p>) }
+        </div>
+        <div class="ld-detail-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _selected.Clear(); _selected.Add(_detail!); _showAssign = true; }">
+                <i class="bi bi-person-check" aria-hidden="true"></i> Assign
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _selected.Clear(); _selected.Add(_detail!); ConvertToOpportunityAsync(); }">
+                <i class="bi bi-trophy" aria-hidden="true"></i> Convert
+            </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _selected.Clear(); _selected.Add(_detail!); _showCampaign = true; }">
+                <i class="bi bi-megaphone" aria-hidden="true"></i> Campaign
+            </button>
+        </div>
+        <div class="ld-detail-footer">
+            <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo($"/crm/leads/{_detail.LeadId}")'>
+                Open Full Record <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </button>
+        </div>
+    </div>
+}
+
+<!-- ══════════════════════════════════════════════════════════
+     DIALOG — Import Leads
+     ══════════════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showImport" Width="540px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="ld-dlg-hdr"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Import Leads</span></Header>
+        <Content>
+            <div class="ld-import-body">
+                <p class="ld-import-intro">
+                    Upload a <strong>.CSV</strong> or <strong>.XLSX</strong> file. Required columns:
+                    <code>FirstName, LastName, Company, Email, Source</code>.
+                </p>
+                <SfUploader AllowedExtensions=".csv,.xlsx"
+                            MaxFileSize="5242880"
+                            AutoUpload="false"
+                            @ref="_uploader">
+                    <UploaderEvents ValueChange="OnFileSelected" />
+                </SfUploader>
+
+                @if (_importErrors.Count > 0)
+                {
+                    <div class="ld-import-errors">
+                        <div class="ld-import-errors-hdr"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_importErrors.Count validation error(s)</div>
+                        <ul>
+                            @foreach (var e in _importErrors.Take(5))
+                            {
+                                <li>@e</li>
+                            }
+                            @if (_importErrors.Count > 5) { <li>… and @(_importErrors.Count - 5) more</li> }
+                        </ul>
+                    </div>
+                }
+
+                @if (_importPreview.Count > 0)
+                {
+                    <div class="ld-import-preview">
+                        <div class="ld-import-preview-hdr">Preview — first @_importPreview.Count row(s)</div>
+                        <SfGrid TValue="LeadImportRow"
+                                DataSource="_importPreview"
+                                AllowPaging="false"
+                                EnableHover="true"
+                                Height="160px">
+                            <GridColumns>
+                                <GridColumn Field="@nameof(LeadImportRow.FullName)"    HeaderText="Name"    Width="160" />
+                                <GridColumn Field="@nameof(LeadImportRow.CompanyName)" HeaderText="Company" Width="160" />
+                                <GridColumn Field="@nameof(LeadImportRow.Email)"       HeaderText="Email"   Width="200" />
+                                <GridColumn Field="@nameof(LeadImportRow.Source)"      HeaderText="Source"  Width="120" />
+                            </GridColumns>
+                        </SfGrid>
+                    </div>
+                }
+
+                <div class="ld-import-options">
+                    <label class="ld-toggle-label">
+                        <input type="checkbox" @bind="_importDedupe" />
+                        Skip duplicate emails
+                    </label>
+                    <label class="ld-toggle-label">
+                        <input type="checkbox" @bind="_importAssignRoundRobin" />
+                        Auto-assign (round-robin)
+                    </label>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="ld-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => { _showImport = false; _importPreview.Clear(); _importErrors.Clear(); }">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="CommitImportAsync" disabled="@(_importPreview.Count == 0 || _importErrors.Count > 0)">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Import @(_importPreview.Count > 0 ? $"{_importPreview.Count} Lead(s)" : "")
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════════════
+     DIALOG — Assign Owner
+     ══════════════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showAssign" Width="420px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="ld-dlg-hdr"><i class="bi bi-person-check" aria-hidden="true"></i> Assign Owner</span></Header>
+        <Content>
+            <div class="ld-assign-body">
+                <p class="ld-assign-info">Assign <strong>@_selected.Count lead(s)</strong> to:</p>
+                <SfDropDownList TValue="string" TItem="LabelValue"
+                                DataSource="_ownerOptions"
+                                Placeholder="Select owner…"
+                                Width="100%"
+                                @bind-Value="_assignTarget">
+                    <DropDownListFieldSettings Value="Value" Text="Label" />
+                </SfDropDownList>
+                <label class="ld-toggle-label" style="margin-top:.75rem">
+                    <input type="checkbox" @bind="_assignNotify" />
+                    Notify owner by email
+                </label>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="ld-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showAssign = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="CommitAssignAsync" disabled="@string.IsNullOrEmpty(_assignTarget)">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Assign
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════════════
+     DIALOG — Merge Duplicates
+     ══════════════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showMerge" Width="600px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="ld-dlg-hdr"><i class="bi bi-intersect" aria-hidden="true"></i> Merge Duplicates</span></Header>
+        <Content>
+            <div class="ld-merge-body">
+                @if (_selected.Count < 2)
+                {
+                    <div class="ld-merge-warn">
+                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                        Select at least 2 leads in the grid before merging.
+                    </div>
+                }
+                else
+                {
+                    <p class="ld-merge-intro">
+                        Merging <strong>@_selected.Count leads</strong>. Choose the <em>master</em> record — all other records will be de-duplicated into it.
+                    </p>
+                    <div class="ld-merge-list">
+                        @foreach (var r in _selected)
+                        {
+                            <label class="ld-merge-option @(_mergeTarget == r.LeadId.ToString() ? "ld-merge-option--active" : "")">
+                                <input type="radio" name="merge-target" value="@r.LeadId"
+                                       @onchange="() => _mergeTarget = r.LeadId.ToString()" />
+                                <div class="ld-merge-card">
+                                    <div class="ld-merge-name">@r.FullName</div>
+                                    <div class="ld-merge-meta">@r.CompanyName · @r.Email · @r.Source</div>
+                                    <div class="ld-merge-meta">Score: @r.Score · Stage: @r.Stage · Owner: @r.Owner</div>
+                                </div>
+                            </label>
+                        }
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="ld-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showMerge = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="CommitMergeAsync"
+                        disabled="@(string.IsNullOrEmpty(_mergeTarget) || _selected.Count < 2)">
+                    <i class="bi bi-intersect" aria-hidden="true"></i> Merge into Master
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════════════
+     DIALOG — Convert to Opportunity  (confirmation)
+     ══════════════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showConvert" Width="480px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="ld-dlg-hdr"><i class="bi bi-trophy" aria-hidden="true"></i> Convert to Opportunity</span></Header>
+        <Content>
+            <div class="ld-convert-body">
+                <p>Convert <strong>@_selected.Count lead(s)</strong> to opportunities?</p>
+                <ul class="ld-convert-list">
+                    @foreach (var r in _selected.Take(5))
+                    {
+                        <li>@r.FullName — @r.CompanyName (@r.EstPremium.ToString("C0") est.)</li>
+                    }
+                    @if (_selected.Count > 5) { <li>… and @(_selected.Count - 5) more</li> }
+                </ul>
+                <label class="ld-toggle-label">
+                    <input type="checkbox" @bind="_convertKeepLead" />
+                    Keep lead record after conversion
+                </label>
+                <label class="ld-toggle-label">
+                    <input type="checkbox" @bind="_convertCreateActivity" />
+                    Create follow-up activity on new opportunity
+                </label>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="ld-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showConvert = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="CommitConvertAsync">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Convert
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ══════════════════════════════════════════════════════════
+     DIALOG — Enroll Campaign
+     ══════════════════════════════════════════════════════════ -->
+<SfDialog @bind-Visible="_showCampaign" Width="480px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="ld-dlg-hdr"><i class="bi bi-megaphone" aria-hidden="true"></i> Enroll in Campaign</span></Header>
+        <Content>
+            <div class="ld-campaign-body">
+                <p>Enroll <strong>@_selected.Count lead(s)</strong> into a campaign:</p>
+                <SfDropDownList TValue="string" TItem="LabelValue"
+                                DataSource="_campaignOptions"
+                                Placeholder="Select campaign…"
+                                Width="100%"
+                                @bind-Value="_campaignTarget">
+                    <DropDownListFieldSettings Value="Value" Text="Label" />
+                </SfDropDownList>
+                <label class="ld-toggle-label" style="margin-top:.75rem">
+                    <input type="checkbox" @bind="_campaignSendImmediately" />
+                    Send first campaign email immediately
+                </label>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="ld-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showCampaign = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="CommitCampaignAsync" disabled="@string.IsNullOrEmpty(_campaignTarget)">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Enroll
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Row context menu ───────────────────────────────────────────────────── -->
+@if (_menuLead is not null)
+{
+    <div class="ld-ctx-overlay" @onclick="() => _menuLead = null"></div>
+    <div class="ld-ctx-menu" style="top:@(_menuY)px;left:@(_menuX)px">
+        <button @onclick="() => { OpenDetail(_menuLead!); _menuLead = null; }">
+            <i class="bi bi-person" aria-hidden="true"></i> View Detail
+        </button>
+        <button @onclick='() => Nav.NavigateTo($"/crm/leads/{_menuLead!.LeadId}")'>
+            <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Full Record
+        </button>
+        <div class="ld-ctx-sep"></div>
+        <button @onclick="() => { _selected.Clear(); _selected.Add(_menuLead!); _showAssign  = true; _menuLead = null; }">
+            <i class="bi bi-person-check" aria-hidden="true"></i> Assign Owner
+        </button>
+        <button @onclick="() => { _selected.Clear(); _selected.Add(_menuLead!); ConvertToOpportunityAsync(); _menuLead = null; }">
+            <i class="bi bi-trophy" aria-hidden="true"></i> Convert to Opportunity
+        </button>
+        <button @onclick="() => { _selected.Clear(); _selected.Add(_menuLead!); _showCampaign = true; _menuLead = null; }">
+            <i class="bi bi-megaphone" aria-hidden="true"></i> Enroll Campaign
+        </button>
+        <div class="ld-ctx-sep"></div>
+        <button class="ld-ctx-danger" @onclick="() => { /* delete */ _menuLead = null; }">
+            <i class="bi bi-trash" aria-hidden="true"></i> Delete
+        </button>
+    </div>
+}
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast?    _toast;
+    private SfGrid<LeadRow>? _grid;
+    private SfUploader? _uploader;
+
+    // ── View state ────────────────────────────────────────────────────────────
+    private string _view   = "grid";
+    private bool   _loading = false;
+
+    private record ViewDef(string Id, string Label, string Icon);
+    private static readonly List<ViewDef> _views =
+    [
+        new("grid",     "Grid",     "bi-table"),
+        new("kanban",   "Kanban",   "bi-kanban"),
+        new("funnel",   "Funnel",   "bi-funnel-fill"),
+        new("producer", "Producer", "bi-person-badge"),
+    ];
+
+    // ── Data ──────────────────────────────────────────────────────────────────
+    private List<LeadRow>   _leads    = [];
+    private List<LeadRow>   _filtered = [];
+    private List<SourceRow> _sourceFunnel  = [];
+    private List<ProducerRow> _producerRows = [];
+    private LeadKpi         _kpi = new();
+
+    // ── Filters ───────────────────────────────────────────────────────────────
+    private string _search        = string.Empty;
+    private string _filterStage   = string.Empty;
+    private string _filterSource  = string.Empty;
+    private string _filterOwner   = string.Empty;
+    private string _filterRating  = string.Empty;
+
+    // ── Selection ─────────────────────────────────────────────────────────────
+    private List<LeadRow> _selected = [];
+
+    // ── Detail slide-over ─────────────────────────────────────────────────────
+    private LeadRow? _detail = null;
+
+    // ── Row context menu ──────────────────────────────────────────────────────
+    private LeadRow? _menuLead = null;
+    private double   _menuX = 0, _menuY = 0;
+
+    // ── Kanban ────────────────────────────────────────────────────────────────
+    private bool _swimByOwner = false;
+
+    private record KanbanColDef(string Key, string Label);
+    private static readonly List<KanbanColDef> _kanbanColumns =
+    [
+        new("New",         "New"),
+        new("Contacted",   "Contacted"),
+        new("Qualified",   "Qualified"),
+        new("Proposal",    "Proposal"),
+        new("Negotiation", "Negotiation"),
+        new("Converted",   "Converted"),
+        new("Lost",        "Lost"),
+    ];
+
+    // ── Funnel ────────────────────────────────────────────────────────────────
+    private string _funnelSource = string.Empty;
+
+    // ── Producer ──────────────────────────────────────────────────────────────
+    private string _producerFilter = string.Empty;
+
+    // ── Dialogs ───────────────────────────────────────────────────────────────
+    private bool   _showImport    = false;
+    private bool   _showAssign    = false;
+    private bool   _showMerge     = false;
+    private bool   _showConvert   = false;
+    private bool   _showCampaign  = false;
+
+    // Import
+    private List<LeadImportRow> _importPreview = [];
+    private List<string>        _importErrors  = [];
+    private bool _importDedupe           = true;
+    private bool _importAssignRoundRobin = false;
+
+    // Assign
+    private string _assignTarget = string.Empty;
+    private bool   _assignNotify = true;
+
+    // Merge
+    private string _mergeTarget = string.Empty;
+
+    // Convert
+    private bool _convertKeepLead       = false;
+    private bool _convertCreateActivity = true;
+
+    // Campaign
+    private string _campaignTarget          = string.Empty;
+    private bool   _campaignSendImmediately = false;
+
+    // ── Static reference data ─────────────────────────────────────────────────
+    private static readonly List<LabelValue> _stageOptions =
+    [
+        new("New","New"), new("Contacted","Contacted"), new("Qualified","Qualified"),
+        new("Proposal","Proposal"), new("Negotiation","Negotiation"),
+        new("Converted","Converted"), new("Lost","Lost"),
+    ];
+    private static readonly List<LabelValue> _sourceOptions =
+    [
+        new("Referral","Referral"), new("Website","Website"), new("Cold Call","Cold Call"),
+        new("Social","Social"), new("Email","Email"), new("Event","Event"),
+        new("Partner","Partner"), new("Inbound","Inbound"),
+    ];
+    private static readonly List<LabelValue> _ratingOptions =
+    [
+        new("Hot","Hot"), new("Warm","Warm"), new("Cold","Cold"),
+    ];
+    private static readonly List<LabelValue> _ownerOptions =
+    [
+        new("Alice Carter","Alice Carter"), new("Bob Martinez","Bob Martinez"),
+        new("Carol Smith","Carol Smith"),   new("David Lee","David Lee"),
+        new("Eva Johnson","Eva Johnson"),
+    ];
+    private static readonly List<LabelValue> _campaignOptions =
+    [
+        new("c1","Q3 Commercial BOP Drip"),
+        new("c2","Renewal Win-Back 2025"),
+        new("c3","Mid-Market Cyber Awareness"),
+        new("c4","New Business Referral Series"),
+    ];
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Leads", "/crm/leads"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; StateHasChanged();
+        try
+        {
+            await Task.Delay(0); // replace with: _leads = await Api.GetLeadsAsync(_tenantId);
+            _leads = [];
+            RebuildDerived();
+        }
+        finally { _loading = false; }
+    }
+
+    private void RebuildDerived()
+    {
+        ApplyFilters();
+
+        _sourceFunnel = _leads
+            .GroupBy(x => x.Source)
+            .Select(g => new SourceRow
+            {
+                Source        = g.Key,
+                Total         = g.Count(),
+                Converted     = g.Count(x => x.Stage == "Converted"),
+                AvgScore      = g.Any() ? (int)g.Average(x => x.Score) : 0,
+                AvgPremium    = g.Any() ? g.Average(x => x.EstPremium) : 0,
+                TotalPipeline = g.Sum(x => x.EstPremium),
+            })
+            .OrderByDescending(x => x.Total)
+            .ToList();
+
+        _producerRows = _leads
+            .GroupBy(x => x.Owner)
+            .Select(g => new ProducerRow
+            {
+                Owner    = g.Key,
+                Total    = g.Count(),
+                Converted= g.Count(x => x.Stage == "Converted"),
+                Pipeline = g.Sum(x => x.EstPremium),
+            })
+            .OrderByDescending(x => x.Pipeline)
+            .ToList();
+
+        _kpi = new LeadKpi
+        {
+            TotalLeads     = _leads.Count,
+            Hot            = _leads.Count(x => x.Rating == "Hot"),
+            Converted      = _leads.Count(x => x.Stage == "Converted"),
+            ConversionRate = _leads.Count == 0 ? 0 : (double)_leads.Count(x => x.Stage == "Converted") / _leads.Count * 100,
+            Stale          = _leads.Count(x => x.DaysSinceActivity > 30),
+            EstPipeline    = _leads.Where(x => x.Stage != "Converted" && x.Stage != "Lost").Sum(x => x.EstPremium),
+        };
+    }
+
+    private void ApplyFilters()
+    {
+        _filtered = _leads.Where(r =>
+            (string.IsNullOrEmpty(_filterStage)  || r.Stage  == _filterStage) &&
+            (string.IsNullOrEmpty(_filterSource) || r.Source == _filterSource) &&
+            (string.IsNullOrEmpty(_filterOwner)  || r.Owner  == _filterOwner) &&
+            (string.IsNullOrEmpty(_filterRating) || r.Rating == _filterRating) &&
+            (string.IsNullOrEmpty(_search) ||
+             r.FullName.Contains(_search,    StringComparison.OrdinalIgnoreCase) ||
+             r.CompanyName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             r.Email.Contains(_search,       StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+    }
+
+    private List<LeadRow> ProducerFiltered() =>
+        string.IsNullOrEmpty(_producerFilter)
+            ? _filtered
+            : _filtered.Where(x => x.Owner == _producerFilter).ToList();
+
+    private void SetView(string v) { _view = v; _selected.Clear(); }
+    private void SelectFunnelSource(string s) => _funnelSource = _funnelSource == s ? string.Empty : s;
+    private void SelectProducer(string p)     => _producerFilter = _producerFilter == p ? string.Empty : p;
+    private void OpenDetail(LeadRow r)        => _detail = r;
+    private void ClearSelection()             => _selected.Clear();
+
+    private void OpenRowMenu(LeadRow r)
+    {
+        _menuLead = r;
+        _menuX = 200; _menuY = 200; // TODO: use JS interop for cursor position
+    }
+
+    private void OnRowSelected(RowSelectEventArgs<LeadRow> args)
+    {
+        if (!_selected.Any(x => x.LeadId == args.Data.LeadId))
+            _selected.Add(args.Data);
+    }
+
+    private void OnRowDeselected(RowDeselectEventArgs<LeadRow> args) =>
+        _selected.RemoveAll(x => x.LeadId == args.Data.LeadId);
+
+    // ── Actions ───────────────────────────────────────────────────────────────
+    private void OnFileSelected(UploadChangeEventArgs args)
+    {
+        _importErrors.Clear();
+        _importPreview.Clear();
+        // TODO: parse CSV/XLSX from args.Files[0].Stream
+        // Stub: show empty preview
+        StateHasChanged();
+    }
+
+    private async Task CommitImportAsync()
+    {
+        // TODO: Api.ImportLeadsAsync(_tenantId, _importPreview, _importDedupe, _importAssignRoundRobin)
+        _showImport = false;
+        _importPreview.Clear();
+        await ShowToastAsync($"Import queued — {_importPreview.Count} lead(s) will be processed.", "e-toast-success");
+        await LoadAsync();
+    }
+
+    private async Task CommitAssignAsync()
+    {
+        // TODO: Api.AssignLeadsAsync(_tenantId, _selected.Select(x => x.LeadId), _assignTarget, _assignNotify)
+        await Task.Delay(0);
+        _showAssign  = false;
+        _detail      = null;
+        await ShowToastAsync($"{_selected.Count} lead(s) assigned to {_assignTarget}.", "e-toast-success");
+        _selected.Clear();
+        await LoadAsync();
+    }
+
+    private async Task CommitMergeAsync()
+    {
+        // TODO: Api.MergeLeadsAsync(_tenantId, masterId, duplicateIds)
+        await Task.Delay(0);
+        _showMerge   = false;
+        _mergeTarget = string.Empty;
+        await ShowToastAsync($"Leads merged.", "e-toast-success");
+        _selected.Clear();
+        await LoadAsync();
+    }
+
+    private void ConvertToOpportunityAsync() => _showConvert = true;
+
+    private async Task CommitConvertAsync()
+    {
+        // TODO: Api.ConvertLeadsToOpportunitiesAsync(_tenantId, _selected.Select(x=>x.LeadId), _convertKeepLead, _convertCreateActivity)
+        await Task.Delay(0);
+        _showConvert = false;
+        _detail      = null;
+        await ShowToastAsync($"{_selected.Count} lead(s) converted to opportunities.", "e-toast-success");
+        _selected.Clear();
+        await LoadAsync();
+    }
+
+    private async Task CommitCampaignAsync()
+    {
+        // TODO: Api.EnrollLeadsInCampaignAsync(_tenantId, _selected.Select(x=>x.LeadId), _campaignTarget, _campaignSendImmediately)
+        await Task.Delay(0);
+        _showCampaign        = false;
+        _campaignTarget      = string.Empty;
+        _detail              = null;
+        await ShowToastAsync($"{_selected.Count} lead(s) enrolled in campaign.", "e-toast-success");
+        _selected.Clear();
+    }
+
+    private async Task ShowToastAsync(string msg, string css = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = css });
+    }
+
+    // ── Render helpers ────────────────────────────────────────────────────────
+    private static RenderFragment DetailRow(string label, RenderFragment val) => __builder =>
+    {
+        <div class="ld-detail-row">
+            <span class="ld-detail-lbl">@label</span>
+            @val
+        </div>;
+    };
+
+    // ── Static badge / style helpers ──────────────────────────────────────────
+    private static string RatingBadge(string r) => r switch
+    {
+        "Hot"  => "ld-rating ld-rating--hot",
+        "Warm" => "ld-rating ld-rating--warm",
+        _      => "ld-rating ld-rating--cold",
+    };
+
+    private static string StageBadge(string s) => s switch
+    {
+        "New"         => "ld-stage ld-stage--new",
+        "Contacted"   => "ld-stage ld-stage--contacted",
+        "Qualified"   => "ld-stage ld-stage--qualified",
+        "Proposal"    => "ld-stage ld-stage--proposal",
+        "Negotiation" => "ld-stage ld-stage--negotiation",
+        "Converted"   => "ld-stage ld-stage--converted",
+        "Lost"        => "ld-stage ld-stage--lost",
+        _             => "ld-stage",
+    };
+
+    private static string StageFill(string s) => s switch
+    {
+        "Converted"   => "ld-sf--converted",
+        "Lost"        => "ld-sf--lost",
+        "Negotiation" => "ld-sf--negotiation",
+        "Proposal"    => "ld-sf--proposal",
+        _             => "ld-sf--default",
+    };
+
+    private static int StageOrder(string s) => s switch
+    {
+        "New" => 0, "Contacted" => 1, "Qualified" => 2, "Proposal" => 3,
+        "Negotiation" => 4, "Converted" => 5, "Lost" => 6, _ => 99,
+    };
+
+    private static string SourceIcon(string s) => s switch
+    {
+        "Referral"  => "bi-share-fill",
+        "Website"   => "bi-globe",
+        "Cold Call" => "bi-telephone-fill",
+        "Social"    => "bi-instagram",
+        "Email"     => "bi-envelope-fill",
+        "Event"     => "bi-calendar-event-fill",
+        "Partner"   => "bi-handshake-fill",
+        "Inbound"   => "bi-inbox-fill",
+        _           => "bi-question-circle",
+    };
+
+    private static string ScoreColor(int s) =>
+        s >= 75 ? "#16a34a" : s >= 50 ? "#b45309" : "#dc2626";
+
+    private static string AvatarColor(string name)
+    {
+        var colors = new[] { "ld-av1","ld-av2","ld-av3","ld-av4","ld-av5","ld-av6" };
+        return colors[Math.Abs(name.GetHashCode()) % colors.Length];
+    }
+
+    private static string Initials(string name)
+    {
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?";
+    }
+
+    // ── Models ────────────────────────────────────────────────────────────────
+    private sealed class LeadRow
+    {
+        public Guid      LeadId          { get; set; } = Guid.NewGuid();
+        public string    FullName        { get; set; } = string.Empty;
+        public string    CompanyName     { get; set; } = string.Empty;
+        public string    Email           { get; set; } = string.Empty;
+        public string    Phone           { get; set; } = string.Empty;
+        public string    Stage           { get; set; } = "New";
+        public string    Source          { get; set; } = string.Empty;
+        public string    Owner           { get; set; } = string.Empty;
+        public string    Rating          { get; set; } = "Cold";
+        public int       Score           { get; set; }
+        public decimal   EstPremium      { get; set; }
+        public DateTime  CreatedAt       { get; set; } = DateTime.UtcNow;
+        public DateTime? LastActivity    { get; set; }
+        public int       DaysSinceActivity => LastActivity.HasValue
+            ? (int)(DateTime.UtcNow - LastActivity.Value).TotalDays : 999;
+        public string?   Notes           { get; set; }
+    }
+
+    private sealed class LeadImportRow
+    {
+        public string FullName    { get; set; } = string.Empty;
+        public string CompanyName { get; set; } = string.Empty;
+        public string Email       { get; set; } = string.Empty;
+        public string Source      { get; set; } = string.Empty;
+    }
+
+    private sealed class SourceRow
+    {
+        public string  Source        { get; set; } = string.Empty;
+        public int     Total         { get; set; }
+        public int     Converted     { get; set; }
+        public int     AvgScore      { get; set; }
+        public decimal AvgPremium    { get; set; }
+        public decimal TotalPipeline { get; set; }
+        public double  ConvPct       => Total == 0 ? 0 : (double)Converted / Total * 100;
+    }
+
+    private sealed class ProducerRow
+    {
+        public string  Owner     { get; set; } = string.Empty;
+        public int     Total     { get; set; }
+        public int     Converted { get; set; }
+        public decimal Pipeline  { get; set; }
+        public double  ConvPct   => Total == 0 ? 0 : (double)Converted / Total * 100;
+    }
+
+    private sealed class LeadKpi
+    {
+        public int     TotalLeads     { get; set; }
+        public int     Hot            { get; set; }
+        public int     Converted      { get; set; }
+        public double  ConversionRate { get; set; }
+        public int     Stale          { get; set; }
+        public decimal EstPipeline    { get; set; }
+    }
+
+    private sealed record LabelValue(string Value, string Label);
+}

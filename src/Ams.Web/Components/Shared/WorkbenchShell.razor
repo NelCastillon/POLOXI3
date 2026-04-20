@@ -1,0 +1,375 @@
+@*
+    WorkbenchShell — shared chrome used by every specialist workbench.
+
+    Features surfaced here (always rendered):
+      • AI Daily Summary expandable banner
+      • My Queue / Team Queue scope toggle
+      • Branch / Team scoping drop-downs
+      • SLA Heatmap modal
+      • Saved Views drop-down (save / load / delete named filter snapshots)
+
+    Child content is rendered via the Queues render-fragment.
+
+    Usage:
+        <WorkbenchShell Title="CSR Workbench"
+                        Subtitle="…"
+                        Icon="bi-headset"
+                        @bind-Scope="_scope"
+                        @bind-BranchId="_branchId"
+                        @bind-TeamId="_teamId"
+                        SavedViews="_savedViews"
+                        OnSaveView="SaveViewAsync"
+                        OnLoadView="LoadViewAsync"
+                        OnDeleteView="DeleteViewAsync"
+                        SlaItems="_slaItems"
+                        AiSummary="_aiSummary"
+                        AiSummaryLoading="_aiLoading"
+                        OnRefresh="LoadAsync"
+                        OnExport="ExportAsync"
+                        Loading="_loading">
+            <Queues>
+                … queue grids …
+            </Queues>
+        </WorkbenchShell>
+*@
+
+@namespace Ams.Web.Components.Shared
+
+<div class="wbs-shell">
+
+    <!-- ── Page header ───────────────────────────────────────────────────── -->
+    <AppPageHeader Title="@Title" Subtitle="@Subtitle" Icon="@Icon">
+        <Actions>
+
+            <!-- My / Team scope pill -->
+            <div class="wbs-scope-toggle" role="group" aria-label="Queue scope">
+                <button class="wbs-scope-btn @(Scope == "me" ? "wbs-scope-btn--active" : "")"
+                        @onclick='() => ScopeChanged.InvokeAsync("me")'>
+                    <i class="bi bi-person-fill" aria-hidden="true"></i> My Queue
+                </button>
+                <button class="wbs-scope-btn @(Scope == "team" ? "wbs-scope-btn--active" : "")"
+                        @onclick='() => ScopeChanged.InvokeAsync("team")'>
+                    <i class="bi bi-people-fill" aria-hidden="true"></i> Team Queue
+                </button>
+            </div>
+
+            <!-- Branch scoping -->
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_branchOptions"
+                            Placeholder="All Branches"
+                            ShowClearButton="true"
+                            Width="150px"
+                            Value="BranchId"
+                            ValueChanged="BranchChanged">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <!-- Team scoping (visible in team scope) -->
+            @if (Scope == "team")
+            {
+                <SfDropDownList TValue="string" TItem="LabelValue"
+                                DataSource="_teamOptions"
+                                Placeholder="All Teams"
+                                ShowClearButton="true"
+                                Width="150px"
+                                Value="TeamId"
+                                ValueChanged="TeamChanged">
+                    <DropDownListFieldSettings Value="Value" Text="Label" />
+                </SfDropDownList>
+            }
+
+            <!-- Saved views -->
+            <div class="wbs-saved-views">
+                <SfDropDownList TValue="string" TItem="SavedView"
+                                DataSource="SavedViews"
+                                Placeholder="Saved views…"
+                                ShowClearButton="true"
+                                Width="160px"
+                                Value="_loadedViewName"
+                                ValueChanged="OnLoadView">
+                    <DropDownListFieldSettings Value="Name" Text="Name" />
+                </SfDropDownList>
+                <button class="um-btn um-btn-ghost um-btn-sm wbs-save-btn"
+                        @onclick="PromptSaveView"
+                        title="Save current view">
+                    <i class="bi bi-bookmark-plus" aria-hidden="true"></i>
+                </button>
+            </div>
+
+            <!-- SLA Heatmap -->
+            <button class="um-btn um-btn-ghost" @onclick="() => _showSla = true" title="SLA Heatmap">
+                <i class="bi bi-grid-3x3-gap-fill" aria-hidden="true"></i> SLA
+            </button>
+
+            <!-- Refresh -->
+            <button class="um-btn um-btn-ghost" @onclick="OnRefresh" title="Refresh" disabled="@Loading">
+                <i class="bi bi-arrow-clockwise @(Loading ? "wbs-spin" : "")" aria-hidden="true"></i>
+            </button>
+
+            @if (ExtraActions is not null)
+            {
+                @ExtraActions
+            }
+
+        </Actions>
+    </AppPageHeader>
+
+    <!-- ── AI Daily Summary banner ────────────────────────────────────────── -->
+    <div class="wbs-ai-banner @(_aiExpanded ? "wbs-ai-banner--open" : "")">
+        <button class="wbs-ai-toggle" @onclick="() => _aiExpanded = !_aiExpanded"
+                aria-expanded="@_aiExpanded" aria-controls="wbs-ai-body">
+            <span class="wbs-ai-badge"><i class="bi bi-stars" aria-hidden="true"></i> AI Summary</span>
+            @if (AiSummaryLoading)
+            {
+                <span class="wbs-ai-loading"><span class="wbs-ai-dot"></span><span class="wbs-ai-dot"></span><span class="wbs-ai-dot"></span></span>
+            }
+            else if (!string.IsNullOrEmpty(AiSummary))
+            {
+                <span class="wbs-ai-preview">@(AiSummary.Length > 120 ? AiSummary[..120] + "…" : AiSummary)</span>
+            }
+            else
+            {
+                <span class="wbs-ai-preview wbs-ai-preview--empty">No summary yet — click to generate</span>
+            }
+            <i class="bi @(_aiExpanded ? "bi-chevron-up" : "bi-chevron-down") wbs-ai-chevron" aria-hidden="true"></i>
+        </button>
+        @if (_aiExpanded)
+        {
+            <div class="wbs-ai-body" id="wbs-ai-body" role="region" aria-label="AI daily summary">
+                @if (AiSummaryLoading)
+                {
+                    <div class="wbs-ai-skeleton">
+                        <div class="wbs-ai-skel-line"></div>
+                        <div class="wbs-ai-skel-line wbs-ai-skel-line--short"></div>
+                        <div class="wbs-ai-skel-line"></div>
+                    </div>
+                }
+                else if (string.IsNullOrEmpty(AiSummary))
+                {
+                    <div class="wbs-ai-generate">
+                        <p>Get an AI-generated summary of your queue priorities, SLA risks and recommended actions for today.</p>
+                        <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => OnGenerateAiSummary.InvokeAsync()">
+                            <i class="bi bi-stars" aria-hidden="true"></i> Generate Summary
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <div class="wbs-ai-content">
+                        <p>@AiSummary</p>
+                        <div class="wbs-ai-footer">
+                            <span class="wbs-ai-ts">Generated @(AiSummaryGeneratedAt?.ToString("g") ?? "today")</span>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OnGenerateAiSummary.InvokeAsync()">
+                                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Regenerate
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    <!-- ── Queue content ──────────────────────────────────────────────────── -->
+    @Queues
+
+</div>
+
+<!-- ── SLA Heatmap dialog ─────────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showSla" Width="780px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header>
+            <span class="wbs-dlg-hdr">
+                <i class="bi bi-grid-3x3-gap-fill" aria-hidden="true"></i> SLA Heatmap
+                @if (!string.IsNullOrEmpty(Scope))
+                {
+                    <span class="wbs-dlg-scope">@(Scope == "me" ? "My Queue" : "Team Queue")</span>
+                }
+            </span>
+        </Header>
+        <Content>
+            <div class="wbs-sla-body">
+                @if (SlaItems is null || SlaItems.Count == 0)
+                {
+                    <div class="wbs-sla-empty">
+                        <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                        All queues within SLA thresholds.
+                    </div>
+                }
+                else
+                {
+                    <div class="wbs-sla-grid">
+                        @foreach (var row in SlaItems)
+                        {
+                            var heat = SlaHeatClass(row.BreachPct);
+                            <div class="wbs-sla-cell @heat" title="@row.QueueName — @row.BreachPct.ToString("F0")% breach risk">
+                                <div class="wbs-sla-cell-name">@row.QueueName</div>
+                                <div class="wbs-sla-cell-val">@row.BreachPct.ToString("F0")%</div>
+                                <div class="wbs-sla-cell-bar">
+                                    <div class="wbs-sla-bar-fill" style="width:@Math.Min(row.BreachPct, 100).ToString("F0", System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                                </div>
+                                <div class="wbs-sla-cell-counts">
+                                    <span>@row.InSla ok</span>
+                                    <span class="@(row.Breached > 0 ? "wbs-sla-alert" : "")">@row.Breached breach</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                    <div class="wbs-sla-legend">
+                        <span class="wbs-sla-legend-item wbs-sla-heat--ok"><span></span>Within SLA</span>
+                        <span class="wbs-sla-legend-item wbs-sla-heat--warn"><span></span>At risk (≥ 50%)</span>
+                        <span class="wbs-sla-legend-item wbs-sla-heat--danger"><span></span>Breach risk (≥ 75%)</span>
+                        <span class="wbs-sla-legend-item wbs-sla-heat--breach"><span></span>Breached (≥ 100%)</span>
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="wbs-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showSla = false">Close</button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<!-- ── Save View dialog ───────────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showSaveView" Width="400px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="wbs-dlg-hdr"><i class="bi bi-bookmark-plus" aria-hidden="true"></i> Save View</span></Header>
+        <Content>
+            <div class="wbs-save-body">
+                <label class="wbs-save-label" for="wbs-view-name">View name</label>
+                <input id="wbs-view-name" class="wbs-save-input"
+                       type="text" maxlength="60"
+                       placeholder="e.g. High-priority BOP renewals"
+                       @bind="_newViewName" />
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="wbs-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showSaveView = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="CommitSaveView" disabled="@string.IsNullOrWhiteSpace(_newViewName)">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    // ── Parameters ────────────────────────────────────────────────────────────────
+    [Parameter, EditorRequired] public string Title    { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Subtitle { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Icon     { get; set; } = "bi-tools";
+
+    [Parameter] public RenderFragment? Queues      { get; set; }
+    [Parameter] public RenderFragment? ExtraActions { get; set; }
+
+    // scope
+    [Parameter] public string Scope { get; set; } = "me";
+    [Parameter] public EventCallback<string> ScopeChanged { get; set; }
+
+    // branch / team
+    [Parameter] public string BranchId { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> BranchIdChanged { get; set; }
+    [Parameter] public string TeamId { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> TeamIdChanged { get; set; }
+
+    // saved views
+    [Parameter] public List<SavedView> SavedViews { get; set; } = [];
+    [Parameter] public EventCallback<string>    OnLoadView   { get; set; }
+    [Parameter] public EventCallback<SavedView> OnSaveView   { get; set; }
+    [Parameter] public EventCallback<string>    OnDeleteView { get; set; }
+
+    // SLA heatmap
+    [Parameter] public List<SlaHeatItem>? SlaItems { get; set; }
+
+    // AI summary
+    [Parameter] public string?   AiSummary            { get; set; }
+    [Parameter] public bool      AiSummaryLoading     { get; set; }
+    [Parameter] public DateTime? AiSummaryGeneratedAt { get; set; }
+    [Parameter] public EventCallback OnGenerateAiSummary { get; set; }
+
+    // actions
+    [Parameter] public bool     Loading    { get; set; }
+    [Parameter] public EventCallback OnRefresh { get; set; }
+    [Parameter] public EventCallback OnExport  { get; set; }
+
+    // ── Local state ───────────────────────────────────────────────────────────────
+    private bool   _showSla      = false;
+    private bool   _showSaveView = false;
+    private bool   _aiExpanded   = false;
+    private string _newViewName  = string.Empty;
+    private string _loadedViewName = string.Empty;
+
+    // ── Static seed options (replace with Api calls in each workbench) ────────────
+    private static readonly List<LabelValue> _branchOptions =
+    [
+        new("01", "Downtown"),
+        new("02", "Midtown"),
+        new("03", "East Side"),
+        new("04", "West End"),
+        new("05", "Uptown"),
+    ];
+
+    private static readonly List<LabelValue> _teamOptions =
+    [
+        new("csr",    "CSR Team"),
+        new("ops",    "Operations"),
+        new("acct",   "Accounting"),
+        new("market", "Marketing"),
+        new("svc",    "Service Mgmt"),
+    ];
+
+    // ── Methods ───────────────────────────────────────────────────────────────────
+    private Task BranchChanged(string v)
+    {
+        BranchId = v;
+        return BranchIdChanged.InvokeAsync(v);
+    }
+
+    private Task TeamChanged(string v)
+    {
+        TeamId = v;
+        return TeamIdChanged.InvokeAsync(v);
+    }
+
+    private void PromptSaveView()
+    {
+        _newViewName  = string.Empty;
+        _showSaveView = true;
+    }
+
+    private async Task CommitSaveView()
+    {
+        if (string.IsNullOrWhiteSpace(_newViewName)) return;
+        _showSaveView = false;
+        await OnSaveView.InvokeAsync(new SavedView { Name = _newViewName });
+        _loadedViewName = _newViewName;
+    }
+
+    private static string SlaHeatClass(double pct) => pct >= 100 ? "wbs-sla-heat--breach"
+        : pct >= 75 ? "wbs-sla-heat--danger"
+        : pct >= 50 ? "wbs-sla-heat--warn"
+        : "wbs-sla-heat--ok";
+
+    // ── Shared models (re-used by all workbenches via @using) ─────────────────────
+    public sealed record LabelValue(string Value, string Label);
+
+    public sealed class SavedView
+    {
+        public string Name        { get; set; } = string.Empty;
+        public string QueueId     { get; set; } = string.Empty;
+        public string Scope       { get; set; } = "me";
+        public string BranchId    { get; set; } = string.Empty;
+        public string TeamId      { get; set; } = string.Empty;
+        public string FilterJson  { get; set; } = string.Empty;
+    }
+
+    public sealed class SlaHeatItem
+    {
+        public string QueueName { get; set; } = string.Empty;
+        public int    InSla     { get; set; }
+        public int    Breached  { get; set; }
+        public double BreachPct => InSla + Breached == 0 ? 0 : (double)Breached / (InSla + Breached) * 100;
+    }
+}

@@ -1,0 +1,365 @@
+@page "/billing/payment-experience"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Payment Experience — AMS</PageTitle>
+
+<AppPageHeader Title="Payment Experience Monitor"
+               Subtitle="Track failed payments, ACH return codes, card decline trends, autopay enrollment, and days-to-pay by segment"
+               Icon="bi-graph-up">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/payments")'>
+            <i class="bi bi-cash-coin" aria-hidden="true"></i> All Payments
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/collections")'>
+            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Collections
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
+            <i class="bi bi-building" aria-hidden="true"></i> Accounts
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Period selector -->
+<div class="pe-period-bar">
+    <span class="pe-period-lbl">Period:</span>
+    @foreach (var p in new[]{"7d","30d","90d","YTD","12M"})
+    {
+        <button class="pe-period-btn @(_period==p?"pe-period-active":"")" @onclick="@(() => SetPeriod(p))">@p</button>
+    }
+    <span class="pe-period-sep">|</span>
+    <span class="pe-period-lbl">Segment:</span>
+    @foreach (var s in new[]{"All","Commercial","Personal","Agency Bill","Direct Bill"})
+    {
+        <button class="pe-period-btn @(_segment==s?"pe-period-active":"")" @onclick="@(() => _segment=s)">@s</button>
+    }
+</div>
+
+<!-- ── TOP KPI STRIP ──────────────────────────────────────────── -->
+<div class="pe-kpi-strip">
+    @KpiCard("bi-x-circle",          "Failed Payments",    _failed.ToString(),              "@(_failedRate.ToString(\"F1\"))% of total",          "pe-ki-red")
+    @KpiCard("bi-arrow-counterclockwise","ACH Returns",    _achReturns.ToString(),          "R01 · R08 · R29 most common",                        "pe-ki-orange")
+    @KpiCard("bi-credit-card",        "Card Declines",     _cardDeclines.ToString(),        "@(_declineRate.ToString(\"F1\"))% decline rate",      "pe-ki-amber")
+    @KpiCard("bi-arrow-repeat",       "Autopay Enrolled",  _autopayEnrolled.ToString(),     "@(_autopayPct.ToString(\"F0\"))% of accounts",        "pe-ki-green")
+    @KpiCard("bi-clock-history",      "Avg Days-to-Pay",   _avgDays.ToString("F1") + " d",  "vs. @_prevAvgDays.ToString(\"F1\")d prior period",   "pe-ki-blue")
+    @KpiCard("bi-shield-x",           "NSF / Bounced",     _nsf.ToString(),                 "@(_nsfAmt.ToString(\"C0\")) at risk",                 "pe-ki-red")
+    @KpiCard("bi-graph-up-arrow",     "Recovery Rate",     _recoveryRate.ToString("F0")+"%","Failed → cleared within 30 d",                       "pe-ki-green")
+    @KpiCard("bi-calendar-check",     "On-Time Rate",      _onTimeRate.ToString("F0")+"%",  "Paid on or before due date",                         "pe-ki-blue")
+</div>
+
+<div class="pe-main-grid">
+
+    <!-- LEFT COLUMN ──────────────────────────────────────────── -->
+    <div class="pe-col">
+
+        <!-- Failed Payments panel -->
+        <div class="pe-panel">
+            <div class="pe-panel-hdr">
+                <i class="bi bi-x-circle pe-hdr-icon red" aria-hidden="true"></i>
+                <span class="pe-hdr-title">Failed Payments</span>
+                <button class="um-btn um-btn-ghost um-btn-xs pe-hdr-link" @onclick='() => Nav.NavigateTo("/billing/payments")'>View all <i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+            </div>
+            <SfGrid DataSource="_failedList" AllowSorting="true" Height="260px">
+                <GridColumns>
+                    <GridColumn Field="@nameof(FailedPayment.Date)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="100"></GridColumn>
+                    <GridColumn Field="@nameof(FailedPayment.AccountName)" HeaderText="Account" Width="170"></GridColumn>
+                    <GridColumn Field="@nameof(FailedPayment.Amount)" HeaderText="Amount" Format="C2" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+                    <GridColumn HeaderText="Method" Width="90">
+                        <Template>
+                            @{ var f = (FailedPayment)context; }
+                            <span class="pe-method-chip pe-m-@f.Method.ToLower()">@f.Method</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(FailedPayment.FailReason)" HeaderText="Reason" Width="180"></GridColumn>
+                    <GridColumn HeaderText="" Width="80">
+                        <Template>
+                            @{ var f2 = (FailedPayment)context; }
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/billing/payments")' title="Retry">
+                                <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Retry
+                            </button>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        </div>
+
+        <!-- ACH Return Codes panel -->
+        <div class="pe-panel">
+            <div class="pe-panel-hdr">
+                <i class="bi bi-arrow-counterclockwise pe-hdr-icon orange" aria-hidden="true"></i>
+                <span class="pe-hdr-title">ACH Return Codes</span>
+                <span class="pe-hdr-badge">Last @_period</span>
+            </div>
+            <div class="pe-ach-grid">
+                @foreach (var achCode in _achCodes)
+                {
+                    <div class="pe-ach-row">
+                        <div class="pe-ach-code">@achCode.Code</div>
+                        <div class="pe-ach-desc">@achCode.Description</div>
+                        <div class="pe-ach-bar-wrap">
+                            <div class="pe-ach-bar" style="width:@(achCode.Count * 100 / (_achCodes.Max(x=>x.Count)+1))%"></div>
+                        </div>
+                        <div class="pe-ach-cnt">@achCode.Count</div>
+                        <span class="pe-ach-sev pe-sev-@achCode.Severity.ToLower()">@achCode.Severity</span>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Days-to-Pay by Segment -->
+        <div class="pe-panel">
+            <div class="pe-panel-hdr">
+                <i class="bi bi-clock-history pe-hdr-icon blue" aria-hidden="true"></i>
+                <span class="pe-hdr-title">Days-to-Pay by Segment</span>
+            </div>
+            <div class="pe-dtp-grid">
+                @foreach (var seg in _daysToPay)
+                {
+                    <div class="pe-dtp-row">
+                        <div class="pe-dtp-seg">@seg.Segment</div>
+                        <div class="pe-dtp-bar-wrap">
+                            <div class="pe-dtp-bar @(seg.Days>14?"pe-dtp-warn":"pe-dtp-ok")" style="width:@(Math.Min(100,(int)(seg.Days/30.0*100)))%"></div>
+                        </div>
+                        <div class="pe-dtp-val @(seg.Days>14?"pe-dtp-warn-text":"")">@seg.Days.ToString("F1") d</div>
+                        <div class="pe-dtp-trend @(seg.Delta>0?"pe-dtp-up":"pe-dtp-dn")">
+                            <i class="bi @(seg.Delta>0?"bi-arrow-up":"bi-arrow-down")" aria-hidden="true"></i> @Math.Abs(seg.Delta).ToString("F1")
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+    </div>
+
+    <!-- RIGHT COLUMN ─────────────────────────────────────────── -->
+    <div class="pe-col">
+
+        <!-- Card Decline Trends panel -->
+        <div class="pe-panel">
+            <div class="pe-panel-hdr">
+                <i class="bi bi-credit-card pe-hdr-icon amber" aria-hidden="true"></i>
+                <span class="pe-hdr-title">Card Decline Trends</span>
+                <span class="pe-hdr-badge">Last @_period</span>
+            </div>
+            <div class="pe-decline-grid">
+                @foreach (var dc in _declineCodes)
+                {
+                    <div class="pe-dec-row">
+                        <div class="pe-dec-code">@dc.Code</div>
+                        <div class="pe-dec-desc">@dc.Description</div>
+                        <div class="pe-dec-bar-wrap">
+                            <div class="pe-dec-bar" style="width:@(dc.Count * 100 / (_declineCodes.Max(x=>x.Count)+1))%"></div>
+                        </div>
+                        <div class="pe-dec-cnt">@dc.Count</div>
+                    </div>
+                }
+            </div>
+            <!-- Trend chart (inline spark) -->
+            <div class="pe-spark-section">
+                <div class="pe-spark-title">Monthly Decline Rate</div>
+                <div class="pe-spark-bars">
+                    @foreach (var (month, rate) in _monthlyDeclines)
+                    {
+                        <div class="pe-spark-col">
+                            <div class="pe-spark-bar @(rate>5?"pe-spark-high":rate>3?"pe-spark-mid":"pe-spark-low")" style="height:@(rate*5)px" title="@month: @rate%"></div>
+                            <div class="pe-spark-lbl">@month</div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Autopay Enrollment panel -->
+        <div class="pe-panel">
+            <div class="pe-panel-hdr">
+                <i class="bi bi-arrow-repeat pe-hdr-icon green" aria-hidden="true"></i>
+                <span class="pe-hdr-title">Autopay Enrollment</span>
+            </div>
+            <div class="pe-autopay-body">
+                <!-- Donut-style summary -->
+                <div class="pe-ap-summary">
+                    <div class="pe-ap-ring">
+                        <div class="pe-ap-ring-inner">
+                            <div class="pe-ap-pct">@_autopayPct.ToString("F0")%</div>
+                            <div class="pe-ap-sub">enrolled</div>
+                        </div>
+                    </div>
+                    <div class="pe-ap-legend">
+                        <div class="pe-ap-leg-row"><span class="pe-ap-dot pe-ap-enrolled" aria-hidden="true"></span> Enrolled: @_autopayEnrolled</div>
+                        <div class="pe-ap-leg-row"><span class="pe-ap-dot pe-ap-not"      aria-hidden="true"></span> Not Enrolled: @(_totalAccounts - _autopayEnrolled)</div>
+                        <div class="pe-ap-leg-row pe-ap-leg-info">
+                            <i class="bi bi-arrow-up-circle" aria-hidden="true"></i> +@_newAutopayThisPeriod new enrollments this period
+                        </div>
+                    </div>
+                </div>
+                <!-- Segment breakdown -->
+                <div class="pe-ap-segments">
+                    @foreach (var seg in _autopaySegments)
+                    {
+                        <div class="pe-ap-seg-row">
+                            <div class="pe-ap-seg-lbl">@seg.Segment</div>
+                            <div class="pe-ap-seg-bar-wrap">
+                                <div class="pe-ap-seg-bar" style="width:@seg.Pct%"></div>
+                            </div>
+                            <div class="pe-ap-seg-pct">@seg.Pct%</div>
+                        </div>
+                    }
+                </div>
+                <!-- Insights -->
+                <div class="pe-ap-insights">
+                    <div class="pe-insight-row pe-insight-tip">
+                        <i class="bi bi-lightbulb" aria-hidden="true"></i>
+                        <span>Accounts with autopay have <strong>62% fewer</strong> failed payments</span>
+                    </div>
+                    <div class="pe-insight-row pe-insight-info">
+                        <i class="bi bi-info-circle" aria-hidden="true"></i>
+                        <span><strong>@_eligibleNotEnrolled</strong> eligible accounts not yet enrolled</span>
+                    </div>
+                    <div class="pe-insight-row pe-insight-action">
+                        <i class="bi bi-megaphone" aria-hidden="true"></i>
+                        <span>
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/communications/outreach")'>
+                                Launch enrollment campaign →
+                            </button>
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recovery & Retry panel -->
+        <div class="pe-panel">
+            <div class="pe-panel-hdr">
+                <i class="bi bi-arrow-repeat pe-hdr-icon blue" aria-hidden="true"></i>
+                <span class="pe-hdr-title">Payment Recovery Tracker</span>
+            </div>
+            <SfGrid DataSource="_recoveries" AllowSorting="true" Height="210px">
+                <GridColumns>
+                    <GridColumn Field="@nameof(RecoveryRow.Account)" HeaderText="Account" Width="170"></GridColumn>
+                    <GridColumn Field="@nameof(RecoveryRow.Amount)" HeaderText="Amount" Format="C2" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+                    <GridColumn Field="@nameof(RecoveryRow.Attempts)" HeaderText="Attempts" Width="85" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center"></GridColumn>
+                    <GridColumn HeaderText="Status" Width="110">
+                        <Template>
+                            @{ var r = (RecoveryRow)context; }
+                            <span class="pe-rec-chip pe-rc-@r.Status.ToLower()">@r.Status</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(RecoveryRow.NextRetry)" HeaderText="Next Retry" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
+                </GridColumns>
+            </SfGrid>
+        </div>
+
+    </div>
+</div>
+
+@code {
+    private string _period = "30d", _segment = "All";
+
+    // ── Headline metrics ────────────────────────────────────────
+    private int    _failed           = 23;
+    private double _failedRate       = 4.7;
+    private int    _achReturns       = 11;
+    private int    _cardDeclines     = 37;
+    private double _declineRate      = 6.2;
+    private int    _autopayEnrolled  = 218;
+    private double _autopayPct       = 72.4;
+    private double _avgDays          = 8.3;
+    private double _prevAvgDays      = 9.1;
+    private int    _nsf              = 5;
+    private decimal _nsfAmt          = 18200m;
+    private double _recoveryRate     = 68;
+    private double _onTimeRate       = 84;
+    private int    _totalAccounts    = 301;
+    private int    _newAutopayThisPeriod = 14;
+    private int    _eligibleNotEnrolled  = 83;
+
+    // ── Failed payments list ────────────────────────────────────
+    private readonly List<FailedPayment> _failedList =
+    [
+        new(DateTime.Today.AddDays(-1), "Westside Properties",  7540m,  "ACH",  "R01 – Insufficient Funds"),
+        new(DateTime.Today.AddDays(-2), "Coastal Restaurants",  9300m,  "ACH",  "R08 – Payment Stopped"),
+        new(DateTime.Today.AddDays(-3), "Riverdale Medical",    2100m,  "Card", "Do Not Honor"),
+        new(DateTime.Today.AddDays(-4), "Green Valley LLC",     4200m,  "Card", "Insufficient Funds"),
+        new(DateTime.Today.AddDays(-5), "Summit Tech Solutions", 890m,  "ACH",  "R29 – Corporate Revocation"),
+        new(DateTime.Today.AddDays(-6), "Bluewater Marine",     3750m,  "Card", "Expired Card"),
+        new(DateTime.Today.AddDays(-7), "Harbor Logistics",     1500m,  "ACH",  "R01 – Insufficient Funds"),
+    ];
+
+    // ── ACH return codes ────────────────────────────────────────
+    private readonly List<AchCode> _achCodes =
+    [
+        new("R01", "Insufficient Funds",        5, "High"),
+        new("R08", "Payment Stopped",           3, "Medium"),
+        new("R29", "Corporate Revocation",      1, "High"),
+        new("R03", "No Account / Unable to Locate",1,"Medium"),
+        new("R07", "Authorization Revoked",     1, "Low"),
+    ];
+
+    // ── Card decline codes ──────────────────────────────────────
+    private readonly List<DeclineCode> _declineCodes =
+    [
+        new("05", "Do Not Honor",          14),
+        new("51", "Insufficient Funds",     9),
+        new("54", "Expired Card",           7),
+        new("61", "Exceeds Withdrawal Amt", 4),
+        new("78", "No Account",             3),
+    ];
+
+    private readonly List<(string Month, double Rate)> _monthlyDeclines =
+    [
+        ("Oct", 3.8), ("Nov", 4.2), ("Dec", 6.9), ("Jan", 5.1), ("Feb", 6.2), ("Mar", 6.2),
+    ];
+
+    // ── Days-to-pay by segment ──────────────────────────────────
+    private readonly List<DtpSegment> _daysToPay =
+    [
+        new("Commercial Lines",  7.2, -0.4),
+        new("Personal Lines",    9.8,  0.3),
+        new("Agency Bill",      12.1,  1.2),
+        new("Direct Bill",       6.5, -0.8),
+        new("EFT / Autopay",     1.3, -0.1),
+        new("90+ Day Delinquent",47.0, 5.6),
+    ];
+
+    // ── Autopay segments ────────────────────────────────────────
+    private readonly List<AutopaySegment> _autopaySegments =
+    [
+        new("EFT / ACH",        95),
+        new("Commercial Lines", 78),
+        new("Personal Lines",   61),
+        new("Agency Bill",      45),
+        new("Direct Bill",      82),
+    ];
+
+    // ── Recovery tracker ────────────────────────────────────────
+    private readonly List<RecoveryRow> _recoveries =
+    [
+        new("Westside Properties",  7540m, 1, "Retry Pending", DateTime.Today.AddDays(3)),
+        new("Coastal Restaurants",  9300m, 2, "In Recovery",   DateTime.Today.AddDays(1)),
+        new("Riverdale Medical",    2100m, 1, "Retry Pending", DateTime.Today.AddDays(2)),
+        new("Green Valley LLC",     4200m, 3, "Escalated",     null),
+        new("Bluewater Marine",     3750m, 2, "Recovered",     null),
+    ];
+
+    void SetPeriod(string p) { _period = p; }
+
+    RenderFragment KpiCard(string icon, string title, string value, string sub, string color) => __builder =>
+    {
+        <div class="pe-kpi-card @color">
+            <div class="pe-kpi-top">
+                <i class="bi @icon pe-kpi-icon" aria-hidden="true"></i>
+                <span class="pe-kpi-title">@title</span>
+            </div>
+            <div class="pe-kpi-val">@value</div>
+            <div class="pe-kpi-sub">@sub</div>
+        </div>
+    };
+
+    record FailedPayment(DateTime Date, string AccountName, decimal Amount, string Method, string FailReason);
+    record AchCode(string Code, string Description, int Count, string Severity);
+    record DeclineCode(string Code, string Description, int Count);
+    record DtpSegment(string Segment, double Days, double Delta);
+    record AutopaySegment(string Segment, int Pct);
+    record RecoveryRow(string Account, decimal Amount, int Attempts, string Status, DateTime? NextRetry);
+}

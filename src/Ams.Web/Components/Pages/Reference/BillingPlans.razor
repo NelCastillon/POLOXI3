@@ -1,0 +1,342 @@
+@page "/admin/reference/billing-plans"
+@namespace Ams.Web.Components.Pages.ReferenceAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Billing Plans — Reference Data</PageTitle>
+
+<AppPageHeader Title="Billing Plans"
+               Subtitle="Premium billing plans, installment schedules and payment frequency configurations"
+               Icon="bi-calendar-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Plan
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="bp-kpi-strip">
+    <div class="bp-kpi-card">
+        <span class="bp-kpi-icon bp-kpi-icon--total"><i class="bi bi-calendar-check" aria-hidden="true"></i></span>
+        <div><div class="bp-kpi-value">@_totalCount</div><div class="bp-kpi-label">Total Plans</div></div>
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
+        <span class="bp-kpi-icon bp-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="bp-kpi-value">@_activeCount</div><div class="bp-kpi-label">Active</div></div>
+        @if (_kpiActive == 2) { <span class="bp-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0">
+        <span class="bp-kpi-icon bp-kpi-icon--installment"><i class="bi bi-layers" aria-hidden="true"></i></span>
+        <div><div class="bp-kpi-value">@_installmentCount</div><div class="bp-kpi-label">Installment</div></div>
+        @if (_kpiActive == 3) { <span class="bp-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass4" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0">
+        <span class="bp-kpi-icon bp-kpi-icon--annual"><i class="bi bi-calendar2-check" aria-hidden="true"></i></span>
+        <div><div class="bp-kpi-value">@_annualCount</div><div class="bp-kpi-label">Annual Full-Pay</div></div>
+        @if (_kpiActive == 4) { <span class="bp-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search plan name or carrier…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_frequencyOptions"
+                        Placeholder="All Frequencies"
+                        ShowClearButton="true"
+                        Width="170px"
+                        Value="_filterFrequency"
+                        ValueChanged="@((string v) => { _filterFrequency = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <label class="bp-toggle-label">
+            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
+            Active only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="BillingPlanEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(BillingPlanEntry.PlanName)" HeaderText="Plan" Width="220">
+                <Template>
+                    @{ var e = (BillingPlanEntry)context; }
+                    <div class="bp-name-cell">
+                        <span class="bp-plan-icon" aria-hidden="true"><i class="bi bi-calendar-check"></i></span>
+                        <div>
+                            <div class="bp-plan-name">@e.PlanName</div>
+                            <div class="bp-plan-code bp-mono">@e.PlanCode</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(BillingPlanEntry.PaymentFrequency)" HeaderText="Frequency" Width="140">
+                <Template>
+                    @{ var e = (BillingPlanEntry)context; }
+                    <span class="@FreqBadgeClass(e.PaymentFrequency)">@e.PaymentFrequency</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(BillingPlanEntry.InstallmentCount)" HeaderText="Installments" Width="120" />
+            <GridColumn Field="@nameof(BillingPlanEntry.DownPaymentPct)" HeaderText="Down Pay %" Width="110">
+                <Template>
+                    @{ var e = (BillingPlanEntry)context; }
+                    <span class="bp-mono">@e.DownPaymentPct.ToString("F1")%</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(BillingPlanEntry.ServiceFeePct)" HeaderText="Svc Fee %" Width="110">
+                <Template>
+                    @{ var e = (BillingPlanEntry)context; }
+                    <span class="bp-mono">@e.ServiceFeePct.ToString("F2")%</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(BillingPlanEntry.MinPremium)" HeaderText="Min Premium" Width="130">
+                <Template>
+                    @{ var e = (BillingPlanEntry)context; }
+                    <span class="bp-mono">@(e.MinPremium.HasValue ? e.MinPremium.Value.ToString("C0") : "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(BillingPlanEntry.IsActive)" HeaderText="Status" Width="100">
+                <Template>
+                    @{ var e = (BillingPlanEntry)context; }
+                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (BillingPlanEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.PlanId == Guid.Empty ? "Add Billing Plan" : "Edit Billing Plan")"
+               OnSave="SaveAsync"
+               OnCancel="CloseDrawer">
+    <Body>
+        <div class="bp-form">
+            <label class="bp-form-label">Plan Name *</label>
+            <input class="um-input" @bind="_editModel.PlanName" />
+
+            <label class="bp-form-label">Plan Code</label>
+            <input class="um-input bp-mono" @bind="_editModel.PlanCode" placeholder="e.g. MONTHLY-10" />
+
+            <label class="bp-form-label">Payment Frequency</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_frequencyOptions"
+                            @bind-Value="_editModel.PaymentFrequency"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="bp-form-label">Installment Count</label>
+            <input class="um-input bp-mono" type="number" min="1" @bind="_editModel.InstallmentCount" />
+
+            <div class="bp-form-row">
+                <div>
+                    <label class="bp-form-label">Down Payment (%)</label>
+                    <input class="um-input bp-mono" type="number" step="0.1" @bind="_editModel.DownPaymentPct" />
+                </div>
+                <div>
+                    <label class="bp-form-label">Service Fee (%)</label>
+                    <input class="um-input bp-mono" type="number" step="0.01" @bind="_editModel.ServiceFeePct" />
+                </div>
+            </div>
+
+            <label class="bp-form-label">Minimum Premium</label>
+            <input class="um-input bp-mono" type="number" @bind="_editModel.MinPremium" />
+
+            <label class="bp-form-label">Description</label>
+            <textarea class="um-input" rows="3" @bind="_editModel.Description"></textarea>
+
+            <label class="bp-form-label">Active</label>
+            <SfSwitch @bind-Checked="_editModel.IsActive" />
+        </div>
+    </Body>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<BillingPlanEntry> _allEntries = [];
+    private List<BillingPlanEntry> _entries    = [];
+
+    private bool _loading    = false;
+    private bool _showDrawer = false;
+
+    private string _search            = string.Empty;
+    private string _filterFrequency   = string.Empty;
+    private bool   _filterActiveOnly  = false;
+    private int    _kpiActive         = 0;
+
+    private int _totalCount      = 0;
+    private int _activeCount     = 0;
+    private int _installmentCount = 0;
+    private int _annualCount     = 0;
+
+    private string KpiClass2 => "bp-kpi-card" + (_kpiActive == 2 ? " bp-kpi-card--active" : "");
+    private string KpiClass3 => "bp-kpi-card" + (_kpiActive == 3 ? " bp-kpi-card--active" : "");
+    private string KpiClass4 => "bp-kpi-card" + (_kpiActive == 4 ? " bp-kpi-card--active" : "");
+
+    private static readonly List<LabelValue> _frequencyOptions =
+    [
+        new("Annual",      "Annual (Full Pay)"),
+        new("SemiAnnual",  "Semi-Annual"),
+        new("Quarterly",   "Quarterly"),
+        new("Monthly",     "Monthly"),
+        new("Custom",      "Custom Installment"),
+    ];
+
+    private BillingPlanEntry _editModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",           "/"),
+            new("Reference Data", "/admin/reference/carriers"),
+            new("Billing Plans",  "/admin/reference/billing-plans"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: Api.GetBillingPlansAsync(_tenantId)
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterFrequency) || e.PaymentFrequency == _filterFrequency) &&
+            (!_filterActiveOnly || e.IsActive) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.PlanName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.PlanCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        if (_kpiActive == 2) _entries = _entries.Where(e =>  e.IsActive).ToList();
+        if (_kpiActive == 3) _entries = _entries.Where(e => e.InstallmentCount > 1).ToList();
+        if (_kpiActive == 4) _entries = _entries.Where(e => e.PaymentFrequency == "Annual").ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive       = _kpiActive == n ? 0 : n;
+        _filterActiveOnly = false;
+        _filterFrequency = string.Empty;
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount       = _allEntries.Count;
+        _activeCount      = _allEntries.Count(e => e.IsActive);
+        _installmentCount = _allEntries.Count(e => e.InstallmentCount > 1);
+        _annualCount      = _allEntries.Count(e => e.PaymentFrequency == "Annual");
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(BillingPlanEntry e)
+    {
+        _editModel = new BillingPlanEntry
+        {
+            PlanId           = e.PlanId,
+            PlanName         = e.PlanName,
+            PlanCode         = e.PlanCode,
+            PaymentFrequency = e.PaymentFrequency,
+            InstallmentCount = e.InstallmentCount,
+            DownPaymentPct   = e.DownPaymentPct,
+            ServiceFeePct    = e.ServiceFeePct,
+            MinPremium       = e.MinPremium,
+            Description      = e.Description,
+            IsActive         = e.IsActive,
+        };
+        _showDrawer = true;
+    }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveAsync()
+    {
+        // TODO: Api.SaveBillingPlanAsync(_tenantId, _editModel)
+        await Task.Delay(0);
+        _showDrawer = false;
+        await LoadAsync();
+        await ShowToastAsync("Billing plan saved.", "e-toast-success");
+    }
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string FreqBadgeClass(string freq) => freq switch
+    {
+        "Annual"     => "bp-freq-badge bp-freq-badge--annual",
+        "SemiAnnual" => "bp-freq-badge bp-freq-badge--semi",
+        "Quarterly"  => "bp-freq-badge bp-freq-badge--quarterly",
+        "Monthly"    => "bp-freq-badge bp-freq-badge--monthly",
+        _            => "bp-freq-badge bp-freq-badge--custom",
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class BillingPlanEntry
+    {
+        public Guid     PlanId           { get; set; } = Guid.Empty;
+        public string   PlanName         { get; set; } = string.Empty;
+        public string   PlanCode         { get; set; } = string.Empty;
+        public string   PaymentFrequency { get; set; } = "Monthly";
+        public int      InstallmentCount { get; set; } = 1;
+        public decimal  DownPaymentPct   { get; set; }
+        public decimal  ServiceFeePct    { get; set; }
+        public decimal? MinPremium       { get; set; }
+        public string?  Description      { get; set; }
+        public bool     IsActive         { get; set; } = true;
+    }
+}
