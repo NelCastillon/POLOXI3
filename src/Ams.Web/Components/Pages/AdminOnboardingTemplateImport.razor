@@ -1,0 +1,208 @@
+@page "/admin/system/onboarding/template-import"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Template Import — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Template Import"
+               Subtitle="Import email and document templates from your previous system, classify them, and map merge variables to AMS fields"
+               Icon="bi-file-earmark-arrow-up">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/admin/system/onboarding")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Onboarding</button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showUpload = true"><i class="bi bi-upload" aria-hidden="true"></i> Import Templates</button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Filters -->
+<div class="ti-filter-row">
+    <div class="ti-search-wrap"><i class="bi bi-search" aria-hidden="true"></i><input class="ti-search" placeholder="Search templates…" @bind="_search" @bind:event="oninput" /></div>
+    <select class="ti-sel" @bind="_typeFilter">
+        <option value="">All Types</option>
+        <option value="Renewal">Renewal</option>
+        <option value="Invoice">Invoice</option>
+        <option value="Claims">Claims</option>
+        <option value="General">General</option>
+        <option value="Marketing">Marketing</option>
+    </select>
+    <select class="ti-sel" @bind="_statusFilter">
+        <option value="">All Statuses</option>
+        <option value="Mapped">Mapped</option>
+        <option value="Needs Review">Needs Review</option>
+        <option value="Draft">Draft</option>
+    </select>
+</div>
+
+<!-- Template grid -->
+<div class="ti-grid">
+    @foreach (var t in Filtered)
+    {
+        <div class="ti-card @(t.Selected ? "ti-card-sel" : "")">
+            <div class="ti-card-hdr">
+                <div class="ti-card-icon @TypeIconCss(t.Type)"><i class="bi bi-@TypeIcon(t.Type)" aria-hidden="true"></i></div>
+                <div class="ti-card-info">
+                    <div class="ti-card-name">@t.Name</div>
+                    <div class="ti-card-meta">@t.Subject</div>
+                </div>
+                <span class="ti-status-badge @StatusCss(t.Status)">@t.Status</span>
+            </div>
+            <div class="ti-card-body">
+                <div class="ti-card-type-row">
+                    <span class="ti-type-label">Type</span>
+                    <select class="ti-inline-sel" @bind="t.Type">
+                        <option>Renewal</option><option>Invoice</option><option>Claims</option><option>General</option><option>Marketing</option>
+                    </select>
+                </div>
+                <div class="ti-var-row">
+                    <span class="ti-var-label">Variables</span>
+                    <div class="ti-var-chips">
+                        @foreach (var v in t.Variables)
+                        {
+                            <span class="ti-var-chip @(v.Mapped ? "ti-var-ok" : "ti-var-miss")" title="@v.AmsField">@v.SourceVar</span>
+                        }
+                    </div>
+                </div>
+            </div>
+            <div class="ti-card-footer">
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenPreview(t)"><i class="bi bi-eye" aria-hidden="true"></i> Preview</button>
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => MapVariables(t)"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Map Variables</button>
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => SendTest(t)"><i class="bi bi-send" aria-hidden="true"></i> Test Send</button>
+            </div>
+        </div>
+    }
+</div>
+
+<!-- Preview overlay -->
+@if (_previewTemplate is not null)
+{
+    <div class="ti-overlay" @onclick="() => _previewTemplate = null">
+        <div class="ti-viewer" @onclick:stopPropagation="true">
+            <div class="ti-viewer-hdr">
+                <span><i class="bi bi-envelope" aria-hidden="true"></i> @_previewTemplate.Name</span>
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _previewTemplate = null"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="ti-viewer-meta"><strong>Subject:</strong> @_previewTemplate.Subject</div>
+            <div class="ti-viewer-body">
+                <p>@_previewTemplate.BodyPreview</p>
+                <div class="ti-var-legend">
+                    <div class="ti-var-legend-title">Variable Mappings</div>
+                    @foreach (var v in _previewTemplate.Variables)
+                    {
+                        <div class="ti-var-map-row">
+                            <span class="ti-var-src">@v.SourceVar</span>
+                            <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                            <select class="ti-map-sel" @bind="v.AmsField">
+                                <option value="">— Unmapped —</option>
+                                @foreach (var f in _amsVarFields) { <option value="@f">@f</option> }
+                            </select>
+                            @if (v.Mapped) { <i class="bi bi-check-circle-fill ti-var-ok-ico" aria-hidden="true"></i> } else { <i class="bi bi-exclamation-circle ti-var-miss-ico" aria-hidden="true"></i> }
+                        </div>
+                    }
+                </div>
+            </div>
+            <div class="ti-viewer-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _previewTemplate = null">Close</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveAndClose"><i class="bi bi-check2" aria-hidden="true"></i> Save Mappings</button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Upload dialog -->
+<SfDialog @bind-Visible="_showUpload" Width="440px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header>Import Templates</Header>
+        <Content>
+            <div class="ti-dlg">
+                <label class="ti-dlg-label">Source Format</label>
+                <select class="ti-dlg-sel">
+                    <option>HTML Files (.html, .htm)</option>
+                    <option>Plain Text (.txt)</option>
+                    <option>Applied Epic Template Export</option>
+                    <option>HawkSoft Template Export</option>
+                    <option>Microsoft Word (.docx)</option>
+                </select>
+                <label class="ti-dlg-label">Upload File or Archive</label>
+                <div class="ti-dlg-upload">
+                    <i class="bi bi-cloud-upload" aria-hidden="true"></i>
+                    <span>Drop files or <span class="ti-dlg-link">browse</span></span>
+                    <input type="file" class="ti-dlg-file" accept=".html,.htm,.txt,.zip,.docx" multiple />
+                </div>
+                <label class="ti-dlg-label">Default Template Type</label>
+                <select class="ti-dlg-sel">
+                    <option>Auto-Detect</option>
+                    <option>Renewal</option>
+                    <option>Invoice</option>
+                    <option>General</option>
+                </select>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <button class="um-btn um-btn-ghost" @onclick="() => _showUpload = false">Cancel</button>
+            <button class="um-btn um-btn-primary" @onclick="CommitUpload"><i class="bi bi-upload" aria-hidden="true"></i> Import</button>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private SfToast? _toast;
+    private bool _showUpload;
+    private string _search = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private TemplateItem? _previewTemplate;
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Administration","/admin"), new("Tenant Onboarding","/admin/system/onboarding"), new("Template Import",""));
+    }
+
+    private IEnumerable<TemplateItem> Filtered => _templates.Where(t =>
+        (string.IsNullOrEmpty(_search)       || t.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_typeFilter)   || t.Type == _typeFilter) &&
+        (string.IsNullOrEmpty(_statusFilter) || t.Status == _statusFilter));
+
+    private void OpenPreview(TemplateItem t) => _previewTemplate = t;
+    private void MapVariables(TemplateItem t) => _previewTemplate = t;
+
+    private async Task SendTest(TemplateItem t)
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Test email sent for '{t.Name}'.", CssClass = "e-toast-success" });
+    }
+
+    private async Task SaveAndClose()
+    {
+        if (_previewTemplate is not null) _previewTemplate.Status = "Mapped";
+        _previewTemplate = null;
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Variable mappings saved.", CssClass = "e-toast-success" });
+    }
+
+    private async Task CommitUpload()
+    {
+        _showUpload = false;
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "3 templates imported. Review and map variables.", CssClass = "e-toast-success" });
+    }
+
+    private static string TypeIcon(string t) => t switch { "Renewal"=>"arrow-clockwise","Invoice"=>"receipt","Claims"=>"exclamation-circle","Marketing"=>"megaphone",_=>"envelope" };
+    private static string TypeIconCss(string t) => t switch { "Renewal"=>"ti-ic-blue","Invoice"=>"ti-ic-amber","Claims"=>"ti-ic-red","Marketing"=>"ti-ic-green",_=>"ti-ic-grey" };
+    private static string StatusCss(string s) => s switch { "Mapped"=>"ti-st-ok","Needs Review"=>"ti-st-warn",_=>"ti-st-draft" };
+
+    private sealed class TemplateVar { public string SourceVar{get;set;}=string.Empty; public string AmsField{get;set;}=string.Empty; public bool Mapped => !string.IsNullOrEmpty(AmsField); }
+    private sealed class TemplateItem { public string Name{get;set;}=string.Empty; public string Type{get;set;}=string.Empty; public string Subject{get;set;}=string.Empty; public string Status{get;set;}=string.Empty; public string BodyPreview{get;set;}=string.Empty; public bool Selected{get;set;} public List<TemplateVar> Variables{get;set;}=[]; }
+
+    private static readonly string[] _amsVarFields = ["{{account.name}}","{{policy.number}}","{{policy.expiry_date}}","{{contact.first_name}}","{{contact.last_name}}","{{contact.email}}","{{invoice.amount}}","{{invoice.due_date}}","{{claim.number}}","{{producer.name}}","{{agency.name}}","{{agency.phone}}"];
+
+    private List<TemplateItem> _templates =
+    [
+        new TemplateItem { Name="Renewal Notice — 90 Days",      Type="Renewal",   Subject="Your policy renews in 90 days — action required",          Status="Mapped",       BodyPreview="Dear [FirstName], your policy [PolicyNumber] is due for renewal on [ExpiryDate]. Please review the attached renewal proposal...", Variables=[ new TemplateVar{SourceVar="[FirstName]",AmsField="{{contact.first_name}}"}, new TemplateVar{SourceVar="[PolicyNumber]",AmsField="{{policy.number}}"}, new TemplateVar{SourceVar="[ExpiryDate]",AmsField="{{policy.expiry_date}}"} ] },
+        new TemplateItem { Name="Renewal Notice — 30 Days",      Type="Renewal",   Subject="Urgent: Policy renewal due in 30 days",                     Status="Mapped",       BodyPreview="This is a final reminder that your policy [PolicyNumber] expires on [ExpiryDate]...", Variables=[ new TemplateVar{SourceVar="[PolicyNumber]",AmsField="{{policy.number}}"}, new TemplateVar{SourceVar="[ExpiryDate]",AmsField="{{policy.expiry_date}}"} ] },
+        new TemplateItem { Name="Payment Receipt",               Type="Invoice",   Subject="Payment confirmation — Invoice [InvNumber]",               Status="Mapped",       BodyPreview="Thank you for your payment of [PaymentAmount] received on [PaymentDate] for invoice [InvNumber]...", Variables=[ new TemplateVar{SourceVar="[InvNumber]",AmsField="{{invoice.number}}"}, new TemplateVar{SourceVar="[PaymentAmount]",AmsField="{{invoice.amount}}"}, new TemplateVar{SourceVar="[PaymentDate]",AmsField=""} ] },
+        new TemplateItem { Name="FNOL Acknowledgement",          Type="Claims",    Subject="Claim received — Ref [ClaimRef]",                          Status="Needs Review", BodyPreview="We have received your claim [ClaimRef] and it has been assigned to adjuster [AdjusterName]...", Variables=[ new TemplateVar{SourceVar="[ClaimRef]",AmsField="{{claim.number}}"}, new TemplateVar{SourceVar="[AdjusterName]",AmsField=""} ] },
+        new TemplateItem { Name="Welcome Email",                 Type="General",   Subject="Welcome to [AgencyName]",                                  Status="Mapped",       BodyPreview="Welcome! We're thrilled to have [ClientName] as part of [AgencyName]. Your dedicated producer is [ProducerName]...", Variables=[ new TemplateVar{SourceVar="[AgencyName]",AmsField="{{agency.name}}"}, new TemplateVar{SourceVar="[ClientName]",AmsField="{{contact.first_name}}"}, new TemplateVar{SourceVar="[ProducerName]",AmsField="{{producer.name}}"} ] },
+        new TemplateItem { Name="Cross-Sell Intro",              Type="Marketing", Subject="Have you considered [ProductName] coverage?",              Status="Draft",        BodyPreview="Hi [FirstName], based on your current coverage, we think you might benefit from...", Variables=[ new TemplateVar{SourceVar="[FirstName]",AmsField="{{contact.first_name}}"}, new TemplateVar{SourceVar="[ProductName]",AmsField=""} ] },
+    ];
+}

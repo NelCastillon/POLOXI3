@@ -1,0 +1,269 @@
+@page "/analytics/ai-assistant"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>AI Assistant — AMS</PageTitle>
+
+<AppPageHeader Title="AI Assistant"
+               Subtitle="Assistive AI for account history, communication summaries, next-best-action, renewal risk, cross-sell, service bottlenecks, and data quality"
+               Icon="bi-robot">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="ClearConversation">
+            <i class="bi bi-trash" aria-hidden="true"></i> Clear
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="aia-layout">
+
+    <!-- Left: capability tiles + context picker -->
+    <aside class="aia-sidebar">
+        <div class="aia-sidebar-hdr">Quick Actions</div>
+        <div class="aia-capability-list">
+            @foreach (var cap in _capabilities)
+            {
+                <button class="aia-cap-btn" @onclick="() => UsePrompt(cap.Prompt)">
+                    <div class="aia-cap-icon @cap.IconCss"><i class="bi @cap.Icon" aria-hidden="true"></i></div>
+                    <div>
+                        <div class="aia-cap-name">@cap.Name</div>
+                        <div class="aia-cap-desc">@cap.Desc</div>
+                    </div>
+                </button>
+            }
+        </div>
+
+        <div class="aia-sidebar-hdr aia-sidebar-hdr--mt">Context</div>
+        <div class="aia-ctx-picker">
+            <select class="aia-ctx-sel" @bind="_ctxType">
+                <option value="global">Global — All data</option>
+                <option value="account">Specific Account</option>
+                <option value="producer">Specific Producer</option>
+                <option value="policy">Specific Policy</option>
+            </select>
+            @if (_ctxType != "global")
+            {
+                <input class="aia-ctx-input" placeholder="Enter name or ID…" @bind="_ctxValue" />
+            }
+        </div>
+    </aside>
+
+    <!-- Right: conversation -->
+    <div class="aia-convo-panel">
+        <div class="aia-messages" @ref="_msgContainer">
+            @if (_messages.Count == 0)
+            {
+                <div class="aia-welcome">
+                    <div class="aia-welcome-icon"><i class="bi bi-robot" aria-hidden="true"></i></div>
+                    <div class="aia-welcome-title">Hello! I'm your AMS AI Assistant.</div>
+                    <div class="aia-welcome-sub">I can help you summarize account history, identify renewal risks, suggest cross-sell opportunities, surface service bottlenecks, flag data quality issues, and recommend next best actions. Choose a quick action on the left, or ask me anything.</div>
+                    <div class="aia-starter-grid">
+                        @foreach (var s in _starters)
+                        {
+                            <button class="aia-starter" @onclick="() => UsePrompt(s)">@s</button>
+                        }
+                    </div>
+                </div>
+            }
+            @foreach (var msg in _messages)
+            {
+                <div class="aia-msg-row aia-msg-row--@msg.Role">
+                    @if (msg.Role == "assistant")
+                    {
+                        <div class="aia-msg-av-ai"><i class="bi bi-robot" aria-hidden="true"></i></div>
+                    }
+                    <div class="aia-msg-bubble aia-bubble--@msg.Role">
+                        @if (msg.Role == "assistant" && msg.IsStreaming)
+                        {
+                            <span class="aia-typing">@msg.Content<span class="aia-cursor">▋</span></span>
+                        }
+                        else
+                        {
+                            @msg.Content
+                        }
+                        @if (msg.Role == "assistant" && msg.Actions.Length > 0)
+                        {
+                            <div class="aia-msg-actions">
+                                @foreach (var a in msg.Actions)
+                                {
+                                    <button class="aia-action-btn" @onclick="() => HandleAction(a)"><i class="bi @a.Icon" aria-hidden="true"></i> @a.Label</button>
+                                }
+                            </div>
+                        }
+                    </div>
+                    @if (msg.Role == "user")
+                    {
+                        <div class="aia-msg-av-user">Me</div>
+                    }
+                </div>
+            }
+            @if (_thinking)
+            {
+                <div class="aia-msg-row aia-msg-row--assistant">
+                    <div class="aia-msg-av-ai"><i class="bi bi-robot" aria-hidden="true"></i></div>
+                    <div class="aia-msg-bubble aia-bubble--assistant aia-thinking-bubble">
+                        <span class="aia-dot"></span><span class="aia-dot"></span><span class="aia-dot"></span>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <!-- Input row -->
+        <div class="aia-input-row">
+            <textarea class="aia-input"
+                      placeholder="Ask the AI assistant anything about your accounts, policies, claims, or pipeline…"
+                      rows="2"
+                      @bind="_userInput"
+                      @bind:event="oninput"
+                      @onkeydown="HandleKey"></textarea>
+            <button class="aia-send-btn" disabled="@(string.IsNullOrWhiteSpace(_userInput) || _thinking)" @onclick="SendMessage">
+                <i class="bi bi-send-fill" aria-hidden="true"></i>
+            </button>
+        </div>
+        <div class="aia-input-footer">
+            <span><i class="bi bi-info-circle" aria-hidden="true"></i> AI responses are assistive and should be reviewed before acting. Not a substitute for professional judgment.</span>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _userInput = string.Empty;
+    private string _ctxType = "global";
+    private string _ctxValue = string.Empty;
+    private bool _thinking;
+    private ElementReference _msgContainer;
+    private List<ChatMessage> _messages = [];
+
+    private static readonly List<string> _starters =
+    [
+        "What are my highest renewal risk accounts this month?",
+        "Which accounts are best candidates for umbrella cross-sell?",
+        "Summarize open service requests older than 48 hours",
+        "Find data quality issues that could block renewal notices",
+        "What's the next best action for my top 5 at-risk accounts?",
+    ];
+
+    private static readonly List<CapabilityDef> _capabilities =
+    [
+        new("Summarize Account History",  "Narrative summary of activity, claims, and contacts",           "bi-building",           "aia-ci-blue",   "Summarize the full account history for [Account Name], including policy history, claims, open service requests, and recent communications."),
+        new("Summarize Comms Thread",     "Key themes and action items from email / note threads",          "bi-chat-dots",          "aia-ci-blue",   "Summarize the last 30 days of communication for account [Account Name] and identify any open action items or commitments."),
+        new("Next Best Action",           "AI-recommended outreach or service action",                      "bi-lightning-charge",   "aia-ci-amber",  "What is the recommended next best action for accounts expiring in the next 30 days with no recent producer contact?"),
+        new("Identify Renewal Risk",      "Flag accounts most likely to lapse",                             "bi-arrow-clockwise",    "aia-ci-red",    "Identify accounts with the highest renewal risk in the next 60 days and explain the primary risk factors for each."),
+        new("Recommend Cross-Sell",       "Surface coverage gaps and upsell opportunities",                 "bi-arrows-expand",      "aia-ci-green",  "Which accounts in my book have significant coverage gaps that represent a cross-sell or upsell opportunity? Prioritize by premium potential."),
+        new("Detect Service Bottlenecks", "Highlight workflow delays and capacity issues",                  "bi-hourglass-split",    "aia-ci-amber",  "Are there any service bottlenecks in the current open service request queue? Identify root causes and suggest resolution steps."),
+        new("Data Quality Issues",        "Find records with missing or inconsistent data",                 "bi-database-exclamation","aia-ci-blue",  "What are the most impactful data quality issues in the account and policy records that could affect renewal processing or reporting?"),
+    ];
+
+    // Simulated AI responses keyed by capability prompt keywords
+    private static readonly Dictionary<string, (string Response, AiAction[] Actions)> _aiResponses = new()
+    {
+        ["renewal risk"] = (
+            "Based on your current book, I've identified **17 accounts** at elevated renewal risk in the next 60 days:\n\n**Top 5 by risk score:**\n1. **Apex Logistics LLC** — No producer contact in 47 days, 22% rate increase, 1 open complaint. Probability of lapse: 74%.\n2. **Riverside Dental Group** — Carrier non-renewal flag, open COI dispute. Probability: 68%.\n3. **Castillo Auto Group** — Competitor quote obtained, loss ratio 84%. Probability: 61%.\n4. **Kim Realty LLC** — Invoice 21 days overdue, no portal login in 62 days. Probability: 54%.\n5. **Sullivan Manufacturing** — Modest price increase only; no other risk signals. Probability: 31%.\n\nI recommend scheduling outreach tasks for the top 4 immediately.",
+            [new AiAction("Create outreach tasks for top 5","bi-check2-square"), new AiAction("View retention analytics","bi-graph-up")]
+        ),
+        ["cross-sell"] = (
+            "I found **84 accounts** with significant cross-sell potential based on coverage gaps:\n\n**Highest-value opportunities:**\n- **Umbrella coverage** — 84 commercial accounts have BOP but no umbrella. Avg premium add: $2,000. Total opportunity: ~$168K.\n- **Cyber Liability** — 61 professional services accounts with no cyber coverage. Avg premium: $3,200.\n- **Employment Practices** — 38 accounts with 5+ employees and no EPL coverage.\n- **Directors & Officers** — 12 entities with board structures and no D&O.\n\nI recommend prioritizing umbrella for BOP accounts renewing in the next 90 days.",
+            [new AiAction("Generate cross-sell campaign","bi-megaphone"), new AiAction("View marketing analytics","bi-bar-chart")]
+        ),
+        ["bottleneck"] = (
+            "I've detected a **COI processing bottleneck** that's your most critical service issue right now:\n\n- **Current average fulfillment time:** 51 hours\n- **SLA target:** 24 hours\n- **Root cause:** Lisa Park (141% capacity) and Marcus Webb (128% capacity) are handling 78% of all COI requests\n- **Downstream impact:** 3 accounts have escalated, 1 is threatening to move their policy\n\n**Recommendations:**\n1. Immediately redistribute 15 pending COI requests to Beth Nakamura and Tom Reyes\n2. For simple certificates, enable senior producer self-serve via the portal template library\n3. Review if the 24-hour SLA is achievable with current staffing — data suggests 36 hours is more realistic",
+            [new AiAction("View service analytics","bi-headset"), new AiAction("Create redistribution task","bi-check2-square")]
+        ),
+        ["data quality"] = (
+            "I've identified the following data quality issues that could impact operations:\n\n**Critical:**\n- **214 accounts** missing primary contact email → blocks renewal notices, campaign delivery, portal invites\n- **38 policies** missing effective date → impacts renewal scheduling and compliance reporting\n\n**High priority:**\n- **91 contacts** with duplicate records — consolidation needed before campaign sends\n- **47 accounts** with no assigned producer → fall outside any active outreach workflow\n\n**Medium:**\n- **162 policy records** missing LOB classification → affects analytics accuracy\n- **28 claim records** with $0 reserves → may be placeholder records, require validation\n\nI recommend running the data enrichment workflow for emails first — it has an 80% auto-resolution rate.",
+            [new AiAction("Run enrichment workflow","bi-lightning-charge"), new AiAction("Export data quality report","bi-download")]
+        ),
+        ["account history"] = (
+            "Here's a summary for **Apex Logistics LLC** (Account #ACC-4821):\n\n**Overview:** Regional logistics company, 3 locations, 140 employees. Customer since 2019.\n\n**Coverage:** Commercial Auto (fleet of 28 vehicles), GL, Workers Comp, Umbrella. Annual premium: $84,200.\n\n**Recent activity:**\n- Mar 14: Renewal quoted at +22% (carrier rate increase)\n- Feb 28: COI request fulfilled (2-day delay)\n- Feb 14: Claim filed — auto accident, reserves $18,400, adjuster assigned\n- Jan 9: Last producer call (Tom Reyes) — no follow-up documented\n\n**Risk flags:** No producer contact in 47 days, open claim, rate increase. Renewal probability: 74% lapse risk.\n\n**Next best action:** Proactive renewal meeting to discuss rate, present competitor benchmarks, and update on claim status.",
+            [new AiAction("Create renewal task","bi-check2-square"), new AiAction("View account","bi-arrow-right")]
+        ),
+        ["comms"] = (
+            "**Communication Thread Summary** — Last 30 days:\n\n**Volume:** 14 emails, 3 phone calls logged, 2 portal messages\n\n**Key themes:**\n1. **COI request (resolved)** — Client requested 3 certificates for new vendor relationships. Fulfilled Feb 28, slight delay noted.\n2. **Rate increase concern** — Client expressed surprise at 22% renewal increase in Feb 19 email. Tom Reyes acknowledged but no formal response documented.\n3. **Open claim follow-up** — Client asked for claim status update twice. No documented response to second inquiry (Feb 27).\n\n**Open action items:**\n- ⚠️ Respond to rate increase concern with carrier justification and competitive context\n- ⚠️ Provide claim status update — adjuster contact needed\n- Schedule renewal strategy meeting before March 30\n\n**Sentiment:** Cautious. Client is engaged but showing frustration with response time.",
+            [new AiAction("Draft rate response","bi-envelope"), new AiAction("Follow up on claim","bi-exclamation-circle")]
+        ),
+        ["next best action"] = (
+            "**Next Best Action Recommendations** — Accounts expiring in 30 days with no recent contact:\n\n1. **Apex Logistics LLC** (exp. Apr 14) → **Schedule renewal strategy call** — 47 days no contact, rate increase pending. Call to present options and address open claim status.\n2. **Kim Realty LLC** (exp. Apr 21) → **Resolve overdue invoice first** — billing issue must be cleared before renewal conversation is productive.\n3. **Riverside Dental Group** (exp. Apr 28) → **Carrier non-renewal letter — urgent** — must identify replacement carrier within 10 days. Senior account manager should lead.\n4. **Torres & Partners CPAs** (exp. May 3) → **Cross-sell meeting** — renewal is secure but coverage gap (no cyber) is significant for their client data profile.\n5. **Mesa Contractors LLC** (exp. May 8) → **Loss control visit** — loss ratio 74% may prompt carrier action. Proactive loss control demonstrates engagement.",
+            [new AiAction("Create all 5 tasks","bi-check2-square"), new AiAction("View at-risk accounts","bi-shield-exclamation")]
+        ),
+    };
+
+    private void UsePrompt(string prompt)
+    {
+        _userInput = prompt;
+        _ = SendMessage();
+    }
+
+    private async Task SendMessage()
+    {
+        if (string.IsNullOrWhiteSpace(_userInput) || _thinking) return;
+        var userText = _userInput.Trim();
+        _userInput = string.Empty;
+
+        _messages.Add(new ChatMessage("user", userText));
+        _thinking = true;
+        StateHasChanged();
+
+        await Task.Delay(1100 + Random.Shared.Next(200, 600));
+        _thinking = false;
+
+        var (response, actions) = FindResponse(userText);
+        var aiMsg = new ChatMessage("assistant", string.Empty) { IsStreaming = true, Actions = actions };
+        _messages.Add(aiMsg);
+
+        // Simulate streaming
+        var words = response.Split(' ');
+        foreach (var word in words)
+        {
+            aiMsg.Content += (aiMsg.Content.Length > 0 ? " " : "") + word;
+            StateHasChanged();
+            await Task.Delay(22);
+        }
+        aiMsg.IsStreaming = false;
+        StateHasChanged();
+    }
+
+    private static (string Response, AiAction[] Actions) FindResponse(string text)
+    {
+        var lower = text.ToLower();
+        foreach (var kvp in _aiResponses)
+            if (lower.Contains(kvp.Key))
+                return kvp.Value;
+
+        return ($"I analyzed your request: \"{text}\"\n\nBased on current data, here's what I found:\n\n- This query spans multiple data domains. I recommend narrowing to a specific account, LOB, or time period for the most accurate analysis.\n- You can also try one of the quick actions on the left for pre-built insights.\n\nWould you like me to focus on a specific area — retention, sales, claims, finance, or service?",
+                [new AiAction("View AI Insights","bi-stars"), new AiAction("Open Reports Library","bi-collection")]);
+    }
+
+    private async Task HandleAction(AiAction a)
+    {
+        _messages.Add(new ChatMessage("user", $"[Clicked: {a.Label}]"));
+        _thinking = true;
+        StateHasChanged();
+        await Task.Delay(800);
+        _thinking = false;
+        _messages.Add(new ChatMessage("assistant", $"Opening **{a.Label}**…") { Actions = [] });
+        StateHasChanged();
+    }
+
+    private async Task HandleKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey)
+            await SendMessage();
+    }
+
+    private void ClearConversation() => _messages.Clear();
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Analytics","/analytics/reports"), new("AI Assistant",""));
+    }
+
+    private sealed class ChatMessage(string role, string content)
+    {
+        public string     Role        { get; } = role;
+        public string     Content     { get; set; } = content;
+        public bool       IsStreaming { get; set; }
+        public AiAction[] Actions     { get; set; } = [];
+    }
+
+    private sealed record AiAction(string Label, string Icon);
+    private sealed record CapabilityDef(string Name, string Desc, string Icon, string IconCss, string Prompt);
+}

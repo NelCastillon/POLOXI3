@@ -1,0 +1,120 @@
+@page "/analytics/claims"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Claims Analytics — AMS</PageTitle>
+
+<AppPageHeader Title="Claims Analytics"
+               Subtitle="Loss ratio, claim frequency, severity trends, open reserves, and carrier performance"
+               Icon="bi-exclamation-circle-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="ca-kpi-strip">
+    <div class="ca-kpi-card ca-kpi-card--lr">
+        <div class="ca-kpi-big" style="color:@(62 <= 65 ? "#059669" : "#dc2626")">62.4%</div>
+        <div class="ca-kpi-lbl">Loss Ratio (YTD)</div>
+        <div class="ca-kpi-target">Target ≤ 65%</div>
+    </div>
+    <div class="ca-kpi-card"><div class="ca-kpi-icon ca-ki-red"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></div><div><div class="ca-kv">142</div><div class="ca-kl">Open Claims</div></div></div>
+    <div class="ca-kpi-card"><div class="ca-kpi-icon ca-ki-amber"><i class="bi bi-currency-dollar" aria-hidden="true"></i></div><div><div class="ca-kv">$2.8M</div><div class="ca-kl">Open Reserves</div></div></div>
+    <div class="ca-kpi-card"><div class="ca-kpi-icon ca-ki-blue"><i class="bi bi-stopwatch" aria-hidden="true"></i></div><div><div class="ca-kv">28.4d</div><div class="ca-kl">Avg Cycle Time</div></div></div>
+    <div class="ca-kpi-card"><div class="ca-kpi-icon ca-ki-green"><i class="bi bi-check-circle" aria-hidden="true"></i></div><div><div class="ca-kv">84</div><div class="ca-kl">Closed (MTD)</div></div></div>
+</div>
+
+<div class="ca-two-col">
+
+    <!-- Loss ratio by LOB -->
+    <div class="ca-panel">
+        <div class="ca-panel-hdr">Loss Ratio by Line of Business</div>
+        <div class="ca-lr-chart">
+            @foreach (var l in _lrByLob)
+            {
+                <div class="ca-lr-row">
+                    <div class="ca-lr-lbl">@l.Lob</div>
+                    <div class="ca-lr-track">
+                        <div class="@LrFill(l.Ratio)" style="width:@Math.Min(l.Ratio,100)%"></div>
+                        <div class="ca-lr-target-line" style="left:65%"></div>
+                    </div>
+                    <div class="@LrVal(l.Ratio)">@l.Ratio%</div>
+                </div>
+            }
+            <div class="ca-lr-legend"><span class="ca-legend-dot ca-legend-good"></span> Good <span class="ca-legend-dot ca-legend-warn"></span> Watch <span class="ca-legend-dot ca-legend-bad"></span> Over target | <span class="ca-legend-line"></span> 65% target</div>
+        </div>
+    </div>
+
+    <!-- Claim volume trend -->
+    <div class="ca-panel">
+        <div class="ca-panel-hdr">Claim Volume — Monthly (Last 12 Months)</div>
+        <div class="ca-trend-wrap">
+            <div class="ca-trend-chart">
+                @foreach (var (mo, opened, closed) in _trend)
+                {
+                    var maxV = _trend.Max(t => Math.Max(t.Opened, t.Closed));
+                    <div class="ca-trend-grp">
+                        <div class="ca-trend-bars">
+                            <div class="ca-tbar ca-tbar--opened" style="height:@((int)(opened*80.0/maxV))px" title="Opened: @opened"></div>
+                            <div class="ca-tbar ca-tbar--closed" style="height:@((int)(closed*80.0/maxV))px" title="Closed: @closed"></div>
+                        </div>
+                        <div class="ca-trend-mo">@mo</div>
+                    </div>
+                }
+            </div>
+            <div class="ca-trend-legend"><span class="ca-tl-dot ca-tl-opened"></span> Opened <span class="ca-tl-dot ca-tl-closed"></span> Closed</div>
+        </div>
+    </div>
+
+    <!-- Top open claims -->
+    <div class="ca-panel ca-panel--wide">
+        <div class="ca-panel-hdr">Large Open Claims — Reserve &gt; $25K</div>
+        <SfGrid TValue="OpenClaim" DataSource="_openClaims" AllowSorting="true" EnableHover="true" RowHeight="52">
+            <GridColumns>
+                <GridColumn Field="@nameof(OpenClaim.ClaimNo)"   HeaderText="Claim #" Width="120" />
+                <GridColumn Field="@nameof(OpenClaim.Account)"   HeaderText="Account" MinWidth="170" />
+                <GridColumn Field="@nameof(OpenClaim.Lob)"       HeaderText="LOB" Width="140" />
+                <GridColumn Field="@nameof(OpenClaim.FnolDate)"  HeaderText="FNOL Date" Width="120" Type="ColumnType.DateTime" Format="MMM d, yyyy" />
+                <GridColumn Field="@nameof(OpenClaim.DaysOpen)"  HeaderText="Days Open" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>@{ var c = (OpenClaim)context; }<span class="@(c.DaysOpen>45?"ca-days-warn":"ca-days-ok")">@c.DaysOpen</span></Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(OpenClaim.Reserves)"  HeaderText="Reserves" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>@{ var c = (OpenClaim)context; }<span class="ca-mono">@c.Reserves</span></Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(OpenClaim.Status)"    HeaderText="Status" Width="120">
+                    <Template>@{ var c = (OpenClaim)context; }<span class="@StatusBadge(c.Status)">@c.Status</span></Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+</div>
+
+@code {
+    private record LrRow(string Lob, int Ratio);
+    private record TrendRow(string Mo, int Opened, int Closed);
+    private sealed class OpenClaim { public string ClaimNo{get;set;}=string.Empty; public string Account{get;set;}=string.Empty; public string Lob{get;set;}=string.Empty; public DateTime FnolDate{get;set;} public int DaysOpen{get;set;} public string Reserves{get;set;}=string.Empty; public string Status{get;set;}=string.Empty; }
+
+    private List<LrRow> _lrByLob = [];
+    private List<TrendRow> _trend = [];
+    private List<OpenClaim> _openClaims = [];
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Analytics","/analytics/reports"), new("Claims",""));
+        _lrByLob = [new("Workers Comp",58), new("Commercial Auto",61), new("Commercial GL",63), new("BOP",66), new("Professional Liab",71), new("Umbrella",48)];
+        _trend   = [new("Jan",18,22), new("Feb",14,16), new("Mar",21,18), new("Apr",16,20), new("May",24,19), new("Jun",19,23), new("Jul",22,17), new("Aug",17,21), new("Sep",25,19), new("Oct",20,24), new("Nov",18,18), new("Dec",21,20)];
+        _openClaims =
+        [
+            new OpenClaim { ClaimNo="CLM-2025-0142", Account="Ortega Construction",    Lob="Workers Comp",    FnolDate=new(2025,1,14), DaysOpen=88, Reserves="$84,200", Status="In Litigation" },
+            new OpenClaim { ClaimNo="CLM-2025-0198", Account="Apex Logistics LLC",     Lob="Commercial Auto", FnolDate=new(2025,2,3),  DaysOpen=68, Reserves="$62,100", Status="Under Investigation" },
+            new OpenClaim { ClaimNo="CLM-2025-0241", Account="Vega Foods Inc",         Lob="Commercial GL",   FnolDate=new(2025,2,28), DaysOpen=41, Reserves="$48,500", Status="Adjuster Assigned" },
+            new OpenClaim { ClaimNo="CLM-2025-0287", Account="Sullivan Manufacturing", Lob="Property",        FnolDate=new(2025,3,15), DaysOpen=27, Reserves="$31,800", Status="Adjuster Assigned" },
+            new OpenClaim { ClaimNo="CLM-2025-0314", Account="Castillo Auto Group",    Lob="Commercial Auto", FnolDate=new(2025,4,1),  DaysOpen=10, Reserves="$27,400", Status="FNOL - New" },
+        ];
+    }
+
+    private static string LrFill(int r) => r < 65 ? "ca-lr-fill ca-lr-fill--good" : r < 75 ? "ca-lr-fill ca-lr-fill--warn" : "ca-lr-fill ca-lr-fill--bad";
+    private static string LrVal(int r)  => r < 65 ? "ca-lr-val ca-lrv--good" : r < 75 ? "ca-lr-val ca-lrv--warn" : "ca-lr-val ca-lrv--bad";
+    private static string StatusBadge(string s) => s switch { "In Litigation"=>"ca-st ca-st--lit","Under Investigation"=>"ca-st ca-st--inv","Adjuster Assigned"=>"ca-st ca-st--adj",_=>"ca-st ca-st--new" };
+}

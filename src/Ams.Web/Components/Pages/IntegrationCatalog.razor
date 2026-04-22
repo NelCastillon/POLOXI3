@@ -1,0 +1,201 @@
+@page "/integrations"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Integration Catalog — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Integration Catalog"
+               Subtitle="Browse, configure, and manage all connected apps, carrier feeds, and third-party services"
+               Icon="bi-plug-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='()=>Nav.NavigateTo("/integrations/api")'>
+            <i class="bi bi-key" aria-hidden="true"></i> API Keys
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showConnect = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Connect App
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="ic-kpi-strip">
+    <div class="ic-kpi-card"><div class="ic-kpi-icon ic-ki-green"><i class="bi bi-check-circle" aria-hidden="true"></i></div><div><div class="ic-kv">@_integrations.Count(i => i.Status == "Connected")</div><div class="ic-kl">Connected</div></div></div>
+    <div class="ic-kpi-card"><div class="ic-kpi-icon ic-ki-amber"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></div><div><div class="ic-kv">@_integrations.Count(i => i.Status == "Warning")</div><div class="ic-kl">Warnings</div></div></div>
+    <div class="ic-kpi-card"><div class="ic-kpi-icon ic-ki-red"><i class="bi bi-x-circle" aria-hidden="true"></i></div><div><div class="ic-kv">@_integrations.Count(i => i.Status == "Error")</div><div class="ic-kl">Errors</div></div></div>
+    <div class="ic-kpi-card"><div class="ic-kpi-icon ic-ki-blue"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></div><div><div class="ic-kv">1,842</div><div class="ic-kl">Syncs Today</div></div></div>
+</div>
+
+<!-- Filter bar -->
+<div class="ic-filter-bar">
+    <div class="ic-search-wrap">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input class="ic-search" placeholder="Search integrations…" @bind="_search" @bind:event="oninput" />
+    </div>
+    <select class="ic-sel" @bind="_catFilter">
+        <option value="">All Categories</option>
+        <option value="Carrier">Carrier</option>
+        <option value="Accounting">Accounting</option>
+        <option value="CRM">CRM</option>
+        <option value="Communication">Communication</option>
+        <option value="E-Sign">E-Sign</option>
+        <option value="Rating">Rating</option>
+        <option value="Data">Data</option>
+    </select>
+    <select class="ic-sel" @bind="_statusFilter">
+        <option value="">All Statuses</option>
+        <option value="Connected">Connected</option>
+        <option value="Warning">Warning</option>
+        <option value="Error">Error</option>
+        <option value="Inactive">Inactive</option>
+    </select>
+</div>
+
+<!-- Integration cards -->
+<div class="ic-grid">
+    @foreach (var intg in Filtered)
+    {
+        <div class="ic-card @StatusCardCss(intg.Status)">
+            <div class="ic-card-hdr">
+                <div class="ic-logo @intg.LogoCss"><i class="bi @intg.LogoIcon" aria-hidden="true"></i></div>
+                <div class="ic-card-meta">
+                    <div class="ic-card-name">@intg.Name</div>
+                    <div class="ic-card-cat">@intg.Category</div>
+                </div>
+                <span class="@StatusBadge(intg.Status)">@intg.Status</span>
+            </div>
+            <div class="ic-card-desc">@intg.Description</div>
+            <div class="ic-card-stats">
+                <div class="ic-stat"><span class="ic-sl">Last sync</span><span class="ic-sv">@intg.LastSync</span></div>
+                <div class="ic-stat"><span class="ic-sl">Syncs/day</span><span class="ic-sv">@intg.SyncsPerDay</span></div>
+                @if (intg.ErrorCount > 0)
+                {
+                    <div class="ic-stat ic-stat-err"><span class="ic-sl">Errors</span><span class="ic-sv ic-err-val">@intg.ErrorCount</span></div>
+                }
+            </div>
+            <div class="ic-card-footer">
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ToggleIntegration(intg)">
+                    @(intg.Status == "Inactive" ? "Enable" : "Configure")
+                </button>
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => SyncNow(intg)" title="Sync now">
+                    <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                </button>
+                @if (intg.Status is "Warning" or "Error")
+                {
+                    <button class="um-btn um-btn-ghost um-btn-xs ic-btn-warn" title="View errors" @onclick='()=>Nav.NavigateTo("/integrations/download-exceptions")'>
+                        <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                    </button>
+                }
+            </div>
+        </div>
+    }
+    <!-- Add new card -->
+    <div class="ic-new-card" @onclick="() => _showConnect = true">
+        <i class="bi bi-plus-circle ic-new-icon" aria-hidden="true"></i>
+        <span>Connect New App</span>
+    </div>
+</div>
+
+<!-- Connect dialog -->
+<SfDialog @bind-Visible="_showConnect" Width="500px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="ic-dlg-hdr"><i class="bi bi-plug" aria-hidden="true"></i> Connect App</span></Header>
+        <Content>
+            <div class="ic-dlg-body">
+                <div class="ic-marketplace-grid">
+                    @foreach (var app in _marketplace)
+                    {
+                        <div class="ic-mp-item @(_selectedApp == app.Name ? "ic-mp-sel" : "")" @onclick="() => _selectedApp = app.Name">
+                            <div class="ic-mp-icon @app.LogoCss"><i class="bi @app.Icon" aria-hidden="true"></i></div>
+                            <div class="ic-mp-name">@app.Name</div>
+                            <div class="ic-mp-cat">@app.Category</div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="ic-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showConnect = false">Cancel</button>
+                <button class="um-btn um-btn-primary" disabled="@string.IsNullOrEmpty(_selectedApp)" @onclick="CommitConnect">
+                    <i class="bi bi-plug" aria-hidden="true"></i> Connect @_selectedApp
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private SfToast? _toast;
+    private string _search = string.Empty;
+    private string _catFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private bool _showConnect;
+    private string _selectedApp = string.Empty;
+
+    private List<IntegrationDef> _integrations = [];
+
+    private IEnumerable<IntegrationDef> Filtered => _integrations.Where(i =>
+        (string.IsNullOrEmpty(_search) || i.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_catFilter) || i.Category == _catFilter) &&
+        (string.IsNullOrEmpty(_statusFilter) || i.Status == _statusFilter));
+
+    private static readonly List<(string Name, string Icon, string LogoCss, string Category)> _marketplace =
+    [
+        ("Applied Epic","bi-diagram-3","ic-lo-blue","Carrier"),
+        ("Vertafore AMS360","bi-diagram-2","ic-lo-purple","Carrier"),
+        ("QQ Catalyst","bi-lightning-charge","ic-lo-amber","Rating"),
+        ("DocuSign","bi-pen","ic-lo-blue","E-Sign"),
+        ("QuickBooks","bi-calculator","ic-lo-green","Accounting"),
+        ("Xero","bi-journals","ic-lo-blue","Accounting"),
+        ("Salesforce","bi-cloud","ic-lo-blue","CRM"),
+        ("Twilio","bi-telephone","ic-lo-red","Communication"),
+        ("SendGrid","bi-envelope","ic-lo-blue","Communication"),
+        ("EZLynx","bi-shield-check","ic-lo-green","Rating"),
+    ];
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Integrations",""));
+        _integrations =
+        [
+            new IntegrationDef { Id=1,  Name="ACORD AL3 Carrier Download",  Category="Carrier",       LogoIcon="bi-arrow-down-circle",  LogoCss="ic-lo-blue",   Status="Connected", LastSync="2 min ago",  SyncsPerDay=288, ErrorCount=0,  Description="Automated carrier policy download via ACORD AL3 format. Processes daily statement downloads from 14 carriers." },
+            new IntegrationDef { Id=2,  Name="Applied Epic Sync",            Category="Carrier",       LogoIcon="bi-diagram-3",          LogoCss="ic-lo-blue",   Status="Connected", LastSync="1 hr ago",   SyncsPerDay=24,  ErrorCount=0,  Description="Bi-directional sync with Applied Epic for shared book-of-business accounts." },
+            new IntegrationDef { Id=3,  Name="EZLynx Rating Engine",         Category="Rating",        LogoIcon="bi-shield-check",       LogoCss="ic-lo-green",  Status="Connected", LastSync="8 min ago",  SyncsPerDay=180, ErrorCount=0,  Description="Real-time commercial lines rating via EZLynx. Supports BOP, GL, WC, and commercial auto." },
+            new IntegrationDef { Id=4,  Name="DocuSign eSign",               Category="E-Sign",        LogoIcon="bi-pen",                LogoCss="ic-lo-amber",  Status="Warning",   LastSync="3 hr ago",   SyncsPerDay=12,  ErrorCount=3,  Description="E-signature integration for policy documents, applications, and agreements." },
+            new IntegrationDef { Id=5,  Name="QuickBooks Online",            Category="Accounting",    LogoIcon="bi-calculator",         LogoCss="ic-lo-green",  Status="Connected", LastSync="4 hr ago",   SyncsPerDay=6,   ErrorCount=0,  Description="Accounting sync for invoices, payments, and commission statements to QuickBooks Online." },
+            new IntegrationDef { Id=6,  Name="Twilio SMS / Voice",           Category="Communication", LogoIcon="bi-telephone",          LogoCss="ic-lo-red",    Status="Connected", LastSync="12 min ago", SyncsPerDay=96,  ErrorCount=0,  Description="Automated SMS reminders for renewals, payment due, and appointment confirmations." },
+            new IntegrationDef { Id=7,  Name="SendGrid Email Delivery",      Category="Communication", LogoIcon="bi-envelope",           LogoCss="ic-lo-blue",   Status="Connected", LastSync="6 min ago",  SyncsPerDay=144, ErrorCount=0,  Description="Transactional and marketing email delivery for all system-generated messages." },
+            new IntegrationDef { Id=8,  Name="Vertafore eDocs",              Category="Carrier",       LogoIcon="bi-folder2",            LogoCss="ic-lo-purple", Status="Error",     LastSync="6 hr ago",   SyncsPerDay=24,  ErrorCount=12, Description="Electronic document delivery and storage via Vertafore eDocs connector." },
+            new IntegrationDef { Id=9,  Name="Salesforce CRM Bridge",        Category="CRM",           LogoIcon="bi-cloud",              LogoCss="ic-lo-blue",   Status="Inactive",  LastSync="Never",      SyncsPerDay=0,   ErrorCount=0,  Description="Lead and opportunity sync between AMS and Salesforce CRM." },
+            new IntegrationDef { Id=10, Name="Microsoft 365 Calendar",       Category="Communication", LogoIcon="bi-calendar3",          LogoCss="ic-lo-blue",   Status="Connected", LastSync="1 min ago",  SyncsPerDay=720, ErrorCount=0,  Description="Two-way calendar sync for appointments and follow-up activities." },
+        ];
+    }
+
+    private async Task SyncNow(IntegrationDef i)
+    {
+        i.LastSync = "Just now";
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Sync triggered for {i.Name}.", CssClass = "e-toast-success" });
+    }
+
+    private void ToggleIntegration(IntegrationDef i)
+    {
+        i.Status = i.Status == "Inactive" ? "Connected" : i.Status;
+    }
+
+    private async Task CommitConnect()
+    {
+        _showConnect = false;
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"{_selectedApp} connected successfully.", CssClass = "e-toast-success" });
+        _selectedApp = string.Empty;
+    }
+
+    private static string StatusBadge(string s) => s switch { "Connected"=>"ic-st ic-st--ok","Warning"=>"ic-st ic-st--warn","Error"=>"ic-st ic-st--err",_=>"ic-st ic-st--off" };
+    private static string StatusCardCss(string s) => s switch { "Warning"=>"ic-card--warn","Error"=>"ic-card--err",_=>"" };
+
+    private sealed class IntegrationDef { public int Id{get;set;} public string Name{get;set;}=string.Empty; public string Category{get;set;}=string.Empty; public string LogoIcon{get;set;}=string.Empty; public string LogoCss{get;set;}=string.Empty; public string Status{get;set;}=string.Empty; public string LastSync{get;set;}=string.Empty; public int SyncsPerDay{get;set;} public int ErrorCount{get;set;} public string Description{get;set;}=string.Empty; }
+}

@@ -1,0 +1,420 @@
+@page "/renewals/remarket"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Renewal Remarketing — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── CREATE SUBMISSION DIALOG ──────────────────────────────────── -->
+<SfDialog @bind-Visible="_showCreateDialog" Width="560px" ShowCloseIcon="true" IsModal="true">
+    <DialogTemplates>
+        <Header>
+            <div class="rrm-dlg-hdr">
+                <i class="bi bi-send-plus" aria-hidden="true"></i>
+                Create Submission from Renewal
+            </div>
+        </Header>
+        <Content>
+            @if (_createTarget is not null)
+            {
+                <div class="rrm-dlg-body">
+                    <div class="rrm-dlg-renewal-info">
+                        <span class="rrm-dlg-acct">@_createTarget.AccountName</span>
+                        <span class="rrm-dlg-meta">@_createTarget.PolicyNumber · @_createTarget.Lob</span>
+                        <span class="rrm-dlg-meta">Current Carrier: @_createTarget.CurrentCarrier</span>
+                        <span class="rrm-dlg-meta">Current Premium: @_createTarget.CurrentPremium.ToString("C0")</span>
+                    </div>
+                    <div class="rrm-dlg-field">
+                        <label class="rrm-dlg-lbl">Remarketing Reason *</label>
+                        <SfDropDownList TValue="string" TItem="string"
+                                        DataSource="@_remarkReasons"
+                                        @bind-Value="_createReason"
+                                        Placeholder="Select reason…" />
+                    </div>
+                    <div class="rrm-dlg-field">
+                        <label class="rrm-dlg-lbl">Target Markets</label>
+                        <SfMultiSelect TValue="string[]" TItem="string"
+                                       DataSource="@_carriers"
+                                       @bind-Value="_createMarkets"
+                                       Placeholder="Select carriers to approach…"
+                                       Mode="Syncfusion.Blazor.DropDowns.VisualMode.Box" />
+                    </div>
+                    <div class="rrm-dlg-field">
+                        <label class="rrm-dlg-lbl">Target Premium Budget</label>
+                        <SfNumericTextBox TValue="decimal?" @bind-Value="_createBudget"
+                                          Format="C0" Placeholder="e.g. 15,000" Min="0" />
+                    </div>
+                    <div class="rrm-dlg-field">
+                        <label class="rrm-dlg-lbl">Notes</label>
+                        <SfTextBox @bind-Value="_createNotes"
+                                   Multiline="true" Rows="3"
+                                   Placeholder="Instructions for carriers, coverage changes, etc." />
+                    </div>
+                </div>
+            }
+        </Content>
+        <FooterTemplate>
+            <div class="rrm-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseCreateDialog">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ConfirmCreateSubmissionAsync"
+                        disabled="@(string.IsNullOrWhiteSpace(_createReason))">
+                    <i class="bi bi-send" aria-hidden="true"></i> Create Submission
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<AppPageHeader Title="Renewal Remarketing"
+               Subtitle="Identify renewals for remarketing and create new market submissions"
+               Icon="bi-send">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        @if (_selectedRows.Count > 0)
+        {
+            <button class="um-btn um-btn-primary" @onclick="BulkRemarkAsync">
+                <i class="bi bi-send-plus" aria-hidden="true"></i> Remarket Selected (@_selectedRows.Count)
+            </button>
+        }
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI STRIP ─────────────────────────────────────────────────── -->
+<div class="rrm-kpi-strip">
+    <div class="rrm-kpi-card">
+        <div class="rrm-kpi-val">@_rows.Count(r => r.Status == "Pending")</div>
+        <div class="rrm-kpi-lbl"><i class="bi bi-hourglass" aria-hidden="true"></i> Pending</div>
+    </div>
+    <div class="rrm-kpi-card rrm-kpi-active">
+        <div class="rrm-kpi-val">@_rows.Count(r => r.Status == "Submitted")</div>
+        <div class="rrm-kpi-lbl"><i class="bi bi-send" aria-hidden="true"></i> Submitted</div>
+    </div>
+    <div class="rrm-kpi-card rrm-kpi-quoted">
+        <div class="rrm-kpi-val">@_rows.Count(r => r.Status == "Quoted")</div>
+        <div class="rrm-kpi-lbl"><i class="bi bi-quote" aria-hidden="true"></i> Quoted</div>
+    </div>
+    <div class="rrm-kpi-card rrm-kpi-bound">
+        <div class="rrm-kpi-val">@_rows.Count(r => r.Status == "Bound")</div>
+        <div class="rrm-kpi-lbl"><i class="bi bi-check2-circle" aria-hidden="true"></i> Bound</div>
+    </div>
+    <div class="rrm-kpi-card rrm-kpi-prem">
+        <div class="rrm-kpi-val">@_rows.Sum(r => r.CurrentPremium).ToString("C0")</div>
+        <div class="rrm-kpi-lbl"><i class="bi bi-currency-dollar" aria-hidden="true"></i> Premium at Stake</div>
+    </div>
+    <div class="rrm-kpi-card rrm-kpi-savings">
+        <div class="rrm-kpi-val">@(_rows.Where(r => r.ProjectedSavings.HasValue).Sum(r => r.ProjectedSavings ?? 0).ToString("C0"))</div>
+        <div class="rrm-kpi-lbl"><i class="bi bi-graph-down-arrow" aria-hidden="true"></i> Projected Savings</div>
+    </div>
+</div>
+
+<!-- ── FILTER BAR ────────────────────────────────────────────────── -->
+<div class="rrm-filter-bar">
+    <input class="e-input rrm-search" @bind="_search" @bind:event="oninput"
+           placeholder="Search account, carrier, producer, LOB…" />
+    <div class="rrm-status-pills">
+        @foreach (var s in new[]{ "All","Pending","Submitted","Quoted","Bound","Declined" })
+        {
+            <button class="rrm-pill @(_statusFilter == s ? "rrm-pill-active" : "")"
+                    @onclick="() => _statusFilter = s">@s</button>
+        }
+    </div>
+    <select class="e-input rrm-filter-sel" @bind="_lobFilter">
+        <option value="">All Lines</option>
+        @foreach (var l in _lobs) { <option>@l</option> }
+    </select>
+    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">
+        <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
+    </button>
+</div>
+
+<!-- ── REMARKET GRID ─────────────────────────────────────────────── -->
+<div class="rrm-grid-wrap">
+    <SfGrid DataSource="@FilteredRows" @ref="_grid"
+            AllowSorting="true" AllowPaging="true" AllowResizing="true"
+            AllowFiltering="true" EnableHover="true" RowHeight="56"
+            AllowSelection="true">
+        <GridSelectionSettings Type="Syncfusion.Blazor.Grids.SelectionType.Multiple"
+                                Mode="Syncfusion.Blazor.Grids.SelectionMode.Row" />
+        <GridEvents TValue="RemarkRow"
+                    RowSelected="OnRowSelected"
+                    RowDeselected="OnRowDeselected" />
+        <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+        <GridPageSettings PageSize="20" />
+        <GridColumns>
+
+            <GridColumn Type="Syncfusion.Blazor.Grids.ColumnType.CheckBox" Width="48" />
+
+            <GridColumn Field="@nameof(RemarkRow.AccountName)" HeaderText="Account" MinWidth="180">
+                <Template>
+                    @{ var r = (RemarkRow)context; }
+                    <div class="rrm-acct-cell">
+                        <button class="rrm-acct-link"
+                                @onclick='() => Nav.NavigateTo($"/renewals/{r.RenewalId}")'>
+                            @r.AccountName
+                        </button>
+                        <div class="rrm-acct-meta">@r.PolicyNumber · @r.Lob</div>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RemarkRow.CurrentCarrier)" HeaderText="Current Carrier" Width="165" />
+
+            <GridColumn Field="@nameof(RemarkRow.ReasonForRemarket)" HeaderText="Reason" MinWidth="170" />
+
+            <GridColumn Field="@nameof(RemarkRow.Status)" HeaderText="Status" Width="130">
+                <Template>
+                    @{ var r = (RemarkRow)context; }
+                    <span class="rrm-status rrm-st-@StatusCss(r.Status)">@r.Status</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RemarkRow.TargetMarkets)" HeaderText="Target Markets" MinWidth="180">
+                <Template>
+                    @{ var r = (RemarkRow)context; }
+                    <div class="rrm-markets-cell">
+                        @foreach (var m in r.TargetMarkets)
+                        {
+                            <span class="rrm-market-chip">@m</span>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RemarkRow.CurrentPremium)" HeaderText="Current Prem." Width="130"
+                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    @{ var r = (RemarkRow)context; }
+                    <span class="pd-mono">@r.CurrentPremium.ToString("C0")</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RemarkRow.ProjectedSavings)" HeaderText="Proj. Savings" Width="130"
+                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    @{ var r = (RemarkRow)context; }
+                    @if (r.ProjectedSavings.HasValue)
+                    {
+                        <span class="pd-mono rrm-savings">-@r.ProjectedSavings.Value.ToString("C0")</span>
+                    }
+                    else
+                    {
+                        <span class="rrm-no-data">—</span>
+                    }
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RemarkRow.DaysToExpiry)" HeaderText="Days Left" Width="110">
+                <Template>
+                    @{ var r = (RemarkRow)context; }
+                    <span class="rrm-days rrm-days-@DaysCss(r.DaysToExpiry)">
+                        @(r.DaysToExpiry <= 0 ? $"Expired {Math.Abs(r.DaysToExpiry)}d ago" : $"{r.DaysToExpiry}d")
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RemarkRow.Producer)" HeaderText="Producer" Width="140" />
+
+            <GridColumn HeaderText="Actions" Width="160" AllowSorting="false" AllowFiltering="false">
+                <Template>
+                    @{ var r = (RemarkRow)context; }
+                    <div class="rrm-row-actions">
+                        @if (r.Status == "Pending")
+                        {
+                            <button class="um-btn um-btn-primary um-btn-xs"
+                                    @onclick="() => OpenCreateDialog(r)"
+                                    title="Create submission">
+                                <i class="bi bi-send-plus" aria-hidden="true"></i> Submit
+                            </button>
+                        }
+                        else if (r.SubmissionId.HasValue)
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs"
+                                    @onclick='() => Nav.NavigateTo($"/submissions/{r.SubmissionId}")'
+                                    title="View submission">
+                                <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> View
+                            </button>
+                        }
+                        <button class="um-btn um-btn-ghost um-btn-xs"
+                                @onclick='() => Nav.NavigateTo($"/renewals/{r.RenewalId}")'
+                                title="Open renewal">
+                            <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+@code {
+    SfToast _toast = default!;
+    SfGrid<RemarkRow> _grid = default!;
+
+    string _search       = "";
+    string _statusFilter = "All";
+    string _lobFilter    = "";
+
+    bool         _showCreateDialog = false;
+    RemarkRow?   _createTarget;
+    string       _createReason  = "";
+    string[]?    _createMarkets;
+    decimal?     _createBudget;
+    string       _createNotes   = "";
+
+    readonly List<RemarkRow> _rows         = new();
+    readonly List<RemarkRow> _selectedRows = new();
+
+    readonly string[] _lobs          = { "General Liability","Commercial Auto","Commercial Property","Workers Comp","Umbrella","Professional Liab.","Home/Dwelling","Personal Auto" };
+    readonly string[] _remarkReasons = { "Rate increase above threshold","Loss ratio flag","Carrier non-renewal","Coverage gap","Competitive repricing","Account request","Capacity issue" };
+    readonly string[] _carriers      = { "Travelers Indemnity","Hartford Fire & Cas.","Liberty Mutual","CNA Commercial","Zurich American","Markel Corporation","Cincinnati Financial","Nationwide","Chubb","AIG" };
+
+    sealed class RemarkRow
+    {
+        public Guid     RenewalId          { get; set; }
+        public Guid?    SubmissionId       { get; set; }
+        public string   AccountName        { get; set; } = "";
+        public string   PolicyNumber       { get; set; } = "";
+        public string   Lob                { get; set; } = "";
+        public string   CurrentCarrier     { get; set; } = "";
+        public string   ReasonForRemarket  { get; set; } = "";
+        public string   Status             { get; set; } = "";
+        public List<string> TargetMarkets  { get; set; } = new();
+        public decimal  CurrentPremium     { get; set; }
+        public decimal? ProjectedSavings   { get; set; }
+        public int      DaysToExpiry       { get; set; }
+        public string   Producer           { get; set; } = "";
+    }
+
+    IEnumerable<RemarkRow> FilteredRows => _rows
+        .Where(r =>
+            (string.IsNullOrEmpty(_search) ||
+             r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             r.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             r.CurrentCarrier.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             r.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             r.Lob.Contains(_search, StringComparison.OrdinalIgnoreCase))
+         && (_statusFilter == "All" || r.Status == _statusFilter)
+         && (string.IsNullOrEmpty(_lobFilter) || r.Lob == _lobFilter))
+        .OrderBy(r => r.DaysToExpiry);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Renewals", "/renewals"), new("Remarketing", "/renewals/remarket"));
+        await Task.Delay(0);
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _rows.Clear();
+        _rows.AddRange(new[]
+        {
+            new RemarkRow { RenewalId=Guid.NewGuid(), SubmissionId=null,          AccountName="Bridgewater Hotels",    PolicyNumber="LIB-GL-2024-77210",  Lob="General Liability",   CurrentCarrier="Liberty Mutual",       ReasonForRemarket="Rate increase above threshold", Status="Pending",   TargetMarkets=new(){"Travelers Indemnity","CNA Commercial","Zurich American"},  CurrentPremium=24_800m, ProjectedSavings=2_200m, DaysToExpiry=37,  Producer="Maria Santos" },
+            new RemarkRow { RenewalId=Guid.NewGuid(), SubmissionId=null,          AccountName="Laredo Steel Works",    PolicyNumber="ZUR-GL-2023-18820",  Lob="General Liability",   CurrentCarrier="Zurich American",      ReasonForRemarket="Carrier non-renewal",           Status="Pending",   TargetMarkets=new(){"Markel Corporation","Nationwide","Cincinnati Financial"},   CurrentPremium=22_100m, ProjectedSavings=null,   DaysToExpiry=-15, Producer="Kevin Obi"    },
+            new RemarkRow { RenewalId=Guid.NewGuid(), SubmissionId=Guid.NewGuid(),AccountName="Coastal Seafood Dist.", PolicyNumber="CNA-GL-2024-71004",  Lob="General Liability",   CurrentCarrier="CNA Commercial",       ReasonForRemarket="Loss ratio flag",               Status="Submitted", TargetMarkets=new(){"Hartford Fire & Cas.","Chubb"},                             CurrentPremium=11_600m, ProjectedSavings=1_800m, DaysToExpiry=88,  Producer="Kevin Obi"    },
+            new RemarkRow { RenewalId=Guid.NewGuid(), SubmissionId=Guid.NewGuid(),AccountName="Metro Freight Co.",     PolicyNumber="HFD-CA-2024-14822",  Lob="Commercial Auto",     CurrentCarrier="Hartford Fire & Cas.", ReasonForRemarket="Competitive repricing",          Status="Quoted",    TargetMarkets=new(){"Travelers Indemnity","Nationwide"},                         CurrentPremium=31_500m, ProjectedSavings=3_400m, DaysToExpiry=24,  Producer="James Park"   },
+            new RemarkRow { RenewalId=Guid.NewGuid(), SubmissionId=Guid.NewGuid(),AccountName="Crestview Elementary",  PolicyNumber="LIB-GL-2023-44008",  Lob="General Liability",   CurrentCarrier="Liberty Mutual",       ReasonForRemarket="Competitive repricing",          Status="Declined",  TargetMarkets=new(){"Zurich American","AIG"},                                    CurrentPremium=7_400m,  ProjectedSavings=null,   DaysToExpiry=-5,  Producer="Maria Santos" },
+            new RemarkRow { RenewalId=Guid.NewGuid(), SubmissionId=Guid.NewGuid(),AccountName="Apex Medical Group",    PolicyNumber="MKL-PL-2024-28004",  Lob="Professional Liab.",  CurrentCarrier="Markel Corporation",   ReasonForRemarket="Coverage gap",                  Status="Quoted",    TargetMarkets=new(){"Chubb","AIG","Hartford Fire & Cas."},                       CurrentPremium=14_200m, ProjectedSavings=900m,   DaysToExpiry=61,  Producer="Maria Santos" },
+            new RemarkRow { RenewalId=Guid.NewGuid(), SubmissionId=Guid.NewGuid(),AccountName="Dallas Roofing LLC",    PolicyNumber="CNA-WC-2024-55102",  Lob="Workers Comp",        CurrentCarrier="CNA Commercial",       ReasonForRemarket="Rate increase above threshold", Status="Bound",     TargetMarkets=new(){"Travelers Indemnity"},                                      CurrentPremium=9_400m,  ProjectedSavings=1_100m, DaysToExpiry=45,  Producer="Kevin Obi"    },
+        });
+    }
+
+    void OpenCreateDialog(RemarkRow r)
+    {
+        _createTarget  = r;
+        _createReason  = "";
+        _createMarkets = r.TargetMarkets.Count > 0 ? r.TargetMarkets.ToArray() : null;
+        _createBudget  = null;
+        _createNotes   = "";
+        _showCreateDialog = true;
+    }
+
+    void CloseCreateDialog()
+    {
+        _showCreateDialog = false;
+        _createTarget = null;
+    }
+
+    async Task ConfirmCreateSubmissionAsync()
+    {
+        if (_createTarget is null) return;
+
+        var subId = Guid.NewGuid();
+        _createTarget.Status       = "Submitted";
+        _createTarget.SubmissionId = subId;
+        if (_createMarkets?.Length > 0)
+            _createTarget.TargetMarkets = _createMarkets.ToList();
+
+        _showCreateDialog = false;
+        _createTarget = null;
+
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "Submission Created",
+            Content  = "New remarketing submission created and sent to selected carriers.",
+            CssClass = "e-toast-success"
+        });
+    }
+
+    async Task BulkRemarkAsync()
+    {
+        var count = _selectedRows.Count;
+        foreach (var r in _selectedRows.Where(r => r.Status == "Pending"))
+        {
+            r.Status       = "Submitted";
+            r.SubmissionId = Guid.NewGuid();
+        }
+        _selectedRows.Clear();
+
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "Bulk Remarket",
+            Content  = $"{count} submission(s) created.",
+            CssClass = "e-toast-success"
+        });
+    }
+
+    void OnRowSelected(RowSelectEventArgs<RemarkRow> args)
+    {
+        if (!_selectedRows.Contains(args.Data))
+            _selectedRows.Add(args.Data);
+    }
+
+    void OnRowDeselected(RowDeselectEventArgs<RemarkRow> args)
+        => _selectedRows.Remove(args.Data);
+
+    void ResetFilters() { _search = ""; _statusFilter = "All"; _lobFilter = ""; }
+    void Refresh() => BuildStub();
+
+    async Task ExportAsync()
+    {
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "Exported",
+            Content  = "Remarketing list exported.",
+            CssClass = "e-toast-success"
+        });
+    }
+
+    static string StatusCss(string status) => status switch
+    {
+        "Pending"   => "pending",
+        "Submitted" => "submitted",
+        "Quoted"    => "quoted",
+        "Bound"     => "bound",
+        "Declined"  => "declined",
+        _           => "pending"
+    };
+
+    static string DaysCss(int days) => days <= 0 ? "expired" : days <= 30 ? "red" : days <= 60 ? "amber" : "blue";
+}

@@ -1,0 +1,119 @@
+@page "/admin/system/data-quality"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Data Quality Center — AMS</PageTitle>
+
+<AppPageHeader Title="Data Quality Center"
+               Subtitle="Identify and resolve duplicate records, missing required fields, orphaned data, and data anomalies"
+               Icon="bi-patch-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Run Scan</button>
+        <button class="um-btn um-btn-primary"><i class="bi bi-download" aria-hidden="true"></i> Export Issues</button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Score card -->
+<div class="dq-score-card">
+    <div class="dq-score-main">
+        <div class="dq-score-num @ScoreCss(_overallScore)">@_overallScore</div>
+        <div class="dq-score-label">Overall Data Quality Score</div>
+        <div class="dq-score-sub">Last scan: Jun 11, 9:00 AM · @_issues.Count total issues found</div>
+    </div>
+    <div class="dq-score-dims">
+        @foreach (var dim in _dimensions)
+        {
+            <div class="dq-dim">
+                <div class="dq-dim-name">@dim.Name</div>
+                <div class="dq-dim-bar-wrap"><div class="dq-dim-bar @ScoreCss(dim.Score)" style="width:@dim.Score%"></div></div>
+                <div class="dq-dim-score @ScoreCss(dim.Score)">@dim.Score%</div>
+            </div>
+        }
+    </div>
+</div>
+
+<!-- Issue categories -->
+<div class="dq-cat-strip">
+    @foreach (var cat in _issueCategories)
+    {
+        <div class="dq-cat-card @SeverityCss(cat.Severity)" @onclick="() => ToggleCatFilter(cat.Name)">
+            <div class="dq-cat-icon"><i class="bi bi-@cat.Icon" aria-hidden="true"></i></div>
+            <div class="dq-cat-name">@cat.Name</div>
+            <div class="dq-cat-count">@cat.Count</div>
+        </div>
+    }
+</div>
+
+<!-- Issues grid -->
+<div class="dq-table-wrap">
+    <SfGrid TValue="DqIssue" DataSource="FilteredIssues.ToList()" AllowSorting="true" AllowPaging="true" EnableHover="true" RowHeight="52">
+        <GridPageSettings PageSize="20" />
+        <GridColumns>
+            <GridColumn Field="@nameof(DqIssue.Entity)"   HeaderText="Entity" Width="120" />
+            <GridColumn Field="@nameof(DqIssue.Record)"   HeaderText="Record" MinWidth="160" />
+            <GridColumn Field="@nameof(DqIssue.Category)" HeaderText="Issue Type" Width="160" />
+            <GridColumn Field="@nameof(DqIssue.Details)"  HeaderText="Details" MinWidth="200" />
+            <GridColumn Field="@nameof(DqIssue.Severity)" HeaderText="Severity" Width="100">
+                <Template>@{ var r=(DqIssue)context; }<span class="@SeverityBadge(r.Severity)">@r.Severity</span></Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    <button class="um-btn um-btn-ghost um-btn-xs" title="Fix"><i class="bi bi-tools" aria-hidden="true"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" title="Ignore"><i class="bi bi-x" aria-hidden="true"></i></button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+@code {
+    private int _overallScore = 83;
+    private string _catFilter = string.Empty;
+
+    private IEnumerable<DqIssue> FilteredIssues => string.IsNullOrEmpty(_catFilter) ? _issues : _issues.Where(i => i.Category == _catFilter);
+
+    private void ToggleCatFilter(string name) => _catFilter = _catFilter == name ? string.Empty : name;
+
+    private List<DimScore> _dimensions = [];
+    private List<IssueCategory> _issueCategories = [];
+    private List<DqIssue> _issues = [];
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Administration","/admin"), new("Data Quality Center",""));
+        _dimensions =
+        [
+            new DimScore("Completeness", 88), new DimScore("Uniqueness", 76), new DimScore("Accuracy", 91),
+            new DimScore("Consistency", 85), new DimScore("Timeliness", 78),
+        ];
+        _issueCategories =
+        [
+            new IssueCategory("Missing Fields",    "form-text",       "Critical", 42),
+            new IssueCategory("Duplicates",        "copy",            "High",     18),
+            new IssueCategory("Invalid Formats",   "file-earmark-x",  "Medium",  31),
+            new IssueCategory("Orphaned Records",  "link-45deg",      "Low",     14),
+            new IssueCategory("Stale Data",        "hourglass",       "Low",     27),
+        ];
+        _issues =
+        [
+            new DqIssue { Entity="Account",  Record="Apex Logistics LLC",       Category="Missing Fields", Details="Missing: EIN, SIC code, annual revenue",           Severity="Critical" },
+            new DqIssue { Entity="Contact",  Record="Sarah Kim",                 Category="Missing Fields", Details="Missing: email address, phone number",             Severity="High" },
+            new DqIssue { Entity="Account",  Record="Kim Realty LLC",            Category="Duplicates",    Details="Matches 'Kim Realty of Colorado LLC' — same EIN",   Severity="High" },
+            new DqIssue { Entity="Policy",   Record="PLY-44210",                 Category="Invalid Formats",Details="Policy number format invalid for carrier Travelers", Severity="Medium" },
+            new DqIssue { Entity="Contact",  Record="R. Martinez",               Category="Invalid Formats",Details="Email 'rmartinez@' is not a valid email address",  Severity="Medium" },
+            new DqIssue { Entity="Invoice",  Record="INV-88002",                 Category="Orphaned Records",Details="Invoice not linked to any account or policy",     Severity="High" },
+            new DqIssue { Entity="Account",  Record="Summit Restaurant Group",   Category="Stale Data",    Details="No activity in 18 months, contact info unverified", Severity="Low" },
+            new DqIssue { Entity="Policy",   Record="PLY-10033",                 Category="Stale Data",    Details="Policy end date is 2 years past — may be archived",  Severity="Low" },
+            new DqIssue { Entity="Account",  Record="Blue Harbor Marina",        Category="Missing Fields", Details="Missing: annual revenue, SIC code",                Severity="Medium" },
+            new DqIssue { Entity="Claim",    Record="CLM-5501",                  Category="Orphaned Records",Details="Claim not linked to a valid policy",              Severity="Critical" },
+        ];
+    }
+
+    private static string ScoreCss(int s) => s >= 90 ? "dq-score-green" : s >= 75 ? "dq-score-amber" : "dq-score-red";
+    private static string SeverityCss(string s) => s switch { "Critical"=>"dq-cat-crit","High"=>"dq-cat-high","Medium"=>"dq-cat-med",_=>"dq-cat-low" };
+    private static string SeverityBadge(string s) => s switch { "Critical"=>"dq-pri dq-pri-crit","High"=>"dq-pri dq-pri-high","Medium"=>"dq-pri dq-pri-med",_=>"dq-pri dq-pri-low" };
+
+    private sealed class DimScore(string name, int score) { public string Name=name; public int Score=score; }
+    private sealed class IssueCategory(string name, string icon, string severity, int count) { public string Name=name; public string Icon=icon; public string Severity=severity; public int Count=count; }
+    private sealed class DqIssue { public string Entity{get;set;}=string.Empty; public string Record{get;set;}=string.Empty; public string Category{get;set;}=string.Empty; public string Details{get;set;}=string.Empty; public string Severity{get;set;}=string.Empty; }
+}

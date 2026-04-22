@@ -1,0 +1,204 @@
+@page "/admin/system/onboarding/carrier-mapping"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Carrier Mapping Setup — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Carrier Mapping Setup"
+               Subtitle="Connect carriers, map codes and NAIC numbers, and configure automated download schedules"
+               Icon="bi-broadcast">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/admin/system/onboarding")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Onboarding</button>
+        <button class="um-btn um-btn-primary" @onclick="SaveMappings"><i class="bi bi-check2" aria-hidden="true"></i> Save All Mappings</button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Stats strip -->
+<div class="cm-stat-strip">
+    <div class="cm-stat"><div class="cm-stat-num">@_carriers.Count</div><div class="cm-stat-lbl">Carriers Configured</div></div>
+    <div class="cm-stat"><div class="cm-stat-num cm-ok">@_carriers.Count(c => c.Status == "Connected")</div><div class="cm-stat-lbl">Connected</div></div>
+    <div class="cm-stat"><div class="cm-stat-num cm-warn">@_carriers.Count(c => c.Status == "Pending")</div><div class="cm-stat-lbl">Pending Setup</div></div>
+    <div class="cm-stat"><div class="cm-stat-num cm-err">@_carriers.Count(c => c.Status == "Error")</div><div class="cm-stat-lbl">Connection Errors</div></div>
+</div>
+
+<!-- Tabs -->
+<div class="cm-tabs">
+    <button class="cm-tab @(_tab == 1 ? "cm-tab-active" : "")" @onclick="() => _tab = 1">Carrier Mappings</button>
+    <button class="cm-tab @(_tab == 2 ? "cm-tab-active" : "")" @onclick="() => _tab = 2">Download Schedules</button>
+    <button class="cm-tab @(_tab == 3 ? "cm-tab-active" : "")" @onclick="() => _tab = 3">Code Reference</button>
+</div>
+
+@if (_tab == 1)
+{
+    <div class="cm-table-wrap">
+        <div class="cm-table-hdr">
+            <span>Carrier Name</span>
+            <span>Source Code</span>
+            <span>NAIC Number</span>
+            <span>AMS Carrier</span>
+            <span>Download</span>
+            <span>Status</span>
+            <span></span>
+        </div>
+        @foreach (var c in _carriers)
+        {
+            <div class="cm-table-row">
+                <div class="cm-carr-name"><i class="bi bi-shield-check cm-carr-ico" aria-hidden="true"></i> @c.Name</div>
+                <div><input class="cm-input cm-input-sm" @bind="c.SourceCode" placeholder="e.g. TRAV" /></div>
+                <div><input class="cm-input cm-input-sm" @bind="c.NaicNumber" placeholder="5-digit NAIC" /></div>
+                <div>
+                    <select class="cm-sel" @bind="c.AmsCarrierKey">
+                        <option value="">— Select —</option>
+                        @foreach (var ac in _amsCarriers) { <option value="@ac">@ac</option> }
+                    </select>
+                </div>
+                <div>
+                    <label class="cm-toggle"><input type="checkbox" @bind="c.DownloadEnabled" /><span class="cm-thumb"></span></label>
+                </div>
+                <div><span class="cm-status-badge @StatusCss(c.Status)">@c.Status</span></div>
+                <div class="cm-row-actions">
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => TestConnection(c)" title="Test Connection"><i class="bi bi-plug" aria-hidden="true"></i></button>
+                </div>
+            </div>
+        }
+    </div>
+    <div class="cm-add-row">
+        <button class="um-btn um-btn-ghost" @onclick="AddCarrier"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Carrier</button>
+    </div>
+}
+else if (_tab == 2)
+{
+    <div class="cm-sched-list">
+        @foreach (var c in _carriers.Where(c => c.DownloadEnabled))
+        {
+            <div class="cm-sched-card">
+                <div class="cm-sched-hdr">
+                    <i class="bi bi-shield-check cm-sched-ico" aria-hidden="true"></i>
+                    <div class="cm-sched-name">@c.Name</div>
+                    <span class="cm-status-badge @StatusCss(c.Status)">@c.Status</span>
+                </div>
+                <div class="cm-sched-row">
+                    <label class="cm-sched-lbl">Download Frequency</label>
+                    <select class="cm-sel" @bind="c.DownloadFrequency">
+                        <option value="realtime">Real-time (IVANS)</option>
+                        <option value="hourly">Every hour</option>
+                        <option value="4h">Every 4 hours</option>
+                        <option value="daily">Daily</option>
+                        <option value="manual">Manual only</option>
+                    </select>
+                </div>
+                <div class="cm-sched-row">
+                    <label class="cm-sched-lbl">Exception Routing</label>
+                    <select class="cm-sel">
+                        <option>Operations Queue</option>
+                        <option>Admin</option>
+                        <option>Download Manager</option>
+                    </select>
+                </div>
+                <div class="cm-sched-actions">
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => RunDownload(c)"><i class="bi bi-play-circle" aria-hidden="true"></i> Run Now</button>
+                    <span class="cm-last-run">Last run: @c.LastDownload</span>
+                </div>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <div class="cm-code-ref">
+        <p class="cm-hint">Standard carrier codes and NAIC numbers for common carriers. Click a row to pre-fill the mapping above.</p>
+        <div class="cm-ref-table">
+            <div class="cm-ref-hdr"><span>Carrier Name</span><span>Common Code</span><span>NAIC</span><span>Download Type</span></div>
+            @foreach (var ref_ in _carrierRef)
+            {
+                <div class="cm-ref-row">
+                    <span>@ref_.Name</span>
+                    <span class="cm-mono">@ref_.Code</span>
+                    <span class="cm-mono">@ref_.Naic</span>
+                    <span>@ref_.DownloadType</span>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private SfToast? _toast;
+    private int _tab = 1;
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Administration","/admin"), new("Tenant Onboarding","/admin/system/onboarding"), new("Carrier Mapping",""));
+    }
+
+    private async Task SaveMappings()
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Carrier mappings saved successfully.", CssClass = "e-toast-success" });
+    }
+
+    private async Task TestConnection(CarrierMapping c)
+    {
+        c.Status = "Connected";
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"{c.Name} connection test passed.", CssClass = "e-toast-success" });
+    }
+
+    private async Task RunDownload(CarrierMapping c)
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Download batch started for {c.Name}.", CssClass = "e-toast-success" });
+    }
+
+    private void AddCarrier() => _carriers.Add(new CarrierMapping { Name = "New Carrier", Status = "Pending" });
+
+    private static string StatusCss(string s) => s switch
+    {
+        "Connected" => "cm-st-ok",
+        "Pending"   => "cm-st-pend",
+        "Error"     => "cm-st-err",
+        _           => "cm-st-pend"
+    };
+
+    private sealed class CarrierMapping
+    {
+        public string Name{get;set;}=string.Empty;
+        public string SourceCode{get;set;}=string.Empty;
+        public string NaicNumber{get;set;}=string.Empty;
+        public string AmsCarrierKey{get;set;}=string.Empty;
+        public bool   DownloadEnabled{get;set;}
+        public string DownloadFrequency{get;set;}="daily";
+        public string Status{get;set;}="Pending";
+        public string LastDownload{get;set;}=string.Empty;
+    }
+
+    private sealed class CarrierRef(string name, string code, string naic, string downloadType) { public string Name=name; public string Code=code; public string Naic=naic; public string DownloadType=downloadType; }
+
+    private static readonly string[] _amsCarriers =
+        ["Travelers","Liberty Mutual","Nationwide","Hartford","Chubb","CNA","Zurich","Markel","Philadelphia","Employers","Guard","ICW","State Auto"];
+
+    private List<CarrierMapping> _carriers =
+    [
+        new CarrierMapping { Name="Travelers",     SourceCode="TRAV",  NaicNumber="25658", AmsCarrierKey="Travelers",     DownloadEnabled=true,  DownloadFrequency="realtime", Status="Connected",  LastDownload="Today 6:02 AM" },
+        new CarrierMapping { Name="Liberty Mutual", SourceCode="LM",   NaicNumber="23043", AmsCarrierKey="Liberty Mutual",DownloadEnabled=true,  DownloadFrequency="daily",    Status="Connected",  LastDownload="Today 2:00 AM" },
+        new CarrierMapping { Name="Nationwide",    SourceCode="NW",    NaicNumber="23787", AmsCarrierKey="Nationwide",    DownloadEnabled=true,  DownloadFrequency="4h",       Status="Pending",    LastDownload="Never" },
+        new CarrierMapping { Name="Hartford",      SourceCode="HART",  NaicNumber="29424", AmsCarrierKey="",              DownloadEnabled=false, DownloadFrequency="daily",    Status="Error",      LastDownload="Jun 8 (failed)" },
+        new CarrierMapping { Name="Chubb",         SourceCode="CHUBB", NaicNumber="20281", AmsCarrierKey="Chubb",         DownloadEnabled=true,  DownloadFrequency="daily",    Status="Connected",  LastDownload="Today 3:15 AM" },
+    ];
+
+    private List<CarrierRef> _carrierRef =
+    [
+        new("Travelers",       "TRAV",  "25658", "IVANS / AL3"),
+        new("Liberty Mutual",  "LM",    "23043", "IVANS / AL3"),
+        new("Nationwide",      "NW",    "23787", "IVANS / AL3"),
+        new("Hartford",        "HART",  "29424", "IVANS / AL3"),
+        new("Chubb",           "CHUBB", "20281", "API"),
+        new("CNA",             "CNA",   "20443", "IVANS / AL3"),
+        new("Zurich",          "ZNA",   "16535", "IVANS / AL3"),
+        new("Markel",          "MARK",  "38970", "API"),
+        new("Philadelphia",    "PHLY",  "25623", "IVANS / AL3"),
+        new("Guard",           "GUARD", "42390", "IVANS / AL3"),
+    ];
+}

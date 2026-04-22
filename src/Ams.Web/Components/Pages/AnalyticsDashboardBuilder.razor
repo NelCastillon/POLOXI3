@@ -1,0 +1,215 @@
+@page "/analytics/dashboards"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Dashboard Builder — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Dashboard Builder"
+               Subtitle="Create, configure, and publish custom analytics dashboards for any role or team"
+               Icon="bi-grid-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="() => _showNew = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Dashboard
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Dashboard cards -->
+<div class="db-dash-grid">
+    @foreach (var d in _dashboards)
+    {
+        <div class="db-dash-card @(d.IsDefault ? "db-dash-card--default" : "")">
+            <div class="db-dash-card-hdr">
+                <div class="db-dash-icon @d.IconCss"><i class="bi @d.Icon" aria-hidden="true"></i></div>
+                @if (d.IsDefault) { <span class="db-default-chip">Default</span> }
+            </div>
+            <div class="db-dash-name">@d.Name</div>
+            <div class="db-dash-desc">@d.Description</div>
+            <div class="db-dash-meta">
+                <span class="db-widget-count"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> @d.WidgetCount widgets</span>
+                <span class="db-audience-badge @AudienceCss(d.Audience)">@d.Audience</span>
+            </div>
+            <div class="db-dash-footer">
+                <span class="db-last-edit">Updated @d.LastEdited.ToString("MMM d")</span>
+                <div class="db-dash-actions">
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenBuilder(d)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => SetDefault(d)" title="Set default" disabled="@d.IsDefault"><i class="bi bi-pin" aria-hidden="true"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" title="Duplicate"><i class="bi bi-copy" aria-hidden="true"></i></button>
+                </div>
+            </div>
+        </div>
+    }
+    <!-- Add new card -->
+    <div class="db-new-card" @onclick="() => _showNew = true">
+        <i class="bi bi-plus-circle db-new-icon" aria-hidden="true"></i>
+        <span>New Dashboard</span>
+    </div>
+</div>
+
+<!-- Builder canvas (shown when editing) -->
+@if (_editing is not null)
+{
+    <div class="db-builder-canvas">
+        <div class="db-canvas-toolbar">
+            <span class="db-canvas-title">Editing: @_editing.Name</span>
+            <div class="db-canvas-tools">
+                <select class="db-layout-sel">
+                    <option>2-column</option>
+                    <option>3-column</option>
+                    <option>Freeform</option>
+                </select>
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _editing = null">Discard</button>
+                <button class="um-btn um-btn-primary um-btn-sm" @onclick="SaveCanvas">Save</button>
+            </div>
+        </div>
+        <div class="db-widget-palette">
+            <div class="db-palette-hdr">Widget Palette</div>
+            @foreach (var w in _widgetPalette)
+            {
+                <div class="db-palette-item" title="Drag to canvas">
+                    <i class="bi @w.Icon" aria-hidden="true"></i> @w.Name
+                </div>
+            }
+        </div>
+        <div class="db-canvas-grid">
+            @foreach (var w in _editing.Widgets)
+            {
+                <div class="db-canvas-widget">
+                    <div class="db-cw-hdr">@w <button class="db-cw-remove" title="Remove">×</button></div>
+                    <div class="db-cw-placeholder"><i class="bi bi-bar-chart" aria-hidden="true"></i></div>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+<!-- New dashboard dialog -->
+<SfDialog @bind-Visible="_showNew" Width="460px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="db-dlg-hdr"><i class="bi bi-grid-fill" aria-hidden="true"></i> New Dashboard</span></Header>
+        <Content>
+            <div class="db-dlg-body">
+                <div class="db-dlg-field">
+                    <label class="db-lbl">Dashboard Name *</label>
+                    <SfTextBox @bind-Value="_newDash.Name" Placeholder="e.g. Executive Snapshot" />
+                </div>
+                <div class="db-dlg-field">
+                    <label class="db-lbl">Description</label>
+                    <SfTextBox @bind-Value="_newDash.Description" Multiline="true" />
+                </div>
+                <div class="db-dlg-row">
+                    <div class="db-dlg-field">
+                        <label class="db-lbl">Audience</label>
+                        <SfDropDownList TValue="string" TItem="Lv" DataSource="_audienceOpts" Width="100%" @bind-Value="_newDash.Audience">
+                            <DropDownListFieldSettings Value="V" Text="L" />
+                        </SfDropDownList>
+                    </div>
+                    <div class="db-dlg-field">
+                        <label class="db-lbl">Start from</label>
+                        <SfDropDownList TValue="string" TItem="Lv" DataSource="_templateOpts" Width="100%" @bind-Value="_newTemplate">
+                            <DropDownListFieldSettings Value="V" Text="L" />
+                        </SfDropDownList>
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="db-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showNew = false">Cancel</button>
+                <button class="um-btn um-btn-primary" disabled="@string.IsNullOrEmpty(_newDash.Name)" @onclick="CommitNew">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Create &amp; Open Builder
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private SfToast? _toast;
+    private bool _showNew;
+    private DashDef? _editing;
+    private DashDef _newDash = new();
+    private string _newTemplate = "blank";
+
+    private List<DashDef> _dashboards = [];
+
+    private static readonly List<Lv> _audienceOpts = [new("All","All Users"), new("Executive","Executive"), new("Producer","Producers"), new("Accounting","Accounting"), new("Service","Service Team")];
+    private static readonly List<Lv> _templateOpts = [new("blank","Blank"), new("sales","Sales Template"), new("retention","Retention Template"), new("exec","Executive Template")];
+
+    private static readonly List<(string Name, string Icon)> _widgetPalette =
+    [
+        ("KPI Card", "bi-card-heading"), ("Bar Chart", "bi-bar-chart"), ("Line Chart", "bi-graph-up"),
+        ("Pie Chart", "bi-pie-chart"), ("Data Table", "bi-table"), ("Funnel", "bi-funnel"),
+        ("Gauge", "bi-speedometer"), ("Map", "bi-map"), ("Recent Activity", "bi-clock-history"),
+    ];
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Analytics","/analytics/reports"), new("Dashboard Builder",""));
+        _dashboards =
+        [
+            new DashDef { Id=1, Name="Executive Snapshot",  Description="Top-level KPIs for leadership: premium, retention, loss ratio, pipeline.",    Icon="bi-speedometer2",    IconCss="db-di-blue",   Audience="Executive", WidgetCount=8, IsDefault=true,  LastEdited=DateTime.Today.AddDays(-2),  Widgets=["Revenue KPI","Retention Rate","Loss Ratio","Pipeline","New Business","Claims Open","Producer Top 5","Renewal 30d"] },
+            new DashDef { Id=2, Name="Producer Workbench",  Description="Per-producer pipeline, tasks, expiring policies, and activity feed.",          Icon="bi-person-badge",    IconCss="db-di-purple", Audience="Producer",  WidgetCount=6, IsDefault=false, LastEdited=DateTime.Today.AddDays(-5),  Widgets=["My Pipeline","Expiring 30d","Open Tasks","Recent Activity","Commission MTD","Goal Progress"] },
+            new DashDef { Id=3, Name="Operations Daily",    Description="Service queue depth, open requests, SLA compliance, and issue tracker.",        Icon="bi-tools",           IconCss="db-di-amber",  Audience="Service",   WidgetCount=5, IsDefault=false, LastEdited=DateTime.Today.AddDays(-10), Widgets=["Open Requests","SLA Compliance","Queue Depth","Issue Tracker","Appointments Today"] },
+            new DashDef { Id=4, Name="Financial Overview",  Description="Revenue, AR aging, commission payable, and collections summary.",               Icon="bi-bank",            IconCss="db-di-green",  Audience="Accounting",WidgetCount=7, IsDefault=false, LastEdited=DateTime.Today.AddDays(-3),  Widgets=["Revenue MTD","AR Aging","Commission Payable","Collections","Invoices Due","Cash Position","Period vs Budget"] },
+            new DashDef { Id=5, Name="Marketing Attribution",Description="Campaign ROI, conversion funnel, cross-sell pipeline, and referral count.",    Icon="bi-megaphone",       IconCss="db-di-amber",  Audience="All",       WidgetCount=5, IsDefault=false, LastEdited=DateTime.Today.AddDays(-15), Widgets=["Campaign ROI","Conversion Funnel","Referrals","Cross-Sell Opps","Win-Back"] },
+        ];
+    }
+
+    private void OpenBuilder(DashDef d) => _editing = d;
+
+    private void SetDefault(DashDef d)
+    {
+        foreach (var x in _dashboards) x.IsDefault = false;
+        d.IsDefault = true;
+    }
+
+    private async Task SaveCanvas()
+    {
+        _editing!.LastEdited = DateTime.Today;
+        _editing = null;
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Dashboard saved.", CssClass = "e-toast-success" });
+    }
+
+    private async Task CommitNew()
+    {
+        _newDash.Id = _dashboards.Count + 1;
+        _newDash.Icon = "bi-grid-1x2"; _newDash.IconCss = "db-di-blue";
+        _newDash.LastEdited = DateTime.Today; _newDash.WidgetCount = 0;
+        _newDash.Widgets = [];
+        _dashboards.Add(_newDash);
+        _editing = _newDash;
+        _showNew = false;
+        _newDash = new();
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Dashboard created — add widgets from the palette.", CssClass = "e-toast-success" });
+    }
+
+    private static string AudienceCss(string a) => a switch
+    {
+        "Executive" => "db-aud db-aud--exec",
+        "Producer"  => "db-aud db-aud--prod",
+        "Accounting"=> "db-aud db-aud--acct",
+        "Service"   => "db-aud db-aud--svc",
+        _           => "db-aud",
+    };
+
+    private sealed class DashDef
+    {
+        public int          Id          { get; set; }
+        public string       Name        { get; set; } = string.Empty;
+        public string       Description { get; set; } = string.Empty;
+        public string       Icon        { get; set; } = "bi-grid";
+        public string       IconCss     { get; set; } = string.Empty;
+        public string       Audience    { get; set; } = "All";
+        public int          WidgetCount { get; set; }
+        public bool         IsDefault   { get; set; }
+        public DateTime     LastEdited  { get; set; }
+        public List<string> Widgets     { get; set; } = [];
+    }
+
+    private sealed record Lv(string V, string L);
+}

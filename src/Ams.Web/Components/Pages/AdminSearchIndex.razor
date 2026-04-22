@@ -1,0 +1,106 @@
+@page "/admin/system/search"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Search &amp; Index Management — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Search &amp; Index Management"
+               Subtitle="Manage full-text search indexes, rebuild indexes, and configure searchable fields across all entities"
+               Icon="bi-search-heart">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="RebuildAll"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Rebuild All Indexes</button>
+        <button class="um-btn um-btn-primary" @onclick="SaveConfig"><i class="bi bi-check2" aria-hidden="true"></i> Save Configuration</button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Search health strip -->
+<div class="si-health-strip">
+    <div class="si-health-item si-hi-green"><div class="si-hi-label">Search Service</div><div class="si-hi-val"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> Healthy</div></div>
+    <div class="si-health-item"><div class="si-hi-label">Total Indexed Docs</div><div class="si-hi-val si-hi-bold">@_indexes.Sum(i=>i.DocumentCount).ToString("N0")</div></div>
+    <div class="si-health-item"><div class="si-hi-label">Last Full Rebuild</div><div class="si-hi-val">Jun 8, 2:00 AM</div></div>
+    <div class="si-health-item"><div class="si-hi-label">Avg Query Time</div><div class="si-hi-val">38ms</div></div>
+    <div class="si-health-item"><div class="si-hi-label">Queries Today</div><div class="si-hi-val">14,822</div></div>
+</div>
+
+<!-- Index management -->
+<div class="si-index-grid">
+    @foreach (var idx in _indexes)
+    {
+        <div class="si-idx-card @(idx.IsEnabled?"":"si-idx-off")">
+            <div class="si-idx-hdr">
+                <div class="si-idx-icon @idx.IconCss"><i class="bi bi-@idx.Icon" aria-hidden="true"></i></div>
+                <div class="si-idx-info">
+                    <div class="si-idx-name">@idx.Name</div>
+                    <div class="si-idx-meta">@idx.DocumentCount.ToString("N0") docs · Last indexed @idx.LastIndexed</div>
+                </div>
+                <label class="si-toggle"><input type="checkbox" @bind="idx.IsEnabled" /><span class="si-thumb"></span></label>
+            </div>
+            <div class="si-idx-fields">
+                <div class="si-fld-hdr">Searchable Fields</div>
+                @foreach (var fld in idx.Fields)
+                {
+                    <div class="si-field-row">
+                        <span class="si-field-name">@fld.Name</span>
+                        <span class="si-field-type">@fld.Type</span>
+                        <label class="si-toggle si-toggle-sm"><input type="checkbox" @bind="fld.Enabled" /><span class="si-thumb si-thumb-sm"></span></label>
+                        <select class="si-boost-sel" @bind="fld.Boost">
+                            <option value="1">Boost ×1</option><option value="2">Boost ×2</option><option value="3">Boost ×3</option><option value="5">Boost ×5</option>
+                        </select>
+                    </div>
+                }
+            </div>
+            <div class="si-idx-footer">
+                <div class="si-idx-status @(idx.Status=="Ready"?"si-st-green":idx.Status=="Rebuilding"?"si-st-amber":"si-st-red")"><i class="bi bi-circle-fill" aria-hidden="true"></i> @idx.Status</div>
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="()=>RebuildIndex(idx)" disabled="@idx.IsRebuilding"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Rebuild</button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private SfToast? _toast;
+    private List<SearchIndex> _indexes = [];
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Administration","/admin"), new("Search & Index Management",""));
+        _indexes =
+        [
+            new SearchIndex { Name="Accounts & Contacts", Icon="people",          IconCss="si-ic-blue",   DocumentCount=12482, LastIndexed="4 min ago",  Status="Ready",     IsEnabled=true,  Fields=[new("account_name","text",true,3),new("contact_name","text",true,2),new("email","text",true,1),new("phone","text",true,1),new("address","text",true,1)] },
+            new SearchIndex { Name="Policies",            Icon="shield-check",    IconCss="si-ic-green",  DocumentCount=38901, LastIndexed="2 min ago",  Status="Ready",     IsEnabled=true,  Fields=[new("policy_number","keyword",true,5),new("insured_name","text",true,3),new("lob","keyword",true,1),new("carrier","text",true,2),new("status","keyword",true,1)] },
+            new SearchIndex { Name="Claims",              Icon="exclamation-circle",IconCss="si-ic-red",DocumentCount=8214,  LastIndexed="8 min ago",  Status="Ready",     IsEnabled=true,  Fields=[new("claim_number","keyword",true,5),new("claimant","text",true,3),new("description","text",true,1),new("adjuster","text",true,2)] },
+            new SearchIndex { Name="Invoices & Payments", Icon="receipt",         IconCss="si-ic-amber",  DocumentCount=55320, LastIndexed="12 min ago", Status="Ready",     IsEnabled=true,  Fields=[new("invoice_number","keyword",true,5),new("account","text",true,2),new("amount","number",true,1),new("status","keyword",true,1)] },
+            new SearchIndex { Name="Documents",           Icon="folder2-open",    IconCss="si-ic-purple", DocumentCount=91205, LastIndexed="1 hr ago",   Status="Ready",     IsEnabled=true,  Fields=[new("file_name","text",true,3),new("account","text",true,2),new("content","text",false,1),new("type","keyword",true,1)] },
+            new SearchIndex { Name="Downloads",           Icon="arrow-down-circle",IconCss="si-ic-grey",DocumentCount=14022, LastIndexed="5 min ago",  Status="Rebuilding",IsEnabled=true,  Fields=[new("policy_number","keyword",true,5),new("carrier","text",true,2),new("insured_name","text",true,3)] },
+        ];
+    }
+
+    private async Task RebuildIndex(SearchIndex idx)
+    {
+        idx.IsRebuilding = true;
+        idx.Status = "Rebuilding";
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Rebuilding '{idx.Name}' index…", CssClass = "e-toast-info" });
+        await Task.Delay(1500);
+        idx.IsRebuilding = false;
+        idx.Status = "Ready";
+        idx.LastIndexed = "Just now";
+        StateHasChanged();
+    }
+
+    private async Task RebuildAll()
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Full index rebuild scheduled. This may take several minutes.", CssClass = "e-toast-info" });
+    }
+
+    private async Task SaveConfig()
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Search configuration saved.", CssClass = "e-toast-success" });
+    }
+
+    private sealed class SearchIndex { public string Name{get;set;}=string.Empty; public string Icon{get;set;}=string.Empty; public string IconCss{get;set;}=string.Empty; public int DocumentCount{get;set;} public string LastIndexed{get;set;}=string.Empty; public string Status{get;set;}=string.Empty; public bool IsEnabled{get;set;} public bool IsRebuilding{get;set;} public List<SearchField> Fields{get;set;}=[]; }
+    private sealed class SearchField(string name, string type, bool enabled, int boost) { public string Name=name; public string Type=type; public bool Enabled=enabled; public int Boost=boost; }
+}

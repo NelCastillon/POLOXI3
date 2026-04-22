@@ -1,0 +1,260 @@
+@page "/ai/actions"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>AI Next Actions — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="AI Next Actions"
+               Subtitle="Rules-engine generated, AI-prioritized action queue — work the most impactful items first"
+               Icon="bi-lightning-charge">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="RefreshAsync">
+            <i class="bi bi-arrow-clockwise @(_refreshing ? "ana-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/analytics/ai")'>
+            <i class="bi bi-stars" aria-hidden="true"></i> AI Insights
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="ExecuteAllHighAsync"
+                disabled="@(!_actions.Any(a => a.Priority == "High" && !a.Done))">
+            <i class="bi bi-check2-all" aria-hidden="true"></i> Execute All High
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI STRIP ─────────────────────────────────────────────────── -->
+<div class="ana-kpi-strip">
+    <div class="ana-kpi-card ana-kpi-high">
+        <div class="ana-kv">@_actions.Count(a => a.Priority == "High" && !a.Done)</div>
+        <div class="ana-kl"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> High Priority</div>
+    </div>
+    <div class="ana-kpi-card ana-kpi-med">
+        <div class="ana-kv">@_actions.Count(a => a.Priority == "Medium" && !a.Done)</div>
+        <div class="ana-kl"><i class="bi bi-dash-circle" aria-hidden="true"></i> Medium</div>
+    </div>
+    <div class="ana-kpi-card ana-kpi-done">
+        <div class="ana-kv">@_actions.Count(a => a.Done)</div>
+        <div class="ana-kl"><i class="bi bi-check-circle" aria-hidden="true"></i> Completed</div>
+    </div>
+    <div class="ana-kpi-card ana-kpi-val">
+        <div class="ana-kv">@_actions.Where(a => !a.Done).Sum(a => a.ImpactPremium).ToString("C0")</div>
+        <div class="ana-kl"><i class="bi bi-currency-dollar" aria-hidden="true"></i> Impact at Stake</div>
+    </div>
+    <div class="ana-kpi-card ana-kpi-acc">
+        <div class="ana-kv">@_actions.Select(a => a.AccountName).Distinct().Count()</div>
+        <div class="ana-kl"><i class="bi bi-building" aria-hidden="true"></i> Accounts Affected</div>
+    </div>
+</div>
+
+<!-- ── FILTER BAR ────────────────────────────────────────────────── -->
+<div class="ana-filter-bar">
+    <input class="e-input ana-search" @bind="_search" @bind:event="oninput"
+           placeholder="Search account, action, category…" />
+    <div class="ana-pills">
+        @foreach (var p in new[]{ "All","High","Medium","Low" })
+        {
+            <button class="ana-pill @(_priorityFilter == p ? "ana-pill-active" : "")"
+                    @onclick="() => _priorityFilter = p">@p</button>
+        }
+    </div>
+    <div class="ana-pills">
+        @foreach (var cat in new[]{ "All","Renewal","Cross-Sell","Service","Claims","Win-Back","Finance" })
+        {
+            <button class="ana-pill @(_categoryFilter == cat ? "ana-pill-active" : "")"
+                    @onclick="() => _categoryFilter = cat">@cat</button>
+        }
+    </div>
+    <label class="ana-done-toggle">
+        <input type="checkbox" @bind="_showDone" /> Show completed
+    </label>
+    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">
+        <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
+    </button>
+</div>
+
+<!-- ── ACTION LIST VIEW ───────────────────────────────────────────── -->
+<div class="ana-list-wrap">
+    <div class="ana-listview">
+        @foreach (var ai in FilteredActions)
+        {
+            <div class="ana-item @(ai.Done ? "ana-item-done" : "") @("ana-item-" + PriCss(ai.Priority))">
+                <!-- Priority indicator -->
+                <div class="ana-item-pri ana-pri-@PriCss(ai.Priority)">
+                    <i class="bi @PriIcon(ai.Priority)" aria-hidden="true"></i>
+                </div>
+
+                <!-- Category icon -->
+                <div class="ana-cat-icon ana-cat-@CatCss(ai.Category)">
+                    <i class="bi @CatIcon(ai.Category)" aria-hidden="true"></i>
+                </div>
+
+                <!-- Body -->
+                <div class="ana-item-body">
+                    <div class="ana-item-title">@ai.Title</div>
+                    <div class="ana-item-sub">
+                        <button class="ana-acct-link"
+                                @onclick='() => Nav.NavigateTo($"/accounts/{ai.AccountId}")'>
+                            @ai.AccountName
+                        </button>
+                        <span class="ana-cat-badge ana-cat-badge-@CatCss(ai.Category)">@ai.Category</span>
+                        @if (ai.DueDate.HasValue)
+                        {
+                            <span class="ana-due @(ai.DueDate.Value < DateTime.Today ? "ana-due-overdue" : "")">
+                                <i class="bi bi-calendar" aria-hidden="true"></i>
+                                @(ai.DueDate.Value < DateTime.Today ? "Overdue — " : "Due ")@ai.DueDate.Value.ToString("MMM d")
+                            </span>
+                        }
+                    </div>
+                    <div class="ana-item-rationale">@ai.Rationale</div>
+                </div>
+
+                <!-- Impact -->
+                <div class="ana-item-impact">
+                    @if (ai.ImpactPremium > 0)
+                    {
+                        <div class="ana-impact-val">@ai.ImpactPremium.ToString("C0")</div>
+                        <div class="ana-impact-lbl">impact</div>
+                    }
+                    <div class="ana-conf-badge">@ai.Confidence%</div>
+                </div>
+
+                <!-- Actions -->
+                <div class="ana-item-actions">
+                    @if (!ai.Done)
+                    {
+                        <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => ExecuteAsync(ai)"
+                                title="Mark done / execute">
+                            <i class="bi bi-check-lg" aria-hidden="true"></i> Execute
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ai.Snoozed = true"
+                                title="Snooze">
+                            <i class="bi bi-alarm" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs"
+                                @onclick='() => Nav.NavigateTo($"/accounts/{ai.AccountId}/ai")'
+                                title="View account AI">
+                            <i class="bi bi-stars" aria-hidden="true"></i>
+                        </button>
+                    }
+                    else
+                    {
+                        <span class="ana-done-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> Done</span>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ai.Done = false"
+                                title="Undo">
+                            <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
+                        </button>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+
+    @if (!FilteredActions.Any())
+    {
+        <div class="ana-empty">
+            <i class="bi bi-lightning-charge ana-empty-icon" aria-hidden="true"></i>
+            <span>No actions match the current filters.</span>
+        </div>
+    }
+
+</div>
+
+@code {
+    SfToast _toast = default!;
+    bool _refreshing;
+    bool _showDone;
+    string _search          = "";
+    string _priorityFilter  = "All";
+    string _categoryFilter  = "All";
+
+    sealed class ActionItem
+    {
+        public string  Id            { get; set; } = Guid.NewGuid().ToString();
+        public string  Title         { get; set; } = "";
+        public string  Rationale     { get; set; } = "";
+        public string  Category      { get; set; } = "";
+        public string  Priority      { get; set; } = "";
+        public Guid    AccountId     { get; set; }
+        public string  AccountName   { get; set; } = "";
+        public decimal ImpactPremium { get; set; }
+        public int     Confidence    { get; set; }
+        public DateTime? DueDate     { get; set; }
+        public bool    Done          { get; set; }
+        public bool    Snoozed       { get; set; }
+    }
+
+    readonly List<ActionItem> _actions = new();
+
+    IEnumerable<ActionItem> FilteredActions => _actions
+        .Where(a =>
+            (_showDone || !a.Done)
+         && (string.IsNullOrEmpty(_search) ||
+             a.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             a.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             a.Category.Contains(_search, StringComparison.OrdinalIgnoreCase))
+         && (_priorityFilter == "All" || a.Priority == _priorityFilter)
+         && (_categoryFilter == "All" || a.Category == _categoryFilter))
+        .OrderBy(a => a.Priority == "High" ? 0 : a.Priority == "Medium" ? 1 : 2)
+        .ThenByDescending(a => a.ImpactPremium);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("AI", "/analytics/ai"), new("Next Actions", "/ai/actions"));
+        await Task.Delay(0);
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _actions.Clear();
+        _actions.AddRange(new[]
+        {
+            new ActionItem { Title="Start WC renewal for Sullivan Mfg. LLC",           Rationale="Workers Comp expires in 18 days. Historical data: accounts renewed 45+ days early retain at 94% vs 71% for last-minute renewals.", Category="Renewal",   Priority="High",   AccountId=Guid.NewGuid(), AccountName="Sullivan Mfg. LLC",      ImpactPremium=9_400m,  Confidence=94, DueDate=DateTime.Today.AddDays(3)  },
+            new ActionItem { Title="Present umbrella quote to Bridgewater Hotels",      Rationale="BOP-only account with $0 umbrella. Asset exposure exceeds $12M per AI property valuation. Cross-sell probability: 78%.",             Category="Cross-Sell", Priority="High",   AccountId=Guid.NewGuid(), AccountName="Bridgewater Hotels",      ImpactPremium=14_200m, Confidence=78, DueDate=DateTime.Today.AddDays(5)  },
+            new ActionItem { Title="Contact Laredo Steel Works — renewal expired",      Rationale="Policy lapsed 15 days ago. Loss control review required before re-write. Carrier may require updated loss runs.",                    Category="Renewal",   Priority="High",   AccountId=Guid.NewGuid(), AccountName="Laredo Steel Works",      ImpactPremium=22_100m, Confidence=91, DueDate=DateTime.Today.AddDays(-2) },
+            new ActionItem { Title="Resolve open service complaint — Metro Freight",    Rationale="COI request pending 72 hours (SLA: 24h). Account has upcoming renewal — unresolved complaints increase churn risk by 38%.",          Category="Service",   Priority="High",   AccountId=Guid.NewGuid(), AccountName="Metro Freight Co.",       ImpactPremium=31_500m, Confidence=87, DueDate=DateTime.Today             },
+            new ActionItem { Title="Schedule coverage review — Apex Medical Group",     Rationale="No formal coverage review in 14 months. EPL gap identified. Last NPS: 8/10 — strong relationship for upsell conversation.",          Category="Cross-Sell", Priority="Medium", AccountId=Guid.NewGuid(), AccountName="Apex Medical Group",      ImpactPremium=14_200m, Confidence=79, DueDate=DateTime.Today.AddDays(10) },
+            new ActionItem { Title="Follow up on unreconciled commission — Acme Cas.",  Rationale="Commission statement $8,200 unreconciled 47 days. Carrier agreement forfeiture threshold: 60 days.",                                Category="Finance",   Priority="High",   AccountId=Guid.NewGuid(), AccountName="Acme Casualty",           ImpactPremium=8_200m,  Confidence=96, DueDate=DateTime.Today.AddDays(13) },
+            new ActionItem { Title="Win-back outreach — Crestview Elementary",          Rationale="Account lapsed 5 days ago. Portal login detected yesterday — signs of active shopping. Win-back window: 30 days.",                   Category="Win-Back",  Priority="Medium", AccountId=Guid.NewGuid(), AccountName="Crestview Elementary",    ImpactPremium=7_400m,  Confidence=64, DueDate=DateTime.Today.AddDays(7)  },
+            new ActionItem { Title="Loss control referral — Dallas Roofing",            Rationale="WC claim frequency 42% above peer average in last 6 months. Loss control visit projected to reduce claims by 28% over 12 months.",   Category="Claims",    Priority="Medium", AccountId=Guid.NewGuid(), AccountName="Dallas Roofing LLC",      ImpactPremium=3_800m,  Confidence=82, DueDate=DateTime.Today.AddDays(14) },
+            new ActionItem { Title="Referral ask — Greenleaf Nurseries",                Rationale="NPS 9/10 and just renewed. Highest probability referral window is 7–14 days post-renewal. Expected 1.2 referred accounts.",          Category="Cross-Sell", Priority="Low",    AccountId=Guid.NewGuid(), AccountName="Greenleaf Nurseries",     ImpactPremium=6_750m,  Confidence=74, DueDate=DateTime.Today.AddDays(10) },
+            new ActionItem { Title="COI batch processing — 8 pending requests",         Rationale="8 COIs queued beyond 24h SLA. Risk of client escalation on 3 accounts with active lending requirements.",                            Category="Service",   Priority="Medium", AccountId=Guid.NewGuid(), AccountName="Multiple Accounts",       ImpactPremium=0m,      Confidence=98, DueDate=DateTime.Today             },
+            new ActionItem { Title="Present auto fleet review — Pioneer Automotive",    Rationale="Fleet size grew 12% YoY per DMV records. Current schedule may be out-of-date. Coverage gap risk + upsell opportunity.",             Category="Cross-Sell", Priority="Low",    AccountId=Guid.NewGuid(), AccountName="Pioneer Automotive",      ImpactPremium=19_800m, Confidence=71, DueDate=DateTime.Today.AddDays(21) },
+            new ActionItem { Title="Enrich 214 records missing email address",          Rationale="Email gaps block automated renewal notices for $840K premium. Data enrichment workflow available in platform.",                      Category="Service",   Priority="Medium", AccountId=Guid.NewGuid(), AccountName="Multiple Accounts",       ImpactPremium=840_000m,Confidence=96, DueDate=DateTime.Today.AddDays(7)  },
+        });
+    }
+
+    async Task ExecuteAsync(ActionItem item)
+    {
+        item.Done = true;
+        await _toast.ShowAsync(new ToastModel { Content = $"Action completed: {item.Title}", CssClass = "e-toast-success" });
+    }
+
+    async Task ExecuteAllHighAsync()
+    {
+        var highItems = _actions.Where(a => a.Priority == "High" && !a.Done).ToList();
+        foreach (var a in highItems) a.Done = true;
+        await _toast.ShowAsync(new ToastModel { Content = $"{highItems.Count} high-priority actions marked complete.", CssClass = "e-toast-success" });
+    }
+
+    async Task RefreshAsync()
+    {
+        _refreshing = true;
+        StateHasChanged();
+        await Task.Delay(600);
+        BuildStub();
+        _refreshing = false;
+        await _toast.ShowAsync(new ToastModel { Content = "Action queue refreshed.", CssClass = "e-toast-info" });
+    }
+
+    void ResetFilters() { _search = ""; _priorityFilter = "All"; _categoryFilter = "All"; }
+
+    static string PriCss(string p)  => p == "High" ? "high" : p == "Medium" ? "med" : "low";
+    static string PriIcon(string p) => p == "High" ? "bi-exclamation-circle-fill" : p == "Medium" ? "bi-dash-circle-fill" : "bi-info-circle-fill";
+    static string CatCss(string c)  => c switch { "Renewal" => "renewal", "Cross-Sell" => "xsell", "Service" => "svc", "Claims" => "claims", "Win-Back" => "winback", "Finance" => "finance", _ => "other" };
+    static string CatIcon(string c) => c switch { "Renewal" => "bi-arrow-repeat", "Cross-Sell" => "bi-arrows-expand", "Service" => "bi-headset", "Claims" => "bi-file-medical", "Win-Back" => "bi-person-check", "Finance" => "bi-cash-coin", _ => "bi-lightning" };
+}

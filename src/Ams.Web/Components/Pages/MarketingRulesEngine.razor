@@ -1,0 +1,324 @@
+@page "/marketing/rules-engine"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Marketing Rules Engine — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Insurance Marketing Rules Engine"
+               Subtitle="Automated trigger rules that surface cross-sell, upsell, and retention opportunities across your book"
+               Icon="bi-lightning-charge-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/marketing/cross-sell")'>
+            <i class="bi bi-arrows-expand" aria-hidden="true"></i> View Opportunities
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="RunAllRulesAsync" disabled="@_running">
+            @if (_running)
+            {
+                <span class="um-spinner-sm" aria-hidden="true"></span>
+                <span>Running…</span>
+            }
+            else
+            {
+                <i class="bi bi-play-fill" aria-hidden="true"></i>
+                <span>Run All Rules</span>
+            }
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="mke-kpi-strip">
+    <div class="mke-kpi-card">
+        <div class="mke-kpi-icon mke-ki-blue"><i class="bi bi-lightning-charge" aria-hidden="true"></i></div>
+        <div><div class="mke-kv">@_rules.Count(r => r.Enabled)</div><div class="mke-kl">Active Rules</div></div>
+    </div>
+    <div class="mke-kpi-card">
+        <div class="mke-kpi-icon mke-ki-amber"><i class="bi bi-flag" aria-hidden="true"></i></div>
+        <div><div class="mke-kv">@_rules.Sum(r => r.Enabled ? r.FlaggedCount : 0).ToString("N0")</div><div class="mke-kl">Accounts Flagged</div></div>
+    </div>
+    <div class="mke-kpi-card">
+        <div class="mke-kpi-icon mke-ki-green"><i class="bi bi-cash-stack" aria-hidden="true"></i></div>
+        <div><div class="mke-kv">@_rules.Where(r => r.Enabled).Sum(r => r.EstimatedPipeline).ToString("C0")</div><div class="mke-kl">Est. Premium Pipeline</div></div>
+    </div>
+    <div class="mke-kpi-card">
+        <div class="mke-kpi-icon mke-ki-green"><i class="bi bi-calendar-check" aria-hidden="true"></i></div>
+        <div><div class="mke-kv">@(_lastRun?.ToString("MMM d, h:mm tt") ?? "Never")</div><div class="mke-kl">Last Run</div></div>
+    </div>
+</div>
+
+<!-- Rules list -->
+<div class="mke-rules-grid">
+    @foreach (var rule in _rules)
+    {
+        <div class="mke-rule-card @(rule.Enabled ? "" : "mke-rule-card--off")">
+            <div class="mke-rule-header">
+                <div class="mke-rule-icon @rule.IconCss">
+                    <i class="bi @rule.Icon" aria-hidden="true"></i>
+                </div>
+                <div class="mke-rule-title-wrap">
+                    <div class="mke-rule-name">@rule.Name</div>
+                    <div class="mke-rule-desc">@rule.Description</div>
+                </div>
+                <label class="mke-toggle" title="@(rule.Enabled ? "Disable rule" : "Enable rule")">
+                    <input type="checkbox" checked="@rule.Enabled" @onchange="() => rule.Enabled = !rule.Enabled" />
+                    <span class="mke-toggle-slider"></span>
+                </label>
+            </div>
+
+            <div class="mke-rule-body">
+                <!-- Trigger conditions -->
+                <div class="mke-thresholds">
+                    @foreach (var th in rule.Thresholds)
+                    {
+                        <div class="mke-th-row">
+                            <label class="mke-th-lbl">@th.Label</label>
+                            @if (th.IsDecimal)
+                            {
+                                <SfNumericTextBox TValue="decimal" @bind-Value="th.DecimalValue" Min="0" Format="N0"
+                                                  CssClass="mke-th-input" Width="120px" />
+                            }
+                            else if (th.IsBool)
+                            {
+                                <label class="mke-chk-lbl">
+                                    <SfCheckBox @bind-Checked="th.BoolValue" />
+                                    <span>@th.BoolLabel</span>
+                                </label>
+                            }
+                            else
+                            {
+                                <SfNumericTextBox TValue="int" @bind-Value="th.IntValue" Min="0" Format="N0"
+                                                  CssClass="mke-th-input" Width="120px" />
+                            }
+                        </div>
+                    }
+                </div>
+
+                <!-- Stats -->
+                <div class="mke-rule-stats">
+                    <div class="mke-rs-item">
+                        <span class="mke-rs-val @(rule.FlaggedCount > 0 && rule.Enabled ? "mke-rs-amber" : "")">@rule.FlaggedCount</span>
+                        <span class="mke-rs-lbl">Flagged</span>
+                    </div>
+                    <div class="mke-rs-item">
+                        <span class="mke-rs-val mke-rs-green">@rule.EstimatedPipeline.ToString("C0")</span>
+                        <span class="mke-rs-lbl">Est. Pipeline</span>
+                    </div>
+                    <div class="mke-rs-item">
+                        <span class="mke-rs-val">@rule.AvgScore</span>
+                        <span class="mke-rs-lbl">Avg. Score</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mke-rule-footer">
+                <span class="@CategoryBadge(rule.Category)">@rule.Category</span>
+                <div class="mke-rule-actions">
+                    <button class="um-btn um-btn-ghost um-btn-xs" disabled="@(!rule.Enabled)"
+                            @onclick='() => Nav.NavigateTo("/marketing/campaigns/new")'>
+                        <i class="bi bi-megaphone" aria-hidden="true"></i> Campaign
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" disabled="@(!rule.Enabled)"
+                            @onclick='() => Nav.NavigateTo("/marketing/cross-sell")'>
+                        <i class="bi bi-arrow-right" aria-hidden="true"></i> View Accounts
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<!-- Run history -->
+<div class="mke-history-card">
+    <div class="mke-hist-hdr">
+        <i class="bi bi-clock-history" aria-hidden="true"></i> Recent Rule Runs
+    </div>
+    <SfGrid TValue="RuleRun" DataSource="_runHistory" AllowSorting="true" EnableHover="true" RowHeight="46">
+        <GridColumns>
+            <GridColumn Field="@nameof(RuleRun.RanAt)" HeaderText="Run Time" Width="170" Type="ColumnType.DateTime" Format="MMM d, yyyy h:mm tt" />
+            <GridColumn Field="@nameof(RuleRun.RulesRan)" HeaderText="Rules" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+            <GridColumn Field="@nameof(RuleRun.TotalFlagged)" HeaderText="Flagged" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>@{ var r = (RuleRun)context; }<span class="mke-mono mke-bold">@r.TotalFlagged.ToString("N0")</span></Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(RuleRun.NewOpportunities)" HeaderText="New Opps" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>@{ var r = (RuleRun)context; }<span class="mke-mono" style="color:#059669;font-weight:600">+@r.NewOpportunities</span></Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(RuleRun.EstimatedPipeline)" HeaderText="Pipeline" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>@{ var r = (RuleRun)context; }<span class="mke-mono mke-bold">@r.EstimatedPipeline.ToString("C0")</span></Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(RuleRun.TriggeredBy)" HeaderText="Triggered By" Width="150" />
+        </GridColumns>
+    </SfGrid>
+</div>
+
+@code {
+    private SfToast? _toast;
+    private bool _running;
+    private DateTime? _lastRun;
+
+    private List<MarketingRule> _rules = [];
+    private List<RuleRun> _runHistory = [];
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Rules Engine",""));
+        BuildDefaultRules();
+        _runHistory =
+        [
+            new(new DateTime(2025,4,10,9,15,0), 7, 312, 48, 156_000m, "Scheduled"),
+            new(new DateTime(2025,4,3,9,0,0),   7, 287, 41, 143_500m, "Scheduled"),
+            new(new DateTime(2025,3,27,9,0,0),  6, 264, 37, 132_000m, "Scheduled"),
+            new(new DateTime(2025,3,20,14,22,0),7, 301, 52, 175_400m, "Manual — Beth N."),
+        ];
+        _lastRun = new DateTime(2025,4,10,9,15,0);
+    }
+
+    private void BuildDefaultRules()
+    {
+        _rules =
+        [
+            new MarketingRule
+            {
+                Id = 1, Name = "Missing Umbrella",
+                Description = "Flags commercial accounts with payroll above threshold that carry no umbrella or excess liability policy.",
+                Icon = "bi-shield-exclamation", IconCss = "mke-icon-purple", Category = "Commercial Cross-Sell",
+                Enabled = true, FlaggedCount = 94, EstimatedPipeline = 396_000m, AvgScore = 88,
+                Thresholds =
+                [
+                    new RuleThreshold { Label = "Min. Annual Payroll ($)", IsDecimal = true, DecimalValue = 500_000m },
+                    new RuleThreshold { Label = "Min. Employees", IntValue = 10 },
+                ]
+            },
+            new MarketingRule
+            {
+                Id = 2, Name = "Home + Auto Bundling",
+                Description = "Identifies personal-lines households with home and auto placed on separate carriers — bundling discount opportunity.",
+                Icon = "bi-house-gear", IconCss = "mke-icon-blue", Category = "Personal Cross-Sell",
+                Enabled = true, FlaggedCount = 218, EstimatedPipeline = 327_000m, AvgScore = 82,
+                Thresholds =
+                [
+                    new RuleThreshold { Label = "Separate Carriers Required", IsBool = true, BoolValue = true, BoolLabel = "Yes" },
+                    new RuleThreshold { Label = "Min. Current Premium ($)", IsDecimal = true, DecimalValue = 1_200m },
+                ]
+            },
+            new MarketingRule
+            {
+                Id = 3, Name = "Teen Driver Add-On",
+                Description = "Detects household policies where a driver aged 16–19 is not listed as an additional insured or endorsement.",
+                Icon = "bi-car-front", IconCss = "mke-icon-green", Category = "Personal Cross-Sell",
+                Enabled = true, FlaggedCount = 67, EstimatedPipeline = 63_650m, AvgScore = 79,
+                Thresholds =
+                [
+                    new RuleThreshold { Label = "Driver Min. Age", IntValue = 16 },
+                    new RuleThreshold { Label = "Driver Max. Age", IntValue = 19 },
+                ]
+            },
+            new MarketingRule
+            {
+                Id = 4, Name = "Business Package Expansion",
+                Description = "BOP holders missing coverage extensions: liquor liability, cyber, EPLI, or professional liability based on SIC code.",
+                Icon = "bi-briefcase", IconCss = "mke-icon-amber", Category = "Commercial Cross-Sell",
+                Enabled = true, FlaggedCount = 55, EstimatedPipeline = 170_500m, AvgScore = 75,
+                Thresholds =
+                [
+                    new RuleThreshold { Label = "Min. Annual Revenue ($)", IsDecimal = true, DecimalValue = 250_000m },
+                    new RuleThreshold { Label = "Check Cyber Gap", IsBool = true, BoolValue = true, BoolLabel = "Enabled" },
+                ]
+            },
+            new MarketingRule
+            {
+                Id = 5, Name = "Workers Comp Cross-Sell",
+                Description = "Commercial accounts with employees above the threshold that have no workers compensation policy on file.",
+                Icon = "bi-person-gear", IconCss = "mke-icon-orange", Category = "Commercial Cross-Sell",
+                Enabled = true, FlaggedCount = 41, EstimatedPipeline = 287_000m, AvgScore = 84,
+                Thresholds =
+                [
+                    new RuleThreshold { Label = "Min. Employee Count", IntValue = 3 },
+                    new RuleThreshold { Label = "Min. Annual Payroll ($)", IsDecimal = true, DecimalValue = 150_000m },
+                ]
+            },
+            new MarketingRule
+            {
+                Id = 6, Name = "Benefits Upsell",
+                Description = "Employer group accounts enrolled in health without dental, vision, life, or disability — upsell ancillary benefits.",
+                Icon = "bi-heart-pulse", IconCss = "mke-icon-pink", Category = "Benefits Cross-Sell",
+                Enabled = true, FlaggedCount = 29, EstimatedPipeline = 348_000m, AvgScore = 77,
+                Thresholds =
+                [
+                    new RuleThreshold { Label = "Min. Enrolled Lives", IntValue = 10 },
+                    new RuleThreshold { Label = "Missing Dental/Vision", IsBool = true, BoolValue = true, BoolLabel = "Required" },
+                ]
+            },
+            new MarketingRule
+            {
+                Id = 7, Name = "Lapsed Policy Recovery",
+                Description = "Recovers accounts whose policy lapsed within the configured window — targets with win-back offers before the relationship is lost.",
+                Icon = "bi-arrow-counterclockwise", IconCss = "mke-icon-red", Category = "Retention",
+                Enabled = true, FlaggedCount = 134, EstimatedPipeline = 402_000m, AvgScore = 71,
+                Thresholds =
+                [
+                    new RuleThreshold { Label = "Lapse Window Min. (days)", IntValue = 30 },
+                    new RuleThreshold { Label = "Lapse Window Max. (days)", IntValue = 180 },
+                    new RuleThreshold { Label = "Prior Premium Min. ($)", IsDecimal = true, DecimalValue = 500m },
+                ]
+            },
+        ];
+    }
+
+    private async Task RunAllRulesAsync()
+    {
+        _running = true;
+        StateHasChanged();
+        await Task.Delay(1_800); // simulate engine run
+        _lastRun = DateTime.Now;
+        var newRun = new RuleRun(_lastRun.Value, _rules.Count(r => r.Enabled),
+            _rules.Where(r => r.Enabled).Sum(r => r.FlaggedCount),
+            12, _rules.Where(r => r.Enabled).Sum(r => r.EstimatedPipeline), "Manual");
+        _runHistory.Insert(0, newRun);
+        _running = false;
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = $"Rules engine completed — {_rules.Sum(r => r.FlaggedCount):N0} accounts flagged across {_rules.Count(r => r.Enabled)} rules.", CssClass = "e-toast-success" });
+    }
+
+    private static string CategoryBadge(string cat) => cat switch
+    {
+        "Commercial Cross-Sell" => "mke-cat mke-cat--comm",
+        "Personal Cross-Sell"   => "mke-cat mke-cat--pers",
+        "Benefits Cross-Sell"   => "mke-cat mke-cat--ben",
+        "Retention"             => "mke-cat mke-cat--ret",
+        _                       => "mke-cat",
+    };
+
+    // ── Models ─────────────────────────────────────────────────────────────────
+    private sealed class MarketingRule
+    {
+        public int    Id               { get; set; }
+        public string Name             { get; set; } = string.Empty;
+        public string Description      { get; set; } = string.Empty;
+        public string Icon             { get; set; } = "bi-lightning";
+        public string IconCss          { get; set; } = string.Empty;
+        public string Category         { get; set; } = string.Empty;
+        public bool   Enabled          { get; set; } = true;
+        public int    FlaggedCount     { get; set; }
+        public decimal EstimatedPipeline { get; set; }
+        public int    AvgScore         { get; set; }
+        public List<RuleThreshold> Thresholds { get; set; } = [];
+    }
+
+    private sealed class RuleThreshold
+    {
+        public string  Label        { get; set; } = string.Empty;
+        public bool    IsDecimal    { get; set; }
+        public bool    IsBool       { get; set; }
+        public decimal DecimalValue { get; set; }
+        public int     IntValue     { get; set; }
+        public bool    BoolValue    { get; set; }
+        public string  BoolLabel    { get; set; } = "Yes";
+    }
+
+    private sealed record RuleRun(DateTime RanAt, int RulesRan, int TotalFlagged, int NewOpportunities, decimal EstimatedPipeline, string TriggeredBy);
+}

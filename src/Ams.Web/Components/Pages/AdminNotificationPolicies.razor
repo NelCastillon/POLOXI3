@@ -1,0 +1,110 @@
+@page "/admin/system/notifications"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Notification Policies — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="3000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Notification Policies"
+               Subtitle="Manage when, how, and to whom system notifications and alerts are sent across all modules"
+               Icon="bi-bell-gear">
+    <Actions>
+        <button class="um-btn um-btn-primary" @onclick="SaveAll"><i class="bi bi-check2" aria-hidden="true"></i> Save Changes</button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Channel cards -->
+<div class="np-channel-strip">
+    @foreach (var ch in _channels)
+    {
+        <div class="np-ch-card">
+            <div class="np-ch-icon @ch.IconCss"><i class="bi bi-@ch.Icon" aria-hidden="true"></i></div>
+            <div class="np-ch-info"><div class="np-ch-name">@ch.Name</div><div class="np-ch-status @(ch.Enabled?"np-ch-ok":"np-ch-off")">@(ch.Enabled?"Configured":"Not configured")</div></div>
+            <label class="np-toggle"><input type="checkbox" @bind="ch.Enabled" /><span class="np-thumb"></span></label>
+        </div>
+    }
+</div>
+
+<!-- Notification policy table -->
+<div class="np-table-wrap">
+    <div class="np-table-hdr">
+        <span class="np-col-event">Event</span>
+        <span class="np-col-module">Module</span>
+        @foreach (var ch in _channels) { <span class="np-col-ch">@ch.ShortName</span> }
+        <span class="np-col-freq">Frequency</span>
+    </div>
+    @foreach (var policy in _policies)
+    {
+        <div class="np-table-row">
+            <div class="np-col-event"><div class="np-ev-name">@policy.EventName</div><div class="np-ev-desc">@policy.Description</div></div>
+            <div class="np-col-module"><span class="np-module-badge">@policy.Module</span></div>
+            @foreach (var ch in _channels)
+            {
+                var enabled = policy.EnabledChannels.Contains(ch.Key);
+                <div class="np-col-ch">
+                    <label class="np-toggle np-toggle-sm">
+                        <input type="checkbox" checked="@enabled" @onchange="()=>ToggleChannel(policy, ch.Key)" />
+                        <span class="np-thumb np-thumb-sm"></span>
+                    </label>
+                </div>
+            }
+            <div class="np-col-freq">
+                <select class="np-freq-sel" @bind="policy.Frequency">
+                    <option value="instant">Instant</option>
+                    <option value="digest">Daily Digest</option>
+                    <option value="weekly">Weekly</option>
+                </select>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private SfToast? _toast;
+
+    private List<ChannelDef> _channels = [];
+    private List<NotifPolicy> _policies = [];
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Administration","/admin"), new("Notification Policies",""));
+        _channels =
+        [
+            new ChannelDef { Key="email",   Name="Email",          ShortName="Email",  Icon="envelope",      IconCss="np-ic-blue",   Enabled=true },
+            new ChannelDef { Key="sms",     Name="SMS",            ShortName="SMS",    Icon="phone",         IconCss="np-ic-green",  Enabled=true },
+            new ChannelDef { Key="inapp",   Name="In-App",         ShortName="App",    Icon="bell",          IconCss="np-ic-purple", Enabled=true },
+            new ChannelDef { Key="slack",   Name="Slack",          ShortName="Slack",  Icon="chat-square",   IconCss="np-ic-amber",  Enabled=false },
+            new ChannelDef { Key="webhook", Name="Webhook",        ShortName="Hook",   Icon="link-45deg",    IconCss="np-ic-grey",   Enabled=false },
+        ];
+        _policies =
+        [
+            new NotifPolicy { EventName="Renewal 90 days out",      Module="Renewals",   Description="Policy expires in 90 days",                 Frequency="instant", EnabledChannels=["email","inapp"] },
+            new NotifPolicy { EventName="Renewal 30 days out",      Module="Renewals",   Description="Policy expires in 30 days — urgent",        Frequency="instant", EnabledChannels=["email","sms","inapp"] },
+            new NotifPolicy { EventName="Claim opened",             Module="Claims",     Description="New claim created",                         Frequency="instant", EnabledChannels=["email","inapp","slack"] },
+            new NotifPolicy { EventName="Claim reserve changed",    Module="Claims",     Description="Reserve amount updated > 20%",              Frequency="instant", EnabledChannels=["email","inapp"] },
+            new NotifPolicy { EventName="Payment failed",           Module="Billing",    Description="Scheduled payment did not process",         Frequency="instant", EnabledChannels=["email","sms","inapp"] },
+            new NotifPolicy { EventName="Payment received",         Module="Billing",    Description="Payment processed successfully",            Frequency="instant", EnabledChannels=["email","inapp"] },
+            new NotifPolicy { EventName="Download exception",       Module="Downloads",  Description="Carrier download record could not be matched",Frequency="instant",EnabledChannels=["email","inapp"] },
+            new NotifPolicy { EventName="Task overdue",             Module="Tasks",      Description="Task past due date with no completion",     Frequency="digest",  EnabledChannels=["email","inapp"] },
+            new NotifPolicy { EventName="e-Sign timeout",           Module="Documents",  Description="E-sign package not signed within 7 days",  Frequency="instant", EnabledChannels=["email","inapp"] },
+            new NotifPolicy { EventName="Lead inactive 14 days",    Module="CRM",        Description="Lead with no activity for 14 days",        Frequency="digest",  EnabledChannels=["email","inapp"] },
+        ];
+    }
+
+    private void ToggleChannel(NotifPolicy policy, string channelKey)
+    {
+        if (!policy.EnabledChannels.Remove(channelKey))
+            policy.EnabledChannels.Add(channelKey);
+    }
+
+    private async Task SaveAll()
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Notification policies saved.", CssClass = "e-toast-success" });
+    }
+
+    private sealed class ChannelDef { public string Key{get;set;}=string.Empty; public string Name{get;set;}=string.Empty; public string ShortName{get;set;}=string.Empty; public string Icon{get;set;}=string.Empty; public string IconCss{get;set;}=string.Empty; public bool Enabled{get;set;} }
+    private sealed class NotifPolicy { public string EventName{get;set;}=string.Empty; public string Module{get;set;}=string.Empty; public string Description{get;set;}=string.Empty; public string Frequency{get;set;}=string.Empty; public List<string> EnabledChannels{get;set;}=[]; }
+}

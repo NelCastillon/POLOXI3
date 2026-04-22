@@ -1,0 +1,199 @@
+@page "/integrations/api"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>API Keys & Webhooks — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="API Keys &amp; Webhooks"
+               Subtitle="Manage API credentials, webhook endpoints, and developer access for third-party integrations"
+               Icon="bi-key-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="() => _tab = 1" disabled="@(_tab==1)"><i class="bi bi-key" aria-hidden="true"></i> API Keys</button>
+        <button class="um-btn um-btn-ghost" @onclick="() => _tab = 2" disabled="@(_tab==2)"><i class="bi bi-link-45deg" aria-hidden="true"></i> Webhooks</button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showCreate = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> @(_tab==1 ? "New API Key" : "New Webhook")
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Tab bar -->
+<div class="ak-tab-bar">
+    <button class="ak-tab @(_tab==1?"ak-tab--active":"")" @onclick="()=>_tab=1">API Keys <span class="ak-badge">@_apiKeys.Count</span></button>
+    <button class="ak-tab @(_tab==2?"ak-tab--active":"")" @onclick="()=>_tab=2">Webhooks <span class="ak-badge">@_webhooks.Count</span></button>
+    <button class="ak-tab @(_tab==3?"ak-tab--active":"")" @onclick="()=>_tab=3">Request Log</button>
+</div>
+
+@if (_tab == 1)
+{
+    <!-- API Keys -->
+    <div class="ak-card-list">
+        @foreach (var key in _apiKeys)
+        {
+            <div class="ak-key-card @(key.IsActive?"":"ak-key-inactive")">
+                <div class="ak-key-hdr">
+                    <div class="ak-key-icon @(key.IsActive?"ak-ki-blue":"ak-ki-grey")"><i class="bi bi-key" aria-hidden="true"></i></div>
+                    <div class="ak-key-info">
+                        <div class="ak-key-name">@key.Name</div>
+                        <div class="ak-key-meta">Created @key.CreatedOn · Last used @key.LastUsed · @key.Scope scope</div>
+                    </div>
+                    <span class="@(key.IsActive?"ak-st ak-st--ok":"ak-st ak-st--off")">@(key.IsActive?"Active":"Inactive")</span>
+                </div>
+                <div class="ak-key-val">
+                    <code class="ak-code">@(key.Revealed ? key.FullKey : key.MaskedKey)</code>
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => key.Revealed = !key.Revealed" title="@(key.Revealed?"Hide":"Reveal")">
+                        <i class="bi bi-@(key.Revealed?"eye-slash":"eye")" aria-hidden="true"></i>
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" title="Copy"><i class="bi bi-copy" aria-hidden="true"></i></button>
+                </div>
+                <div class="ak-key-scopes">
+                    @foreach (var s in key.Scopes)
+                    {
+                        <span class="ak-scope-tag">@s</span>
+                    }
+                </div>
+                <div class="ak-key-footer">
+                    <div class="ak-expire @(key.DaysUntilExpiry<=30?"ak-exp-warn":"")"><i class="bi bi-calendar" aria-hidden="true"></i> Expires @key.ExpiresOn</div>
+                    <div class="ak-key-actions">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => RevokeKey(key)" title="Revoke">Revoke</button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Rotate"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Rotate</button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+else if (_tab == 2)
+{
+    <!-- Webhooks -->
+    <div class="ak-card-list">
+        @foreach (var wh in _webhooks)
+        {
+            <div class="ak-wh-card @(wh.IsActive?"":"ak-key-inactive")">
+                <div class="ak-wh-hdr">
+                    <div class="ak-key-icon @(wh.IsActive?"ak-ki-purple":"ak-ki-grey")"><i class="bi bi-link-45deg" aria-hidden="true"></i></div>
+                    <div class="ak-key-info">
+                        <div class="ak-key-name">@wh.Name</div>
+                        <div class="ak-key-meta">@wh.Url</div>
+                    </div>
+                    <span class="@(wh.IsActive?"ak-st ak-st--ok":"ak-st ak-st--off")">@(wh.IsActive?"Active":"Disabled")</span>
+                </div>
+                <div class="ak-wh-events">
+                    @foreach (var ev in wh.Events)
+                    {
+                        <span class="ak-ev-tag">@ev</span>
+                    }
+                </div>
+                <div class="ak-wh-stats">
+                    <div class="ak-ws"><span class="ak-wsl">Deliveries (7d)</span><span class="ak-wsv">@wh.DeliveriesWeek</span></div>
+                    <div class="ak-ws"><span class="ak-wsl">Success rate</span><span class="ak-wsv @(wh.SuccessRate>=95?"ak-good":wh.SuccessRate>=80?"ak-warn":"ak-bad")">@wh.SuccessRate%</span></div>
+                    <div class="ak-ws"><span class="ak-wsl">Last delivery</span><span class="ak-wsv">@wh.LastDelivery</span></div>
+                    <div class="ak-ws"><span class="ak-wsl">Failures (7d)</span><span class="ak-wsv @(wh.Failures>0?"ak-bad":"")">@wh.Failures</span></div>
+                </div>
+                <div class="ak-key-footer">
+                    <div class="ak-expire">Secret: <code class="ak-code-sm">••••••••@wh.SecretHint</code></div>
+                    <div class="ak-key-actions">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => wh.IsActive = !wh.IsActive">@(wh.IsActive?"Disable":"Enable")</button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Test"><i class="bi bi-send" aria-hidden="true"></i> Test</button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Delete"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <!-- Request log placeholder -->
+    <div class="ak-log-placeholder"><i class="bi bi-terminal ak-log-icon" aria-hidden="true"></i><div>Request log view — shows recent API and webhook delivery history, status codes, and payloads.</div></div>
+}
+
+<!-- Create dialog placeholder -->
+<SfDialog @bind-Visible="_showCreate" Width="460px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><i class="bi bi-@(_tab==1?"key":"link-45deg")" aria-hidden="true"></i> @(_tab==1?"New API Key":"New Webhook")</Header>
+        <Content>
+            <div class="ak-dlg-body">
+                <label class="ak-label">Name</label>
+                <input class="ak-input" placeholder="e.g. Carrier Integration Service" />
+                @if (_tab == 1)
+                {
+                    <label class="ak-label">Expiry</label>
+                    <select class="ak-input">
+                        <option>30 days</option><option>90 days</option><option>1 year</option><option>Never</option>
+                    </select>
+                    <label class="ak-label">Scope</label>
+                    <div class="ak-scope-list">
+                        @foreach (var s in new[]{"policies:read","policies:write","claims:read","claims:write","billing:read","billing:write","integrations:read","integrations:write"})
+                        {
+                            <label class="ak-scope-opt"><input type="checkbox" /><span>@s</span></label>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <label class="ak-label">Endpoint URL</label>
+                    <input class="ak-input" placeholder="https://your-service.com/webhooks/ams" />
+                    <label class="ak-label">Events</label>
+                    <div class="ak-scope-list">
+                        @foreach (var ev in new[]{"policy.created","policy.updated","claim.opened","payment.received","renewal.created","lead.created","document.signed","download.received"})
+                        {
+                            <label class="ak-scope-opt"><input type="checkbox" /><span>@ev</span></label>
+                        }
+                    </div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <button class="um-btn um-btn-ghost" @onclick="()=>_showCreate=false">Cancel</button>
+            <button class="um-btn um-btn-primary" @onclick="CommitCreate"><i class="bi bi-check2" aria-hidden="true"></i> Create</button>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private SfToast? _toast;
+    private int _tab = 1;
+    private bool _showCreate;
+
+    private List<ApiKeyDef> _apiKeys = [];
+    private List<WebhookDef> _webhooks = [];
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Integrations","/integrations"), new("API Keys & Webhooks",""));
+        _apiKeys =
+        [
+            new ApiKeyDef { Id=1, Name="Carrier Download Service", CreatedOn="Jan 10", LastUsed="2 min ago", ExpiresOn="Dec 31, 2025", DaysUntilExpiry=200, IsActive=true,  MaskedKey="ams_live_••••••••••••••••••3f2a", FullKey="ams_live_k8f2j9p1q4r7t3f2a", Scopes=["policies:read","policies:write","integrations:read"], Scope="Full" },
+            new ApiKeyDef { Id=2, Name="Billing Sync – QuickBooks", CreatedOn="Mar 5",  LastUsed="4 hr ago",  ExpiresOn="Mar 5, 2026",  DaysUntilExpiry=260, IsActive=true,  MaskedKey="ams_live_••••••••••••••••••b1c8", FullKey="ams_live_m2n3p5q6r7s8t9b1c8", Scopes=["billing:read","billing:write"],                         Scope="Billing" },
+            new ApiKeyDef { Id=3, Name="Portal Public API",         CreatedOn="Nov 1",  LastUsed="1 day ago", ExpiresOn="Jun 15, 2025", DaysUntilExpiry=14,  IsActive=true,  MaskedKey="ams_live_••••••••••••••••••a4d9", FullKey="ams_live_z1x2y3w4v5u6t7a4d9", Scopes=["policies:read","claims:read"],                          Scope="ReadOnly" },
+            new ApiKeyDef { Id=4, Name="Legacy EZLynx Key",         CreatedOn="Aug 22", LastUsed="3 mo ago",  ExpiresOn="Aug 22, 2024", DaysUntilExpiry=-90, IsActive=false, MaskedKey="ams_live_••••••••••••••••••f8e0", FullKey="ams_live_a9b8c7d6e5f4g3f8e0", Scopes=["policies:read"],                                         Scope="ReadOnly" },
+        ];
+        _webhooks =
+        [
+            new WebhookDef { Id=1, Name="Renewal Pipeline Notifier",  Url="https://ops.agency.com/webhooks/renewals",  Events=["renewal.created","policy.lapsed"],                    DeliveriesWeek=142, SuccessRate=100, Failures=0,  LastDelivery="5 min ago", IsActive=true,  SecretHint="3f2a" },
+            new WebhookDef { Id=2, Name="Claims Slack Alert",          Url="https://hooks.slack.com/services/T00/B00/x", Events=["claim.opened","claim.severity.changed"],              DeliveriesWeek=28,  SuccessRate=96,  Failures=1,  LastDelivery="2 hr ago",  IsActive=true,  SecretHint="b7c1" },
+            new WebhookDef { Id=3, Name="Payment CRM Sync",            Url="https://crm.company.com/api/payments",       Events=["payment.received","payment.failed"],                  DeliveriesWeek=204, SuccessRate=99,  Failures=2,  LastDelivery="18 min ago",IsActive=true,  SecretHint="d4e9" },
+            new WebhookDef { Id=4, Name="Download Event Handler",      Url="https://etl.company.com/webhooks/downloads", Events=["download.received","download.exception.created"],     DeliveriesWeek=312, SuccessRate=88,  Failures=8,  LastDelivery="2 min ago", IsActive=true,  SecretHint="a2f8" },
+            new WebhookDef { Id=5, Name="eSign Completion Notifier",   Url="https://dms.company.com/esign/complete",     Events=["document.signed","document.esign.timeout"],          DeliveriesWeek=19,  SuccessRate=100, Failures=0,  LastDelivery="1 day ago", IsActive=false, SecretHint="c5b3" },
+        ];
+    }
+
+    private async Task RevokeKey(ApiKeyDef key)
+    {
+        key.IsActive = false;
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"API key '{key.Name}' revoked.", CssClass = "e-toast-warning" });
+    }
+
+    private async Task CommitCreate()
+    {
+        _showCreate = false;
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = _tab == 1 ? "API key created." : "Webhook created.", CssClass = "e-toast-success" });
+    }
+
+    private sealed class ApiKeyDef { public int Id{get;set;} public string Name{get;set;}=string.Empty; public string CreatedOn{get;set;}=string.Empty; public string LastUsed{get;set;}=string.Empty; public string ExpiresOn{get;set;}=string.Empty; public int DaysUntilExpiry{get;set;} public bool IsActive{get;set;} public string MaskedKey{get;set;}=string.Empty; public string FullKey{get;set;}=string.Empty; public List<string> Scopes{get;set;}=[]; public string Scope{get;set;}=string.Empty; public bool Revealed{get;set;} }
+    private sealed class WebhookDef { public int Id{get;set;} public string Name{get;set;}=string.Empty; public string Url{get;set;}=string.Empty; public List<string> Events{get;set;}=[]; public int DeliveriesWeek{get;set;} public int SuccessRate{get;set;} public int Failures{get;set;} public string LastDelivery{get;set;}=string.Empty; public bool IsActive{get;set;} public string SecretHint{get;set;}=string.Empty; }
+}

@@ -1,0 +1,207 @@
+@page "/portal/requests"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Self-Service Requests — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Self-Service Requests"
+               Subtitle="Inbound requests submitted by clients through the insured portal — review, assign, and fulfill"
+               Icon="bi-inbox-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="pr-kpi-strip">
+    <div class="pr-kpi-card">
+        <div class="pr-kpi-icon pr-ki-amber"><i class="bi bi-clock" aria-hidden="true"></i></div>
+        <div><div class="pr-kv">@_requests.Count(r => r.Status == "Open")</div><div class="pr-kl">Open</div></div>
+    </div>
+    <div class="pr-kpi-card">
+        <div class="pr-kpi-icon pr-ki-blue"><i class="bi bi-hourglass-split" aria-hidden="true"></i></div>
+        <div><div class="pr-kv">@_requests.Count(r => r.Status == "In Progress")</div><div class="pr-kl">In Progress</div></div>
+    </div>
+    <div class="pr-kpi-card">
+        <div class="pr-kpi-icon pr-ki-green"><i class="bi bi-check-circle" aria-hidden="true"></i></div>
+        <div><div class="pr-kv">@_requests.Count(r => r.Status == "Fulfilled")</div><div class="pr-kl">Fulfilled Today</div></div>
+    </div>
+    <div class="pr-kpi-card">
+        <div class="pr-kpi-icon pr-ki-red"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></div>
+        <div><div class="pr-kv">@_requests.Count(r => r.Priority == "Urgent" && r.Status != "Fulfilled")</div><div class="pr-kl">Urgent</div></div>
+    </div>
+    <div class="pr-kpi-card">
+        <div class="pr-kpi-icon pr-ki-green"><i class="bi bi-stopwatch" aria-hidden="true"></i></div>
+        <div><div class="pr-kv">2.4h</div><div class="pr-kl">Avg. Response Time</div></div>
+    </div>
+</div>
+
+<!-- Tabs + filter -->
+<div class="pr-filter-bar">
+    <div class="pr-tab-group">
+        <button class="pr-tab @(_statusTab=="All"?"pr-tab--active":"")" @onclick='()=>_statusTab="All"'>All</button>
+        <button class="pr-tab @(_statusTab=="Open"?"pr-tab--active":"")" @onclick='()=>_statusTab="Open"'>Open</button>
+        <button class="pr-tab @(_statusTab=="In Progress"?"pr-tab--active":"")" @onclick='()=>_statusTab="In Progress"'>In Progress</button>
+        <button class="pr-tab @(_statusTab=="Fulfilled"?"pr-tab--active":"")" @onclick='()=>_statusTab="Fulfilled"'>Fulfilled</button>
+    </div>
+    <div class="pr-search-wrap">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input class="pr-search" placeholder="Search requests…" @bind="_search" @bind:event="oninput" />
+    </div>
+    <select class="pr-sel" @bind="_typeFilter">
+        <option value="">All Types</option>
+        <option value="COI Request">COI Request</option>
+        <option value="Policy Change">Policy Change</option>
+        <option value="Document Upload">Document Upload</option>
+        <option value="Payment">Payment</option>
+        <option value="Claim Intake">Claim Intake</option>
+        <option value="Renewal Questionnaire">Renewal Questionnaire</option>
+        <option value="Secure Message">Secure Message</option>
+    </select>
+</div>
+
+<!-- Grid -->
+<div class="pr-grid-wrap">
+    <SfGrid TValue="SsRequest" DataSource="Filtered" AllowSorting="true" AllowFiltering="true"
+            EnableHover="true" RowHeight="58">
+        <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+        <GridColumns>
+            <GridColumn Field="@nameof(SsRequest.SubmittedAt)" HeaderText="Submitted" Width="155" Type="ColumnType.DateTime" Format="MMM d, h:mm tt" />
+            <GridColumn HeaderText="Client" MinWidth="180" Field="@nameof(SsRequest.ClientName)">
+                <Template>
+                    @{ var r = (SsRequest)context; }
+                    <div class="pr-client-cell">
+                        <div class="pr-av">@Initials(r.ClientName)</div>
+                        <div>
+                            <div class="pr-cname">@r.ClientName</div>
+                            <div class="pr-account">@r.AccountName</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SsRequest.RequestType)" HeaderText="Type" Width="180">
+                <Template>@{ var r = (SsRequest)context; }<span class="@TypeBadge(r.RequestType)">@r.RequestType</span></Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SsRequest.Summary)" HeaderText="Summary" MinWidth="220" />
+            <GridColumn Field="@nameof(SsRequest.Priority)" HeaderText="Priority" Width="100">
+                <Template>@{ var r = (SsRequest)context; }<span class="@PrioBadge(r.Priority)">@r.Priority</span></Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SsRequest.AssignedTo)" HeaderText="Assigned To" Width="140" />
+            <GridColumn Field="@nameof(SsRequest.Status)" HeaderText="Status" Width="120">
+                <Template>@{ var r = (SsRequest)context; }<span class="@StatusBadge(r.Status)">@r.Status</span></Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    @{ var r = (SsRequest)context; }
+                    <div class="pr-row-actions">
+                        @if (r.Status == "Open")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Claim(r)" title="Claim">
+                                <i class="bi bi-person-check" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Fulfill(r)" title="Mark fulfilled" disabled="@(r.Status == "Fulfilled")">
+                            <i class="bi bi-check-circle" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+@code {
+    private SfToast? _toast;
+    private string _statusTab  = "All";
+    private string _search     = string.Empty;
+    private string _typeFilter = string.Empty;
+
+    private List<SsRequest> _requests = [];
+
+    private IEnumerable<SsRequest> Filtered => _requests.Where(r =>
+        (_statusTab == "All" || r.Status == _statusTab) &&
+        (string.IsNullOrEmpty(_search) || r.ClientName.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.Summary.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_typeFilter) || r.RequestType == _typeFilter));
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Requests",""));
+        var now = DateTime.Now;
+        _requests =
+        [
+            new SsRequest { Id=1,  SubmittedAt=now.AddMinutes(-12), ClientName="Marcus Lee",      AccountName="Sullivan Manufacturing", RequestType="COI Request",            Summary="COI for Lakeview Office Park — GL/WC",     Priority="Urgent",  AssignedTo="Beth N.",  Status="Open"        },
+            new SsRequest { Id=2,  SubmittedAt=now.AddMinutes(-28), ClientName="James Ortega",    AccountName="Ortega Construction",   RequestType="Policy Change",          Summary="Add new equipment — 2024 Cat Excavator",   Priority="Normal",  AssignedTo="Tom R.",   Status="In Progress" },
+            new SsRequest { Id=3,  SubmittedAt=now.AddMinutes(-45), ClientName="Rachel Nguyen",   AccountName="Nguyen Family HH",      RequestType="Document Upload",        Summary="Uploaded photos of home renovation",       Priority="Low",     AssignedTo="—",        Status="Open"        },
+            new SsRequest { Id=4,  SubmittedAt=now.AddHours(-2),    ClientName="Carlos Vega",     AccountName="Vega Foods Inc",        RequestType="Payment",                Summary="Paid Invoice INV-2025-0481 — $3,200",      Priority="Normal",  AssignedTo="System",   Status="Fulfilled"   },
+            new SsRequest { Id=5,  SubmittedAt=now.AddHours(-3),    ClientName="Nicole Thornton", AccountName="Thornton Household",    RequestType="Secure Message",         Summary="Question re: deductible for claim #042",   Priority="Normal",  AssignedTo="Beth N.",  Status="In Progress" },
+            new SsRequest { Id=6,  SubmittedAt=now.AddHours(-4),    ClientName="Frank Castillo",  AccountName="Castillo Auto Group",   RequestType="COI Request",            Summary="COI for new dealer floor plan lender",     Priority="Urgent",  AssignedTo="Tom R.",   Status="In Progress" },
+            new SsRequest { Id=7,  SubmittedAt=now.AddHours(-5),    ClientName="Brittany Walsh",  AccountName="TechVault Inc",         RequestType="Renewal Questionnaire",  Summary="Submitted 2026 renewal data form",         Priority="Normal",  AssignedTo="System",   Status="Fulfilled"   },
+            new SsRequest { Id=8,  SubmittedAt=now.AddHours(-6),    ClientName="Marcus Lee",      AccountName="Sullivan Manufacturing", RequestType="Claim Intake",          Summary="FNOL — equipment theft at job site",       Priority="Urgent",  AssignedTo="—",        Status="Open"        },
+            new SsRequest { Id=9,  SubmittedAt=now.AddHours(-8),    ClientName="Sandra Kim",      AccountName="Kim Realty LLC",        RequestType="Policy Change",          Summary="Remove 123 Oak Ave from schedule",         Priority="Normal",  AssignedTo="—",        Status="Open"        },
+            new SsRequest { Id=10, SubmittedAt=now.AddHours(-10),   ClientName="James Ortega",    AccountName="Ortega Construction",   RequestType="COI Request",            Summary="COI for River City Bid — GL only",         Priority="Normal",  AssignedTo="Beth N.",  Status="Fulfilled"   },
+        ];
+    }
+
+    private async Task Claim(SsRequest r)
+    {
+        r.Status = "In Progress"; r.AssignedTo = "Me";
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Request #{r.Id} claimed.", CssClass = "e-toast-success" });
+    }
+
+    private async Task Fulfill(SsRequest r)
+    {
+        r.Status = "Fulfilled";
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Request #{r.Id} marked fulfilled.", CssClass = "e-toast-success" });
+    }
+
+    private static string TypeBadge(string t) => t switch
+    {
+        "COI Request"           => "pr-type pr-type--coi",
+        "Policy Change"         => "pr-type pr-type--change",
+        "Document Upload"       => "pr-type pr-type--doc",
+        "Payment"               => "pr-type pr-type--pay",
+        "Claim Intake"          => "pr-type pr-type--claim",
+        "Renewal Questionnaire" => "pr-type pr-type--renew",
+        _                       => "pr-type",
+    };
+
+    private static string PrioBadge(string p) => p switch
+    {
+        "Urgent" => "pr-prio pr-prio--urgent",
+        "Low"    => "pr-prio pr-prio--low",
+        _        => "pr-prio pr-prio--normal",
+    };
+
+    private static string StatusBadge(string s) => s switch
+    {
+        "Open"        => "pr-status pr-status--open",
+        "In Progress" => "pr-status pr-status--wip",
+        "Fulfilled"   => "pr-status pr-status--done",
+        _             => "pr-status",
+    };
+
+    private static string Initials(string name)
+    {
+        var p = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return p.Length >= 2 ? $"{p[0][0]}{p[^1][0]}" : name.Length > 0 ? name[..1] : "?";
+    }
+
+    private sealed class SsRequest
+    {
+        public int      Id          { get; set; }
+        public DateTime SubmittedAt { get; set; }
+        public string   ClientName  { get; set; } = string.Empty;
+        public string   AccountName { get; set; } = string.Empty;
+        public string   RequestType { get; set; } = string.Empty;
+        public string   Summary     { get; set; } = string.Empty;
+        public string   Priority    { get; set; } = "Normal";
+        public string   AssignedTo  { get; set; } = "—";
+        public string   Status      { get; set; } = "Open";
+    }
+}

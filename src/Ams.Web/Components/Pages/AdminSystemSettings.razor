@@ -1,0 +1,147 @@
+@page "/admin/system/settings"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>System Settings — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="3000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="System Settings"
+               Subtitle="Global platform configuration, feature toggles, regional defaults, and operational parameters"
+               Icon="bi-sliders2">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="ResetDefaults"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset Defaults</button>
+        <button class="um-btn um-btn-primary" @onclick="SaveAll"><i class="bi bi-check2" aria-hidden="true"></i> Save All Changes</button>
+    </Actions>
+</AppPageHeader>
+
+<div class="ss-layout">
+    <!-- Sidebar nav -->
+    <div class="ss-sidenav">
+        @foreach (var grp in _settingGroups)
+        {
+            <button class="ss-nav-item @(_activeGroup==grp.Key?"ss-nav-active":"")" @onclick="()=>_activeGroup=grp.Key">
+                <i class="bi bi-@grp.Icon" aria-hidden="true"></i> @grp.Label
+            </button>
+        }
+    </div>
+
+    <!-- Settings panel -->
+    <div class="ss-panel">
+        @if (ActiveGroup is not null)
+        {
+            <div class="ss-group-hdr">@ActiveGroup.Label</div>
+            @foreach (var s in ActiveGroup.Settings)
+            {
+                <div class="ss-setting-row">
+                    <div class="ss-setting-info">
+                        <div class="ss-setting-name">@s.Name</div>
+                        <div class="ss-setting-desc">@s.Description</div>
+                    </div>
+                    <div class="ss-setting-ctrl">
+                        @if (s.Type == "toggle")
+                        {
+                            <label class="ss-toggle">
+                                <input type="checkbox" @bind="s.BoolValue" />
+                                <span class="ss-toggle-thumb"></span>
+                            </label>
+                        }
+                        else if (s.Type == "select")
+                        {
+                            <select class="ss-sel" @bind="s.StringValue">
+                                @foreach (var opt in s.Options) { <option>@opt</option> }
+                            </select>
+                        }
+                        else if (s.Type == "number")
+                        {
+                            <input type="number" class="ss-num" @bind="s.NumValue" min="@s.Min" max="@s.Max" />
+                        }
+                        else
+                        {
+                            <input type="text" class="ss-txt" @bind="s.StringValue" placeholder="@s.Placeholder" />
+                        }
+                    </div>
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private SfToast? _toast;
+    private string _activeGroup = "general";
+
+    private SettingGroup? ActiveGroup => _settingGroups.FirstOrDefault(g => g.Key == _activeGroup);
+
+    private List<SettingGroup> _settingGroups = [];
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Administration","/admin"), new("System Settings",""));
+        _settingGroups =
+        [
+            new SettingGroup("general","General","gear",
+            [
+                new Setting("Platform Name","Display name shown in the browser title and UI header","text","AMS Enterprise","",[]),
+                new Setting("Support Email","Help desk email shown to end-users","text","","support@youragency.com",[]),
+                new Setting("Max Session Idle (min)","Users are signed out after this many minutes of inactivity","number","","",[]) { NumValue=30, Min=5, Max=480 },
+                new Setting("Default Time Zone","System-wide default time zone","select","","", ["UTC","America/Denver","America/Chicago","America/New_York","America/Los_Angeles"]) { StringValue="America/Denver" },
+                new Setting("Default Date Format","How dates are displayed","select","","",["MM/dd/yyyy","dd/MM/yyyy","yyyy-MM-dd"]) { StringValue="MM/dd/yyyy" },
+                new Setting("Enable Dark Mode Support","Allow users to switch to dark mode","toggle","","",[]),
+            ]),
+            new SettingGroup("email","Email & Notifications","envelope",
+            [
+                new Setting("SMTP Host","Outbound mail server hostname","text","","mail.youragency.com",[]),
+                new Setting("SMTP Port","Mail server port","number","","",[]){ NumValue=587, Min=1, Max=65535 },
+                new Setting("From Name","Display name for system emails","text","","AMS Notifications",[]),
+                new Setting("From Address","Reply-to address for system emails","text","","noreply@youragency.com",[]),
+                new Setting("Enable Email Queue","Batch and queue outbound email for rate limiting","toggle","","",[]) { BoolValue=true },
+                new Setting("Daily Digest Hour","Hour of day to send daily digest emails (24h)","number","","",[]){ NumValue=7, Min=0, Max=23 },
+            ]),
+            new SettingGroup("security","Security","shield-lock",
+            [
+                new Setting("Password Min Length","Minimum password length for all users","number","","",[]){ NumValue=10, Min=8, Max=64 },
+                new Setting("Require MFA","Enforce multi-factor authentication for all logins","toggle","","",[]) { BoolValue=true },
+                new Setting("MFA Grace Period (days)","Days new users have before MFA is mandatory","number","","",[]){ NumValue=3, Min=0, Max=30 },
+                new Setting("Session Audit Logging","Log all session start/end and IP changes","toggle","","",[]) { BoolValue=true },
+                new Setting("IP Allowlist","Comma-separated CIDRs that bypass MFA (leave blank to disable)","text","","",[]),
+            ]),
+            new SettingGroup("features","Feature Toggles","toggles",
+            [
+                new Setting("Enable Client Portal","Allow policyholders to log in to the client portal","toggle","","",[]) { BoolValue=true },
+                new Setting("Enable eSign Integration","Enable DocuSign/HelloSign e-signature workflows","toggle","","",[]) { BoolValue=true },
+                new Setting("Enable Carrier Downloads","Enable automated ACORD AL3 / IVANS carrier downloads","toggle","","",[]) { BoolValue=true },
+                new Setting("Enable AI Features","Enable AI Insight Center and AI Assistant modules","toggle","","",[]) { BoolValue=false },
+                new Setting("Enable Sandbox Mode","Allow sandbox/training mode for new user onboarding","toggle","","",[]) { BoolValue=false },
+                new Setting("Enable Download Auto-Match","Automatically match download records to accounts","toggle","","",[]) { BoolValue=true },
+            ]),
+            new SettingGroup("storage","Storage & Retention","hdd",
+            [
+                new Setting("Document Storage Provider","Where policy documents are stored","select","","",["Local","Azure Blob","AWS S3","Google Cloud"]) { StringValue="Azure Blob" },
+                new Setting("Document Retention (years)","Years to retain archived documents","number","","",[]){ NumValue=7, Min=1, Max=25 },
+                new Setting("Audit Log Retention (days)","Days to retain detailed audit logs","number","","",[]){ NumValue=365, Min=90, Max=3650 },
+                new Setting("Max Upload Size (MB)","Maximum file size for document uploads","number","","",[]){ NumValue=50, Min=1, Max=500 },
+            ]),
+        ];
+    }
+
+    private async Task SaveAll()
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "System settings saved successfully.", CssClass = "e-toast-success" });
+    }
+
+    private async Task ResetDefaults()
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Settings reset to platform defaults.", CssClass = "e-toast-warning" });
+    }
+
+    private sealed class SettingGroup(string key, string label, string icon, List<Setting> settings) { public string Key=key; public string Label=label; public string Icon=icon; public List<Setting> Settings=settings; }
+    private sealed class Setting(string name, string description, string type, string stringValue, string placeholder, IEnumerable<string> options)
+    {
+        public string Name=name; public string Description=description; public string Type=type;
+        public string StringValue=stringValue; public string Placeholder=placeholder;
+        public List<string> Options=[..options]; public bool BoolValue; public int NumValue; public int Min=0; public int Max=9999;
+    }
+}

@@ -1,35 +1,262 @@
 @page "/branches"
 @page "/admin/agency/branches"
+@namespace Ams.Web.Components.Pages.AgencyAdmin
 @inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Branches</PageTitle>
-<h1>Branches</h1>
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+<PageTitle>Branches — Agency Setup</PageTitle>
+
+<AppPageHeader Title="Branches"
+               Subtitle="Agency office locations and branch codes used system-wide"
+               Icon="bi-diagram-3-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Branch
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="br-kpi-strip">
+    <div class="br-kpi-card">
+        <span class="br-kpi-icon br-kpi-icon--total"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></span>
+        <div><div class="br-kpi-value">@_totalCount</div><div class="br-kpi-label">Total Branches</div></div>
+    </div>
+    <div class="br-kpi-card">
+        <span class="br-kpi-icon br-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="br-kpi-value">@_activeCount</div><div class="br-kpi-label">Active</div></div>
+    </div>
+    <div class="br-kpi-card">
+        <span class="br-kpi-icon br-kpi-icon--inactive"><i class="bi bi-dash-circle" aria-hidden="true"></i></span>
+        <div><div class="br-kpi-value">@(_totalCount - _activeCount)</div><div class="br-kpi-label">Inactive</div></div>
+    </div>
 </div>
-@if (_items is null) { <p>Loading...</p> }
-else {
-<SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="10"></GridPageSettings>
-    <GridColumns>
-        <GridColumn Field="@nameof(BranchDto.BranchCode)"    HeaderText="Code"    Width="130"></GridColumn>
-        <GridColumn Field="@nameof(BranchDto.BranchName)"    HeaderText="Name"    Width="220"></GridColumn>
-        <GridColumn Field="@nameof(BranchDto.City)"          HeaderText="City"    Width="140"></GridColumn>
-        <GridColumn Field="@nameof(BranchDto.StateProvince)" HeaderText="State"   Width="120"></GridColumn>
-        <GridColumn Field="@nameof(BranchDto.CountryCode)"   HeaderText="Country" Width="100"></GridColumn>
-        <GridColumn Field="@nameof(BranchDto.IsActive)"      HeaderText="Active"  Width="90"  DisplayAsCheckBox="true"></GridColumn>
-    </GridColumns>
-</SfGrid>
-}
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search branch name or code…">
+    <Filters>
+        <label class="br-toggle-label">
+            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
+            Active only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="BranchEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(BranchEntry.BranchCode)" HeaderText="Code" Width="130">
+                <Template>
+                    @{ var e = (BranchEntry)context; }
+                    <span class="br-mono">@e.BranchCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(BranchEntry.BranchName)" HeaderText="Branch Name" Width="220" />
+            <GridColumn Field="@nameof(BranchEntry.City)" HeaderText="City" Width="140" />
+            <GridColumn Field="@nameof(BranchEntry.StateProvince)" HeaderText="State" Width="110" />
+            <GridColumn Field="@nameof(BranchEntry.CountryCode)" HeaderText="Country" Width="100" />
+            <GridColumn Field="@nameof(BranchEntry.IsActive)" HeaderText="Status" Width="110">
+                <Template>
+                    @{ var e = (BranchEntry)context; }
+                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (BranchEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.BranchId == Guid.Empty ? "Add Branch" : "Edit Branch")"
+               OnConfirm="SaveBranchAsync"
+               OnClose="CloseDrawer">
+    <Content>
+        <div class="br-form">
+            <label class="br-form-label">Branch Code *</label>
+            <input class="um-input br-mono" @bind="_editModel.BranchCode" placeholder="e.g. HQ, WEST-01" />
+
+            <label class="br-form-label">Branch Name *</label>
+            <input class="um-input" @bind="_editModel.BranchName" placeholder="Full branch name" />
+
+            <label class="br-form-label">City</label>
+            <input class="um-input" @bind="_editModel.City" />
+
+            <label class="br-form-label">State / Province</label>
+            <input class="um-input" @bind="_editModel.StateProvince" placeholder="e.g. CA, TX" />
+
+            <label class="br-form-label">Country Code</label>
+            <input class="um-input br-mono" @bind="_editModel.CountryCode" placeholder="e.g. US" />
+
+            @if (_editModel.BranchId != Guid.Empty)
+            {
+                <label class="br-form-label">Active</label>
+                <SfSwitch @bind-Checked="_editModel.IsActive" />
+            }
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private string? _searchTerm;
-    private List<BranchDto>? _items;
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private SfToast? _toast;
+
+    private List<BranchEntry> _allEntries = [];
+    private List<BranchEntry> _entries    = [];
+
+    private bool _loading        = false;
+    private bool _showDrawer     = false;
+    private bool _filterActiveOnly = false;
+    private string _search       = string.Empty;
+
+    private int _totalCount  = 0;
+    private int _activeCount = 0;
+
+    private BranchEntry _editModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",        "/"),
+            new("Agency Setup", "/admin/agency/branches"),
+            new("Branches",    "/admin/agency/branches"));
+
+        await LoadAsync();
+    }
+
     private async Task LoadAsync()
     {
-        var result = await Api.SearchBranchesAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchBranchesAsync(_tenantId, _search, pageSize: 500);
+            _allEntries = result?.Items.Select(d => new BranchEntry
+            {
+                BranchId      = d.BranchId,
+                BranchCode    = d.BranchCode,
+                BranchName    = d.BranchName,
+                City          = d.City,
+                StateProvince = d.StateProvince,
+                CountryCode   = d.CountryCode,
+                IsActive      = d.IsActive,
+            }).ToList() ?? [];
+
+            _totalCount  = _allEntries.Count;
+            _activeCount = _allEntries.Count(e => e.IsActive);
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private Task OnSearchAsync(string _) => LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (!_filterActiveOnly || e.IsActive) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.BranchName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.BranchCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+        StateHasChanged();
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(BranchEntry e)
+    {
+        _editModel = new BranchEntry
+        {
+            BranchId      = e.BranchId,
+            BranchCode    = e.BranchCode,
+            BranchName    = e.BranchName,
+            City          = e.City,
+            StateProvince = e.StateProvince,
+            CountryCode   = e.CountryCode,
+            IsActive      = e.IsActive,
+        };
+        _showDrawer = true;
+    }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveBranchAsync()
+    {
+        try
+        {
+            if (_editModel.BranchId == Guid.Empty)
+            {
+                await Api.CreateBranchAsync(new(
+                    _tenantId,
+                    _editModel.BranchCode,
+                    _editModel.BranchName,
+                    _editModel.City,
+                    _editModel.StateProvince,
+                    _editModel.CountryCode));
+            }
+            else
+            {
+                await Api.UpdateBranchAsync(_editModel.BranchId, new(
+                    _editModel.BranchCode,
+                    _editModel.BranchName,
+                    _editModel.City,
+                    _editModel.StateProvince,
+                    _editModel.CountryCode,
+                    _editModel.IsActive));
+            }
+            _showDrawer = false;
+            await LoadAsync();
+            await ShowToastAsync("Branch saved.", "e-toast-success");
+        }
+        catch
+        {
+            await ShowToastAsync("Failed to save branch.", "e-toast-danger");
+        }
+    }
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private sealed class BranchEntry
+    {
+        public Guid    BranchId      { get; set; } = Guid.Empty;
+        public string  BranchCode    { get; set; } = string.Empty;
+        public string  BranchName    { get; set; } = string.Empty;
+        public string? City          { get; set; }
+        public string? StateProvince { get; set; }
+        public string? CountryCode   { get; set; }
+        public bool    IsActive      { get; set; } = true;
     }
 }

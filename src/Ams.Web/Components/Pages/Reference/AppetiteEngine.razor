@@ -1,0 +1,356 @@
+@page "/admin/reference/appetite"
+@namespace Ams.Web.Components.Pages.ReferenceAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Appetite Engine — Reference Data</PageTitle>
+
+<AppPageHeader Title="Appetite Engine"
+               Subtitle="Define underwriting appetite rules that match submissions to the best carriers and markets"
+               Icon="bi-lightning-charge-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Rule
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="ae-kpi-strip">
+    <div class="ae-kpi-card">
+        <span class="ae-kpi-icon ae-kpi-icon--total"><i class="bi bi-lightning-charge-fill" aria-hidden="true"></i></span>
+        <div><div class="ae-kpi-value">@_totalCount</div><div class="ae-kpi-label">Total Rules</div></div>
+    </div>
+    <div class="ae-kpi-card">
+        <span class="ae-kpi-icon ae-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="ae-kpi-value">@_activeCount</div><div class="ae-kpi-label">Active</div></div>
+    </div>
+    <div class="ae-kpi-card">
+        <span class="ae-kpi-icon ae-kpi-icon--preferred"><i class="bi bi-star-fill" aria-hidden="true"></i></span>
+        <div><div class="ae-kpi-value">@_preferredCount</div><div class="ae-kpi-label">Preferred</div></div>
+    </div>
+    <div class="ae-kpi-card">
+        <span class="ae-kpi-icon ae-kpi-icon--declined"><i class="bi bi-x-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="ae-kpi-value">@_declinedCount</div><div class="ae-kpi-label">Declined</div></div>
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search rule name, LOB or NAIC…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_appetiteLevelOptions"
+                        Placeholder="Any Appetite"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterLevel"
+                        ValueChanged="@((string v) => { _filterLevel = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_lobOptions"
+                        Placeholder="All Lines"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterLob"
+                        ValueChanged="@((string v) => { _filterLob = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+
+        <label class="ae-toggle-label">
+            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
+            Active only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="AppetiteEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(AppetiteEntry.RuleName)" HeaderText="Rule Name" Width="220" />
+            <GridColumn Field="@nameof(AppetiteEntry.LobCode)" HeaderText="LoB" Width="90">
+                <Template>
+                    @{ var e = (AppetiteEntry)context; }
+                    <span class="ae-mono">@e.LobCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AppetiteEntry.CarrierNaic)" HeaderText="Carrier NAIC" Width="130">
+                <Template>
+                    @{ var e = (AppetiteEntry)context; }
+                    <span class="ae-mono">@(e.CarrierNaic ?? "—")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AppetiteEntry.AppetiteLevel)" HeaderText="Appetite" Width="130">
+                <Template>
+                    @{ var e = (AppetiteEntry)context; }
+                    <span class="@AppetiteBadgeClass(e.AppetiteLevel)">@e.AppetiteLevel</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(AppetiteEntry.Priority)" HeaderText="Priority" Width="90" />
+            <GridColumn Field="@nameof(AppetiteEntry.IsActive)" HeaderText="Status" Width="110">
+                <Template>
+                    @{ var e = (AppetiteEntry)context; }
+                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (AppetiteEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.AppetiteRuleId == Guid.Empty ? "New Appetite Rule" : "Edit Appetite Rule")"
+               OnConfirm="SaveRuleAsync"
+               OnClose="CloseDrawer">
+    <Content>
+        <div class="ae-form">
+            <label class="ae-form-label">Rule Name *</label>
+            <input class="um-input" @bind="_editModel.RuleName" placeholder="Descriptive rule name" />
+
+            <label class="ae-form-label">Line of Business *</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_lobOptions"
+                            @bind-Value="_editModel.LobCode"
+                            Placeholder="Select line…"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="ae-form-label">Carrier NAIC</label>
+            <input class="um-input ae-mono" @bind="_editModel.CarrierNaic" placeholder="NAIC code (optional)" />
+
+            <label class="ae-form-label">Appetite Level *</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_appetiteLevelOptions"
+                            @bind-Value="_editModel.AppetiteLevel"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="ae-form-label">Priority <span class="ae-form-hint">(lower = higher priority)</span></label>
+            <input class="um-input ae-mono" type="number" @bind="_editModel.Priority" min="1" />
+
+            <label class="ae-form-label">Rule JSON</label>
+            <textarea class="um-input ae-mono" rows="5" @bind="_editModel.RuleJson" placeholder="{}" spellcheck="false"></textarea>
+
+            @if (_editModel.AppetiteRuleId != Guid.Empty)
+            {
+                <label class="ae-form-label">Active</label>
+                <SfSwitch @bind-Checked="_editModel.IsActive" />
+            }
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<AppetiteEntry> _allEntries = [];
+    private List<AppetiteEntry> _entries    = [];
+
+    private bool   _loading          = false;
+    private bool   _showDrawer       = false;
+    private bool   _filterActiveOnly = false;
+    private string _search           = string.Empty;
+    private string _filterLevel      = string.Empty;
+    private string _filterLob        = string.Empty;
+
+    private int _totalCount     = 0;
+    private int _activeCount    = 0;
+    private int _preferredCount = 0;
+    private int _declinedCount  = 0;
+
+    private AppetiteEntry _editModel = new();
+
+    private static readonly List<LabelValue> _appetiteLevelOptions =
+    [
+        new("Preferred", "Preferred"),
+        new("Standard",  "Standard"),
+        new("Limited",   "Limited"),
+        new("Declined",  "Declined"),
+    ];
+
+    private static readonly List<LabelValue> _lobOptions =
+    [
+        new("BOP", "BOP – Business Owners Policy"),
+        new("GL",  "GL – General Liability"),
+        new("WC",  "WC – Workers Comp"),
+        new("CA",  "CA – Commercial Auto"),
+        new("CPP", "CPP – Commercial Package"),
+        new("PL",  "PL – Professional Liability"),
+        new("CY",  "CY – Cyber Liability"),
+        new("IM",  "IM – Inland Marine"),
+        new("HO",  "HO – Homeowners"),
+        new("PAP", "PAP – Personal Auto"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",          "/"),
+            new("Reference Data","/admin/reference/appetite"),
+            new("Appetite Engine", "/admin/reference/appetite"));
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var result = await Api.SearchAppetiteRulesAsync(_tenantId, _search, pageSize: 500);
+            _allEntries = result?.Items.Select(d => new AppetiteEntry
+            {
+                AppetiteRuleId = d.AppetiteRuleId,
+                RuleName       = d.RuleName,
+                LobCode        = d.LobCode,
+                CarrierNaic    = d.CarrierNaic,
+                RuleJson       = d.RuleJson,
+                AppetiteLevel  = d.AppetiteLevel,
+                Priority       = d.Priority,
+                IsActive       = d.IsActive,
+            }).ToList() ?? [];
+
+            _totalCount     = _allEntries.Count;
+            _activeCount    = _allEntries.Count(e => e.IsActive);
+            _preferredCount = _allEntries.Count(e => e.AppetiteLevel == "Preferred");
+            _declinedCount  = _allEntries.Count(e => e.AppetiteLevel == "Declined");
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private Task OnSearchAsync(string _) => LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterLevel) || e.AppetiteLevel == _filterLevel) &&
+            (string.IsNullOrEmpty(_filterLob)   || e.LobCode == _filterLob) &&
+            (!_filterActiveOnly || e.IsActive) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.RuleName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.LobCode.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             (e.CarrierNaic ?? "").Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+        StateHasChanged();
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(AppetiteEntry e)
+    {
+        _editModel = new AppetiteEntry
+        {
+            AppetiteRuleId = e.AppetiteRuleId,
+            RuleName       = e.RuleName,
+            LobCode        = e.LobCode,
+            CarrierNaic    = e.CarrierNaic,
+            RuleJson       = e.RuleJson,
+            AppetiteLevel  = e.AppetiteLevel,
+            Priority       = e.Priority,
+            IsActive       = e.IsActive,
+        };
+        _showDrawer = true;
+    }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveRuleAsync()
+    {
+        try
+        {
+            if (_editModel.AppetiteRuleId == Guid.Empty)
+            {
+                await Api.CreateAppetiteRuleAsync(new(
+                    _tenantId,
+                    _editModel.RuleName,
+                    _editModel.LobCode,
+                    _editModel.CarrierNaic,
+                    _editModel.RuleJson,
+                    _editModel.AppetiteLevel,
+                    _editModel.Priority));
+            }
+            else
+            {
+                await Api.UpdateAppetiteRuleAsync(_editModel.AppetiteRuleId, new(
+                    _editModel.RuleName,
+                    _editModel.LobCode,
+                    _editModel.CarrierNaic,
+                    _editModel.RuleJson,
+                    _editModel.AppetiteLevel,
+                    _editModel.Priority,
+                    _editModel.IsActive));
+            }
+            _showDrawer = false;
+            await LoadAsync();
+            await ShowToastAsync("Appetite rule saved.", "e-toast-success");
+        }
+        catch
+        {
+            await ShowToastAsync("Failed to save appetite rule.", "e-toast-danger");
+        }
+    }
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string AppetiteBadgeClass(string level) => level switch
+    {
+        "Preferred" => "ae-badge ae-badge--preferred",
+        "Standard"  => "ae-badge ae-badge--standard",
+        "Limited"   => "ae-badge ae-badge--limited",
+        "Declined"  => "ae-badge ae-badge--declined",
+        _           => "ae-badge ae-badge--standard",
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class AppetiteEntry
+    {
+        public Guid    AppetiteRuleId { get; set; } = Guid.Empty;
+        public string  RuleName       { get; set; } = string.Empty;
+        public string  LobCode        { get; set; } = string.Empty;
+        public string? CarrierNaic    { get; set; }
+        public string  RuleJson       { get; set; } = "{}";
+        public string  AppetiteLevel  { get; set; } = "Standard";
+        public int     Priority       { get; set; } = 100;
+        public bool    IsActive       { get; set; } = true;
+    }
+}

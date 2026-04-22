@@ -1,0 +1,200 @@
+@page "/integrations/automation/designer"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Workflow Designer — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Workflow Designer"
+               Subtitle="Build no-code automation flows using triggers, conditions, and actions"
+               Icon="bi-diagram-3">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='()=>Nav.NavigateTo("/integrations/automation")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Back</button>
+        <button class="um-btn um-btn-ghost" @onclick="TestRun"><i class="bi bi-play-circle" aria-hidden="true"></i> Test Run</button>
+        <button class="um-btn um-btn-primary" @onclick="SaveWorkflow"><i class="bi bi-check2" aria-hidden="true"></i> Save &amp; Activate</button>
+    </Actions>
+</AppPageHeader>
+
+<div class="wfd-layout">
+    <!-- Left: Properties panel -->
+    <div class="wfd-props">
+        <div class="wfd-props-hdr">Workflow Properties</div>
+        <label class="wfd-label">Name</label>
+        <input class="wfd-input" @bind="_name" placeholder="e.g. Renewal 90-Day Reminder" />
+
+        <label class="wfd-label">Description</label>
+        <textarea class="wfd-input wfd-textarea" @bind="_desc" placeholder="Describe what this workflow does…"></textarea>
+
+        <label class="wfd-label">Trigger Event</label>
+        <select class="wfd-input" @bind="_selectedTrigger">
+            <option value="">— Select trigger —</option>
+            @foreach (var cat in _triggerGroups)
+            {
+                <optgroup label="@cat.Key">
+                    @foreach (var trig in cat.Value)
+                    {
+                        <option value="@trig.Event">@trig.Label</option>
+                    }
+                </optgroup>
+            }
+        </select>
+
+        @if (!string.IsNullOrEmpty(_selectedTrigger))
+        {
+            <div class="wfd-trigger-badge"><i class="bi bi-lightning-charge" aria-hidden="true"></i> @_selectedTrigger</div>
+        }
+
+        <div class="wfd-section-hdr">Filter / Conditions</div>
+        @foreach (var cond in _conditions)
+        {
+            <div class="wfd-cond-row">
+                <select class="wfd-input wfd-sel-sm" @bind="cond.Field">
+                    <option value="">Field…</option>
+                    <option value="days_to_expiry">days_to_expiry</option>
+                    <option value="reserve_amount">reserve_amount</option>
+                    <option value="premium_amount">premium_amount</option>
+                    <option value="is_exception">is_exception</option>
+                    <option value="days_inactive">days_inactive</option>
+                    <option value="pending_days">pending_days</option>
+                </select>
+                <select class="wfd-input wfd-sel-op">
+                    <option>=</option><option>!=</option><option>&gt;</option><option>&lt;</option><option>&gt;=</option><option>&lt;=</option>
+                </select>
+                <input class="wfd-input wfd-val-sm" @bind="cond.Value" placeholder="value" />
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="()=>_conditions.Remove(cond)"><i class="bi bi-x" aria-hidden="true"></i></button>
+            </div>
+        }
+        <button class="wfd-add-cond" @onclick="AddCondition"><i class="bi bi-plus" aria-hidden="true"></i> Add condition</button>
+    </div>
+
+    <!-- Center: Canvas -->
+    <div class="wfd-canvas">
+        <div class="wfd-canvas-hdr">
+            <span>Flow Canvas</span>
+            <div class="wfd-canvas-actions">
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="AddStep"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Step</button>
+            </div>
+        </div>
+
+        <!-- Trigger node -->
+        <div class="wfd-node wfd-node--trigger">
+            <div class="wfd-node-icon wfd-ni-blue"><i class="bi bi-lightning-charge" aria-hidden="true"></i></div>
+            <div class="wfd-node-body">
+                <div class="wfd-node-type">TRIGGER</div>
+                <div class="wfd-node-name">@(string.IsNullOrEmpty(_selectedTrigger) ? "Choose trigger event →" : _selectedTrigger)</div>
+            </div>
+        </div>
+
+        @foreach (var (step, idx) in _steps.Select((s, i) => (s, i)))
+        {
+            <div class="wfd-connector"><div class="wfd-line"></div><i class="bi bi-arrow-down wfd-arr" aria-hidden="true"></i></div>
+            <div class="wfd-node @(step.Type == "Condition" ? "wfd-node--cond" : step.Type == "Wait" ? "wfd-node--wait" : "wfd-node--action") @(_selectedStep==idx?"wfd-node--sel":"")"
+                 @onclick="()=>_selectedStep=idx">
+                <div class="wfd-node-icon @NodeIconCss(step.Type)"><i class="bi bi-@NodeIcon(step.Type)" aria-hidden="true"></i></div>
+                <div class="wfd-node-body">
+                    <div class="wfd-node-type">@step.Type.ToUpper()</div>
+                    <div class="wfd-node-name">@step.Label</div>
+                    @if (!string.IsNullOrEmpty(step.Config)) { <div class="wfd-node-cfg">@step.Config</div> }
+                </div>
+                <button class="wfd-node-del" @onclick:stopPropagation="true" @onclick="()=>_steps.RemoveAt(idx)" title="Remove"><i class="bi bi-x" aria-hidden="true"></i></button>
+            </div>
+        }
+
+        <div class="wfd-connector"><div class="wfd-line"></div></div>
+        <div class="wfd-add-node" @onclick="AddStep"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add step</div>
+    </div>
+
+    <!-- Right: Step palette / editor -->
+    <div class="wfd-palette">
+        <div class="wfd-props-hdr">Step Library</div>
+        <div class="wfd-pal-section">Actions</div>
+        @foreach (var tmpl in _stepTemplates.Where(s => s.Type == "Action"))
+        {
+            <div class="wfd-pal-item" @onclick="()=>AddTemplateStep(tmpl)">
+                <div class="wfd-pal-icon wfd-ni-blue"><i class="bi bi-@tmpl.Icon" aria-hidden="true"></i></div>
+                <div><div class="wfd-pal-name">@tmpl.Label</div><div class="wfd-pal-sub">@tmpl.Sub</div></div>
+            </div>
+        }
+        <div class="wfd-pal-section">Conditions &amp; Logic</div>
+        @foreach (var tmpl in _stepTemplates.Where(s => s.Type is "Condition" or "Wait"))
+        {
+            <div class="wfd-pal-item" @onclick="()=>AddTemplateStep(tmpl)">
+                <div class="wfd-pal-icon wfd-ni-amber"><i class="bi bi-@tmpl.Icon" aria-hidden="true"></i></div>
+                <div><div class="wfd-pal-name">@tmpl.Label</div><div class="wfd-pal-sub">@tmpl.Sub</div></div>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private SfToast? _toast;
+    private string _name = string.Empty;
+    private string _desc = string.Empty;
+    private string _selectedTrigger = string.Empty;
+    private int _selectedStep = -1;
+    private List<ConditionRow> _conditions = [];
+    private List<FlowStep> _steps = [];
+
+    private static readonly Dictionary<string, List<(string Event, string Label)>> _triggerGroups = new()
+    {
+        ["Renewals"]       = [("renewal.created","On renewal created"),("policy.lapsed","On policy lapsed")],
+        ["Claims"]         = [("claim.opened","On claim opened"),("claim.severity.changed","On claim severity changed")],
+        ["Payments"]       = [("payment.received","On payment received"),("payment.failed","On payment failed")],
+        ["Downloads"]      = [("download.received","On new download received"),("download.exception.created","On download exception created")],
+        ["Documents"]      = [("document.missing_required","On missing document"),("document.esign.timeout","On pending e-sign timeout"),("document.signed","On document signed")],
+        ["Leads"]          = [("lead.inactive","On lead inactive"),("lead.created","On lead created")],
+        ["Communications"] = [("appointment.scheduled","On appointment scheduled")],
+    };
+
+    private static readonly List<StepTemplate> _stepTemplates =
+    [
+        new StepTemplate("Action","Send Email",         "envelope",          "Send a templated email to the policyholder, producer, or custom address"),
+        new StepTemplate("Action","Send SMS",           "phone",             "Send a text message using the configured messaging provider"),
+        new StepTemplate("Action","Create Task",        "check2-square",     "Create a task and assign to a user, role, or queue"),
+        new StepTemplate("Action","Create Activity",    "lightning-charge",  "Log an activity or note on the account or policy"),
+        new StepTemplate("Action","Send Notification",  "bell",              "Send an in-app notification to one or more users"),
+        new StepTemplate("Action","Update Record",      "pencil-square",     "Update a field on the triggering record"),
+        new StepTemplate("Action","Call Webhook",       "link-45deg",        "POST payload to an external URL or integration endpoint"),
+        new StepTemplate("Action","Start Sub-Workflow", "diagram-3",         "Trigger another workflow as a sub-flow"),
+        new StepTemplate("Condition","Branch (If/Else)","signpost-split",    "Add an if/else branch based on field values or conditions"),
+        new StepTemplate("Wait","Wait / Delay",         "hourglass-split",   "Pause the flow for a set duration before continuing"),
+    ];
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Integrations","/integrations"), new("Automation","/integrations/automation"), new("Designer",""));
+        // Pre-populate with renewal example
+        _name = "New Workflow";
+        _steps =
+        [
+            new FlowStep { Type="Condition", Label="Check days to expiry", Config="days_to_expiry = 90" },
+            new FlowStep { Type="Action",    Label="Create task for producer", Config="Template: Renewal Due 90 Days" },
+            new FlowStep { Type="Action",    Label="Send renewal email to client", Config="Template: Renewal Notice 90d" },
+        ];
+    }
+
+    private void AddCondition() => _conditions.Add(new ConditionRow());
+    private void AddStep() => _steps.Add(new FlowStep { Type = "Action", Label = "New action" });
+    private void AddTemplateStep(StepTemplate t) => _steps.Add(new FlowStep { Type = t.Type, Label = t.Label, Config = t.Sub });
+
+    private async Task SaveWorkflow()
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Workflow '{_name}' saved and activated.", CssClass = "e-toast-success" });
+    }
+
+    private async Task TestRun()
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Test run started — check Job History for results.", CssClass = "e-toast-info" });
+    }
+
+    private static string NodeIcon(string type) => type switch { "Condition"=>"signpost-split","Wait"=>"hourglass-split",_=>"lightning-charge" };
+    private static string NodeIconCss(string type) => type switch { "Condition"=>"wfd-ni-amber","Wait"=>"wfd-ni-purple",_=>"wfd-ni-blue" };
+
+    private sealed class ConditionRow { public string Field{get;set;}=string.Empty; public string Op{get;set;}="="; public string Value{get;set;}=string.Empty; }
+    private sealed class FlowStep { public string Type{get;set;}=string.Empty; public string Label{get;set;}=string.Empty; public string Config{get;set;}=string.Empty; }
+    private sealed record StepTemplate(string Type, string Label, string Icon, string Sub);
+}

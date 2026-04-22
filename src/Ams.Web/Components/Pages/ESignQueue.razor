@@ -2,6 +2,8 @@
 @namespace Ams.Web.Components.Pages
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject ApiClient Api
+@using Ams.Application.Features.Documents
 
 <PageTitle>E-Signature Queue — AMS</PageTitle>
 
@@ -170,7 +172,7 @@
                                 <i class="bi bi-download" aria-hidden="true"></i>
                             </button>
                         }
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo($"/documents/{r5.DocumentId}")'
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo($"/documents/{r5.ESignRequestId}")'
                                 title="View document">
                             <i class="bi bi-arrow-up-right-square" aria-hidden="true"></i>
                         </button>
@@ -190,6 +192,8 @@
     private ESignRow? _voidTarget;
     private string? _voidReason;
 
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
     private readonly List<string> _docOptions = [
         "ACORD 25 — Certificate of Liability",
         "ACORD 126 — Commercial GL Section",
@@ -198,21 +202,8 @@
         "Cancellation Notice — POL-2024-88204"
     ];
 
-    private List<ESignRow> _items =
-    [
-        new(Guid.NewGuid(), "ACORD 25 — Certificate of Liability",  "POL-2025-00142", "Sarah Chen",      "schen@email.com",    "Urgent", "Sent",     false, DateTime.Now.AddDays(-3), DateTime.Today.AddDays(-1), null),
-        new(Guid.NewGuid(), "Policy Endorsement — BI Limit Change", "POL-2025-00089", "Marcus Johnson",  "mjohnson@email.com", "High",   "Viewed",   false, DateTime.Now.AddDays(-2), DateTime.Today.AddDays(2),  null),
-        new(Guid.NewGuid(), "Renewal Agreement FY2025",             "POL-2024-99310", "Aiko Tanaka",     "atanaka@corp.com",   "Normal", "Signed",   false, DateTime.Now.AddDays(-5), DateTime.Today.AddDays(-2), DateTime.Now.AddDays(-3)),
-        new(Guid.NewGuid(), "ACORD 126 — GL Section",               "POL-2025-00142", "David Park",      "dpark@email.com",    "High",   "Sent",     false, DateTime.Now.AddDays(-1), DateTime.Today.AddDays(4),  null),
-        new(Guid.NewGuid(), "Cancellation Notice",                  "POL-2024-88204", "Linda Okafor",    "lokafor@email.com",  "Urgent", "Declined", false, DateTime.Now.AddDays(-4), DateTime.Today.AddDays(-2), null),
-        new(Guid.NewGuid(), "Commercial Property Application",      "POL-2025-00217", "Robert Kim",      "rkim@biz.com",       "Normal", "Signed",   false, DateTime.Now.AddDays(-8), DateTime.Today.AddDays(-5), DateTime.Now.AddDays(-7)),
-        new(Guid.NewGuid(), "Umbrella Policy Agreement",            "POL-2024-88555", "Maria Torres",    "mtorres@email.com",  "High",   "Expired",  false, DateTime.Now.AddDays(-15),DateTime.Today.AddDays(-8), null),
-        new(Guid.NewGuid(), "ACORD 36 — Binder",                   "POL-2025-00319", "James Wilson",    "jwilson@email.com",  "Urgent", "Sent",     false, DateTime.Now.AddHours(-5),DateTime.Today,             null),
-        new(Guid.NewGuid(), "Workers Comp Application",             "POL-2024-88204", "Priya Sharma",    "psharma@email.com",  "Normal", "Voided",   false, DateTime.Now.AddDays(-6), DateTime.Today.AddDays(-4), null),
-        new(Guid.NewGuid(), "Homeowner Renewal Packet",             "POL-2025-00089", "Carlos Rivera",   "crivera@email.com",  "Normal", "Signed",   false, DateTime.Now.AddDays(-3), DateTime.Today.AddDays(1),  DateTime.Now.AddDays(-1)),
-    ];
+    private List<ESignRow> _items = [];
 
-    // Mark overdue rows
     private List<ESignRow> Items => _items.Select(r =>
         r.IsOverdue == false && r.DueDate < DateTime.Today && r.Status is "Sent" or "Viewed"
             ? r with { IsOverdue = true }
@@ -223,15 +214,34 @@
         (string.IsNullOrEmpty(_filterStatus)   || r.Status   == _filterStatus) &&
         (string.IsNullOrEmpty(_filterPriority) || r.Priority == _filterPriority));
 
-    protected override void OnInitialized() =>
+    protected override async Task OnInitializedAsync()
+    {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Documents","/documents"), new("E-Sign Queue",""));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var dtos = await Api.GetESignRequestsAsync(_tenantId);
+        _items = (dtos ?? []).Select(d => new ESignRow(
+            d.ESignRequestId, d.Document, d.PolicyNumber,
+            d.SignerName, d.SignerEmail, d.Priority, d.Status,
+            d.IsOverdue, d.SentDate, d.DueDate, d.CompletedDate)).ToList();
+    }
 
     async Task SendRequestAsync()
     {
-        _items.Add(new(Guid.NewGuid(), _reqDoc ?? "New Document", "—", _reqSigner ?? "—", _reqEmail ?? "—",
-            _reqPriority ?? "Normal", "Sent", false, DateTime.Now, _reqDue, null));
+        var docId = Guid.NewGuid(); // placeholder until doc selector is wired to real DocumentId
+        await Api.SendESignRequestAsync(new SendESignRequest(
+            _tenantId, docId,
+            _reqSigner ?? string.Empty,
+            _reqEmail ?? string.Empty,
+            _reqDue,
+            _reqPriority ?? "Normal",
+            _reqMessage));
         _showRequest = false;
         _reqDoc = _reqSigner = _reqEmail = _reqMessage = null; _reqPriority = "Normal";
+        await LoadAsync();
         await _toast.ShowAsync(new ToastModel { Content = "Signature request sent.", CssClass = "e-toast-success" });
     }
 
@@ -240,21 +250,26 @@
     async Task ConfirmVoidAsync()
     {
         if (_voidTarget is null) return;
-        var idx = _items.IndexOf(_voidTarget);
-        if (idx >= 0) _items[idx] = _voidTarget with { Status = "Voided" };
+        await Api.VoidESignRequestAsync(_voidTarget.ESignRequestId, _voidReason);
         _showVoid = false;
+        await LoadAsync();
         await _toast.ShowAsync(new ToastModel { Content = "Request voided.", CssClass = "e-toast-warning" });
     }
 
-    async Task Remind(ESignRow r) =>
+    async Task Remind(ESignRow r)
+    {
+        await Api.RemindESignRequestAsync(r.ESignRequestId);
         await _toast.ShowAsync(new ToastModel { Content = $"Reminder sent to {r.SignerName}.", CssClass = "e-toast-success" });
+    }
 
     async Task RemindAll()
     {
-        var n = Items.Count(r => r.Status is "Sent" or "Viewed");
-        await _toast.ShowAsync(new ToastModel { Content = $"Reminders sent to {n} pending signers.", CssClass = "e-toast-success" });
+        var pending = Items.Where(r => r.Status is "Sent" or "Viewed").ToList();
+        foreach (var r in pending)
+            await Api.RemindESignRequestAsync(r.ESignRequestId);
+        await _toast.ShowAsync(new ToastModel { Content = $"Reminders sent to {pending.Count} pending signers.", CssClass = "e-toast-success" });
     }
 
-    record ESignRow(Guid DocumentId, string Document, string? PolicyNumber, string SignerName, string SignerEmail,
+    record ESignRow(Guid ESignRequestId, string Document, string? PolicyNumber, string SignerName, string SignerEmail,
                     string Priority, string Status, bool IsOverdue, DateTime SentDate, DateTime DueDate, DateTime? CompletedDate);
 }

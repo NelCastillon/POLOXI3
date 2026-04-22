@@ -1,0 +1,260 @@
+@page "/portal/documents"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Portal Document Center — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Portal Document Center"
+               Subtitle="Manage documents shared with insured clients through the self-service portal"
+               Icon="bi-folder2-open">
+    <Actions>
+        <button class="um-btn um-btn-primary" @onclick="() => _showUpload = true">
+            <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Share Document
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="pd-kpi-strip">
+    <div class="pd-kpi-card">
+        <div class="pd-kpi-icon pd-ki-blue"><i class="bi bi-file-earmark" aria-hidden="true"></i></div>
+        <div><div class="pd-kv">@_docs.Count</div><div class="pd-kl">Total Documents</div></div>
+    </div>
+    <div class="pd-kpi-card">
+        <div class="pd-kpi-icon pd-ki-green"><i class="bi bi-eye" aria-hidden="true"></i></div>
+        <div><div class="pd-kv">@_docs.Sum(d => d.ViewCount)</div><div class="pd-kl">Total Views</div></div>
+    </div>
+    <div class="pd-kpi-card">
+        <div class="pd-kpi-icon pd-ki-amber"><i class="bi bi-download" aria-hidden="true"></i></div>
+        <div><div class="pd-kv">@_docs.Sum(d => d.DownloadCount)</div><div class="pd-kl">Downloads</div></div>
+    </div>
+    <div class="pd-kpi-card">
+        <div class="pd-kpi-icon pd-ki-green"><i class="bi bi-people" aria-hidden="true"></i></div>
+        <div><div class="pd-kv">@_docs.Select(d => d.AccountName).Distinct().Count()</div><div class="pd-kl">Accounts with Docs</div></div>
+    </div>
+</div>
+
+<!-- Filter bar -->
+<div class="pd-filter-bar">
+    <div class="pd-search-wrap">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input class="pd-search" placeholder="Search documents or accounts…" @bind="_search" @bind:event="oninput" />
+    </div>
+    <select class="pd-sel" @bind="_catFilter">
+        <option value="">All Categories</option>
+        <option value="Policy">Policy</option>
+        <option value="Certificate">Certificate</option>
+        <option value="ID Card">ID Card</option>
+        <option value="Invoice">Invoice</option>
+        <option value="Form">Form</option>
+        <option value="Claims">Claims</option>
+    </select>
+    <select class="pd-sel" @bind="_visFilter">
+        <option value="">All Visibility</option>
+        <option value="Shared">Shared</option>
+        <option value="Agency Only">Agency Only</option>
+    </select>
+</div>
+
+<!-- Grid -->
+<div class="pd-grid-wrap">
+    <SfGrid TValue="PortalDoc" DataSource="Filtered" AllowSorting="true" AllowFiltering="true"
+            EnableHover="true" RowHeight="56">
+        <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+        <GridColumns>
+            <GridColumn HeaderText="Document" MinWidth="220" Field="@nameof(PortalDoc.Name)">
+                <Template>
+                    @{ var d = (PortalDoc)context; }
+                    <div class="pd-doc-cell">
+                        <div class="pd-doc-icon @DocIconCss(d.Category)"><i class="bi @DocIcon(d.Category)" aria-hidden="true"></i></div>
+                        <div>
+                            <div class="pd-doc-name">@d.Name</div>
+                            <div class="pd-doc-size">@d.FileType · @d.FileSizeKb KB</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PortalDoc.AccountName)" HeaderText="Account" MinWidth="160" />
+            <GridColumn Field="@nameof(PortalDoc.Category)" HeaderText="Category" Width="130">
+                <Template>@{ var d = (PortalDoc)context; }<span class="@CatBadge(d.Category)">@d.Category</span></Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PortalDoc.Visibility)" HeaderText="Visibility" Width="120">
+                <Template>@{ var d = (PortalDoc)context; }<span class="@VisBadge(d.Visibility)">@d.Visibility</span></Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PortalDoc.SharedAt)" HeaderText="Shared" Width="130" Type="ColumnType.DateTime" Format="MMM d, yyyy" />
+            <GridColumn Field="@nameof(PortalDoc.ViewCount)" HeaderText="Views" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+            <GridColumn Field="@nameof(PortalDoc.DownloadCount)" HeaderText="Downloads" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+            <GridColumn HeaderText="" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    @{ var d = (PortalDoc)context; }
+                    <div class="pd-row-actions">
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Toggle visibility"
+                                @onclick="() => ToggleVisibility(d)">
+                            <i class="bi @(d.Visibility=="Shared" ? "bi-eye-slash" : "bi-eye")" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Remove" @onclick="() => RemoveDoc(d)">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Share document dialog -->
+<SfDialog @bind-Visible="_showUpload" Width="480px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="pd-dlg-hdr"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Share Document</span></Header>
+        <Content>
+            <div class="pd-dlg-body">
+                <div class="pd-dlg-row">
+                    <SfTextBox Placeholder="Document name *" @bind-Value="_newDoc.Name" />
+                    <SfDropDownList TValue="string" TItem="Lv" DataSource="_catOpts" Placeholder="Category" Width="100%" @bind-Value="_newDoc.Category">
+                        <DropDownListFieldSettings Value="V" Text="L" />
+                    </SfDropDownList>
+                </div>
+                <div class="pd-dlg-row">
+                    <SfTextBox Placeholder="Account name" @bind-Value="_newDoc.AccountName" />
+                    <SfDropDownList TValue="string" TItem="Lv" DataSource="_visOpts" Placeholder="Visibility" Width="100%" @bind-Value="_newDoc.Visibility">
+                        <DropDownListFieldSettings Value="V" Text="L" />
+                    </SfDropDownList>
+                </div>
+                <div class="pd-drop-zone">
+                    <i class="bi bi-cloud-arrow-up pd-drop-icon" aria-hidden="true"></i>
+                    <span>Drag &amp; drop file here or <strong>browse</strong></span>
+                    <span class="pd-drop-hint">PDF, DOCX, XLSX — max 25 MB</span>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="pd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseUpload">Cancel</button>
+                <button class="um-btn um-btn-primary"
+                        disabled="@(string.IsNullOrEmpty(_newDoc.Name))"
+                        @onclick="CommitShare">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Share
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private SfToast? _toast;
+    private string _search = string.Empty;
+    private string _catFilter = string.Empty;
+    private string _visFilter = string.Empty;
+    private bool _showUpload;
+    private PortalDoc _newDoc = new();
+
+    private List<PortalDoc> _docs = [];
+
+    private static readonly List<Lv> _catOpts =
+    [
+        new("Policy","Policy"), new("Certificate","Certificate"), new("ID Card","ID Card"),
+        new("Invoice","Invoice"), new("Form","Form"), new("Claims","Claims"),
+    ];
+    private static readonly List<Lv> _visOpts =
+    [
+        new("Shared","Shared"), new("Agency Only","Agency Only"),
+    ];
+
+    private IEnumerable<PortalDoc> Filtered => _docs.Where(d =>
+        (string.IsNullOrEmpty(_search) || d.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || d.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_catFilter) || d.Category == _catFilter) &&
+        (string.IsNullOrEmpty(_visFilter) || d.Visibility == _visFilter));
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Documents",""));
+        _docs =
+        [
+            new PortalDoc { Id=1,  Name="Commercial GL Declarations — 2025",        AccountName="Ortega Construction",   Category="Policy",      FileType="PDF", FileSizeKb=284, Visibility="Shared",     SharedAt=new DateTime(2025,1,10), ViewCount=6,  DownloadCount=3 },
+            new PortalDoc { Id=2,  Name="Auto ID Card — Vega Foods Fleet",           AccountName="Vega Foods Inc",        Category="ID Card",     FileType="PDF", FileSizeKb=44,  Visibility="Shared",     SharedAt=new DateTime(2025,2,1),  ViewCount=14, DownloadCount=9 },
+            new PortalDoc { Id=3,  Name="COI — Acme General (Ortega)",              AccountName="Ortega Construction",   Category="Certificate", FileType="PDF", FileSizeKb=62,  Visibility="Shared",     SharedAt=new DateTime(2025,3,5),  ViewCount=3,  DownloadCount=3 },
+            new PortalDoc { Id=4,  Name="Invoice #INV-2025-0481",                   AccountName="Vega Foods Inc",        Category="Invoice",     FileType="PDF", FileSizeKb=38,  Visibility="Shared",     SharedAt=new DateTime(2025,4,1),  ViewCount=2,  DownloadCount=1 },
+            new PortalDoc { Id=5,  Name="Homeowners Policy — Sullivan HH",          AccountName="Sullivan Manufacturing",Category="Policy",      FileType="PDF", FileSizeKb=312, Visibility="Shared",     SharedAt=new DateTime(2025,1,15), ViewCount=4,  DownloadCount=2 },
+            new PortalDoc { Id=6,  Name="Renewal Questionnaire — 2026",             AccountName="TechVault Inc",         Category="Form",        FileType="PDF", FileSizeKb=98,  Visibility="Shared",     SharedAt=new DateTime(2025,3,20), ViewCount=1,  DownloadCount=0 },
+            new PortalDoc { Id=7,  Name="Claim #CLM-2025-0042 — Adjuster Report",  AccountName="Ortega Construction",   Category="Claims",      FileType="PDF", FileSizeKb=450, Visibility="Agency Only", SharedAt=new DateTime(2025,2,28), ViewCount=0,  DownloadCount=0 },
+            new PortalDoc { Id=8,  Name="Auto Policy Declarations — Nguyen HH",    AccountName="Nguyen Family HH",      Category="Policy",      FileType="PDF", FileSizeKb=190, Visibility="Shared",     SharedAt=new DateTime(2025,1,22), ViewCount=8,  DownloadCount=5 },
+        ];
+    }
+
+    private void ToggleVisibility(PortalDoc d) =>
+        d.Visibility = d.Visibility == "Shared" ? "Agency Only" : "Shared";
+
+    private async Task CommitShare()
+    {
+        _newDoc.Id = _docs.Count + 1;
+        _newDoc.SharedAt = DateTime.Today;
+        _newDoc.FileType = "PDF";
+        _newDoc.FileSizeKb = 120;
+        _docs.Add(_newDoc);
+        CloseUpload();
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = $"Document '{_newDoc.Name}' shared to portal.", CssClass = "e-toast-success" });
+        _newDoc = new();
+    }
+
+    private async Task RemoveDoc(PortalDoc d)
+    {
+        _docs.Remove(d);
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = "Document removed from portal.", CssClass = "e-toast-success" });
+    }
+
+    private void CloseUpload() { _showUpload = false; _newDoc = new(); }
+
+    private static string DocIcon(string cat) => cat switch
+    {
+        "Certificate" => "bi-file-earmark-text",
+        "ID Card"     => "bi-person-vcard",
+        "Invoice"     => "bi-receipt",
+        "Form"        => "bi-clipboard",
+        "Claims"      => "bi-exclamation-circle",
+        _             => "bi-file-earmark-pdf",
+    };
+
+    private static string DocIconCss(string cat) => cat switch
+    {
+        "Certificate" => "pd-di-green",
+        "ID Card"     => "pd-di-blue",
+        "Invoice"     => "pd-di-amber",
+        "Claims"      => "pd-di-red",
+        _             => "pd-di-blue",
+    };
+
+    private static string CatBadge(string c) => c switch
+    {
+        "Policy"      => "pd-cat pd-cat--policy",
+        "Certificate" => "pd-cat pd-cat--cert",
+        "ID Card"     => "pd-cat pd-cat--id",
+        "Invoice"     => "pd-cat pd-cat--inv",
+        "Claims"      => "pd-cat pd-cat--claims",
+        _             => "pd-cat",
+    };
+
+    private static string VisBadge(string v) =>
+        v == "Shared" ? "pd-vis pd-vis--shared" : "pd-vis pd-vis--agency";
+
+    private sealed class PortalDoc
+    {
+        public int      Id            { get; set; }
+        public string   Name          { get; set; } = string.Empty;
+        public string   AccountName   { get; set; } = string.Empty;
+        public string   Category      { get; set; } = "Policy";
+        public string   FileType      { get; set; } = "PDF";
+        public int      FileSizeKb    { get; set; }
+        public string   Visibility    { get; set; } = "Shared";
+        public DateTime SharedAt      { get; set; }
+        public int      ViewCount     { get; set; }
+        public int      DownloadCount { get; set; }
+    }
+
+    private sealed record Lv(string V, string L);
+}

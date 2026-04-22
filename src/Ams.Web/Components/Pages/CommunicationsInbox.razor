@@ -2,6 +2,8 @@
 @namespace Ams.Web.Components.Pages
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject ApiClient Api
+@using Ams.Application.Features.Communications
 
 <PageTitle>Communications Inbox — AMS</PageTitle>
 
@@ -702,171 +704,57 @@
         _             => "All Inbox"
     };
 
+    // ── Tenant (placeholder until auth context is wired) ──────────
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
     // ── Lifecycle ─────────────────────────────────────────────────
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Communications","/communications/inbox"), new("Inbox",""));
-        BuildStub();
+        await LoadAsync();
     }
 
-    void BuildStub()
+    private async Task LoadAsync()
     {
-        _messages.Clear();
-        _messages.AddRange(new[]
+        var dtos = await Api.GetMessageThreadsAsync(_tenantId);
+        _messages = (dtos ?? []).Select(MapThread).ToList();
+    }
+
+    static ConversationThread MapThread(MessageThreadDto d) => new()
+    {
+        Id            = d.ThreadId,
+        AccountName   = d.AccountName,
+        AccountId     = d.AccountId ?? string.Empty,
+        ContactName   = d.ContactName,
+        ContactEmail  = d.ContactEmail ?? string.Empty,
+        ContactPhone  = d.ContactPhone ?? string.Empty,
+        Channel       = d.Channel,
+        Subject       = d.Subject,
+        BodyPreview   = d.BodyPreview,
+        Status        = d.Status,
+        Priority      = d.Priority,
+        AssignedTo    = d.AssignedTo ?? string.Empty,
+        Producer      = d.Producer ?? string.Empty,
+        Branch        = d.Branch ?? string.Empty,
+        IsRead        = d.IsRead,
+        IsEscalated   = d.IsEscalated,
+        OptedOut      = d.OptedOut,
+        MessageCount  = d.MessageCount,
+        LastActivityAt= d.LastActivityAt,
+        Sentiment     = d.Sentiment,
+        CsrOwner      = d.CsrOwner ?? string.Empty,
+        AiSummary     = d.AiSummary ?? string.Empty,
+        Thread        = d.Messages.Select(m => new ThreadMessage
         {
-            // threads below — decorated after AddRange
-            Thread("Sullivan Mfg. LLC",    "Robert Sullivan",  "rjsullivan@email.com", "(713) 555-0101",
-                "Email",    "RE: Policy Renewal — GL 2025",               "Thank you for sending that over. I had a quick question about the aggregate limit…",
-                "Open",     "High",   "Sarah Kim",   "Gulf Coast", "Maria Santos",  false, DateTime.Now.AddHours(-1.2),
-                new[]
-                {
-                    Msg("Robert Sullivan",     "Email", "Inbound",  "Thanks for the renewal proposal. Could you clarify the aggregate limit under the GL policy? We had a claim last year and want to make sure we're properly covered going forward.", DateTime.Now.AddDays(-2).AddHours(-3)),
-                    Msg("Sarah Kim",           "Email", "Outbound", "Hi Robert — great question. The current aggregate is $2M with a $5K deductible per occurrence. Given last year's claim, I'd actually recommend we look at bumping the aggregate to $3M. I'll send a revised quote by end of day.", DateTime.Now.AddDays(-2).AddHours(-1)),
-                    Msg("Robert Sullivan",     "Email", "Inbound",  "Thank you for sending that over. I had a quick question about the aggregate limit — is it possible to get a split limit structure? Our CFO is asking.", DateTime.Now.AddHours(-1.2)),
-                }),
-
-            Thread("Bridgewater Hotels",   "Patricia Howe",    "phowe@bwhotels.com",  "(212) 555-0188",
-                "SMS",     "Claim status for CLM-2025-00131",             "Hi, just checking in — any update on our claim? The adjuster hasn't called back.",
-                "Open",     "Urgent", "Maria Santos","Northeast",  "Diana Perez",   true,  DateTime.Now.AddMinutes(-25),
-                new[]
-                {
-                    Msg("AMS Auto-Bot",        "SMS",   "Outbound", "Hi Patricia, this is AMS Insurance. We received your claim CLM-2025-00131 and a handler will be in touch within 24 hours.", DateTime.Now.AddDays(-1).AddHours(-5), automated:true),
-                    Msg("Patricia Howe",       "SMS",   "Inbound",  "Hi, just checking in — any update on our claim? The adjuster hasn't called back and it's been 3 days.", DateTime.Now.AddMinutes(-25)),
-                }),
-
-            Thread("Dallas Roofing LLC",   "Marcus Webb",      "mwebb@dallasroofing.com","(214) 555-0242",
-                "Portal Message","Certificate of Insurance Request",       "We need a COI for our new project at 1400 Main St, Dallas — contractor requiring $1M GL.",
-                "Pending",  "Normal", "Kevin Obi",   "North Texas","James Park",    false, DateTime.Now.AddHours(-3.5),
-                new[]
-                {
-                    Msg("Marcus Webb",         "Portal Message","Inbound",  "We need a Certificate of Insurance for our new project site at 1400 Main Street, Dallas, TX 75201. The general contractor requires $1M GL coverage. Please send asap — project starts Monday.", DateTime.Now.AddHours(-3.5)),
-                    Msg("Kevin Obi",           "Portal Message","Outbound", "Hi Marcus — got it. I'll pull the COI from Travelers and email it to you within the hour. Please confirm the certificate holder name.", DateTime.Now.AddHours(-2.8)),
-                }),
-
-            Thread("Apex Medical Group",   "Sandra Kim",       "sandrakim@apexmed.com","(832) 555-0377",
-                "Email",    "Malpractice renewal — premium increase query","We received the renewal quote and the premium went up 28%. Can we discuss options?",
-                "Open",     "High",   "",            "Gulf Coast", "Maria Santos",  false, DateTime.Now.AddHours(-6),
-                new[]
-                {
-                    Msg("Sandra Kim",          "Email", "Inbound",  "We received the renewal quote for our Medical Malpractice policy and the premium has increased by 28%. This is significantly above what we budgeted. Can we schedule a call to discuss options — remarketing, higher deductible, coverage modifications?", DateTime.Now.AddHours(-6)),
-                }),
-
-            Thread("Metro Freight Co.",    "Dale Foster",      "dfoster@metrofreight.com","(469) 555-0519",
-                "SMS",     "Auto fleet — adding 3 trucks to policy",      "Hi team, we just purchased 3 new Kenworth T680s. Need to add them to the fleet policy.",
-                "Resolved", "Normal", "James Park",  "North Texas","Robert Yamamoto",false,DateTime.Now.AddDays(-1).AddHours(-2),
-                new[]
-                {
-                    Msg("Dale Foster",         "SMS",   "Inbound",  "Hi team, we just purchased 3 new Kenworth T680s — 2024 models. Need to get them added to the fleet policy asap so we can put them on the road.", DateTime.Now.AddDays(-2).AddHours(-4)),
-                    Msg("James Park",          "SMS",   "Outbound", "Got it Dale! Can you send me the VINs and garaging addresses? I'll get them added same day.", DateTime.Now.AddDays(-2).AddHours(-3)),
-                    Msg("Dale Foster",         "SMS",   "Inbound",  "Sending the VINs over email — all garaged in Irving, TX 75039.", DateTime.Now.AddDays(-2).AddHours(-2.5)),
-                    Msg("James Park",          "Email", "Outbound", "Hi Dale — fleet endorsement confirmed. All 3 trucks added effective today. Certificates attached.", DateTime.Now.AddDays(-1).AddHours(-2), attachments: new[]{"Fleet_Endorsement_Metro_2025.pdf","COI_MetroFreight_Fleet.pdf"}),
-                }),
-
-            Thread("Harbor View Marina",   "Tony Marcellis",   "tony@harborviewmarina.com","(361) 555-0633",
-                "Internal Note","CAT Claim — team note re inspection scheduling","Lisa: inspector confirmed for Thurs 9am. Insured is anxious — please call ahead.",
-                "Open",     "High",   "Lisa Chen",   "Gulf Coast", "Diana Perez",   false, DateTime.Now.AddHours(-0.5),
-                new[]
-                {
-                    Msg("Kevin Obi",           "Internal Note","Outbound","@Lisa — CAT field inspector Ramirez confirmed for Thursday 9am at the marina. Tony (insured) has been calling daily, very anxious. Please call him before the inspection to manage expectations. Estimated damage is $115K.", DateTime.Now.AddHours(-0.5)),
-                }),
-
-            Thread("Greenleaf Nurseries",  "Amy Torres",       "amy@greenleafnurs.com", "(512) 555-0744",
-                "Email",    "Coverage question — equipment breakdown",     "Hi, we had a large commercial refrigeration unit fail last week. Are we covered under our policy?",
-                "Open",     "Normal", "Lisa Chen",   "Central TX", "Maria Santos",  false, DateTime.Now.AddDays(-2).AddHours(-5),
-                new[]
-                {
-                    Msg("Amy Torres",          "Email", "Inbound",  "Hi Lisa, we had a large commercial refrigeration unit fail last Tuesday — caused significant inventory loss. I wanted to check if we have equipment breakdown coverage under our Commercial Property policy. Can you look into this?", DateTime.Now.AddDays(-2).AddHours(-5)),
-                    Msg("AMS Auto-Bot",        "Email", "Outbound", "Hi Amy, thank you for reaching out to AMS Insurance. We received your message and a specialist will review your coverage and respond within 1 business day.", DateTime.Now.AddDays(-2).AddHours(-5).AddMinutes(2), automated:true),
-                    Msg("Lisa Chen",           "Email", "Outbound", "Hi Amy — I pulled your policy and you do have Equipment Breakdown coverage with a $5K deductible. I'm filing a claim on your behalf now. Claim number will be assigned today.", DateTime.Now.AddDays(-1).AddHours(-4)),
-                }),
-
-            Thread("Pacific Coast Builders","Jorge Medina",    "jmedina@pcbuilders.com","(619) 555-0812",
-                "Portal Message","Workers Comp audit documents request",   "The WC audit is coming up — auditor is asking for payroll records by Jan 31.",
-                "Pending",  "Normal", "",            "Southwest",  "Robert Yamamoto",false,DateTime.Now.AddDays(-1).AddHours(-1),
-                new[]
-                {
-                    Msg("WC Audit System",     "Portal Message","Outbound","Dear Jorge, your Workers Compensation policy audit is scheduled for February 10, 2025. Please upload your 2024 payroll records, employee classification list, and subcontractor certificates of insurance by January 31. Visit the portal to upload.", DateTime.Now.AddDays(-3), automated:true),
-                    Msg("Jorge Medina",        "Portal Message","Inbound", "We received the audit notice. The auditor is asking for payroll records by Jan 31. Is there an extension available? Our HR is short-staffed this month.", DateTime.Now.AddDays(-1).AddHours(-1)),
-                }),
-
-            Thread("Sunrise Healthcare",   "Nadia Patel",      "nadia@sunrisehc.com",  "(713) 555-0921",
-                "SMS",     "Attorney rep — claim CLM-2025-00160",         "My attorney advised me not to discuss the claim directly. Please contact John Cruz at (832) 555-1111.",
-                "Escalated","Urgent", "Kevin Obi",   "Gulf Coast", "Diana Perez",   true,  DateTime.Now.AddMinutes(-40),
-                new[]
-                {
-                    Msg("Kevin Obi",           "SMS",   "Outbound", "Hi Nadia, this is Kevin from AMS Insurance following up on claim CLM-2025-00160. Can we schedule a brief call?", DateTime.Now.AddHours(-2)),
-                    Msg("Nadia Patel",         "SMS",   "Inbound",  "My attorney advised me not to discuss the claim directly. Please contact John Cruz at (832) 555-1111.", DateTime.Now.AddMinutes(-40)),
-                }),
-        });
-
-        // ── Intelligence decoration ───────────────────────────────
-        _messages[0].Sentiment = "Negative";  _messages[0].CsrOwner = "Sarah Kim";
-        _messages[0].AiSummary = "Client has questions about GL aggregate structure after a prior claim. CFO is requesting a split-limit option. Renewal proposal sent; awaiting revised quote approval.";
-
-        _messages[1].Sentiment = "Urgent";    _messages[1].CsrOwner = "Maria Santos";
-        _messages[1].AiSummary = "Insured frustrated — adjuster has not contacted her despite a 24-hour promise made 3 days ago. Auto-acknowledgement was sent but no live agent follow-up. High escalation risk.";
-
-        _messages[2].Sentiment = "Neutral";   _messages[2].CsrOwner = "Kevin Obi";
-        _messages[2].AiSummary = "COI request for 1400 Main St, Dallas — $1M GL required by general contractor. Agent responded and requested certificate holder details. Project starts Monday.";
-
-        _messages[3].Sentiment = "Negative";  _messages[3].CsrOwner = "Maria Santos";
-        _messages[3].AiSummary = "28% premium increase on medical malpractice renewal has alarmed client. Awaiting agent outreach to discuss options: remarketing, higher deductible, coverage adjustment. No reply sent yet — aging.";
-
-        _messages[4].Sentiment = "Positive";  _messages[4].CsrOwner = "James Park";
-        _messages[4].AiSummary = "Fleet endorsement completed successfully. Three 2024 Kenworth T680s added to Metro Freight Co. commercial auto policy. COI and endorsement delivered. Thread resolved.";
-
-        _messages[5].Sentiment = "Neutral";   _messages[5].CsrOwner = "Lisa Chen";
-        _messages[5].AiSummary = "Internal staff coordination. CAT inspector Ramirez confirmed for Thursday 9am at Harbor View Marina. Insured is anxious — advance call recommended before site visit.";
-
-        _messages[6].Sentiment = "Positive";  _messages[6].CsrOwner = "Lisa Chen";
-        _messages[6].AiSummary = "Equipment breakdown claim initiated for refrigeration unit failure with significant inventory loss. Client confirmed coverage with $5K deductible. Claim number pending.";
-
-        _messages[7].Sentiment = "Neutral";   _messages[7].CsrOwner = "Robert Yamamoto";
-        _messages[7].AiSummary = "WC annual audit notice sent. Client requesting extension due to HR staffing shortage. No agent response yet — unanswered inbound requires action before Jan 31 deadline.";
-
-        _messages[8].Sentiment = "Urgent";    _messages[8].CsrOwner = "Kevin Obi";
-        _messages[8].AiSummary = "Insured has retained legal counsel for CLM-2025-00160. All future communication must route through attorney John Cruz at (832) 555-1111. Legal hold in effect. Escalated to supervisor Diana Perez.";
-        _messages[8].OptedOut  = true;  // Direct contact opted out — route through attorney
-    }
-
-    static ConversationThread Thread(
-        string account, string contact, string email, string phone,
-        string channel, string subject, string preview,
-        string status, string priority, string assignedTo, string branch, string producer,
-        bool escalated, DateTime lastActivity, ThreadMessage[] messages) => new()
-    {
-        Id            = Guid.NewGuid(),
-        AccountName   = account,
-        ContactName   = contact,
-        ContactEmail  = email,
-        ContactPhone  = phone,
-        Channel       = channel,
-        Subject       = subject,
-        BodyPreview   = preview,
-        Status        = status,
-        Priority      = priority,
-        AssignedTo    = assignedTo,
-        Branch        = branch,
-        Producer      = producer,
-        IsEscalated   = escalated,
-        IsRead        = false,
-        MessageCount  = messages.Length,
-        LastActivityAt= lastActivity,
-        Thread        = messages.ToList()
-    };
-
-    static ThreadMessage Msg(
-        string sender, string channel, string direction, string body, DateTime sentAt,
-        bool automated = false, string[] attachments = null!, string deliveryStatus = "Delivered") => new()
-    {
-        SenderName    = sender,
-        Channel       = channel,
-        Direction     = direction,
-        Body          = body,
-        SentAt        = sentAt,
-        IsAutomated   = automated,
-        Attachments   = (attachments ?? Array.Empty<string>()).ToList(),
-        DeliveryStatus= deliveryStatus
+            SenderName     = m.SenderName,
+            Channel        = m.Channel,
+            Direction      = m.Direction,
+            Body           = m.Body,
+            SentAt         = m.SentAt,
+            DeliveryStatus = m.DeliveryStatus,
+            IsAutomated    = m.IsAutomated,
+            Attachments    = m.Attachments.ToList()
+        }).ToList()
     };
 
     // ── Interactions ──────────────────────────────────────────────
@@ -882,23 +770,16 @@
     async Task SendMessage()
     {
         if (string.IsNullOrWhiteSpace(_compose.Body)) return;
-        _messages.Insert(0, new ConversationThread
-        {
-            Id             = Guid.NewGuid(),
-            AccountName    = _compose.Account,
-            Channel        = _compose.Channel,
-            Subject        = string.IsNullOrEmpty(_compose.Subject) ? "(No subject)" : _compose.Subject,
-            BodyPreview    = _compose.Body[..Math.Min(100,_compose.Body.Length)],
-            Status         = "Open",
-            Priority       = _compose.Priority,
-            AssignedTo     = _currentUser,
-            IsRead         = true,
-            MessageCount   = 1,
-            LastActivityAt = DateTime.Now,
-            Thread         = new List<ThreadMessage> { Msg(_currentUser, _compose.Channel, "Outbound", _compose.Body, DateTime.Now) }
-        });
+        await Api.SendMessageAsync(new SendMessageRequest(
+            _tenantId, _compose.Account, null, _compose.Channel,
+            string.IsNullOrEmpty(_compose.Subject) ? "(No subject)" : _compose.Subject,
+            _compose.Body, _compose.Priority, _currentUser, _compose.Template));
         _showComposeDlg = false;
-        await _toast.ShowAsync(new ToastModel { Title="Sent", Content=$"{_compose.Channel} sent to {_compose.Account}.", CssClass="e-toast-success" });
+        var account = _compose.Account;
+        var channel  = _compose.Channel;
+        _compose = new();
+        await LoadAsync();
+        await _toast.ShowAsync(new ToastModel { Title="Sent", Content=$"{channel} sent to {account}.", CssClass="e-toast-success" });
     }
 
     async Task SaveDraft()
@@ -910,13 +791,13 @@
     async Task SendReply()
     {
         if (_selected is null || string.IsNullOrWhiteSpace(_reply.Body)) return;
-        _selected.Thread.Add(Msg(_currentUser, _reply.Channel, "Outbound", _reply.Body, DateTime.Now));
-        _selected.MessageCount++;
-        _selected.LastActivityAt = DateTime.Now;
-        _selected.Status = "Pending";
-        var body = _reply.Body;
+        await Api.ReplyMessageAsync(_selected.Id,
+            new ReplyMessageRequest(_selected.Id, _currentUser, _reply.Channel, _reply.Body));
+        var ch = _reply.Channel;
         _reply = new ReplyForm { Channel = _selected.Channel };
-        await _toast.ShowAsync(new ToastModel { Title="Reply Sent", Content=$"{_selected.Channel} reply sent.", CssClass="e-toast-success" });
+        await LoadAsync();
+        _selected = _messages.FirstOrDefault(m => m.Id == _selected?.Id);
+        await _toast.ShowAsync(new ToastModel { Title="Reply Sent", Content=$"{ch} reply sent.", CssClass="e-toast-success" });
     }
 
     void DiscardReply() { _reply = new ReplyForm { Channel = _selected?.Channel ?? "Email" }; }
@@ -924,6 +805,7 @@
     async Task MarkRead()
     {
         if (_selected is null) return;
+        await Api.MarkThreadReadAsync(_selected.Id);
         _selected.IsRead = true;
         await _toast.ShowAsync(new ToastModel { Title="Marked Read", Content="Conversation marked as read.", CssClass="e-toast-info" });
     }
@@ -931,6 +813,7 @@
     async Task ResolveConversation()
     {
         if (_selected is null) return;
+        await Api.ResolveThreadAsync(_selected.Id);
         _selected.Status = "Resolved";
         await _toast.ShowAsync(new ToastModel { Title="Resolved", Content=$"Conversation with {_selected.AccountName} resolved.", CssClass="e-toast-success" });
     }
@@ -938,23 +821,25 @@
     async Task ConfirmAssign()
     {
         if (_selected is null || string.IsNullOrEmpty(_assignTo)) return;
-        _selected.AssignedTo = _assignTo;
-        _selected.Thread.Add(Msg("System", "Internal Note", "Outbound", $"Assigned to {_assignTo}.{(string.IsNullOrEmpty(_assignNote) ? "" : " Note: " + _assignNote)}", DateTime.Now));
-        _selected.MessageCount++;
+        await Api.AssignThreadAsync(_selected.Id, new AssignThreadRequest(_selected.Id, _assignTo, _assignNote));
         _showAssignDlg = false;
-        await _toast.ShowAsync(new ToastModel { Title="Assigned", Content=$"Conversation assigned to {_assignTo}.", CssClass="e-toast-success" });
+        var assignedTo = _assignTo;
+        _assignTo = ""; _assignNote = "";
+        await LoadAsync();
+        _selected = _messages.FirstOrDefault(m => m.Id == _selected?.Id);
+        await _toast.ShowAsync(new ToastModel { Title="Assigned", Content=$"Conversation assigned to {assignedTo}.", CssClass="e-toast-success" });
     }
 
     async Task ConfirmEscalate()
     {
         if (_selected is null || string.IsNullOrEmpty(_escalateTo)) return;
-        _selected.IsEscalated = true;
-        _selected.Priority    = "Urgent";
-        _selected.AssignedTo  = _escalateTo;
-        _selected.Thread.Add(Msg("System", "Internal Note", "Outbound", $"Escalated to {_escalateTo}. Reason: {_escalateReason}.{(string.IsNullOrEmpty(_escalateNote) ? "" : " " + _escalateNote)}", DateTime.Now));
-        _selected.MessageCount++;
+        await Api.EscalateThreadAsync(_selected.Id, new EscalateThreadRequest(_selected.Id, _escalateTo, _escalateReason, _escalateNote));
         _showEscalateDlg = false;
-        await _toast.ShowAsync(new ToastModel { Title="Escalated", Content=$"Conversation escalated to {_escalateTo}.", CssClass="e-toast-warning" });
+        var escalatedTo = _escalateTo;
+        _escalateTo = ""; _escalateReason = ""; _escalateNote = "";
+        await LoadAsync();
+        _selected = _messages.FirstOrDefault(m => m.Id == _selected?.Id);
+        await _toast.ShowAsync(new ToastModel { Title="Escalated", Content=$"Conversation escalated to {escalatedTo}.", CssClass="e-toast-warning" });
     }
 
     void ApplyTemplate()
@@ -971,7 +856,7 @@
         };
     }
 
-    void Refresh() => BuildStub();
+    async Task Refresh() => await LoadAsync();
     void ResetFilters() { _search=""; _channelFilter=""; _statusFilter=""; _priorityFilter=""; }
 
     // ── Helpers ───────────────────────────────────────────────────

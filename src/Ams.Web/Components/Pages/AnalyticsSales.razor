@@ -1,0 +1,142 @@
+@page "/analytics/sales"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Sales Analytics — AMS</PageTitle>
+
+<AppPageHeader Title="Sales Analytics"
+               Subtitle="New business production, pipeline conversion, LOB mix, and producer-level sales performance"
+               Icon="bi-graph-up-arrow">
+    <Actions>
+        <SfDropDownButton Content="Period: MTD" CssClass="um-btn um-btn-ghost">
+            <DropDownButtonItems>
+                <DropDownButtonItem Text="Month to Date" />
+                <DropDownButtonItem Text="Quarter to Date" />
+                <DropDownButtonItem Text="Year to Date" />
+                <DropDownButtonItem Text="Custom Range…" />
+            </DropDownButtonItems>
+        </SfDropDownButton>
+        <button class="um-btn um-btn-ghost"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Top KPIs -->
+<div class="sa-kpi-strip">
+    @foreach (var k in _kpis)
+    {
+        <div class="sa-kpi-card">
+            <div class="sa-kpi-icon @k.IconCss"><i class="bi @k.Icon" aria-hidden="true"></i></div>
+            <div>
+                <div class="sa-kv">@k.Value</div>
+                <div class="sa-kl">@k.Label</div>
+                <div class="sa-kd @(k.Delta >= 0 ? "sa-kd--up":"sa-kd--dn")">
+                    <i class="bi @(k.Delta>=0?"bi-arrow-up-short":"bi-arrow-down-short")" aria-hidden="true"></i> @Math.Abs(k.Delta)% vs prior period
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<!-- Two-col layout -->
+<div class="sa-two-col">
+
+    <!-- New Business by LOB -->
+    <div class="sa-panel">
+        <div class="sa-panel-hdr">New Business by Line of Business</div>
+        <div class="sa-bar-chart">
+            @foreach (var lob in _lobData)
+            {
+                <div class="sa-bar-row">
+                    <div class="sa-bar-lbl">@lob.Lob</div>
+                    <div class="sa-bar-track">
+                        <div class="sa-bar-fill sa-bar-fill--blue" style="width:@(lob.Pct)%"></div>
+                    </div>
+                    <div class="sa-bar-val">@lob.Premium</div>
+                    <div class="sa-bar-count">@lob.Count policies</div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- Pipeline funnel -->
+    <div class="sa-panel">
+        <div class="sa-panel-hdr">Sales Pipeline Funnel</div>
+        <div class="sa-funnel">
+            @foreach (var s in _funnel)
+            {
+                <div class="sa-funnel-row">
+                    <div class="sa-funnel-label">@s.Stage</div>
+                    <div class="sa-funnel-bar-wrap">
+                        <div class="sa-funnel-bar" style="width:@(s.Pct)%; background:@s.Color"></div>
+                    </div>
+                    <div class="sa-funnel-count">@s.Count <span class="sa-funnel-val">@s.Value</span></div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- Top Producers -->
+    <div class="sa-panel sa-panel--wide">
+        <div class="sa-panel-hdr">Top Producers — New Business MTD</div>
+        <SfGrid TValue="ProducerRow" DataSource="_producers" AllowSorting="true" EnableHover="true" RowHeight="48">
+            <GridColumns>
+                <GridColumn Field="@nameof(ProducerRow.Name)"    HeaderText="Producer" MinWidth="160" />
+                <GridColumn Field="@nameof(ProducerRow.NewPolicies)" HeaderText="Policies" Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                <GridColumn Field="@nameof(ProducerRow.Premium)"     HeaderText="Premium" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>@{ var p = (ProducerRow)context; }<span class="sa-mono">@p.Premium</span></Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(ProducerRow.ConvRate)" HeaderText="Conv. Rate" Width="105" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>@{ var p = (ProducerRow)context; }
+                        <div class="sa-conv-cell">
+                            <div class="sa-conv-bar" style="width:@p.ConvRate%"></div>
+                            <span>@p.ConvRate%</span>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(ProducerRow.GoalPct)" HeaderText="vs Goal" Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>@{ var p = (ProducerRow)context; }<span class="@(p.GoalPct>=100?"sa-goal-on":"sa-goal-off")">@p.GoalPct%</span></Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+
+    <!-- Trend sparklines -->
+    <div class="sa-panel sa-panel--wide">
+        <div class="sa-panel-hdr">Monthly New Business Trend (Last 12 Months)</div>
+        <div class="sa-trend-grid">
+            @foreach (var (month, val) in _trend)
+            {
+                var maxVal = _trend.Max(t => t.Val);
+                <div class="sa-trend-col">
+                    <div class="sa-trend-bar-wrap">
+                        <div class="sa-trend-bar" style="height:@((int)(val * 100.0 / maxVal))%"></div>
+                    </div>
+                    <div class="sa-trend-lbl">@month</div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private record KpiCard(string Label, string Value, int Delta, string Icon, string IconCss);
+    private record LobRow(string Lob, string Premium, int Count, int Pct);
+    private record FunnelStage(string Stage, int Count, string Value, int Pct, string Color);
+    private sealed class ProducerRow { public string Name{get;set;}=string.Empty; public int NewPolicies{get;set;} public string Premium{get;set;}=string.Empty; public int ConvRate{get;set;} public int GoalPct{get;set;} }
+
+    private List<KpiCard> _kpis = [];
+    private List<LobRow> _lobData = [];
+    private List<FunnelStage> _funnel = [];
+    private List<ProducerRow> _producers = [];
+    private List<(string Month, int Val)> _trend = [];
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Analytics","/analytics/reports"), new("Sales",""));
+        _kpis = [new("New Business Premium","$482,100",12,"bi-graph-up-arrow","sa-ki-blue"), new("New Policies Written","214",8,"bi-file-earmark-plus","sa-ki-green"), new("Avg Policy Premium","$2,253",4,"bi-currency-dollar","sa-ki-blue"), new("Conversion Rate","68%",3,"bi-funnel","sa-ki-amber"), new("Quotes Issued","314",-2,"bi-file-text","sa-ki-purple")];
+        _lobData = [new("Commercial GL","$162,400",64,84), new("Commercial Auto","$98,700",41,51), new("BOP","$74,200",38,38), new("Workers Comp","$68,100",27,35), new("Professional Liab","$44,300",18,23), new("Personal Lines","$34,400",26,18)];
+        _funnel = [new("Prospects",842,"$8.4M",100,"#dbeafe"), new("Leads",412,"$4.1M",49,"#93c5fd"), new("Quotes",314,"$3.1M",37,"#3b82f6"), new("Proposals",198,"$2.0M",24,"#1d4ed8"), new("Bound",143,"$1.4M",17,"#1e3a8a")];
+        _producers = [new ProducerRow{Name="Beth Nakamura",NewPolicies=38,Premium="$94,200",ConvRate=74,GoalPct=112}, new ProducerRow{Name="Tom Reyes",NewPolicies=31,Premium="$78,400",ConvRate=68,GoalPct=94}, new ProducerRow{Name="Lisa Park",NewPolicies=28,Premium="$71,100",ConvRate=65,GoalPct=88}, new ProducerRow{Name="Marcus Webb",NewPolicies=24,Premium="$59,800",ConvRate=61,GoalPct=75}, new ProducerRow{Name="Diana Ruiz",NewPolicies=22,Premium="$51,300",ConvRate=58,GoalPct=68}];
+        _trend = [("Jan",310),("Feb",290),("Mar",340),("Apr",380),("May",420),("Jun",395),("Jul",410),("Aug",440),("Sep",480),("Oct",462),("Nov",490),("Dec",482)];
+    }
+}

@@ -55,6 +55,10 @@ public sealed class DatabaseMigrator
         new("0015_Compliance_PolicyDocument_create", Migration0015_CompliancePolicyDocumentCreate),
         new("0016_Compliance_PolicyAudience_create", Migration0016_CompliancePolicyAudienceCreate),
         new("0017_Core_Tenant_registry_columns",   Migration0017_CoreTenantRegistryColumns),
+        new("0018_Agency_AgencyProfile_create",        Migration0018_AgencyAgencyProfileCreate),
+        new("0019_Agency_Carrier_create",                Migration0019_AgencyCarrierCreate),
+        new("0020_Agency_LineOfBusiness_create",         Migration0020_AgencyLineOfBusinessCreate),
+        new("0021_Agency_AppetiteRule_create",           Migration0021_AgencyAppetiteRuleCreate),
     ];
 
     // ── 0001 — Add extended profile/security columns to IAM.[User] ────
@@ -824,6 +828,205 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Core.Tena
 
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Core.Tenant') AND name = N'GoLiveDateUtc')
     ALTER TABLE Core.Tenant ADD GoLiveDateUtc DATETIME2 NULL;
+";
+
+    // ── 0018 — Create Agency schema + Agency.AgencyProfile table ─────────
+    private const string Migration0018_AgencyAgencyProfileCreate = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency')
+    EXEC('CREATE SCHEMA [Agency]');
+
+IF OBJECT_ID(N'Agency.AgencyProfile', N'U') IS NULL
+    CREATE TABLE Agency.AgencyProfile (
+        AgencyProfileId  UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        TenantId         UNIQUEIDENTIFIER NOT NULL,
+        DbaName          NVARCHAR(300)    NULL,
+        Npn              NVARCHAR(50)     NULL,
+        Fein             NVARCHAR(50)     NULL,
+        EntityType       NVARCHAR(100)    NULL,
+        LicenseNumber    NVARCHAR(100)    NULL,
+        DomicileState    NVARCHAR(10)     NULL,
+        Phone            NVARCHAR(50)     NULL,
+        Email            NVARCHAR(300)    NULL,
+        Website          NVARCHAR(500)    NULL,
+        AddressLine1     NVARCHAR(500)    NULL,
+        AddressLine2     NVARCHAR(500)    NULL,
+        City             NVARCHAR(200)    NULL,
+        StateProvince    NVARCHAR(200)    NULL,
+        PostalCode       NVARCHAR(20)     NULL,
+        CountryCode      NVARCHAR(10)     NULL,
+        EoCarrier        NVARCHAR(200)    NULL,
+        EoPolicyNumber   NVARCHAR(100)    NULL,
+        EoCoverageLimit  DECIMAL(18,2)    NULL,
+        EoExpiryDate     DATETIME2        NULL,
+        CreatedDateUtc   DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+        ModifiedDateUtc  DATETIME2        NULL,
+        IsDeleted        BIT              NOT NULL DEFAULT 0
+    );
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'DbaName')
+    ALTER TABLE Agency.AgencyProfile ADD DbaName NVARCHAR(300) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'Npn')
+    ALTER TABLE Agency.AgencyProfile ADD Npn NVARCHAR(50) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'Fein')
+    ALTER TABLE Agency.AgencyProfile ADD Fein NVARCHAR(50) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'EntityType')
+    ALTER TABLE Agency.AgencyProfile ADD EntityType NVARCHAR(100) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'LicenseNumber')
+    ALTER TABLE Agency.AgencyProfile ADD LicenseNumber NVARCHAR(100) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'DomicileState')
+    ALTER TABLE Agency.AgencyProfile ADD DomicileState NVARCHAR(10) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'Phone')
+    ALTER TABLE Agency.AgencyProfile ADD Phone NVARCHAR(50) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'Email')
+    ALTER TABLE Agency.AgencyProfile ADD Email NVARCHAR(300) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'Website')
+    ALTER TABLE Agency.AgencyProfile ADD Website NVARCHAR(500) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'AddressLine1')
+    ALTER TABLE Agency.AgencyProfile ADD AddressLine1 NVARCHAR(500) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'AddressLine2')
+    ALTER TABLE Agency.AgencyProfile ADD AddressLine2 NVARCHAR(500) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'City')
+    ALTER TABLE Agency.AgencyProfile ADD City NVARCHAR(200) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'StateProvince')
+    ALTER TABLE Agency.AgencyProfile ADD StateProvince NVARCHAR(200) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'PostalCode')
+    ALTER TABLE Agency.AgencyProfile ADD PostalCode NVARCHAR(20) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'CountryCode')
+    ALTER TABLE Agency.AgencyProfile ADD CountryCode NVARCHAR(10) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'EoCarrier')
+    ALTER TABLE Agency.AgencyProfile ADD EoCarrier NVARCHAR(200) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'EoPolicyNumber')
+    ALTER TABLE Agency.AgencyProfile ADD EoPolicyNumber NVARCHAR(100) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'EoCoverageLimit')
+    ALTER TABLE Agency.AgencyProfile ADD EoCoverageLimit DECIMAL(18,2) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'EoExpiryDate')
+    ALTER TABLE Agency.AgencyProfile ADD EoExpiryDate DATETIME2 NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'ModifiedDateUtc')
+    ALTER TABLE Agency.AgencyProfile ADD ModifiedDateUtc DATETIME2 NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AgencyProfile') AND name = N'IsDeleted')
+    ALTER TABLE Agency.AgencyProfile ADD IsDeleted BIT NOT NULL DEFAULT 0;
+";
+
+    // ── 0019 — Create Agency.Carrier table ─────────────────────────────
+    private const string Migration0019_AgencyCarrierCreate = @"
+IF OBJECT_ID(N'Agency.Carrier', N'U') IS NULL
+    CREATE TABLE Agency.Carrier (
+        CarrierId        UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        TenantId         UNIQUEIDENTIFIER NOT NULL,
+        CarrierName      NVARCHAR(300)    NOT NULL,
+        NaicCode         NVARCHAR(20)     NULL,
+        AmBestRating     NVARCHAR(20)     NULL,
+        IsAdmitted       BIT              NOT NULL DEFAULT 0,
+        AppointmentDate  DATETIME2        NULL,
+        IsActive         BIT              NOT NULL DEFAULT 1,
+        CreatedDateUtc   DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+        ModifiedDateUtc  DATETIME2        NULL,
+        IsDeleted        BIT              NOT NULL DEFAULT 0
+    );
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.Carrier') AND name = N'NaicCode')
+    ALTER TABLE Agency.Carrier ADD NaicCode NVARCHAR(20) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.Carrier') AND name = N'AmBestRating')
+    ALTER TABLE Agency.Carrier ADD AmBestRating NVARCHAR(20) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.Carrier') AND name = N'IsAdmitted')
+    ALTER TABLE Agency.Carrier ADD IsAdmitted BIT NOT NULL DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.Carrier') AND name = N'AppointmentDate')
+    ALTER TABLE Agency.Carrier ADD AppointmentDate DATETIME2 NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.Carrier') AND name = N'ModifiedDateUtc')
+    ALTER TABLE Agency.Carrier ADD ModifiedDateUtc DATETIME2 NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.Carrier') AND name = N'IsDeleted')
+    ALTER TABLE Agency.Carrier ADD IsDeleted BIT NOT NULL DEFAULT 0;
+";
+
+    // ── 0020 — Create Agency.LineOfBusiness table ──────────────────────
+    private const string Migration0020_AgencyLineOfBusinessCreate = @"
+IF OBJECT_ID(N'Agency.LineOfBusiness', N'U') IS NULL
+    CREATE TABLE Agency.LineOfBusiness (
+        LobId            UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        TenantId         UNIQUEIDENTIFIER NOT NULL,
+        LobCode          NVARCHAR(50)     NOT NULL,
+        LobName          NVARCHAR(300)    NOT NULL,
+        Category         NVARCHAR(100)    NULL,
+        Description      NVARCHAR(1000)   NULL,
+        IsActive         BIT              NOT NULL DEFAULT 1,
+        CreatedDateUtc   DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+        ModifiedDateUtc  DATETIME2        NULL,
+        IsDeleted        BIT              NOT NULL DEFAULT 0
+    );
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.LineOfBusiness') AND name = N'Category')
+    ALTER TABLE Agency.LineOfBusiness ADD Category NVARCHAR(100) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.LineOfBusiness') AND name = N'Description')
+    ALTER TABLE Agency.LineOfBusiness ADD Description NVARCHAR(1000) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.LineOfBusiness') AND name = N'ModifiedDateUtc')
+    ALTER TABLE Agency.LineOfBusiness ADD ModifiedDateUtc DATETIME2 NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.LineOfBusiness') AND name = N'IsDeleted')
+    ALTER TABLE Agency.LineOfBusiness ADD IsDeleted BIT NOT NULL DEFAULT 0;
+";
+
+    // ── 0021 — Create Agency.AppetiteRule table ────────────────────────
+    private const string Migration0021_AgencyAppetiteRuleCreate = @"
+IF OBJECT_ID(N'Agency.AppetiteRule', N'U') IS NULL
+    CREATE TABLE Agency.AppetiteRule (
+        AppetiteRuleId   UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        TenantId         UNIQUEIDENTIFIER NOT NULL,
+        RuleName         NVARCHAR(300)    NOT NULL,
+        LobCode          NVARCHAR(50)     NULL,
+        CarrierNaic      NVARCHAR(20)     NULL,
+        RuleJson         NVARCHAR(MAX)    NULL,
+        AppetiteLevel    NVARCHAR(50)     NULL,
+        Priority         INT              NOT NULL DEFAULT 0,
+        IsActive         BIT              NOT NULL DEFAULT 1,
+        CreatedDateUtc   DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+        ModifiedDateUtc  DATETIME2        NULL,
+        IsDeleted        BIT              NOT NULL DEFAULT 0
+    );
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AppetiteRule') AND name = N'LobCode')
+    ALTER TABLE Agency.AppetiteRule ADD LobCode NVARCHAR(50) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AppetiteRule') AND name = N'CarrierNaic')
+    ALTER TABLE Agency.AppetiteRule ADD CarrierNaic NVARCHAR(20) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AppetiteRule') AND name = N'RuleJson')
+    ALTER TABLE Agency.AppetiteRule ADD RuleJson NVARCHAR(MAX) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AppetiteRule') AND name = N'AppetiteLevel')
+    ALTER TABLE Agency.AppetiteRule ADD AppetiteLevel NVARCHAR(50) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AppetiteRule') AND name = N'ModifiedDateUtc')
+    ALTER TABLE Agency.AppetiteRule ADD ModifiedDateUtc DATETIME2 NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'Agency.AppetiteRule') AND name = N'IsDeleted')
+    ALTER TABLE Agency.AppetiteRule ADD IsDeleted BIT NOT NULL DEFAULT 0;
 ";
 
     // ── Internals ─────────────────────────────────────────────────────

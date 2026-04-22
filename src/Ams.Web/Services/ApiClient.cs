@@ -37,6 +37,11 @@ using Ams.Application.Features.Alerts;
 using Ams.Application.Features.SlaDefinitions;
 using Ams.Application.Features.PlatformEvents;
 using Ams.Application.Features.BackgroundJobs;
+using Ams.Application.Features.Agency;
+using Ams.Application.Features.Carriers;
+using Ams.Application.Features.Lobs;
+using Ams.Application.Features.Appetite;
+using Ams.Application.Features.Communications;
 
 namespace Ams.Web.Services;
 
@@ -355,9 +360,6 @@ public sealed class ApiClient
         var response = await _httpClient.DeleteAsync($"api/subscriptions/{id}", cancellationToken);
         response.EnsureSuccessStatusCode();
     }
-
-    public Task<PagedResult<BranchDto>?> SearchBranchesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<BranchDto>>($"api/branches?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
     // ── IAM ──────────────────────────────────────────────────
     public Task<UserDto?> GetUserByIdAsync(Guid userId, CancellationToken cancellationToken = default)
@@ -988,6 +990,105 @@ public sealed class ApiClient
     public async Task DeleteDocumentAsync(Guid documentId, Guid? deletedByUserId = null, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.DeleteAsync($"api/documents/{documentId}?deletedByUserId={deletedByUserId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── E-Sign ───────────────────────────────────────────────
+    public Task<IReadOnlyList<ESignRequestDto>?> GetESignRequestsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<ESignRequestDto>>($"api/esign?tenantId={tenantId}", cancellationToken);
+
+    public async Task<Guid> SendESignRequestAsync(SendESignRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/esign", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task VoidESignRequestAsync(Guid eSignRequestId, string? voidReason, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/esign/{eSignRequestId}/void", new VoidESignRequest(eSignRequestId, voidReason), cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RemindESignRequestAsync(Guid eSignRequestId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/esign/{eSignRequestId}/remind", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Communications — Inbox ───────────────────────────────
+    public Task<IReadOnlyList<MessageThreadDto>?> GetMessageThreadsAsync(Guid tenantId, string? channel = null, string? status = null, string? assignedTo = null, string? searchTerm = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<MessageThreadDto>>($"api/messages?tenantId={tenantId}&channel={Uri.EscapeDataString(channel ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}&assignedTo={Uri.EscapeDataString(assignedTo ?? string.Empty)}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public Task<MessageThreadDto?> GetMessageThreadByIdAsync(Guid threadId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<MessageThreadDto>($"api/messages/{threadId}", cancellationToken);
+
+    public async Task<Guid> SendMessageAsync(SendMessageRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/messages", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task ReplyMessageAsync(Guid threadId, ReplyMessageRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/messages/{threadId}/reply", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task AssignThreadAsync(Guid threadId, AssignThreadRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/messages/{threadId}/assign", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task EscalateThreadAsync(Guid threadId, EscalateThreadRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/messages/{threadId}/escalate", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ResolveThreadAsync(Guid threadId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/messages/{threadId}/resolve", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task MarkThreadReadAsync(Guid threadId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/messages/{threadId}/read", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Communications — Templates ───────────────────────────
+    public Task<IReadOnlyList<CommTemplateDto>?> GetCommTemplatesAsync(Guid tenantId, string? channel = null, string? category = null, string? status = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<CommTemplateDto>>($"api/commtemplates?tenantId={tenantId}&channel={Uri.EscapeDataString(channel ?? string.Empty)}&category={Uri.EscapeDataString(category ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}", cancellationToken);
+
+    public async Task<Guid> CreateCommTemplateAsync(CreateCommTemplateRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/commtemplates", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateCommTemplateAsync(Guid templateId, UpdateCommTemplateRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/commtemplates/{templateId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task IncrementCommTemplateUsageAsync(Guid templateId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/commtemplates/{templateId}/use", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteCommTemplateAsync(Guid templateId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/commtemplates/{templateId}", cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 
@@ -2062,6 +2163,86 @@ public sealed class ApiClient
     public async Task SaveTenantConfigurationAsync(Guid tenantId, IEnumerable<UpsertTenantSettingModel> settings, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PutAsJsonAsync($"api/platform/configuration/tenant/{tenantId}/settings", settings, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Agency Profile ───────────────────────────────────────
+    public Task<AgencyProfileDto?> GetAgencyProfileAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<AgencyProfileDto>($"api/agency/{tenantId}", cancellationToken);
+
+    public async Task UpdateAgencyProfileAsync(Guid tenantId, UpdateAgencyProfileRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/agency/{tenantId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+    public Task<PagedResult<BranchDto>?> SearchBranchesAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<BranchDto>>($"api/branches?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateBranchAsync(CreateBranchRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/branches", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateBranchAsync(Guid id, UpdateBranchRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/branches/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Carriers ─────────────────────────────────────────────
+    public Task<PagedResult<CarrierDto>?> SearchCarriersAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<CarrierDto>>($"api/carriers?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateCarrierAsync(CreateCarrierRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/carriers", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateCarrierAsync(Guid id, UpdateCarrierRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/carriers/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Lines of Business ────────────────────────────────────
+    public Task<PagedResult<LineOfBusinessDto>?> SearchLobsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<LineOfBusinessDto>>($"api/lobs?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateLobAsync(CreateLineOfBusinessRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/lobs", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateLobAsync(Guid id, UpdateLineOfBusinessRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/lobs/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // ── Appetite Rules ───────────────────────────────────────
+    public Task<PagedResult<AppetiteRuleDto>?> SearchAppetiteRulesAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<AppetiteRuleDto>>($"api/appetite?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateAppetiteRuleAsync(CreateAppetiteRuleRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/appetite", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateAppetiteRuleAsync(Guid id, UpdateAppetiteRuleRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/appetite/{id}", request, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 }

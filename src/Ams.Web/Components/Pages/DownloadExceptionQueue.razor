@@ -1,0 +1,158 @@
+@page "/integrations/download-exceptions"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@inject SfToast _toast
+
+<PageTitle>Download Exception Queue — AMS</PageTitle>
+
+<SfToast @ref="_toastRef" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Download Exception Queue"
+               Subtitle="Carrier download records that could not be automatically matched or applied — resolve, reassign, or skip"
+               Icon="bi-exclamation-triangle-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='()=>Nav.NavigateTo("/integrations/downloads")'><i class="bi bi-arrow-down-circle" aria-hidden="true"></i> All Downloads</button>
+        <button class="um-btn um-btn-ghost" @onclick="BulkSkip" disabled="@(!_selected.Any())"><i class="bi bi-skip-forward" aria-hidden="true"></i> Skip Selected (@_selected.Count)</button>
+        <button class="um-btn um-btn-primary" @onclick="BulkResolve" disabled="@(!_selected.Any())"><i class="bi bi-check2-all" aria-hidden="true"></i> Resolve Selected (@_selected.Count)</button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Filter bar -->
+<div class="deq-filter-bar">
+    <div class="deq-search-wrap">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input class="deq-search" placeholder="Search by carrier, policy #, reason…" @bind="_search" @bind:event="oninput" />
+    </div>
+    <select class="deq-sel" @bind="_reasonFilter">
+        <option value="">All Reasons</option>
+        <option value="No match">No Account Match</option>
+        <option value="Duplicate">Duplicate Policy</option>
+        <option value="Auth">Auth Failure</option>
+        <option value="Format">Format Error</option>
+        <option value="Multiple">Multiple Matches</option>
+    </select>
+    <select class="deq-sel" @bind="_priorityFilter">
+        <option value="">All Priorities</option>
+        <option value="High">High</option>
+        <option value="Medium">Medium</option>
+        <option value="Low">Low</option>
+    </select>
+</div>
+
+<div class="deq-count-bar"><span>@Filtered.Count() exceptions</span> <span class="deq-cnt-sel">@_selected.Count selected</span></div>
+
+<!-- Exception list -->
+@foreach (var ex in Filtered)
+{
+    var isSel = _selected.Contains(ex.Id);
+    <div class="deq-card @PriorityBorderCss(ex.Priority) @(isSel?"deq-sel":"")">
+        <div class="deq-card-hdr">
+            <input type="checkbox" class="deq-chk" checked="@isSel" @onchange="() => ToggleSel(ex.Id)" title="Select" />
+            <div class="deq-reason-icon @ReasonIconCss(ex.ReasonCode)"><i class="bi bi-@ReasonIcon(ex.ReasonCode)" aria-hidden="true"></i></div>
+            <div class="deq-card-main">
+                <div class="deq-card-title">@ex.Carrier — @ex.PolicyNo <span class="deq-tx-type">@ex.TxType</span></div>
+                <div class="deq-card-reason">@ex.Reason</div>
+            </div>
+            <span class="@PriorityBadge(ex.Priority)">@ex.Priority</span>
+            <div class="deq-card-time">@ex.ReceivedAgo</div>
+        </div>
+        <div class="deq-card-body">
+            <div class="deq-meta">
+                <div class="deq-m-item"><span class="deq-ml">Premium</span><span class="deq-mv">@ex.Premium</span></div>
+                <div class="deq-m-item"><span class="deq-ml">Eff. Date</span><span class="deq-mv">@ex.EffDate</span></div>
+                <div class="deq-m-item"><span class="deq-ml">Insured</span><span class="deq-mv">@ex.InsuredName</span></div>
+                @if (!string.IsNullOrEmpty(ex.SuggestedAccount))
+                {
+                    <div class="deq-m-item deq-suggestion"><span class="deq-ml">Suggested</span><span class="deq-mv deq-sug-val"><i class="bi bi-stars" aria-hidden="true"></i> @ex.SuggestedAccount</span></div>
+                }
+            </div>
+            <div class="deq-actions">
+                @if (!string.IsNullOrEmpty(ex.SuggestedAccount))
+                {
+                    <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => AcceptSuggestion(ex)"><i class="bi bi-check2" aria-hidden="true"></i> Apply to @ex.SuggestedAccount</button>
+                }
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _searchAccount = ex.Id"><i class="bi bi-search" aria-hidden="true"></i> Find Account</button>
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => CreateAndLink(ex)"><i class="bi bi-person-plus" aria-hidden="true"></i> Create Account</button>
+                <button class="um-btn um-btn-ghost um-btn-xs deq-skip-btn" @onclick="() => SkipOne(ex)"><i class="bi bi-skip-forward" aria-hidden="true"></i> Skip</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private SfToast? _toastRef;
+    private string _search = string.Empty;
+    private string _reasonFilter = string.Empty;
+    private string _priorityFilter = string.Empty;
+    private HashSet<int> _selected = [];
+    private int _searchAccount = 0;
+
+    private List<DownloadException> _exceptions = [];
+
+    private IEnumerable<DownloadException> Filtered => _exceptions.Where(e =>
+        (string.IsNullOrEmpty(_search) || e.PolicyNo.Contains(_search, StringComparison.OrdinalIgnoreCase) || e.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase) || e.Reason.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_reasonFilter) || e.ReasonCode.Contains(_reasonFilter, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_priorityFilter) || e.Priority == _priorityFilter));
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Integrations","/integrations"), new("Exception Queue",""));
+        _exceptions =
+        [
+            new DownloadException { Id=1,  Carrier="Chubb / ACE",   PolicyNo="PLY-88211", TxType="Endorsement",  ReasonCode="No match",  Reason="Policy number not found in AMS. Insured address changed — no automatic match.", Priority="High",   ReceivedAgo="8 hr ago",  Premium="$14,200", EffDate="Jun 1",  InsuredName="Apex Logistics LLC",        SuggestedAccount="" },
+            new DownloadException { Id=2,  Carrier="Travelers",     PolicyNo="PLY-44021", TxType="Policy",       ReasonCode="Multiple",  Reason="3 accounts match insured name and ZIP code — manual selection required.",         Priority="High",   ReceivedAgo="2 hr ago",  Premium="$3,800",  EffDate="Jun 15", InsuredName="Kim Realty LLC",            SuggestedAccount="Kim Realty of Colorado" },
+            new DownloadException { Id=3,  Carrier="Travelers",     PolicyNo="PLY-77002", TxType="Cancellation", ReasonCode="No match",  Reason="No account found for policy. Policy may have been transferred or rewritten.",    Priority="High",   ReceivedAgo="2 hr ago",  Premium="$0",      EffDate="May 28", InsuredName="Summit Restaurant Group",   SuggestedAccount="Summit Hospitality LLC" },
+            new DownloadException { Id=4,  Carrier="DocuSign",      PolicyNo="PLY-55901", TxType="Policy",       ReasonCode="Auth",      Reason="Carrier credentials expired. Reconnect carrier in integration settings.",         Priority="Medium", ReceivedAgo="4 hr ago",  Premium="$2,600",  EffDate="Jun 10", InsuredName="Rivera Roofing LLC",        SuggestedAccount="" },
+            new DownloadException { Id=5,  Carrier="Berkley One",   PolicyNo="PLY-33120", TxType="Endorsement",  ReasonCode="Duplicate", Reason="Duplicate transaction already applied to policy on Jun 1.",                       Priority="Low",    ReceivedAgo="6 hr ago",  Premium="$450",    EffDate="Jun 1",  InsuredName="Blue Harbor Marina",        SuggestedAccount="" },
+            new DownloadException { Id=6,  Carrier="Chubb / ACE",   PolicyNo="PLY-19944", TxType="Policy",       ReasonCode="Format",    Reason="Malformed ACORD record — field 'LOB_CODE' missing. Raw data saved for review.",   Priority="Medium", ReceivedAgo="8 hr ago",  Premium="—",       EffDate="—",      InsuredName="Unknown",                   SuggestedAccount="" },
+            new DownloadException { Id=7,  Carrier="Travelers",     PolicyNo="PLY-61003", TxType="Reinstatement",ReasonCode="Multiple",  Reason="2 accounts share same EIN — cannot auto-assign. Select account to apply.",        Priority="Medium", ReceivedAgo="3 hr ago",  Premium="$8,100",  EffDate="Jun 12", InsuredName="Mesa Contractors Inc",      SuggestedAccount="Mesa Contractors Inc (Denver)" },
+            new DownloadException { Id=8,  Carrier="National General",PolicyNo="PLY-77890",TxType="Claims",      ReasonCode="No match",  Reason="Claim number not linked to any open policy. Policy may be cancelled.",            Priority="High",   ReceivedAgo="1 hr ago",  Premium="—",       EffDate="—",      InsuredName="Vega Foods Inc",            SuggestedAccount="" },
+        ];
+    }
+
+    private void ToggleSel(int id) { if (!_selected.Remove(id)) _selected.Add(id); }
+
+    private async Task AcceptSuggestion(DownloadException ex)
+    {
+        _exceptions.Remove(ex);
+        if (_toastRef is not null) await _toastRef.ShowAsync(new ToastModel { Content = $"{ex.PolicyNo} applied to {ex.SuggestedAccount}.", CssClass = "e-toast-success" });
+    }
+
+    private async Task SkipOne(DownloadException ex)
+    {
+        _exceptions.Remove(ex);
+        if (_toastRef is not null) await _toastRef.ShowAsync(new ToastModel { Content = $"{ex.PolicyNo} skipped.", CssClass = "e-toast-info" });
+    }
+
+    private async Task BulkResolve()
+    {
+        var count = _selected.Count;
+        _exceptions.RemoveAll(e => _selected.Contains(e.Id));
+        _selected.Clear();
+        if (_toastRef is not null) await _toastRef.ShowAsync(new ToastModel { Content = $"{count} exceptions resolved.", CssClass = "e-toast-success" });
+    }
+
+    private async Task BulkSkip()
+    {
+        var count = _selected.Count;
+        _exceptions.RemoveAll(e => _selected.Contains(e.Id));
+        _selected.Clear();
+        if (_toastRef is not null) await _toastRef.ShowAsync(new ToastModel { Content = $"{count} exceptions skipped.", CssClass = "e-toast-info" });
+    }
+
+    private async Task CreateAndLink(DownloadException ex)
+    {
+        _exceptions.Remove(ex);
+        if (_toastRef is not null) await _toastRef.ShowAsync(new ToastModel { Content = $"Account creation started for {ex.InsuredName}.", CssClass = "e-toast-success" });
+    }
+
+    private static string ReasonIcon(string code) => code switch { "No match"=>"person-x","Multiple"=>"copy","Auth"=>"shield-x","Format"=>"file-earmark-x","Duplicate"=>"files",_=>"question-circle" };
+    private static string ReasonIconCss(string code) => code switch { "No match"=>"deq-ri-red","Multiple"=>"deq-ri-amber","Auth"=>"deq-ri-red","Format"=>"deq-ri-red","Duplicate"=>"deq-ri-blue",_=>"deq-ri-grey" };
+    private static string PriorityBorderCss(string p) => p switch { "High"=>"deq-p-high","Medium"=>"deq-p-med",_=>"" };
+    private static string PriorityBadge(string p) => p switch { "High"=>"deq-pri deq-pri--hi","Medium"=>"deq-pri deq-pri--med",_=>"deq-pri deq-pri--low" };
+
+    private sealed class DownloadException { public int Id{get;set;} public string Carrier{get;set;}=string.Empty; public string PolicyNo{get;set;}=string.Empty; public string TxType{get;set;}=string.Empty; public string ReasonCode{get;set;}=string.Empty; public string Reason{get;set;}=string.Empty; public string Priority{get;set;}=string.Empty; public string ReceivedAgo{get;set;}=string.Empty; public string Premium{get;set;}=string.Empty; public string EffDate{get;set;}=string.Empty; public string InsuredName{get;set;}=string.Empty; public string SuggestedAccount{get;set;}=string.Empty; }
+}

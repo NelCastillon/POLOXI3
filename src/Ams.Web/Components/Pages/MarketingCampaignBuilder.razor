@@ -1,0 +1,301 @@
+@page "/marketing/campaigns/new"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Campaign Builder — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Campaign Builder"
+               Subtitle="Design multi-step, multi-channel marketing campaigns with audience targeting and automation rules"
+               Icon="bi-kanban-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/marketing/campaigns")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="SaveDraftAsync">
+            <i class="bi bi-floppy" aria-hidden="true"></i> Save Draft
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="LaunchAsync"
+                disabled="@(!IsValid)">
+            <i class="bi bi-rocket-takeoff" aria-hidden="true"></i> Launch
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Step indicator -->
+<div class="cb-stepper-wrap">
+    <SfStepper @ref="_stepper" ActiveStep="@_step" ActiveStepChanged="s => _step = s" Linear="false">
+        <Steps>
+            <StepperStep Label="Details"  IconCss="bi bi-info-circle"      IsValid="@StepIsValid(0)" />
+            <StepperStep Label="Audience" IconCss="bi bi-people"            IsValid="@StepIsValid(1)" />
+            <StepperStep Label="Content"  IconCss="bi bi-envelope-paper"    IsValid="@StepIsValid(2)" />
+            <StepperStep Label="Schedule" IconCss="bi bi-calendar-event"    IsValid="@StepIsValid(3)" />
+            <StepperStep Label="Review"   IconCss="bi bi-clipboard-check"   IsValid="@StepIsValid(4)" />
+        </Steps>
+    </SfStepper>
+</div>
+
+<!-- Step panels -->
+@if (_step == 0)
+{
+    <!-- Step 1: Campaign Details -->
+    <div class="cb-panel">
+        <div class="cb-panel-title"><i class="bi bi-info-circle" aria-hidden="true"></i> Campaign Details</div>
+        <div class="cb-form-grid">
+            <div class="cb-full"><label class="cb-lbl">Campaign Name *</label>
+                <SfTextBox @bind-Value="_name" Placeholder="e.g. Q3 Umbrella Cross-Sell — Commercial"></SfTextBox>
+            </div>
+            <div><label class="cb-lbl">Campaign Type *</label>
+                <SfDropDownList TValue="string" TItem="string" DataSource="_types" @bind-Value="_type" Width="100%"></SfDropDownList>
+            </div>
+            <div><label class="cb-lbl">Goal</label>
+                <SfDropDownList TValue="string" TItem="string" DataSource="_goals" @bind-Value="_goal" Width="100%"></SfDropDownList>
+            </div>
+            <div><label class="cb-lbl">Start Date *</label>
+                <SfDatePicker TValue="DateTime" @bind-Value="_startDate" Width="100%"></SfDatePicker>
+            </div>
+            <div><label class="cb-lbl">End Date</label>
+                <SfDatePicker TValue="DateTime?" @bind-Value="_endDate" Width="100%"></SfDatePicker>
+            </div>
+            <div class="cb-full"><label class="cb-lbl">Description</label>
+                <SfTextBox @bind-Value="_description" Multiline="true" Placeholder="What is this campaign trying to achieve?"></SfTextBox>
+            </div>
+        </div>
+        <div class="cb-nav-row">
+            <span></span>
+            <button class="um-btn um-btn-primary" @onclick="() => _step = 1" disabled="@(string.IsNullOrEmpty(_name) || string.IsNullOrEmpty(_type))">
+                Next: Audience <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </button>
+        </div>
+    </div>
+}
+else if (_step == 1)
+{
+    <!-- Step 2: Audience -->
+    <div class="cb-panel">
+        <div class="cb-panel-title"><i class="bi bi-people" aria-hidden="true"></i> Audience Targeting</div>
+        <div class="cb-seg-grid">
+            @foreach (var seg in _segments)
+            {
+                <button class="cb-seg-card @(_selectedSegs.Contains(seg.Id) ? "cb-seg-card--sel" : "")"
+                        @onclick="() => ToggleSeg(seg.Id)">
+                    <i class="bi @seg.Icon cb-seg-icon" aria-hidden="true"></i>
+                    <div class="cb-seg-name">@seg.Name</div>
+                    <div class="cb-seg-cnt">@seg.Count.ToString("N0") contacts</div>
+                    @if (_selectedSegs.Contains(seg.Id)) { <i class="bi bi-check-circle-fill cb-seg-chk" aria-hidden="true"></i> }
+                </button>
+            }
+        </div>
+        <div class="cb-aud-summary">
+            <i class="bi bi-people" aria-hidden="true"></i>
+            <strong>@_selectedSegs.Sum(id => _segments.First(s => s.Id == id).Count).ToString("N0")</strong> estimated contacts selected
+        </div>
+        <div class="cb-nav-row">
+            <button class="um-btn um-btn-ghost" @onclick="() => _step = 0"><i class="bi bi-arrow-left" aria-hidden="true"></i> Back</button>
+            <button class="um-btn um-btn-primary" @onclick="() => _step = 2" disabled="@(!_selectedSegs.Any())">
+                Next: Content <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </button>
+        </div>
+    </div>
+}
+else if (_step == 2)
+{
+    <!-- Step 3: Content / Message -->
+    <div class="cb-panel">
+        <div class="cb-panel-title"><i class="bi bi-envelope-paper" aria-hidden="true"></i> Message Content</div>
+        <div class="cb-form-grid">
+            <div class="cb-full"><label class="cb-lbl">Subject Line / Headline *</label>
+                <SfTextBox @bind-Value="_subject" Placeholder="e.g. Your home might be underinsured — here's how to check"></SfTextBox>
+            </div>
+            <div><label class="cb-lbl">Sender Name</label>
+                <SfTextBox @bind-Value="_senderName" Placeholder="Your agency name"></SfTextBox>
+            </div>
+            <div><label class="cb-lbl">Reply-To Email</label>
+                <SfTextBox @bind-Value="_replyTo" Placeholder="agency@example.com"></SfTextBox>
+            </div>
+            <div class="cb-full"><label class="cb-lbl">Body / Template</label>
+                <div class="cb-template-grid">
+                    @foreach (var tpl in _templates)
+                    {
+                        <button class="cb-tpl-card @(_selectedTemplate == tpl ? "cb-tpl-card--sel" : "")"
+                                @onclick="() => _selectedTemplate = tpl">
+                            <i class="bi bi-layout-text-window-reverse cb-tpl-icon" aria-hidden="true"></i>
+                            <span>@tpl</span>
+                            @if (_selectedTemplate == tpl) { <i class="bi bi-check-circle-fill cb-tpl-chk" aria-hidden="true"></i> }
+                        </button>
+                    }
+                </div>
+            </div>
+            <div class="cb-full"><label class="cb-lbl">Call-to-Action Label</label>
+                <SfTextBox @bind-Value="_ctaLabel" Placeholder="e.g. Get My Free Quote"></SfTextBox>
+            </div>
+        </div>
+        <div class="cb-nav-row">
+            <button class="um-btn um-btn-ghost" @onclick="() => _step = 1"><i class="bi bi-arrow-left" aria-hidden="true"></i> Back</button>
+            <button class="um-btn um-btn-primary" @onclick="() => _step = 3" disabled="@(string.IsNullOrEmpty(_subject))">
+                Next: Schedule <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </button>
+        </div>
+    </div>
+}
+else if (_step == 3)
+{
+    <!-- Step 4: Schedule & Automation -->
+    <div class="cb-panel">
+        <div class="cb-panel-title"><i class="bi bi-calendar-event" aria-hidden="true"></i> Schedule &amp; Automation</div>
+        <div class="cb-form-grid">
+            <div><label class="cb-lbl">Send Mode</label>
+                <SfDropDownList TValue="string" TItem="string" DataSource="_sendModes" @bind-Value="_sendMode" Width="100%"></SfDropDownList>
+            </div>
+            <div><label class="cb-lbl">Send Date / Time</label>
+                <SfDateTimePicker TValue="DateTime" @bind-Value="_sendAt" Width="100%"></SfDateTimePicker>
+            </div>
+            <div><label class="cb-lbl">Timezone</label>
+                <SfDropDownList TValue="string" TItem="string" DataSource="_timezones" @bind-Value="_timezone" Width="100%"></SfDropDownList>
+            </div>
+            <div><label class="cb-lbl">Follow-up Delay (days)</label>
+                <SfNumericTextBox TValue="int" @bind-Value="_followUpDays" Min="1" Max="90" Width="100%"></SfNumericTextBox>
+            </div>
+            <div class="cb-full cb-checks">
+                <SfCheckBox Label="Send follow-up to non-openers" @bind-Checked="_followUp"></SfCheckBox>
+                <SfCheckBox Label="Suppress recent contacts (< 30 days)" @bind-Checked="_suppressRecent"></SfCheckBox>
+                <SfCheckBox Label="Exclude opted-out contacts" @bind-Checked="_suppressOptOut"></SfCheckBox>
+                <SfCheckBox Label="A/B test subject lines" @bind-Checked="_abTest"></SfCheckBox>
+            </div>
+        </div>
+        <div class="cb-nav-row">
+            <button class="um-btn um-btn-ghost" @onclick="() => _step = 2"><i class="bi bi-arrow-left" aria-hidden="true"></i> Back</button>
+            <button class="um-btn um-btn-primary" @onclick="() => _step = 4">
+                Review <i class="bi bi-arrow-right" aria-hidden="true"></i>
+            </button>
+        </div>
+    </div>
+}
+else
+{
+    <!-- Step 5: Review & Launch -->
+    <div class="cb-panel cb-review">
+        <div class="cb-panel-title"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Review &amp; Launch</div>
+        <div class="cb-review-grid">
+            <div class="cb-review-section">
+                <div class="cb-rs-hdr">Campaign Details</div>
+                <div class="cb-rs-row"><span class="cb-rs-lbl">Name</span><span>@_name</span></div>
+                <div class="cb-rs-row"><span class="cb-rs-lbl">Type</span><span>@_type</span></div>
+                <div class="cb-rs-row"><span class="cb-rs-lbl">Goal</span><span>@_goal</span></div>
+                <div class="cb-rs-row"><span class="cb-rs-lbl">Start</span><span>@_startDate.ToString("MMM d, yyyy")</span></div>
+            </div>
+            <div class="cb-review-section">
+                <div class="cb-rs-hdr">Audience</div>
+                <div class="cb-rs-row"><span class="cb-rs-lbl">Segments</span><span>@string.Join(", ", _selectedSegs.Select(id => _segments.First(s => s.Id == id).Name))</span></div>
+                <div class="cb-rs-row"><span class="cb-rs-lbl">Est. Contacts</span><span class="mkc-bold">@_selectedSegs.Sum(id => _segments.First(s => s.Id == id).Count).ToString("N0")</span></div>
+            </div>
+            <div class="cb-review-section">
+                <div class="cb-rs-hdr">Content</div>
+                <div class="cb-rs-row"><span class="cb-rs-lbl">Subject</span><span>@_subject</span></div>
+                <div class="cb-rs-row"><span class="cb-rs-lbl">Template</span><span>@_selectedTemplate</span></div>
+                <div class="cb-rs-row"><span class="cb-rs-lbl">CTA</span><span>@_ctaLabel</span></div>
+            </div>
+            <div class="cb-review-section">
+                <div class="cb-rs-hdr">Schedule</div>
+                <div class="cb-rs-row"><span class="cb-rs-lbl">Mode</span><span>@_sendMode</span></div>
+                <div class="cb-rs-row"><span class="cb-rs-lbl">Send At</span><span>@_sendAt.ToString("MMM d, yyyy h:mm tt")</span></div>
+                <div class="cb-rs-row"><span class="cb-rs-lbl">Follow-up</span><span>@(_followUp ? $"Yes — {_followUpDays}d" : "No")</span></div>
+            </div>
+        </div>
+        <div class="cb-nav-row">
+            <button class="um-btn um-btn-ghost" @onclick="() => _step = 3"><i class="bi bi-arrow-left" aria-hidden="true"></i> Back</button>
+            <div style="display:flex;gap:.5rem">
+                <button class="um-btn um-btn-ghost" @onclick="SaveDraftAsync"><i class="bi bi-floppy" aria-hidden="true"></i> Save Draft</button>
+                <button class="um-btn um-btn-primary" @onclick="LaunchAsync" disabled="@(!IsValid)">
+                    <i class="bi bi-rocket-takeoff" aria-hidden="true"></i> Launch Campaign
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private SfToast?    _toast;
+    private SfStepper?  _stepper;
+    private int         _step = 0;
+
+    private static readonly List<string> _steps = ["Details", "Audience", "Content", "Schedule", "Review"];
+    private static readonly List<string> _types = ["Email", "SMS", "Direct Mail", "Multi-Channel", "Push Notification"];
+    private static readonly List<string> _goals = ["Cross-Sell", "Win-Back", "Referral", "Renewal", "Upsell", "Brand Awareness", "Review Request"];
+    private static readonly List<string> _sendModes = ["Immediate", "Scheduled", "Triggered"];
+    private static readonly List<string> _timezones = ["Eastern", "Central", "Mountain", "Pacific"];
+    private static readonly List<string> _templates = ["Insurance Benefit Card", "Plain Text", "Modern Promo", "Newsletter", "Win-Back Offer", "Referral Ask"];
+
+    private string  _name        = "";
+    private string  _type        = "Email";
+    private string  _goal        = "Cross-Sell";
+    private string  _description = "";
+    private DateTime  _startDate = DateTime.Today.AddDays(7);
+    private DateTime? _endDate;
+    private string  _subject          = "";
+    private string  _senderName       = "";
+    private string  _replyTo          = "";
+    private string  _ctaLabel         = "";
+    private string  _selectedTemplate = "Insurance Benefit Card";
+    private string  _sendMode         = "Scheduled";
+    private DateTime _sendAt          = DateTime.Today.AddDays(7).AddHours(10);
+    private string  _timezone         = "Eastern";
+    private int     _followUpDays     = 7;
+    private bool    _followUp         = true;
+    private bool    _suppressRecent   = true;
+    private bool    _suppressOptOut   = true;
+    private bool    _abTest           = false;
+
+    private HashSet<int> _selectedSegs = [];
+
+    private static readonly List<SegmentOption> _segments =
+    [
+        new(1, "Active Commercial Clients", "bi-building", 3_840),
+        new(2, "Personal Lines Households", "bi-house", 12_400),
+        new(3, "SMB — No Workers Comp",    "bi-briefcase", 1_290),
+        new(4, "HH With Teen Drivers",      "bi-car-front", 2_150),
+        new(5, "BOP Holders — No Umbrella", "bi-umbrella", 980),
+        new(6, "Lapsed 60–180 Days",        "bi-arrow-repeat", 3_100),
+        new(7, "NPS Promoters (9–10)",      "bi-star-fill", 1_750),
+        new(8, "Employer Groups",           "bi-people", 640),
+    ];
+
+    private bool IsValid => !string.IsNullOrEmpty(_name) && !string.IsNullOrEmpty(_type)
+                         && _selectedSegs.Any() && !string.IsNullOrEmpty(_subject);
+
+    private bool? StepIsValid(int idx) => idx switch
+    {
+        0 => !string.IsNullOrEmpty(_name) && !string.IsNullOrEmpty(_type) ? true : null,
+        1 => _selectedSegs.Any() ? true : null,
+        2 => !string.IsNullOrEmpty(_subject) ? true : null,
+        3 => true,
+        _ => null
+    };
+
+    protected override void OnInitialized() =>
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("New Campaign",""));
+
+    private void ToggleSeg(int id)
+    {
+        if (!_selectedSegs.Remove(id)) _selectedSegs.Add(id);
+    }
+
+    private async Task SaveDraftAsync()
+    {
+        await Task.Delay(0);
+        await _toast!.ShowAsync(new ToastModel { Content = "Draft saved.", CssClass = "e-toast-info" });
+    }
+
+    private async Task LaunchAsync()
+    {
+        await Task.Delay(0);
+        await _toast!.ShowAsync(new ToastModel { Content = $"Campaign '{_name}' launched successfully.", CssClass = "e-toast-success" });
+        Nav.NavigateTo("/marketing/campaigns");
+    }
+
+    private sealed record SegmentOption(int Id, string Name, string Icon, int Count);
+}

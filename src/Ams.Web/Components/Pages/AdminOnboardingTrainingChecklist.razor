@@ -1,0 +1,226 @@
+@page "/admin/system/onboarding/training-checklist"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Training Checklist — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Training Checklist"
+               Subtitle="Track each staff member's onboarding progress and promote them to production when training is complete"
+               Icon="bi-check2-all">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/admin/system/onboarding")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Onboarding</button>
+        <button class="um-btn um-btn-ghost" @onclick="() => _showAdd = true"><i class="bi bi-person-plus" aria-hidden="true"></i> Add Trainee</button>
+        <button class="um-btn um-btn-primary" @onclick="ExportReport"><i class="bi bi-download" aria-hidden="true"></i> Export Report</button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Progress summary -->
+<div class="tc-summary-strip">
+    <div class="tc-sum-card">
+        <div class="tc-sum-num">@_trainees.Count</div>
+        <div class="tc-sum-lbl">Total Trainees</div>
+    </div>
+    <div class="tc-sum-card tc-sum-ok">
+        <div class="tc-sum-num">@_trainees.Count(t => t.Status == "Promoted")</div>
+        <div class="tc-sum-lbl">Promoted to Production</div>
+    </div>
+    <div class="tc-sum-card tc-sum-prog">
+        <div class="tc-sum-num">@_trainees.Count(t => t.Status == "In Training")</div>
+        <div class="tc-sum-lbl">In Training</div>
+    </div>
+    <div class="tc-sum-card tc-sum-pend">
+        <div class="tc-sum-num">@_trainees.Count(t => t.Status == "Not Started")</div>
+        <div class="tc-sum-lbl">Not Started</div>
+    </div>
+    <div class="tc-sum-card tc-sum-avg">
+        <div class="tc-sum-num">@AvgProgress%</div>
+        <div class="tc-sum-lbl">Avg. Progress</div>
+    </div>
+</div>
+
+<!-- Module columns header -->
+<div class="tc-layout">
+    <!-- Trainee list -->
+    <div class="tc-trainee-list">
+        @foreach (var t in _trainees)
+        {
+            var totalMods = _modules.Count;
+            var doneMods  = t.CompletedModules.Count;
+            var pct       = totalMods > 0 ? doneMods * 100 / totalMods : 0;
+            <div class="tc-trainee-card @(t.Status == "Promoted" ? "tc-card-promoted" : "")">
+                <div class="tc-trainee-hdr">
+                    <div class="tc-trainee-avatar @RoleColor(t.Role)">@t.Name[0]</div>
+                    <div class="tc-trainee-info">
+                        <div class="tc-trainee-name">@t.Name</div>
+                        <div class="tc-trainee-meta">@t.Role · Started @t.StartDate</div>
+                    </div>
+                    <span class="tc-status-badge @StatusCss(t.Status)">@t.Status</span>
+                </div>
+                <!-- Progress bar -->
+                <div class="tc-prog-row">
+                    <div class="tc-prog-bar"><div class="tc-prog-fill @ProgressCss(pct)" style="width:@pct%"></div></div>
+                    <span class="tc-prog-pct">@pct%</span>
+                </div>
+                <!-- Module checklist -->
+                <div class="tc-module-grid">
+                    @foreach (var mod in _modules)
+                    {
+                        var done = t.CompletedModules.Contains(mod.Key);
+                        <div class="tc-mod-item @(done ? "tc-mod-done" : "")" @onclick="() => ToggleModule(t, mod.Key)" title="@mod.Name">
+                            <i class="bi bi-@(done ? "check-circle-fill" : "circle") tc-mod-ico @(done ? "tc-ico-ok" : "")" aria-hidden="true"></i>
+                            <span class="tc-mod-name">@mod.ShortName</span>
+                        </div>
+                    }
+                </div>
+                <!-- Actions -->
+                <div class="tc-trainee-actions">
+                    @if (t.Status != "Promoted")
+                    {
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenSandbox(t)"><i class="bi bi-bounding-box" aria-hidden="true"></i> Open Sandbox</button>
+                        @if (pct >= 80)
+                        {
+                            <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => PromoteUser(t)"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Promote</button>
+                        }
+                        else
+                        {
+                            <span class="tc-promote-hint">Complete @(80 - pct)% more to promote</span>
+                        }
+                    }
+                    else
+                    {
+                        <span class="tc-promoted-label"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> Active in Production since @t.PromotedDate</span>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+
+    <!-- Training modules panel -->
+    <div class="tc-modules-panel">
+        <div class="tc-mods-title">Training Modules</div>
+        @foreach (var mod in _modules)
+        {
+            var modDone = _trainees.Count(t => t.CompletedModules.Contains(mod.Key));
+            <div class="tc-mod-card">
+                <div class="tc-mod-card-hdr">
+                    <div class="tc-mod-card-icon @mod.IconCss"><i class="bi bi-@mod.Icon" aria-hidden="true"></i></div>
+                    <div class="tc-mod-card-info">
+                        <div class="tc-mod-card-name">@mod.Name</div>
+                        <div class="tc-mod-card-meta">@modDone / @_trainees.Count complete</div>
+                    </div>
+                </div>
+                <div class="tc-mod-mini-bar"><div class="tc-mod-mini-fill" style="width:@(_trainees.Count > 0 ? modDone * 100 / _trainees.Count : 0)%"></div></div>
+                <button class="um-btn um-btn-ghost um-btn-xs tc-mod-open-btn" @onclick='() => Nav.NavigateTo("/admin/system/help")'><i class="bi bi-book" aria-hidden="true"></i> Open Walkthrough</button>
+            </div>
+        }
+    </div>
+</div>
+
+<!-- Add trainee dialog -->
+<SfDialog @bind-Visible="_showAdd" Width="400px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header>Add Trainee</Header>
+        <Content>
+            <div class="tc-dlg">
+                <label class="tc-dlg-label">Select Staff Member</label>
+                <select class="tc-dlg-sel">
+                    <option>— Select user —</option>
+                    <option>Maria Gonzalez</option>
+                    <option>Tyler Brooks</option>
+                    <option>Priya Nair</option>
+                </select>
+                <label class="tc-dlg-label">Role</label>
+                <select class="tc-dlg-sel"><option>Producer</option><option>CSR</option><option>Accounting</option><option>Operations</option></select>
+                <label class="tc-dlg-label">Training Start Date</label>
+                <input type="date" class="tc-dlg-input" value="@DateTime.Today.ToString("yyyy-MM-dd")" />
+                <label class="tc-dlg-label">Assign Modules</label>
+                @foreach (var mod in _modules)
+                {
+                    <label class="tc-dlg-chk-row">
+                        <input type="checkbox" checked />
+                        <span>@mod.Name</span>
+                    </label>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <button class="um-btn um-btn-ghost" @onclick="() => _showAdd = false">Cancel</button>
+            <button class="um-btn um-btn-primary" @onclick="AddTrainee"><i class="bi bi-person-plus" aria-hidden="true"></i> Add Trainee</button>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private SfToast? _toast;
+    private bool _showAdd;
+
+    private int AvgProgress => _trainees.Count > 0
+        ? _trainees.Sum(t => _modules.Count > 0 ? t.CompletedModules.Count * 100 / _modules.Count : 0) / _trainees.Count
+        : 0;
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Administration","/admin"), new("Tenant Onboarding","/admin/system/onboarding"), new("Training Checklist",""));
+    }
+
+    private void ToggleModule(Trainee t, string key)
+    {
+        if (!t.CompletedModules.Remove(key)) t.CompletedModules.Add(key);
+        if (t.CompletedModules.Count > 0 && t.Status == "Not Started") t.Status = "In Training";
+    }
+
+    private async Task PromoteUser(Trainee t)
+    {
+        t.Status = "Promoted";
+        t.PromotedDate = DateTime.Today.ToString("MMM d");
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"{t.Name} has been promoted to production.", CssClass = "e-toast-success" });
+    }
+
+    private async Task OpenSandbox(Trainee t)
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Sandbox session opened for {t.Name}.", CssClass = "e-toast-info" });
+    }
+
+    private async Task ExportReport()
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Training report exported to PDF.", CssClass = "e-toast-success" });
+    }
+
+    private async Task AddTrainee()
+    {
+        _showAdd = false;
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Trainee added and sandbox assigned.", CssClass = "e-toast-success" });
+    }
+
+    private static string StatusCss(string s) => s switch { "Promoted"=>"tc-st-ok","In Training"=>"tc-st-train",_=>"tc-st-pend" };
+    private static string ProgressCss(int p)  => p >= 80 ? "tc-fill-ok" : p >= 40 ? "tc-fill-prog" : "tc-fill-low";
+    private static string RoleColor(string r)  => r switch { "Producer"=>"tc-av-blue","CSR"=>"tc-av-green","Accounting"=>"tc-av-amber",_=>"tc-av-grey" };
+
+    private sealed class TrainingModule(string key, string name, string shortName, string icon, string iconCss) { public string Key=key; public string Name=name; public string ShortName=shortName; public string Icon=icon; public string IconCss=iconCss; }
+    private sealed class Trainee { public string Name{get;set;}=string.Empty; public string Role{get;set;}=string.Empty; public string Status{get;set;}=string.Empty; public string StartDate{get;set;}=string.Empty; public string PromotedDate{get;set;}=string.Empty; public HashSet<string> CompletedModules{get;set;}=[]; }
+
+    private List<TrainingModule> _modules =
+    [
+        new("nav",       "Platform Navigation",  "Navigate",  "compass",          "tc-mic-blue"),
+        new("accounts",  "Accounts & Contacts",  "Accounts",  "people",           "tc-mic-green"),
+        new("policies",  "Policy Management",    "Policies",  "shield-check",     "tc-mic-teal"),
+        new("renewals",  "Renewals Workflow",    "Renewals",  "arrow-clockwise",  "tc-mic-amber"),
+        new("claims",    "Claims Processing",    "Claims",    "exclamation-circle","tc-mic-red"),
+        new("billing",   "Billing & Payments",   "Billing",   "receipt",          "tc-mic-purple"),
+        new("downloads", "Carrier Downloads",    "Downloads", "arrow-down-circle","tc-mic-grey"),
+        new("reports",   "Reports & Analytics",  "Reports",   "bar-chart-line",   "tc-mic-indigo"),
+    ];
+
+    private List<Trainee> _trainees =
+    [
+        new Trainee { Name="Jordan Kim",     Role="CSR",        Status="Promoted",    StartDate="May 15",  PromotedDate="Jun 3",  CompletedModules=["nav","accounts","policies","renewals","claims","billing","downloads","reports"] },
+        new Trainee { Name="Tyler Brooks",   Role="Producer",   Status="In Training", StartDate="Jun 2",   PromotedDate="",       CompletedModules=["nav","accounts","policies","renewals"] },
+        new Trainee { Name="Maria Gonzalez", Role="Accounting", Status="In Training", StartDate="Jun 5",   PromotedDate="",       CompletedModules=["nav","billing"] },
+        new Trainee { Name="Priya Nair",     Role="CSR",        Status="Not Started", StartDate="Jun 10",  PromotedDate="",       CompletedModules=[] },
+    ];
+}

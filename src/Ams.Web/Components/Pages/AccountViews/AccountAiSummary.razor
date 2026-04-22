@@ -1,0 +1,405 @@
+@page "/accounts/{AccountId:guid}/ai"
+@namespace Ams.Web.Components.Pages.AccountViews
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>AI Summary — @(_accountName ?? "Account")</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Account AI Summary"
+               Subtitle="@($"AI-generated insights and recommendations for {_accountName ?? "this account"}")"
+               Icon="bi-stars">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo($"/accounts/{AccountId}")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Account 360
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="RegenerateAsync" disabled="@_regenerating">
+            <i class="bi bi-arrow-clockwise @(_regenerating ? "aas-spin" : "")" aria-hidden="true"></i> Re-generate
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/ai/actions")'>
+            <i class="bi bi-lightning" aria-hidden="true"></i> Next Actions
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="aas-loading"><div class="um-spinner" aria-hidden="true"></div><span>Generating AI summary…</span></div>
+}
+else
+{
+    <div class="aas-layout">
+
+        <!-- ── LEFT COLUMN ──────────────────────────────────────────── -->
+        <div class="aas-main">
+
+            <!-- Executive Summary Card -->
+            <SfCard CssClass="aas-card">
+                <CardHeader>
+                    <div class="aas-card-hdr">
+                        <i class="bi bi-file-text" aria-hidden="true"></i>
+                        <span>Executive Summary</span>
+                        <span class="aas-gen-time">Generated @_generatedAt.ToString("MMM d, h:mm tt")</span>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div class="aas-summary-text">@_summary.ExecutiveSummary</div>
+                    <div class="aas-sentiment-row">
+                        <span class="aas-sent aas-sent-@SentCss(_summary.OverallSentiment)">
+                            <i class="bi @SentIcon(_summary.OverallSentiment)" aria-hidden="true"></i>
+                            @_summary.OverallSentiment Relationship
+                        </span>
+                        <span class="aas-conf"><i class="bi bi-cpu" aria-hidden="true"></i> @_summary.Confidence% AI confidence</span>
+                    </div>
+                </CardContent>
+            </SfCard>
+
+            <!-- Risk & Retention Card -->
+            <SfCard CssClass="aas-card">
+                <CardHeader>
+                    <div class="aas-card-hdr">
+                        <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+                        <span>Retention Risk Assessment</span>
+                        <span class="aas-risk-badge aas-risk-@RiskCss(_summary.RetentionRiskScore)">
+                            Risk Score: @_summary.RetentionRiskScore
+                        </span>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div class="aas-risk-bar-wrap">
+                        <div class="aas-risk-bar aas-risk-fill-@RiskCss(_summary.RetentionRiskScore)"
+                             style="width:@_summary.RetentionRiskScore%"></div>
+                    </div>
+                    <div class="aas-risk-factors">
+                        @foreach (var f in _summary.RiskFactors)
+                        {
+                            <div class="aas-factor @(f.Impact == "Negative" ? "aas-factor-neg" : "aas-factor-pos")">
+                                <i class="bi @(f.Impact == "Negative" ? "bi-arrow-down-circle" : "bi-arrow-up-circle")" aria-hidden="true"></i>
+                                <span class="aas-factor-txt">@f.Description</span>
+                                <span class="aas-factor-wt">@f.Weight%</span>
+                            </div>
+                        }
+                    </div>
+                </CardContent>
+            </SfCard>
+
+            <!-- Coverage Analysis Card -->
+            <SfCard CssClass="aas-card">
+                <CardHeader>
+                    <div class="aas-card-hdr">
+                        <i class="bi bi-umbrella" aria-hidden="true"></i>
+                        <span>Coverage Analysis &amp; Gaps</span>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div class="aas-coverage-grid">
+                        @foreach (var c in _summary.CoverageLines)
+                        {
+                            <div class="aas-cov-row">
+                                <div class="aas-cov-lob">@c.Lob</div>
+                                <div class="aas-cov-status aas-cov-@CovCss(c.Status)">@c.Status</div>
+                                @if (!string.IsNullOrEmpty(c.Note))
+                                {
+                                    <div class="aas-cov-note">@c.Note</div>
+                                }
+                            </div>
+                        }
+                    </div>
+                    @if (_summary.GapRecommendations.Count > 0)
+                    {
+                        <div class="aas-gaps">
+                            <div class="aas-gaps-hdr"><i class="bi bi-lightbulb" aria-hidden="true"></i> Gap Recommendations</div>
+                            @foreach (var g in _summary.GapRecommendations)
+                            {
+                                <div class="aas-gap-item">
+                                    <i class="bi bi-plus-circle" aria-hidden="true"></i> @g
+                                </div>
+                            }
+                        </div>
+                    }
+                </CardContent>
+            </SfCard>
+
+            <!-- Engagement History Card -->
+            <SfCard CssClass="aas-card">
+                <CardHeader>
+                    <div class="aas-card-hdr">
+                        <i class="bi bi-chat-dots" aria-hidden="true"></i>
+                        <span>Engagement Summary</span>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div class="aas-eng-stats">
+                        <div class="aas-eng-stat"><div class="aas-es-val">@_summary.Engagement.TotalInteractions</div><div class="aas-es-lbl">Total Interactions (12mo)</div></div>
+                        <div class="aas-eng-stat"><div class="aas-es-val">@_summary.Engagement.LastTouchDays<span class="aas-es-unit">d ago</span></div><div class="aas-es-lbl">Last Touch</div></div>
+                        <div class="aas-eng-stat"><div class="aas-es-val">@_summary.Engagement.NpsScore</div><div class="aas-es-lbl">NPS Score</div></div>
+                        <div class="aas-eng-stat"><div class="aas-es-val">@_summary.Engagement.OpenTasks</div><div class="aas-es-lbl">Open Tasks</div></div>
+                    </div>
+                    <div class="aas-eng-desc">@_summary.Engagement.AiSummary</div>
+                </CardContent>
+            </SfCard>
+
+        </div>
+
+        <!-- ── RIGHT COLUMN ─────────────────────────────────────────── -->
+        <aside class="aas-aside">
+
+            <!-- Account Snapshot -->
+            <SfCard CssClass="aas-card aas-snapshot-card">
+                <CardHeader>
+                    <div class="aas-card-hdr">
+                        <i class="bi bi-building" aria-hidden="true"></i>
+                        <span>Account Snapshot</span>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div class="aas-snap-grid">
+                        <div class="aas-snap-row"><span class="aas-snap-lbl">Account</span><span class="aas-snap-val">@_summary.AccountName</span></div>
+                        <div class="aas-snap-row"><span class="aas-snap-lbl">Type</span><span class="aas-snap-val">@_summary.AccountType</span></div>
+                        <div class="aas-snap-row"><span class="aas-snap-lbl">Tenure</span><span class="aas-snap-val">@_summary.TenureYears yrs</span></div>
+                        <div class="aas-snap-row"><span class="aas-snap-lbl">Annual Premium</span><span class="aas-snap-val aas-money">@_summary.AnnualPremium.ToString("C0")</span></div>
+                        <div class="aas-snap-row"><span class="aas-snap-lbl">Policies</span><span class="aas-snap-val">@_summary.ActivePolicies</span></div>
+                        <div class="aas-snap-row"><span class="aas-snap-lbl">Open Claims</span><span class="aas-snap-val">@_summary.OpenClaims</span></div>
+                        <div class="aas-snap-row"><span class="aas-snap-lbl">Producer</span><span class="aas-snap-val">@_summary.Producer</span></div>
+                        <div class="aas-snap-row"><span class="aas-snap-lbl">Segment</span><span class="aas-snap-val">@_summary.Segment</span></div>
+                    </div>
+                </CardContent>
+            </SfCard>
+
+            <!-- Next Best Actions -->
+            <SfCard CssClass="aas-card">
+                <CardHeader>
+                    <div class="aas-card-hdr">
+                        <i class="bi bi-lightning-charge" aria-hidden="true"></i>
+                        <span>AI Next Best Actions</span>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div class="aas-nba-list">
+                        @foreach (var a in _summary.NextBestActions)
+                        {
+                            <div class="aas-nba-item">
+                                <div class="aas-nba-icon aas-nba-@PriorityCss(a.Priority)">
+                                    <i class="bi @a.Icon" aria-hidden="true"></i>
+                                </div>
+                                <div class="aas-nba-body">
+                                    <div class="aas-nba-title">@a.Action</div>
+                                    <div class="aas-nba-reason">@a.Reason</div>
+                                </div>
+                                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ExecuteActionAsync(a)"
+                                        title="Execute">
+                                    <i class="bi bi-check-lg" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                        }
+                    </div>
+                </CardContent>
+            </SfCard>
+
+            <!-- Predictive Metrics -->
+            <SfCard CssClass="aas-card">
+                <CardHeader>
+                    <div class="aas-card-hdr">
+                        <i class="bi bi-graph-up-arrow" aria-hidden="true"></i>
+                        <span>Predictive Metrics</span>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div class="aas-pred-list">
+                        @foreach (var m in _summary.PredictiveMetrics)
+                        {
+                            <div class="aas-pred-row">
+                                <span class="aas-pred-lbl">@m.Label</span>
+                                <div class="aas-pred-bar-wrap">
+                                    <div class="aas-pred-bar aas-pred-@m.Color" style="width:@m.Value%"></div>
+                                </div>
+                                <span class="aas-pred-val aas-pred-val-@m.Color">@m.ValueLabel</span>
+                            </div>
+                        }
+                    </div>
+                </CardContent>
+            </SfCard>
+
+        </aside>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid AccountId { get; set; }
+
+    private SfToast? _toast;
+    private bool _loading = true;
+    private bool _regenerating;
+    private string? _accountName;
+    private DateTime _generatedAt;
+    private AiAccountSummary _summary = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home", "/"),
+            new("Accounts", "/accounts"),
+            new(_accountName ?? "Account", $"/accounts/{AccountId}"),
+            new("AI Summary", ""));
+        await Task.Delay(0);
+        BuildStub();
+        _loading = false;
+    }
+
+    void BuildStub()
+    {
+        _accountName   = "Sullivan Mfg. LLC";
+        _generatedAt   = DateTime.Now;
+        _summary = new AiAccountSummary
+        {
+            AccountName   = "Sullivan Mfg. LLC",
+            AccountType   = "Commercial",
+            TenureYears   = 8,
+            AnnualPremium = 47_200m,
+            ActivePolicies= 3,
+            OpenClaims    = 1,
+            Producer      = "Maria Santos",
+            Segment       = "SMB Commercial",
+            OverallSentiment = "Positive",
+            RetentionRiskScore = 28,
+            Confidence    = 91,
+            ExecutiveSummary =
+                "Sullivan Mfg. LLC is an 8-year tenured commercial account with a strong relationship profile. " +
+                "The account carries General Liability, Commercial Auto, and Workers Comp coverage with a combined annual premium of $47,200. " +
+                "Loss history is favorable with a 12-month loss ratio of 18%. The primary retention risk is an upcoming renewal for Workers Comp with a projected 9% rate increase. " +
+                "The account has not been reviewed for umbrella coverage, representing a $12K–15K cross-sell opportunity. " +
+                "Sentiment is positive — the last NPS survey scored 9/10. Immediate priority: lock in renewal 45 days early.",
+            RiskFactors = new()
+            {
+                new("Clean 3-year loss history (LR=18%)",        "Positive", 35),
+                new("Long tenure — 8 years",                      "Positive", 20),
+                new("NPS score 9/10 (last 60 days)",              "Positive", 15),
+                new("WC renewal rate increase projected +9%",     "Negative", 20),
+                new("No umbrella — coverage gap flag",            "Negative", 10),
+            },
+            CoverageLines = new()
+            {
+                new("General Liability",   "Active",  ""),
+                new("Commercial Auto",     "Active",  ""),
+                new("Workers Comp",        "Renewing","Expires in 18 days — start renewal"),
+                new("Commercial Property", "Missing", "No property coverage on file — confirm"),
+                new("Umbrella / Excess",   "Missing", "Cross-sell opportunity identified"),
+            },
+            GapRecommendations = new()
+            {
+                "Present Umbrella/Excess liability quote at renewal — $12K–15K est. premium",
+                "Verify Commercial Property coverage for manufacturing facility",
+                "Explore Equipment Breakdown endorsement given production machinery exposure",
+            },
+            Engagement = new()
+            {
+                TotalInteractions = 24,
+                LastTouchDays     = 12,
+                NpsScore          = 9,
+                OpenTasks         = 2,
+                AiSummary         = "Good engagement frequency — 24 interactions in the last 12 months. Producer Maria Santos has a strong relationship with the primary contact. 2 open tasks: WC renewal follow-up and certificate request pending.",
+            },
+            NextBestActions = new()
+            {
+                new("Send WC renewal proposal",     "Renewal expires in 18 days — early submission improves retention probability by 28%", "bi-file-earmark-text", "high"),
+                new("Present Umbrella quote",       "Coverage gap identified — no umbrella policy on file for $47K commercial account",     "bi-umbrella",          "high"),
+                new("Schedule account review call", "No formal review in 14 months — long-tenured accounts with reviews retain at 91%",    "bi-telephone",         "med"),
+                new("Request NPS follow-up",        "NPS was 9/10 — leverage for referral ask and testimonial",                            "bi-star",              "low"),
+            },
+            PredictiveMetrics = new()
+            {
+                new("Renewal Probability",    82, "82%",  "green"),
+                new("Cross-sell Propensity",  71, "71%",  "blue"),
+                new("Churn Risk (12mo)",      18, "18%",  "green"),
+                new("Upsell Likelihood",      65, "65%",  "blue"),
+                new("Referral Probability",   74, "74%",  "green"),
+            },
+        };
+    }
+
+    async Task RegenerateAsync()
+    {
+        _regenerating = true;
+        StateHasChanged();
+        await Task.Delay(800);
+        _generatedAt = DateTime.Now;
+        _regenerating = false;
+        await _toast!.ShowAsync(new ToastModel { Content = "AI summary regenerated.", CssClass = "e-toast-success" });
+    }
+
+    async Task ExecuteActionAsync(NextBestAction a)
+    {
+        await _toast!.ShowAsync(new ToastModel { Content = $"Action queued: {a.Action}", CssClass = "e-toast-info" });
+    }
+
+    static string RiskCss(int score)   => score >= 70 ? "high" : score >= 40 ? "med" : "low";
+    static string SentCss(string s)    => s == "Positive" ? "pos" : s == "Negative" ? "neg" : "neu";
+    static string SentIcon(string s)   => s == "Positive" ? "bi-emoji-smile" : s == "Negative" ? "bi-emoji-frown" : "bi-emoji-neutral";
+    static string CovCss(string s)     => s == "Active" ? "active" : s == "Renewing" ? "renewing" : "missing";
+    static string PriorityCss(string s)=> s == "high" ? "high" : s == "med" ? "med" : "low";
+
+    // ── Models ──────────────────────────────────────────────────
+    sealed class AiAccountSummary
+    {
+        public string   AccountName        { get; set; } = "";
+        public string   AccountType        { get; set; } = "";
+        public int      TenureYears        { get; set; }
+        public decimal  AnnualPremium      { get; set; }
+        public int      ActivePolicies     { get; set; }
+        public int      OpenClaims         { get; set; }
+        public string   Producer           { get; set; } = "";
+        public string   Segment            { get; set; } = "";
+        public string   OverallSentiment   { get; set; } = "";
+        public int      RetentionRiskScore { get; set; }
+        public int      Confidence         { get; set; }
+        public string   ExecutiveSummary   { get; set; } = "";
+        public List<RiskFactor>       RiskFactors          { get; set; } = new();
+        public List<CoverageLine>     CoverageLines        { get; set; } = new();
+        public List<string>           GapRecommendations   { get; set; } = new();
+        public EngagementSummary      Engagement           { get; set; } = new();
+        public List<NextBestAction>   NextBestActions      { get; set; } = new();
+        public List<PredictiveMetric> PredictiveMetrics    { get; set; } = new();
+    }
+
+    sealed class RiskFactor(string description, string impact, int weight)
+    {
+        public string Description { get; } = description;
+        public string Impact      { get; } = impact;
+        public int    Weight      { get; } = weight;
+    }
+
+    sealed class CoverageLine(string lob, string status, string note)
+    {
+        public string Lob    { get; } = lob;
+        public string Status { get; } = status;
+        public string Note   { get; } = note;
+    }
+
+    sealed class EngagementSummary
+    {
+        public int    TotalInteractions { get; set; }
+        public int    LastTouchDays     { get; set; }
+        public int    NpsScore          { get; set; }
+        public int    OpenTasks         { get; set; }
+        public string AiSummary        { get; set; } = "";
+    }
+
+    sealed class NextBestAction(string action, string reason, string icon, string priority)
+    {
+        public string Action   { get; } = action;
+        public string Reason   { get; } = reason;
+        public string Icon     { get; } = icon;
+        public string Priority { get; } = priority;
+    }
+
+    sealed class PredictiveMetric(string label, int value, string valueLabel, string color)
+    {
+        public string Label      { get; } = label;
+        public int    Value      { get; } = value;
+        public string ValueLabel { get; } = valueLabel;
+        public string Color      { get; } = color;
+    }
+}

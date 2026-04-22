@@ -1,0 +1,218 @@
+@page "/admin/system/onboarding/commission-import"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Commission Import — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Commission Import"
+               Subtitle="Import historical commission statements, map producers to compensation plans, and configure split rules"
+               Icon="bi-percent">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/admin/system/onboarding")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Onboarding</button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showImport = true"><i class="bi bi-upload" aria-hidden="true"></i> Import Statement</button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Sub-tabs -->
+<div class="ci-tabs">
+    <button class="ci-tab @(_tab == 1 ? "ci-tab-active" : "")" @onclick="() => _tab = 1">Statement Import</button>
+    <button class="ci-tab @(_tab == 2 ? "ci-tab-active" : "")" @onclick="() => _tab = 2">Producer Plans</button>
+    <button class="ci-tab @(_tab == 3 ? "ci-tab-active" : "")" @onclick="() => _tab = 3">Import History</button>
+</div>
+
+@if (_tab == 1)
+{
+    <div class="ci-layout">
+        <!-- Upload pane -->
+        <div class="ci-upload-pane">
+            <div class="ci-section-title">Upload Commission Statement</div>
+            <div class="ci-upload-zone">
+                <i class="bi bi-file-earmark-spreadsheet ci-upload-icon" aria-hidden="true"></i>
+                <div class="ci-upload-label">Drag CSV or Excel statement file here</div>
+                <div class="ci-upload-hint">Accepted: .csv, .xlsx · Max 50 MB</div>
+                <input type="file" class="ci-file-input" accept=".csv,.xlsx" />
+            </div>
+            <div class="ci-section-title ci-mt">Statement Details</div>
+            <div class="ci-form-row"><label class="ci-label">Carrier</label>
+                <select class="ci-sel">
+                    @foreach (var c in _carrierList) { <option>@c</option> }
+                </select>
+            </div>
+            <div class="ci-form-row"><label class="ci-label">Statement Month</label>
+                <input type="month" class="ci-input" @bind="_statMonth" />
+            </div>
+            <div class="ci-form-row"><label class="ci-label">Statement Type</label>
+                <select class="ci-sel">
+                    <option>New Business</option>
+                    <option>Renewal</option>
+                    <option>Combined</option>
+                </select>
+            </div>
+            <button class="um-btn um-btn-primary ci-parse-btn" @onclick="ParseStatement"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Parse & Preview</button>
+        </div>
+
+        <!-- Preview pane -->
+        <div class="ci-preview-pane">
+            <div class="ci-section-title">Statement Preview <span class="ci-preview-count">@_previewRows.Count rows</span></div>
+            <div class="ci-preview-table">
+                <div class="ci-prev-hdr">
+                    <span>Policy #</span>
+                    <span>Insured</span>
+                    <span>Carrier</span>
+                    <span>Premium</span>
+                    <span>Commission %</span>
+                    <span>Commission $</span>
+                    <span>Match</span>
+                </div>
+                @foreach (var row in _previewRows)
+                {
+                    <div class="ci-prev-row @(row.Matched ? "" : "ci-prev-unmatched")">
+                        <span class="ci-mono">@row.PolicyNumber</span>
+                        <span>@row.Insured</span>
+                        <span>@row.Carrier</span>
+                        <span class="ci-num">@row.Premium.ToString("C0")</span>
+                        <span class="ci-num">@row.CommPct.ToString("P1")</span>
+                        <span class="ci-num ci-comm-amt">@row.CommAmt.ToString("C0")</span>
+                        <span>@if (row.Matched) { <i class="bi bi-check-circle-fill ci-match-ok" aria-hidden="true"></i> } else { <i class="bi bi-question-circle ci-match-miss" aria-hidden="true"></i> }</span>
+                    </div>
+                }
+            </div>
+            <div class="ci-preview-footer">
+                <span class="ci-preview-total">Total: @_previewRows.Sum(r => r.CommAmt).ToString("C0")</span>
+                <button class="um-btn um-btn-primary" @onclick="CommitImport"><i class="bi bi-check2" aria-hidden="true"></i> Commit Import</button>
+            </div>
+        </div>
+    </div>
+}
+else if (_tab == 2)
+{
+    <div class="ci-table-wrap">
+        <div class="ci-prod-hdr">
+            <span>Producer</span>
+            <span>Role</span>
+            <span>Commission Plan</span>
+            <span>Split %</span>
+            <span>Effective Date</span>
+            <span>Status</span>
+        </div>
+        @foreach (var p in _producers)
+        {
+            <div class="ci-prod-row">
+                <div class="ci-prod-name"><div class="ci-prod-avatar">@p.Name[0]</div><div>@p.Name<div class="ci-prod-email">@p.Email</div></div></div>
+                <div><span class="ci-role-badge">@p.Role</span></div>
+                <div>
+                    <select class="ci-sel" @bind="p.PlanKey">
+                        <option value="">— Unassigned —</option>
+                        @foreach (var pl in _planList) { <option value="@pl">@pl</option> }
+                    </select>
+                </div>
+                <div><input type="number" class="ci-input ci-input-sm" @bind="p.SplitPct" min="0" max="100" /> <span class="ci-pct-sign">%</span></div>
+                <div><input type="date" class="ci-input" @bind="p.EffectiveDate" /></div>
+                <div><span class="ci-plan-badge @(string.IsNullOrEmpty(p.PlanKey) ? "ci-plan-none" : "ci-plan-ok")">@(string.IsNullOrEmpty(p.PlanKey) ? "Unassigned" : "Assigned")</span></div>
+            </div>
+        }
+        <div class="ci-save-row">
+            <button class="um-btn um-btn-primary" @onclick="SaveProducerPlans"><i class="bi bi-check2" aria-hidden="true"></i> Save Producer Plans</button>
+        </div>
+    </div>
+}
+else
+{
+    <div class="ci-history-list">
+        @foreach (var h in _importHistory)
+        {
+            <div class="ci-hist-card">
+                <div class="ci-hist-hdr">
+                    <div class="ci-hist-icon @HistIconCss(h.Status)"><i class="bi bi-@HistIcon(h.Status)" aria-hidden="true"></i></div>
+                    <div class="ci-hist-info">
+                        <div class="ci-hist-name">@h.Carrier — @h.Month</div>
+                        <div class="ci-hist-meta">Imported by @h.ImportedBy · @h.ImportedAt</div>
+                    </div>
+                    <span class="ci-hist-badge @HistBadge(h.Status)">@h.Status</span>
+                </div>
+                <div class="ci-hist-stats">
+                    <span><i class="bi bi-check-circle" aria-hidden="true"></i> @h.Records records</span>
+                    <span><i class="bi bi-currency-dollar" aria-hidden="true"></i> @h.TotalComm.ToString("C0") total</span>
+                    @if (h.Unmatched > 0) { <span class="ci-hist-warn"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @h.Unmatched unmatched</span> }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+<!-- Import dialog -->
+<SfDialog @bind-Visible="_showImport" Width="400px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header>Import Commission Statement</Header>
+        <Content><div class="ci-dlg-note">Use the Statement Import tab to upload and map a commission statement file, then commit the import.</div></Content>
+        <FooterTemplate><button class="um-btn um-btn-primary" @onclick="() => { _showImport=false; _tab=1; }">Go to Import</button></FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private SfToast? _toast;
+    private int _tab = 1;
+    private bool _showImport;
+    private DateTime _statMonth = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Administration","/admin"), new("Tenant Onboarding","/admin/system/onboarding"), new("Commission Import",""));
+    }
+
+    private async Task ParseStatement()
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Statement parsed — 14 rows found. Review and commit.", CssClass = "e-toast-info" });
+    }
+
+    private async Task CommitImport()
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Commission statement imported successfully.", CssClass = "e-toast-success" });
+    }
+
+    private async Task SaveProducerPlans()
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "Producer commission plans saved.", CssClass = "e-toast-success" });
+    }
+
+    private static string HistIcon(string s)  => s == "Complete" ? "check-circle-fill" : s == "Failed" ? "x-circle-fill" : "clock";
+    private static string HistIconCss(string s) => s == "Complete" ? "ci-hi-ok" : s == "Failed" ? "ci-hi-err" : "ci-hi-pend";
+    private static string HistBadge(string s)  => s == "Complete" ? "ci-hb-ok" : s == "Failed" ? "ci-hb-err" : "ci-hb-pend";
+
+    private sealed class PreviewRow { public string PolicyNumber{get;set;}=string.Empty; public string Insured{get;set;}=string.Empty; public string Carrier{get;set;}=string.Empty; public decimal Premium{get;set;} public decimal CommPct{get;set;} public decimal CommAmt{get;set;} public bool Matched{get;set;} }
+    private sealed class ProducerPlan { public string Name{get;set;}=string.Empty; public string Email{get;set;}=string.Empty; public string Role{get;set;}=string.Empty; public string PlanKey{get;set;}=string.Empty; public int SplitPct{get;set;}=100; public DateTime EffectiveDate{get;set;}=DateTime.Today; }
+    private sealed class ImportHistoryItem { public string Carrier{get;set;}=string.Empty; public string Month{get;set;}=string.Empty; public string Status{get;set;}=string.Empty; public int Records{get;set;} public decimal TotalComm{get;set;} public int Unmatched{get;set;} public string ImportedBy{get;set;}=string.Empty; public string ImportedAt{get;set;}=string.Empty; }
+
+    private static readonly string[] _carrierList = ["Travelers","Liberty Mutual","Nationwide","Hartford","Chubb","CNA","Zurich"];
+    private static readonly string[] _planList    = ["Standard 10%","Senior Producer 12%","Commercial Lines 11%","CSR Bonus Plan","Flat Fee Plan"];
+
+    private List<PreviewRow> _previewRows =
+    [
+        new PreviewRow { PolicyNumber="PLY-10040", Insured="Apex Logistics LLC",   Carrier="Travelers",     Premium=42000, CommPct=.10m, CommAmt=4200,  Matched=true  },
+        new PreviewRow { PolicyNumber="PLY-10041", Insured="Kim Realty LLC",        Carrier="Travelers",     Premium=18500, CommPct=.10m, CommAmt=1850,  Matched=true  },
+        new PreviewRow { PolicyNumber="PLY-99821", Insured="Blue Harbor Marina",   Carrier="Travelers",     Premium=31000, CommPct=.10m, CommAmt=3100,  Matched=false },
+        new PreviewRow { PolicyNumber="PLY-10055", Insured="Summit Restaurant Grp",Carrier="Travelers",     Premium=22000, CommPct=.10m, CommAmt=2200,  Matched=true  },
+        new PreviewRow { PolicyNumber="PLY-10062", Insured="Crestwood Dental",     Carrier="Travelers",     Premium=9800,  CommPct=.10m, CommAmt=980,   Matched=true  },
+    ];
+
+    private List<ProducerPlan> _producers =
+    [
+        new ProducerPlan { Name="Aaron Rivera",  Email="arivera@agency.com",  Role="Producer",     PlanKey="Standard 10%",       SplitPct=100, EffectiveDate=new DateTime(2024,1,1) },
+        new ProducerPlan { Name="Lisa Monroe",   Email="lmonroe@agency.com",  Role="Producer",     PlanKey="Senior Producer 12%", SplitPct=100, EffectiveDate=new DateTime(2024,1,1) },
+        new ProducerPlan { Name="Derek Chang",   Email="dchang@agency.com",   Role="Producer",     PlanKey="",                   SplitPct=100, EffectiveDate=DateTime.Today },
+        new ProducerPlan { Name="Jen Torres",    Email="jtorres@agency.com",  Role="CSR",          PlanKey="CSR Bonus Plan",     SplitPct=0,   EffectiveDate=new DateTime(2024,1,1) },
+    ];
+
+    private List<ImportHistoryItem> _importHistory =
+    [
+        new ImportHistoryItem { Carrier="Travelers",     Month="May 2025",  Status="Complete", Records=48, TotalComm=29400, Unmatched=2,  ImportedBy="A. Rivera",  ImportedAt="Jun 1" },
+        new ImportHistoryItem { Carrier="Liberty Mutual",Month="May 2025",  Status="Complete", Records=31, TotalComm=18200, Unmatched=0,  ImportedBy="A. Rivera",  ImportedAt="Jun 1" },
+        new ImportHistoryItem { Carrier="Nationwide",    Month="Apr 2025",  Status="Complete", Records=22, TotalComm=11800, Unmatched=1,  ImportedBy="Admin",      ImportedAt="May 3" },
+        new ImportHistoryItem { Carrier="Hartford",      Month="Apr 2025",  Status="Failed",   Records=0,  TotalComm=0,     Unmatched=0,  ImportedBy="Admin",      ImportedAt="May 3" },
+    ];
+}

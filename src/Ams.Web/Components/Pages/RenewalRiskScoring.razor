@@ -1,0 +1,395 @@
+@page "/renewals/risk"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Renewal Risk Scoring — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Renewal Risk Scoring"
+               Subtitle="AI-powered retention risk scores — prioritize renewals most likely to be lost"
+               Icon="bi-shield-exclamation">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="RunScoringAsync">
+            <i class="bi bi-cpu" aria-hidden="true"></i> Re-Score All
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI STRIP ─────────────────────────────────────────────────── -->
+<div class="rrs-kpi-strip">
+    <div class="rrs-kpi-card rrs-kpi-high">
+        <div class="rrs-kpi-val">@_rows.Count(r => r.RiskScore >= 70)</div>
+        <div class="rrs-kpi-lbl"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> High Risk</div>
+    </div>
+    <div class="rrs-kpi-card rrs-kpi-med">
+        <div class="rrs-kpi-val">@_rows.Count(r => r.RiskScore is >= 40 and < 70)</div>
+        <div class="rrs-kpi-lbl"><i class="bi bi-dash-circle" aria-hidden="true"></i> Medium Risk</div>
+    </div>
+    <div class="rrs-kpi-card rrs-kpi-low">
+        <div class="rrs-kpi-val">@_rows.Count(r => r.RiskScore < 40)</div>
+        <div class="rrs-kpi-lbl"><i class="bi bi-check-circle" aria-hidden="true"></i> Low Risk</div>
+    </div>
+    <div class="rrs-kpi-card rrs-kpi-prem">
+        <div class="rrs-kpi-val">@_rows.Where(r => r.RiskScore >= 70).Sum(r => r.CurrentPremium).ToString("C0")</div>
+        <div class="rrs-kpi-lbl"><i class="bi bi-currency-dollar" aria-hidden="true"></i> High-Risk Premium at Stake</div>
+    </div>
+    <div class="rrs-kpi-card rrs-kpi-avg">
+        <div class="rrs-kpi-val">@(_rows.Count > 0 ? _rows.Average(r => r.RiskScore).ToString("F0") : "—")</div>
+        <div class="rrs-kpi-lbl"><i class="bi bi-graph-up" aria-hidden="true"></i> Avg Score</div>
+    </div>
+</div>
+
+<!-- ── CHARTS ROW ─────────────────────────────────────────────────── -->
+<div class="rrs-charts-row">
+
+    <!-- Score distribution histogram -->
+    <div class="rrs-chart-panel">
+        <div class="rrs-chart-hdr">
+            <i class="bi bi-bar-chart-steps" aria-hidden="true"></i>
+            Score Distribution
+        </div>
+        <div class="rrs-chart-body">
+            <SfChart Width="100%" Height="220px" Background="transparent">
+                <ChartPrimaryXAxis ValueType="Syncfusion.Blazor.Charts.ValueType.Category"
+                                   Title="Risk Score Band">
+                    <ChartAxisMajorGridLines Width="0" />
+                </ChartPrimaryXAxis>
+                <ChartPrimaryYAxis Title="Count">
+                    <ChartAxisMajorGridLines DashArray="4,4" Color="var(--border)" />
+                </ChartPrimaryYAxis>
+                <ChartTooltipSettings Enable="true" />
+                <ChartSeriesCollection>
+                    <ChartSeries DataSource="@_distribution"
+                                 XName="Band" YName="Count"
+                                 Name="Renewals"
+                                 Type="ChartSeriesType.Column">
+                        <ChartSeriesAnimation Enable="true" />
+                    </ChartSeries>
+                </ChartSeriesCollection>
+                <ChartLegendSettings Visible="false" />
+            </SfChart>
+        </div>
+    </div>
+
+    <!-- Risk by LOB -->
+    <div class="rrs-chart-panel">
+        <div class="rrs-chart-hdr">
+            <i class="bi bi-pie-chart" aria-hidden="true"></i>
+            Avg Risk Score by Line
+        </div>
+        <div class="rrs-chart-body">
+            <SfChart Width="100%" Height="220px" Background="transparent">
+                <ChartPrimaryXAxis ValueType="Syncfusion.Blazor.Charts.ValueType.Category"
+                                   LabelRotation="-30">
+                    <ChartAxisMajorGridLines Width="0" />
+                </ChartPrimaryXAxis>
+                <ChartPrimaryYAxis Minimum="0" Maximum="100" Title="Avg Score">
+                    <ChartAxisMajorGridLines DashArray="4,4" Color="var(--border)" />
+                </ChartPrimaryYAxis>
+                <ChartTooltipSettings Enable="true" />
+                <ChartSeriesCollection>
+                    <ChartSeries DataSource="@_byLob"
+                                 XName="Label" YName="Value"
+                                 Name="Avg Risk"
+                                 Type="ChartSeriesType.Bar"
+                                 Fill="var(--primary)">
+                        <ChartSeriesAnimation Enable="true" />
+                    </ChartSeries>
+                </ChartSeriesCollection>
+                <ChartLegendSettings Visible="false" />
+            </SfChart>
+        </div>
+    </div>
+
+    <!-- Risk vs Premium scatter -->
+    <div class="rrs-chart-panel">
+        <div class="rrs-chart-hdr">
+            <i class="bi bi-scatter-chart" aria-hidden="true"></i>
+            Risk vs. Current Premium
+        </div>
+        <div class="rrs-chart-body">
+            <SfChart Width="100%" Height="220px" Background="transparent">
+                <ChartPrimaryXAxis Title="Risk Score" Minimum="0" Maximum="100">
+                    <ChartAxisMajorGridLines DashArray="4,4" Color="var(--border)" />
+                </ChartPrimaryXAxis>
+                <ChartPrimaryYAxis Title="Premium" LabelFormat="C0">
+                    <ChartAxisMajorGridLines DashArray="4,4" Color="var(--border)" />
+                </ChartPrimaryYAxis>
+                <ChartTooltipSettings Enable="true" />
+                <ChartSeriesCollection>
+                    <ChartSeries DataSource="@_rows"
+                                 XName="RiskScore" YName="CurrentPremiumD"
+                                 Name="Renewal"
+                                 Type="ChartSeriesType.Scatter"
+                                 Fill="var(--primary)"
+                                 Width="2">
+                    </ChartSeries>
+                </ChartSeriesCollection>
+                <ChartLegendSettings Visible="false" />
+            </SfChart>
+        </div>
+    </div>
+
+</div>
+
+<!-- ── FILTER BAR ────────────────────────────────────────────────── -->
+<div class="rrs-filter-bar">
+    <input class="e-input rrs-search" @bind="_search" @bind:event="oninput"
+           placeholder="Search account, carrier, producer, LOB…" />
+    <div class="rrs-risk-pills">
+        @foreach (var tier in new[]{ "All","High","Medium","Low" })
+        {
+            <button class="rrs-pill @(_riskFilter == tier ? "rrs-pill-active" : "")"
+                    @onclick="() => _riskFilter = tier">@tier</button>
+        }
+    </div>
+    <select class="e-input rrs-filter-sel" @bind="_lobFilter">
+        <option value="">All Lines</option>
+        @foreach (var l in _lobs) { <option>@l</option> }
+    </select>
+    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters">
+        <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
+    </button>
+</div>
+
+<!-- ── RISK GRID ─────────────────────────────────────────────────── -->
+<div class="rrs-grid-wrap">
+    <SfGrid DataSource="@FilteredRows" @ref="_grid"
+            AllowSorting="true" AllowPaging="true" AllowResizing="true"
+            AllowFiltering="true" EnableHover="true" RowHeight="56">
+        <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+        <GridPageSettings PageSize="20" />
+        <GridColumns>
+
+            <GridColumn Field="@nameof(RiskRow.AccountName)" HeaderText="Account" MinWidth="180">
+                <Template>
+                    @{ var r = (RiskRow)context; }
+                    <div class="rrs-acct-cell">
+                        <button class="rrs-acct-link"
+                                @onclick='() => Nav.NavigateTo($"/renewals/{r.RenewalId}")'>
+                            @r.AccountName
+                        </button>
+                        <div class="rrs-acct-meta">@r.PolicyNumber · @r.Lob</div>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RiskRow.Carrier)" HeaderText="Carrier" Width="160" />
+
+            <GridColumn Field="@nameof(RiskRow.RiskScore)" HeaderText="Risk Score" Width="160">
+                <Template>
+                    @{ var r = (RiskRow)context; }
+                    <div class="rrs-score-cell">
+                        <div class="rrs-score-bar-wrap">
+                            <div class="rrs-score-bar rrs-score-@RiskCss(r.RiskScore)"
+                                 style="width:@r.RiskScore%"></div>
+                        </div>
+                        <span class="rrs-score-val rrs-score-val-@RiskCss(r.RiskScore)">@r.RiskScore</span>
+                    </div>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RiskRow.RiskTier)" HeaderText="Tier" Width="110">
+                <Template>
+                    @{ var r = (RiskRow)context; }
+                    <span class="rrs-tier rrs-tier-@RiskCss(r.RiskScore)">@r.RiskTier</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RiskRow.TopRiskFactor)" HeaderText="Top Risk Factor" MinWidth="180" />
+
+            <GridColumn Field="@nameof(RiskRow.LossRatio)" HeaderText="Loss Ratio" Width="115"
+                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    @{ var r = (RiskRow)context; }
+                    <span class="pd-mono @(r.LossRatio >= 70 ? "pd-viol-warn" : r.LossRatio >= 40 ? "rrs-lr-warn" : "")">
+                        @r.LossRatio.ToString("F0")%
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RiskRow.CurrentPremium)" HeaderText="Premium" Width="125"
+                        TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    @{ var r = (RiskRow)context; }
+                    <span class="pd-mono">@r.CurrentPremium.ToString("C0")</span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RiskRow.DaysToExpiry)" HeaderText="Days Left" Width="110">
+                <Template>
+                    @{ var r = (RiskRow)context; }
+                    <span class="rrs-days rrs-days-@DaysCss(r.DaysToExpiry)">
+                        @(r.DaysToExpiry <= 0 ? $"Expired {Math.Abs(r.DaysToExpiry)}d ago" : $"{r.DaysToExpiry}d")
+                    </span>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="@nameof(RiskRow.Producer)" HeaderText="Producer" Width="140" />
+
+            <GridColumn Field="@nameof(RiskRow.AIRecommendation)" HeaderText="AI Recommendation" MinWidth="200" />
+
+            <GridColumn HeaderText="Actions" Width="130" AllowSorting="false" AllowFiltering="false">
+                <Template>
+                    @{ var r = (RiskRow)context; }
+                    <div class="rrs-row-actions">
+                        <button class="um-btn um-btn-primary um-btn-xs"
+                                @onclick='() => Nav.NavigateTo($"/renewals/{r.RenewalId}")'
+                                title="Open renewal">
+                            <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Open
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs"
+                                @onclick="() => RemarkAsync(r)"
+                                title="Remarket">
+                            <i class="bi bi-send" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </Template>
+            </GridColumn>
+
+        </GridColumns>
+    </SfGrid>
+</div>
+
+@code {
+    SfToast _toast = default!;
+    SfGrid<RiskRow> _grid = default!;
+
+    string _search     = "";
+    string _riskFilter = "All";
+    string _lobFilter  = "";
+
+    readonly string[] _lobs = { "General Liability","Commercial Auto","Commercial Property","Workers Comp","Umbrella","Professional Liab.","Home/Dwelling","Personal Auto" };
+
+    sealed class RiskRow
+    {
+        public Guid    RenewalId        { get; set; }
+        public string  AccountName      { get; set; } = "";
+        public string  PolicyNumber     { get; set; } = "";
+        public string  Lob              { get; set; } = "";
+        public string  Carrier          { get; set; } = "";
+        public int     RiskScore        { get; set; }   // 0–100
+        public string  RiskTier         { get; set; } = "";
+        public string  TopRiskFactor    { get; set; } = "";
+        public decimal LossRatio        { get; set; }
+        public decimal CurrentPremium   { get; set; }
+        public double  CurrentPremiumD  => (double)CurrentPremium;
+        public int     DaysToExpiry     { get; set; }
+        public string  Producer         { get; set; } = "";
+        public string  AIRecommendation { get; set; } = "";
+        public DateTime ScoredAt        { get; set; }
+    }
+
+    readonly List<RiskRow> _rows = new();
+
+    IEnumerable<RiskRow> FilteredRows => _rows
+        .Where(r =>
+            (string.IsNullOrEmpty(_search) ||
+             r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             r.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             r.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             r.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             r.Lob.Contains(_search, StringComparison.OrdinalIgnoreCase))
+         && (_riskFilter == "All" || r.RiskTier == _riskFilter)
+         && (string.IsNullOrEmpty(_lobFilter) || r.Lob == _lobFilter))
+        .OrderByDescending(r => r.RiskScore);
+
+    // Distribution histogram buckets
+    sealed class BandPoint { public string Band { get; set; } = ""; public int Count { get; set; } }
+    List<BandPoint> _distribution = new();
+
+    // Avg score by LOB
+    sealed class LabelValue { public string Label { get; set; } = ""; public double Value { get; set; } }
+    List<LabelValue> _byLob = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Renewals", "/renewals"), new("Risk Scoring", "/renewals/risk"));
+        await Task.Delay(0);
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        _rows.Clear();
+        _rows.AddRange(new[]
+        {
+            new RiskRow { RenewalId=Guid.NewGuid(), AccountName="Bridgewater Hotels",    PolicyNumber="LIB-GL-2024-77210",  Lob="General Liability",   Carrier="Liberty Mutual",       RiskScore=82, RiskTier="High",   TopRiskFactor="Loss ratio 71% (+34pp)",        LossRatio=71m,  CurrentPremium=24_800m,  DaysToExpiry=37,  Producer="Maria Santos", AIRecommendation="Consider carrier change; present alternative quote",              ScoredAt=DateTime.UtcNow.AddHours(-1)  },
+            new RiskRow { RenewalId=Guid.NewGuid(), AccountName="Crestview Elementary",  PolicyNumber="LIB-GL-2023-44008",  Lob="General Liability",   Carrier="Liberty Mutual",       RiskScore=90, RiskTier="High",   TopRiskFactor="Competitor pricing 18% lower",  LossRatio=62m,  CurrentPremium=7_400m,   DaysToExpiry=-5,  Producer="Maria Santos", AIRecommendation="Escalate to senior underwriter — expiry passed",                  ScoredAt=DateTime.UtcNow.AddHours(-1)  },
+            new RiskRow { RenewalId=Guid.NewGuid(), AccountName="Laredo Steel Works",    PolicyNumber="ZUR-GL-2023-18820",  Lob="General Liability",   Carrier="Zurich American",      RiskScore=88, RiskTier="High",   TopRiskFactor="3 open claims, avg severity $42k", LossRatio=85m, CurrentPremium=22_100m,  DaysToExpiry=-15, Producer="Kevin Obi",    AIRecommendation="Non-renewed — initiate remarket to surplus lines",                ScoredAt=DateTime.UtcNow.AddHours(-1)  },
+            new RiskRow { RenewalId=Guid.NewGuid(), AccountName="Coastal Seafood Dist.", PolicyNumber="CNA-GL-2024-71004",  Lob="General Liability",   Carrier="CNA Commercial",       RiskScore=72, RiskTier="High",   TopRiskFactor="Missed renewal outreach 60+ days", LossRatio=44m, CurrentPremium=11_600m,  DaysToExpiry=88,  Producer="Kevin Obi",    AIRecommendation="Schedule account review call within 5 days",                     ScoredAt=DateTime.UtcNow.AddHours(-1)  },
+            new RiskRow { RenewalId=Guid.NewGuid(), AccountName="Sullivan Mfg. LLC",     PolicyNumber="TRV-GL-2024-00421",  Lob="General Liability",   Carrier="Travelers Indemnity",  RiskScore=65, RiskTier="Medium", TopRiskFactor="Premium increase projected +9%", LossRatio=28m,  CurrentPremium=17_250m,  DaysToExpiry=18,  Producer="Maria Santos", AIRecommendation="Lock in renewal early — low loss ratio is leverage",              ScoredAt=DateTime.UtcNow.AddHours(-1)  },
+            new RiskRow { RenewalId=Guid.NewGuid(), AccountName="Dallas Roofing LLC",    PolicyNumber="CNA-WC-2024-55102",  Lob="Workers Comp",        Carrier="CNA Commercial",       RiskScore=55, RiskTier="Medium", TopRiskFactor="Claim frequency above peer avg",  LossRatio=33m,  CurrentPremium=9_400m,   DaysToExpiry=45,  Producer="Kevin Obi",    AIRecommendation="Propose loss-control services to reduce future frequency",        ScoredAt=DateTime.UtcNow.AddHours(-1)  },
+            new RiskRow { RenewalId=Guid.NewGuid(), AccountName="Apex Medical Group",    PolicyNumber="MKL-PL-2024-28004",  Lob="Professional Liab.",  Carrier="Markel Corporation",   RiskScore=48, RiskTier="Medium", TopRiskFactor="Coverage gap identified in EPL",   LossRatio=5m,  CurrentPremium=14_200m,  DaysToExpiry=61,  Producer="Maria Santos", AIRecommendation="Upsell EPL coverage at renewal — low loss ratio supports it",    ScoredAt=DateTime.UtcNow.AddHours(-1)  },
+            new RiskRow { RenewalId=Guid.NewGuid(), AccountName="Sun Valley Resort",     PolicyNumber="HFD-UMB-2024-38810", Lob="Umbrella",            Carrier="Hartford Fire & Cas.", RiskScore=35, RiskTier="Low",    TopRiskFactor="Minor rate increase expected",    LossRatio=0m,   CurrentPremium=8_200m,   DaysToExpiry=75,  Producer="James Park",   AIRecommendation="Routine renewal — send quote 45 days prior",                     ScoredAt=DateTime.UtcNow.AddHours(-1)  },
+            new RiskRow { RenewalId=Guid.NewGuid(), AccountName="Metro Freight Co.",     PolicyNumber="HFD-CA-2024-14822",  Lob="Commercial Auto",     Carrier="Hartford Fire & Cas.", RiskScore=40, RiskTier="Medium", TopRiskFactor="Fleet size increased 12% YoY",    LossRatio=55m,  CurrentPremium=31_500m,  DaysToExpiry=24,  Producer="James Park",   AIRecommendation="Update schedule of autos; rewrite if premium exceeds budget",    ScoredAt=DateTime.UtcNow.AddHours(-1)  },
+            new RiskRow { RenewalId=Guid.NewGuid(), AccountName="Pioneer Automotive",    PolicyNumber="TRV-CA-2024-90221",  Lob="Commercial Auto",     Carrier="Travelers Indemnity",  RiskScore=28, RiskTier="Low",    TopRiskFactor="Clean loss history 3 years",      LossRatio=22m,  CurrentPremium=19_800m,  DaysToExpiry=95,  Producer="Sarah Kim",    AIRecommendation="Standard renewal — no intervention needed",                      ScoredAt=DateTime.UtcNow.AddHours(-1)  },
+            new RiskRow { RenewalId=Guid.NewGuid(), AccountName="Greenleaf Nurseries",   PolicyNumber="TRV-CP-2024-62011",  Lob="Commercial Property", Carrier="Travelers Indemnity",  RiskScore=20, RiskTier="Low",    TopRiskFactor="Below-average loss ratio",        LossRatio=12m,  CurrentPremium=6_750m,   DaysToExpiry=52,  Producer="Sarah Kim",    AIRecommendation="Present multi-line discount opportunity",                        ScoredAt=DateTime.UtcNow.AddHours(-1)  },
+        });
+
+        // Build distribution
+        _distribution.Clear();
+        _distribution.AddRange(new[]
+        {
+            new BandPoint { Band = "0–19",  Count = _rows.Count(r => r.RiskScore < 20)              },
+            new BandPoint { Band = "20–39", Count = _rows.Count(r => r.RiskScore is >= 20 and < 40) },
+            new BandPoint { Band = "40–59", Count = _rows.Count(r => r.RiskScore is >= 40 and < 60) },
+            new BandPoint { Band = "60–79", Count = _rows.Count(r => r.RiskScore is >= 60 and < 80) },
+            new BandPoint { Band = "80–100",Count = _rows.Count(r => r.RiskScore >= 80)             },
+        });
+
+        // Build by-LOB averages
+        _byLob = _rows
+            .GroupBy(r => r.Lob)
+            .Select(g => new LabelValue { Label = g.Key, Value = g.Average(r => r.RiskScore) })
+            .OrderByDescending(x => x.Value)
+            .ToList();
+    }
+
+    void ResetFilters() { _search = ""; _riskFilter = "All"; _lobFilter = ""; }
+    void Refresh() => BuildStub();
+
+    async Task RunScoringAsync()
+    {
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "AI Scoring",
+            Content  = "Risk scores refreshed via AI Engine.",
+            CssClass = "e-toast-success"
+        });
+        BuildStub();
+    }
+
+    async Task RemarkAsync(RiskRow r)
+    {
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "Remarket",
+            Content  = $"Submission created for {r.AccountName}.",
+            CssClass = "e-toast-info"
+        });
+    }
+
+    async Task ExportAsync()
+    {
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "Exported",
+            Content  = "Risk report exported.",
+            CssClass = "e-toast-success"
+        });
+    }
+
+    static string RiskCss(int score)  => score >= 70 ? "high" : score >= 40 ? "med" : "low";
+    static string DaysCss(int days)   => days <= 0 ? "expired" : days <= 30 ? "red" : days <= 60 ? "amber" : "blue";
+}

@@ -1,0 +1,180 @@
+@page "/analytics/kpis"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>KPI Definitions — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="KPI Definitions"
+               Subtitle="Define, configure, and manage the agency's key performance indicators — what is measured and how"
+               Icon="bi-speedometer2">
+    <Actions>
+        <button class="um-btn um-btn-primary" @onclick="() => _showNew = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New KPI
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Filter bar -->
+<div class="kd-filter-bar">
+    <div class="kd-search-wrap">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input class="kd-search" placeholder="Search KPIs…" @bind="_search" @bind:event="oninput" />
+    </div>
+    <select class="kd-sel" @bind="_domainFilter">
+        <option value="">All Domains</option>
+        <option value="Sales">Sales</option>
+        <option value="Retention">Retention</option>
+        <option value="Claims">Claims</option>
+        <option value="Finance">Finance</option>
+        <option value="Service">Service</option>
+        <option value="Producer">Producer</option>
+    </select>
+</div>
+
+<!-- KPI cards -->
+<div class="kd-kpi-grid">
+    @foreach (var kpi in Filtered)
+    {
+        <div class="kd-kpi-card @(kpi.IsActive ? "" : "kd-kpi-card--off")">
+            <div class="kd-card-hdr">
+                <div class="kd-card-icon @DomainCss(kpi.Domain)"><i class="bi @DomainIcon(kpi.Domain)" aria-hidden="true"></i></div>
+                <span class="@DomainBadge(kpi.Domain)">@kpi.Domain</span>
+                <label class="kd-toggle ms-auto">
+                    <input type="checkbox" checked="@kpi.IsActive" @onchange="() => kpi.IsActive = !kpi.IsActive" />
+                    <span class="kd-toggle-sl"></span>
+                </label>
+            </div>
+            <div class="kd-name">@kpi.Name</div>
+            <div class="kd-desc">@kpi.Description</div>
+            <div class="kd-formula-row">
+                <span class="kd-formula-lbl">Formula:</span>
+                <code class="kd-formula">@kpi.Formula</code>
+            </div>
+            <div class="kd-targets">
+                <div class="kd-target"><span class="kd-tlbl">Target</span><span class="kd-tval kd-t-green">@kpi.Target</span></div>
+                <div class="kd-target"><span class="kd-tlbl">Warning</span><span class="kd-tval kd-t-amber">@kpi.Warning</span></div>
+                <div class="kd-target"><span class="kd-tlbl">Critical</span><span class="kd-tval kd-t-red">@kpi.Critical</span></div>
+                <div class="kd-target"><span class="kd-tlbl">Direction</span><span class="kd-tval">@kpi.Direction</span></div>
+            </div>
+            <div class="kd-card-footer">
+                <span class="kd-freq">@kpi.Frequency · @kpi.Owner</span>
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => EditKpi(kpi)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+            </div>
+        </div>
+    }
+</div>
+
+<!-- New / Edit KPI dialog -->
+<SfDialog @bind-Visible="_showNew" Width="540px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="kd-dlg-hdr"><i class="bi bi-speedometer2" aria-hidden="true"></i> @(_editKpi is null ? "New KPI" : "Edit KPI")</span></Header>
+        <Content>
+            <div class="kd-dlg-body">
+                <div class="kd-dlg-row">
+                    <SfTextBox Placeholder="KPI name *" @bind-Value="_form.Name" />
+                    <SfDropDownList TValue="string" TItem="Lv" DataSource="_domainOpts" Placeholder="Domain" Width="100%" @bind-Value="_form.Domain">
+                        <DropDownListFieldSettings Value="V" Text="L" />
+                    </SfDropDownList>
+                </div>
+                <SfTextBox Placeholder="Description" @bind-Value="_form.Description" Multiline="true" />
+                <SfTextBox Placeholder="Formula (e.g. Renewed / Expiring)" @bind-Value="_form.Formula" />
+                <div class="kd-dlg-row">
+                    <SfTextBox Placeholder="Target (e.g. ≥ 85%)" @bind-Value="_form.Target" />
+                    <SfTextBox Placeholder="Warning (e.g. ≥ 75%)" @bind-Value="_form.Warning" />
+                    <SfTextBox Placeholder="Critical (e.g. < 75%)" @bind-Value="_form.Critical" />
+                </div>
+                <div class="kd-dlg-row">
+                    <SfDropDownList TValue="string" TItem="Lv" DataSource="_dirOpts" Placeholder="Direction" Width="100%" @bind-Value="_form.Direction">
+                        <DropDownListFieldSettings Value="V" Text="L" />
+                    </SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="Lv" DataSource="_freqOpts" Placeholder="Frequency" Width="100%" @bind-Value="_form.Frequency">
+                        <DropDownListFieldSettings Value="V" Text="L" />
+                    </SfDropDownList>
+                </div>
+                <SfTextBox Placeholder="Owner (role or person)" @bind-Value="_form.Owner" />
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="kd-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseKpi">Cancel</button>
+                <button class="um-btn um-btn-primary" disabled="@string.IsNullOrEmpty(_form.Name)" @onclick="CommitKpi">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save KPI
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private SfToast? _toast;
+    private string _search = string.Empty;
+    private string _domainFilter = string.Empty;
+    private bool _showNew;
+    private KpiDef? _editKpi;
+    private KpiForm _form = new();
+
+    private List<KpiDef> _kpis = [];
+
+    private static readonly List<Lv> _domainOpts = [new("Sales","Sales"),new("Retention","Retention"),new("Claims","Claims"),new("Finance","Finance"),new("Service","Service"),new("Producer","Producer")];
+    private static readonly List<Lv> _dirOpts    = [new("Higher is better","Higher is better"),new("Lower is better","Lower is better")];
+    private static readonly List<Lv> _freqOpts   = [new("Daily","Daily"),new("Weekly","Weekly"),new("Monthly","Monthly"),new("Quarterly","Quarterly")];
+
+    private IEnumerable<KpiDef> Filtered => _kpis.Where(k =>
+        (string.IsNullOrEmpty(_search) || k.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_domainFilter) || k.Domain == _domainFilter));
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Analytics","/analytics/reports"), new("KPI Definitions",""));
+        _kpis =
+        [
+            new KpiDef { Id=1,  Name="Retention Rate",          Domain="Retention", Description="Percentage of expiring policies renewed in the period.",        Formula="Renewed ÷ Expiring",          Target="≥ 88%", Warning="≥ 80%", Critical="< 80%", Direction="Higher is better", Frequency="Monthly",   Owner="Operations VP",   IsActive=true  },
+            new KpiDef { Id=2,  Name="New Business Premium",     Domain="Sales",     Description="Total written premium from new accounts in the period.",         Formula="SUM(NewPolicies.Premium)",    Target="$500K", Warning="$400K", Critical="$300K", Direction="Higher is better", Frequency="Monthly",   Owner="Sales Director",  IsActive=true  },
+            new KpiDef { Id=3,  Name="Loss Ratio",               Domain="Claims",    Description="Incurred losses as a percentage of earned premium.",             Formula="Losses ÷ Earned Premium",     Target="≤ 65%", Warning="≤ 75%", Critical="> 75%", Direction="Lower is better",  Frequency="Monthly",   Owner="Principals",      IsActive=true  },
+            new KpiDef { Id=4,  Name="Commission Revenue",       Domain="Finance",   Description="Total commission income recognized in the period.",              Formula="SUM(CommissionStatements)",   Target="$250K", Warning="$200K", Critical="$150K", Direction="Higher is better", Frequency="Monthly",   Owner="CFO",             IsActive=true  },
+            new KpiDef { Id=5,  Name="Service Request SLA",      Domain="Service",   Description="Percentage of service requests resolved within target SLA.",     Formula="Resolved On-Time ÷ Total",    Target="≥ 90%", Warning="≥ 80%", Critical="< 80%", Direction="Higher is better", Frequency="Weekly",    Owner="Service Mgr",     IsActive=true  },
+            new KpiDef { Id=6,  Name="Producer Productivity",    Domain="Producer",  Description="Average new business premium written per active producer.",      Formula="New Premium ÷ Producers",     Target="$50K",  Warning="$35K",  Critical="$25K",  Direction="Higher is better", Frequency="Monthly",   Owner="Sales Director",  IsActive=true  },
+            new KpiDef { Id=7,  Name="Renewal Conversion Rate",  Domain="Retention", Description="Percentage of renewal quotes that convert to bound policies.",   Formula="Bound ÷ Quoted",              Target="≥ 75%", Warning="≥ 65%", Critical="< 65%", Direction="Higher is better", Frequency="Monthly",   Owner="Operations VP",   IsActive=true  },
+            new KpiDef { Id=8,  Name="Claims Cycle Time (Days)", Domain="Claims",    Description="Average days from FNOL to claim closure.",                      Formula="AVG(CloseDate - FNOLDate)",   Target="≤ 30d", Warning="≤ 45d", Critical="> 45d", Direction="Lower is better",  Frequency="Monthly",   Owner="Claims Mgr",      IsActive=true  },
+            new KpiDef { Id=9,  Name="AR Days Outstanding",      Domain="Finance",   Description="Average days invoices remain unpaid (Days Sales Outstanding).",  Formula="AR Balance ÷ Daily Revenue",  Target="≤ 25d", Warning="≤ 40d", Critical="> 40d", Direction="Lower is better",  Frequency="Monthly",   Owner="CFO",             IsActive=false },
+            new KpiDef { Id=10, Name="Portal Self-Service Rate",  Domain="Service",   Description="Percentage of client requests fulfilled via the insured portal.",Formula="Portal Requests ÷ Total Req", Target="≥ 40%", Warning="≥ 25%", Critical="< 25%", Direction="Higher is better", Frequency="Monthly",   Owner="Service Mgr",     IsActive=true  },
+        ];
+    }
+
+    private void EditKpi(KpiDef k)
+    {
+        _editKpi = k;
+        _form = new KpiForm { Name=k.Name, Domain=k.Domain, Description=k.Description, Formula=k.Formula, Target=k.Target, Warning=k.Warning, Critical=k.Critical, Direction=k.Direction, Frequency=k.Frequency, Owner=k.Owner };
+        _showNew = true;
+    }
+
+    private async Task CommitKpi()
+    {
+        if (_editKpi is not null)
+        {
+            _editKpi.Name=_form.Name; _editKpi.Domain=_form.Domain; _editKpi.Description=_form.Description;
+            _editKpi.Formula=_form.Formula; _editKpi.Target=_form.Target; _editKpi.Warning=_form.Warning;
+            _editKpi.Critical=_form.Critical; _editKpi.Direction=_form.Direction; _editKpi.Frequency=_form.Frequency; _editKpi.Owner=_form.Owner;
+        }
+        else
+        {
+            _kpis.Add(new KpiDef { Id=_kpis.Count+1, Name=_form.Name, Domain=_form.Domain, Description=_form.Description, Formula=_form.Formula, Target=_form.Target, Warning=_form.Warning, Critical=_form.Critical, Direction=_form.Direction, Frequency=_form.Frequency, Owner=_form.Owner, IsActive=true });
+        }
+        CloseKpi();
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = "KPI saved.", CssClass = "e-toast-success" });
+    }
+
+    private void CloseKpi() { _showNew = false; _editKpi = null; _form = new(); }
+
+    private static string DomainIcon(string d) => d switch { "Sales"=>"bi-graph-up-arrow","Retention"=>"bi-arrow-clockwise","Claims"=>"bi-exclamation-circle","Finance"=>"bi-bank","Service"=>"bi-headset","Producer"=>"bi-person-badge",_=>"bi-speedometer" };
+    private static string DomainCss(string d)  => d switch { "Sales"=>"kd-di-blue","Retention"=>"kd-di-green","Claims"=>"kd-di-red","Finance"=>"kd-di-green","Service"=>"kd-di-blue","Producer"=>"kd-di-purple",_=>"kd-di-blue" };
+    private static string DomainBadge(string d)=> d switch { "Sales"=>"kd-dom kd-dom--sales","Retention"=>"kd-dom kd-dom--ret","Claims"=>"kd-dom kd-dom--claims","Finance"=>"kd-dom kd-dom--fin","Service"=>"kd-dom kd-dom--svc","Producer"=>"kd-dom kd-dom--prod",_=>"kd-dom" };
+
+    private sealed class KpiDef { public int Id{get;set;} public string Name{get;set;}=string.Empty; public string Domain{get;set;}=string.Empty; public string Description{get;set;}=string.Empty; public string Formula{get;set;}=string.Empty; public string Target{get;set;}=string.Empty; public string Warning{get;set;}=string.Empty; public string Critical{get;set;}=string.Empty; public string Direction{get;set;}="Higher is better"; public string Frequency{get;set;}=string.Empty; public string Owner{get;set;}=string.Empty; public bool IsActive{get;set;}=true; }
+    private sealed class KpiForm { public string Name{get;set;}=string.Empty; public string Domain{get;set;}="Sales"; public string Description{get;set;}=string.Empty; public string Formula{get;set;}=string.Empty; public string Target{get;set;}=string.Empty; public string Warning{get;set;}=string.Empty; public string Critical{get;set;}=string.Empty; public string Direction{get;set;}="Higher is better"; public string Frequency{get;set;}="Monthly"; public string Owner{get;set;}=string.Empty; }
+    private sealed record Lv(string V, string L);
+}

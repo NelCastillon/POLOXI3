@@ -308,6 +308,38 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IBackgroundJobRepository, BackgroundJobRepository>();
         services.AddScoped<IBackgroundJobService, BackgroundJobService>();
 
+        // ── Agency Configuration (Epic 3) ────────────────────────────
+        services.AddScoped<IAgencyProfileRepository, AgencyProfileRepository>();
+        services.AddScoped<IAgencyProfileService, AgencyProfileService>();
+        services.AddScoped<ICarrierRepository, CarrierRepository>();
+        services.AddScoped<ICarrierService, CarrierService>();
+        services.AddScoped<ILineOfBusinessRepository, LineOfBusinessRepository>();
+        services.AddScoped<ILineOfBusinessService, LineOfBusinessService>();
+        services.AddScoped<IAppetiteRuleRepository, AppetiteRuleRepository>();
+        services.AddScoped<IAppetiteRuleService, AppetiteRuleService>();
+
+        // ── AI Engine (Epic 11) ──────────────────────────────────────
+        services.AddScoped<IAiRepository, AiRepository>();
+        services.AddScoped<IAiService, AiService>();
+
+        // ── Carrier Integrations (Epic 12) ───────────────────────────
+        services.AddScoped<IIntegrationRepository, IntegrationRepository>();
+        services.AddScoped<IIntegrationService, IntegrationService>();
+
+        // ── Submissions & Quoting Engine ─────────────────────────────
+        services.AddScoped<ISubmissionRepository, SubmissionRepository>();
+        services.AddScoped<ISubmissionService, SubmissionService>();
+
+        // ── Documents — E-Sign (Epic 11) ─────────────────────────────
+        services.AddScoped<IESignRepository, ESignRepository>();
+        services.AddScoped<IESignService, ESignService>();
+
+        // ── Communications (Epic 10) ──────────────────────────────────
+        services.AddScoped<IMessageRepository, MessageRepository>();
+        services.AddScoped<IMessageService, MessageService>();
+        services.AddScoped<ICommTemplateRepository, CommTemplateRepository>();
+        services.AddScoped<ICommTemplateService, CommTemplateService>();
+
         // ── Audit
         services.AddScoped<IAuditLogRepository, AuditLogRepository>();
         services.AddScoped<IAuditLogService, AuditLogService>();

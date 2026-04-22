@@ -1,0 +1,92 @@
+using Ams.Application.Abstractions.Services;
+using Ams.Application.Features.Submissions;
+using Microsoft.AspNetCore.Mvc;
+
+namespace Ams.Api.Controllers;
+
+[ApiController]
+[Route("api/submissions")]
+public sealed class SubmissionsController : ControllerBase
+{
+    private readonly ISubmissionService _service;
+    public SubmissionsController(ISubmissionService service) => _service = service;
+
+    [HttpGet]
+    public async Task<IActionResult> Search(
+        [FromQuery] Guid tenantId,
+        [FromQuery] string? searchTerm,
+        [FromQuery] string? status,
+        [FromQuery] string? lineOfBusiness,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 25,
+        CancellationToken cancellationToken = default)
+        => Ok(await _service.SearchAsync(tenantId, searchTerm, status, lineOfBusiness, pageNumber, pageSize, cancellationToken));
+
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
+    {
+        var item = await _service.GetByIdAsync(id, cancellationToken);
+        return item is null ? NotFound() : Ok(item);
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateSubmissionRequest request, CancellationToken cancellationToken)
+    {
+        var id = await _service.CreateAsync(request, cancellationToken);
+        return CreatedAtAction(nameof(GetById), new { id }, new { id });
+    }
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateSubmissionRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdateAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPatch("{id:guid}/assign")]
+    public async Task<IActionResult> Assign(Guid id, [FromBody] AssignSubmissionRequest request, CancellationToken cancellationToken)
+    {
+        await _service.AssignAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
+    // ── Markets ───────────────────────────────────────────────────────
+
+    [HttpGet("{id:guid}/markets")]
+    public async Task<IActionResult> GetMarkets(Guid id, CancellationToken cancellationToken)
+        => Ok(await _service.GetMarketsAsync(id, cancellationToken));
+
+    [HttpGet("{id:guid}/markets/suggestions")]
+    public async Task<IActionResult> GetMarketSuggestions(Guid id, CancellationToken cancellationToken)
+        => Ok(await _service.GetMarketSuggestionsAsync(id, cancellationToken));
+
+    [HttpPost("{id:guid}/markets")]
+    public async Task<IActionResult> AddMarket(Guid id, [FromBody] AddSubmissionMarketRequest request, CancellationToken cancellationToken)
+    {
+        var marketId = await _service.AddMarketAsync(request with { SubmissionId = id }, cancellationToken);
+        return Ok(new { id = marketId });
+    }
+
+    [HttpPatch("markets/{marketId:guid}/status")]
+    public async Task<IActionResult> UpdateMarketStatus(Guid marketId, [FromBody] UpdateSubmissionMarketStatusRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdateMarketStatusAsync(marketId, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("markets/{marketId:guid}")]
+    public async Task<IActionResult> RemoveMarket(Guid marketId, CancellationToken cancellationToken)
+    {
+        await _service.RemoveMarketAsync(marketId, cancellationToken);
+        return NoContent();
+    }
+
+    // ── Bound Policy ──────────────────────────────────────────────────
+
+    [HttpGet("{id:guid}/policy")]
+    public async Task<IActionResult> GetPolicy(Guid id, CancellationToken cancellationToken)
+    {
+        var policy = await _service.GetPolicyBySubmissionAsync(id, cancellationToken);
+        return policy is null ? NotFound() : Ok(policy);
+    }
+}
