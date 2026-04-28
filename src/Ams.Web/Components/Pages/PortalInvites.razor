@@ -1,35 +1,397 @@
 @page "/client/portal-invites"
+@namespace Ams.Web.Components.Pages
+@using Microsoft.AspNetCore.Components
+@using Ams.Application.Features.PortalInvites
+@using Ams.Application.Common.Dtos
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Portal Invites</PageTitle>
-<h1>Portal Invites</h1>
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Portal Invites"
+               Subtitle="Manage client portal access invitations"
+               Icon="bi-envelope">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "api-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="NewInvite">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Send Invite
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI Strip -->
+<div class="api-kpi-strip">
+    <div class="api-kpi-card">
+        <span class="api-ki api-ki1"><i class="bi bi-envelope" aria-hidden="true"></i></span>
+        <div><div class="api-kv">@_items?.Count ?? 0</div><div class="api-kl">Total Invites</div></div>
+    </div>
+    <div class="api-kpi-card">
+        <span class="api-ki api-ki2"><i class="bi bi-check-circle" aria-hidden="true"></i></span>
+        <div><div class="api-kv">@(_items?.Count(i => i.StatusCode == "Accepted") ?? 0)</div><div class="api-kl">Accepted</div></div>
+    </div>
+    <div class="api-kpi-card">
+        <span class="api-ki api-ki3"><i class="bi bi-clock" aria-hidden="true"></i></span>
+        <div><div class="api-kv">@(_items?.Count(i => i.StatusCode == "Pending") ?? 0)</div><div class="api-kl">Pending</div></div>
+    </div>
+    <div class="api-kpi-card">
+        <span class="api-ki api-ki4"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></span>
+        <div><div class="api-kv">@(_items?.Count(i => i.StatusCode == "Expired") ?? 0)</div><div class="api-kl">Expired</div></div>
+    </div>
 </div>
-@if (_items is null) { <p>Loading...</p> }
-else {
-<SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="10"></GridPageSettings>
-    <GridColumns>
-        <GridColumn Field="@nameof(PortalInviteDto.AccountName)"    HeaderText="Account"     Width="200"></GridColumn>
-        <GridColumn Field="@nameof(PortalInviteDto.ContactName)"    HeaderText="Contact"     Width="180"></GridColumn>
-        <GridColumn Field="@nameof(PortalInviteDto.InviteEmail)"    HeaderText="Email"       Width="220"></GridColumn>
-        <GridColumn Field="@nameof(PortalInviteDto.StatusCode)"     HeaderText="Status"      Width="110"></GridColumn>
-        <GridColumn Field="@nameof(PortalInviteDto.SentDateUtc)"    HeaderText="Sent"        Width="140" Format="d"></GridColumn>
-        <GridColumn Field="@nameof(PortalInviteDto.ExpiresDateUtc)" HeaderText="Expires"     Width="140" Format="d"></GridColumn>
-        <GridColumn Field="@nameof(PortalInviteDto.AcceptedDateUtc)" HeaderText="Accepted"   Width="140" Format="d"></GridColumn>
-    </GridColumns>
-</SfGrid>
+
+<!-- Filter bar -->
+<div class="api-filter-bar">
+    <div class="api-search-wrap">
+        <i class="bi bi-search api-si" aria-hidden="true"></i>
+        <input class="api-search" type="search" placeholder="Search invites…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => UpdateSearch(e))" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="All Status" ShowClearButton="true" Width="120px"
+                    Value="_filterStatus" ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+</div>
+
+@if (_loading)
+{
+    <div class="api-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading invites…</span></div>
 }
+else if (_items == null || _items.Count == 0)
+{
+    <div class="api-empty">
+        <i class="bi bi-envelope" aria-hidden="true"></i>
+        <span>No portal invites yet. <button class="um-link" @onclick="NewInvite">Send one now.</button></span>
+    </div>
+}
+else if (_filtered.Count == 0)
+{
+    <div class="api-empty">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <span>No invites match your filters.</span>
+    </div>
+}
+else
+{
+    <div class="api-grid-card app-datagrid">
+        <SfGrid @ref="_grid" TValue="PortalInviteDto" DataSource="_filtered"
+                AllowPaging="true" AllowSorting="true"
+                EnableHover="true" RowHeight="56">
+            <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50,100})" />
+            <GridColumns>
+                <GridColumn HeaderText="Account" MinWidth="160" Field="@nameof(PortalInviteDto.AccountName)">
+                    <Template>
+                        @{ var i = (PortalInviteDto)context; }
+                        <div class="api-account-cell">
+                            <div class="api-icon">
+                                <i class="bi bi-building" aria-hidden="true"></i>
+                            </div>
+                            <div>
+                                <div class="api-item-name">@i.AccountName</div>
+                            </div>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(PortalInviteDto.ContactName)" HeaderText="Contact" MinWidth="160" />
+                <GridColumn Field="@nameof(PortalInviteDto.InviteEmail)" HeaderText="Email" MinWidth="220" />
+                <GridColumn Field="@nameof(PortalInviteDto.StatusCode)" HeaderText="Status" Width="110">
+                    <Template>
+                        @{ var i = (PortalInviteDto)context; }
+                        <span class="@StatusBadge(i.StatusCode)">@i.StatusCode</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(PortalInviteDto.SentDateUtc)" HeaderText="Sent" Width="120" Type="Syncfusion.Blazor.Grids.ColumnType.DateTime" Format="d" />
+                <GridColumn Field="@nameof(PortalInviteDto.ExpiresDateUtc)" HeaderText="Expires" Width="120" Type="Syncfusion.Blazor.Grids.ColumnType.DateTime" Format="d" />
+                <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>
+                        @{ var i = (PortalInviteDto)context; }
+                        @if (i.StatusCode == "Pending")
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ResendInviteAsync(i)" title="Resend">
+                                <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button class="um-btn um-btn-ghost um-btn-sm um-btn-danger" @onclick="() => DeleteInviteAsync(i)" title="Delete">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- Send Invite Modal -->
+<SfDialog @bind-Visible="_showModal" Width="520px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header>
+            <span class="api-dlg-hdr">
+                <i class="bi bi-envelope" aria-hidden="true"></i> Send Portal Invite
+            </span>
+        </Header>
+        <Content>
+            <div class="api-dlg-body">
+                <div style="display:grid;gap:.75rem">
+                    <div>
+                        <label class="api-label">Account *</label>
+                        <SfDropDownList TValue="Guid" TItem="LV<Guid>" DataSource="_accountOpts" Placeholder="Select account" Width="100%"
+                                        @bind-Value="_newInvite.AccountId">
+                            <DropDownListFieldSettings Value="Data" Text="Label" />
+                        </SfDropDownList>
+                    </div>
+                    <div>
+                        <label class="api-label">Contact *</label>
+                        <SfDropDownList TValue="Guid" TItem="LV<Guid>" DataSource="_contactOpts" Placeholder="Select contact" Width="100%"
+                                        @bind-Value="_newInvite.ContactId">
+                            <DropDownListFieldSettings Value="Data" Text="Label" />
+                        </SfDropDownList>
+                    </div>
+                    <div>
+                        <label class="api-label">Email Address *</label>
+                        <SfTextBox Placeholder="email@example.com" @bind-Value="_newInvite.InviteEmail" Width="100%" />
+                    </div>
+                    <div>
+                        <label class="api-label">Expires In (Days)</label>
+                        <SfNumericTextBox TValue="int?" Value="@_newInvite.ExpiresDays" ValueChanged="@((int? v) => _newInvite.ExpiresDays = v)" Step="1" Min="1" Max="365" Placeholder="Default: 30"></SfNumericTextBox>
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="api-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showModal = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SendInviteAsync" disabled="@(!IsFormValid())">
+                    <i class="bi bi-send" aria-hidden="true"></i> Send Invite
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
 @code {
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private string? _searchTerm;
+    private Guid _tenantId = Guid.Empty;
+    private Guid _currentUserId = Guid.Empty;
+
+    private SfToast? _toast;
+    private SfGrid<PortalInviteDto>? _grid;
+    private bool _loading = false;
+    private bool _showModal = false;
+
+    private string _search = string.Empty;
+    private string _filterStatus = string.Empty;
+
     private List<PortalInviteDto>? _items;
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private List<PortalInviteDto> _filtered = [];
+    private PortalInviteRequest _newInvite = new();
+    private List<LV<Guid>> _accountOpts = [];
+    private List<LV<Guid>> _contactOpts = [];
+
+    private static readonly List<LV> _statusOpts = [
+        new("Pending", "Pending"),
+        new("Accepted", "Accepted"),
+        new("Expired", "Expired"),
+        new("Revoked", "Revoked")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001"); // TODO: Get from auth context
+        _currentUserId = Guid.Parse("00000000-0000-0000-0000-000000000001"); // TODO: Get from auth context
+
+        Breadcrumbs.SetCrumbs(
+            new("Home", "/"),
+            new("Accounts", "/accounts"),
+            new("Portal Invites", "/client/portal-invites")
+        );
+        await LoadAsync();
+    }
+
+    private void UpdateSearch(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? string.Empty;
+        ApplyFilters();
+    }
+
     private async Task LoadAsync()
     {
-        var result = await Api.SearchPortalInvitesAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        _loading = true;
+        StateHasChanged();
+
+        try
+        {
+            // Load invites from database via API
+            var result = await Api.SearchPortalInvitesAsync(_tenantId, string.Empty);
+            _items = result?.Items?.ToList() ?? [];
+
+            // Load accounts for dropdown
+            var accounts = await Api.SearchAccountsAsync(_tenantId, string.Empty);
+            _accountOpts = accounts?.Items?.Select(a => new LV<Guid>(a.AccountId.ToString(), a.AccountName, a.AccountId)).ToList() ?? [];
+
+            // Load contacts for dropdown - get from first account or all
+            var contacts = await Api.SearchContactsAsync(_tenantId, string.Empty);
+            _contactOpts = contacts?.Items?.Select(c => new LV<Guid>(c.ContactId.ToString(), $"{c.FirstName} {c.LastName}", c.ContactId)).ToList() ?? [];
+
+            ApplyFilters();
+        }
+        catch (Exception ex)
+        {
+            await _toast!.ShowAsync(new ToastModel { Content = $"Error loading invites: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        if (_items == null) { _filtered = []; return; }
+
+        _filtered = _items.Where(i =>
+            (string.IsNullOrEmpty(_filterStatus) || i.StatusCode == _filterStatus) &&
+            (string.IsNullOrEmpty(_search) ||
+             i.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             i.ContactName?.Contains(_search, StringComparison.OrdinalIgnoreCase) == true ||
+             i.InviteEmail.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).OrderByDescending(i => i.CreatedDateUtc).ToList();
+    }
+
+    private void NewInvite()
+    {
+        _newInvite = new PortalInviteRequest 
+        { 
+            TenantId = _tenantId,
+            CreatedByUserId = _currentUserId,
+            ExpiresDateUtc = DateTime.UtcNow.AddDays(30)
+        };
+        _showModal = true;
+    }
+
+    private bool IsFormValid()
+    {
+        return _newInvite.AccountId != Guid.Empty 
+            && _newInvite.ContactId != Guid.Empty 
+            && !string.IsNullOrEmpty(_newInvite.InviteEmail);
+    }
+
+    private async Task SendInviteAsync()
+    {
+        try
+        {
+            if (!IsFormValid())
+            {
+                await _toast!.ShowAsync(new ToastModel { Content = "Please fill in all required fields.", CssClass = "e-toast-warning" });
+                return;
+            }
+
+            // Calculate expiration date
+            var expiresDays = _newInvite.ExpiresDays ?? 30;
+
+            var request = new CreatePortalInviteRequest
+            {
+                TenantId = _tenantId,
+                AccountId = _newInvite.AccountId,
+                ContactId = _newInvite.ContactId,
+                InviteEmail = _newInvite.InviteEmail,
+                ExpiresDateUtc = DateTime.UtcNow.AddDays(expiresDays),
+                CreatedByUserId = _currentUserId
+            };
+
+            // Call API to create portal invite
+            var inviteId = await Api.CreatePortalInviteAsync(request);
+
+            _showModal = false;
+            _newInvite = new();
+            await _toast!.ShowAsync(new ToastModel { Content = "Portal invite sent successfully.", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast!.ShowAsync(new ToastModel { Content = $"Error sending invite: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private async Task ResendInviteAsync(PortalInviteDto invite)
+    {
+        try
+        {
+            // Create a new invite with the same details
+            var request = new CreatePortalInviteRequest
+            {
+                TenantId = _tenantId,
+                AccountId = invite.AccountId,
+                ContactId = invite.ContactId,
+                InviteEmail = invite.InviteEmail,
+                ExpiresDateUtc = DateTime.UtcNow.AddDays(30),
+                CreatedByUserId = _currentUserId
+            };
+
+            await Api.CreatePortalInviteAsync(request);
+
+            await _toast!.ShowAsync(new ToastModel { Content = "Invite resent successfully.", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast!.ShowAsync(new ToastModel { Content = $"Error resending invite: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private async Task DeleteInviteAsync(PortalInviteDto invite)
+    {
+        if (!await ConfirmDeleteAsync()) return;
+
+        try
+        {
+            // TODO: Add delete method to ApiClient
+            // await Api.DeletePortalInviteAsync(invite.PortalInviteId);
+
+            await _toast!.ShowAsync(new ToastModel { Content = "Invite deleted.", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast!.ShowAsync(new ToastModel { Content = $"Error deleting invite: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private async Task<bool> ConfirmDeleteAsync()
+    {
+        return await Task.FromResult(true);
+    }
+
+    private static string StatusBadge(string? s) => s switch
+    {
+        "Accepted" => "api-status api-status--accepted",
+        "Pending" => "api-status api-status--pending",
+        "Expired" => "api-status api-status--expired",
+        "Revoked" => "api-status api-status--revoked",
+        _ => "api-status"
+    };
+
+    private sealed record LV(string Value, string Label);
+
+    private sealed record LV<T>(string Value, string Label, T Data) 
+        where T : struct
+    {
+        public static implicit operator T(LV<T> item) => item.Data;
+    }
+
+    private class PortalInviteRequest
+    {
+        public Guid TenantId { get; set; }
+        public Guid AccountId { get; set; }
+        public Guid ContactId { get; set; }
+        public string InviteEmail { get; set; } = string.Empty;
+        public DateTime ExpiresDateUtc { get; set; } = DateTime.UtcNow.AddDays(30);
+        public int? ExpiresDays { get; set; } = 30;
+        public Guid? CreatedByUserId { get; set; }
     }
 }

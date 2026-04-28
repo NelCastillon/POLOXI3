@@ -1,0 +1,340 @@
+@page "/crm/salesforecast"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@using Ams.Application.Features.Forecast
+
+<PageTitle>Pipeline Forecast — CRM</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Pipeline Forecast"
+               Subtitle="Projected close amounts by period and category"
+               Icon="bi-graph-up-arrow">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "pf-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showAdd = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Entry
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
+<div class="pf-kpi-strip">
+    <div class="pf-kpi-card">
+        <span class="pf-ki pf-ki1"><i class="bi bi-trophy-fill" aria-hidden="true"></i></span>
+        <div><div class="pf-kv">@_kpi.TotalEntries</div><div class="pf-kl">Total Entries</div></div>
+    </div>
+    <div class="pf-kpi-card">
+        <span class="pf-ki pf-ki2"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+        <div><div class="pf-kv">@_kpi.Pipeline.ToString("C0")</div><div class="pf-kl">Pipeline</div></div>
+    </div>
+    <div class="pf-kpi-card">
+        <span class="pf-ki pf-ki3"><i class="bi bi-check2-circle" aria-hidden="true"></i></span>
+        <div><div class="pf-kv">@_kpi.Commit.ToString("C0")</div><div class="pf-kl">Commit</div></div>
+    </div>
+    <div class="pf-kpi-card">
+        <span class="pf-ki pf-ki4"><i class="bi bi-stars" aria-hidden="true"></i></span>
+        <div><div class="pf-kv">@_kpi.BestCase.ToString("C0")</div><div class="pf-kl">Best Case</div></div>
+    </div>
+    <div class="pf-kpi-card">
+        <span class="pf-ki pf-ki5"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
+        <div><div class="pf-kv">@_kpi.Weighted.ToString("C0")</div><div class="pf-kl">Weighted</div></div>
+    </div>
+</div>
+
+<!-- ── Filter bar ────────────────────────────────────────────────────────── -->
+<div class="pf-filter-bar">
+    <div class="pf-search-wrap">
+        <i class="bi bi-search pf-si" aria-hidden="true"></i>
+        <input class="pf-search" type="search" placeholder="Search opportunity or period…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_periodOpts" Placeholder="All Periods" ShowClearButton="true" Width="130px"
+                    Value="_filterPeriod" ValueChanged="@((string v) => { _filterPeriod = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_catOpts" Placeholder="All Categories" ShowClearButton="true" Width="150px"
+                    Value="_filterCat" ValueChanged="@((string v) => { _filterCat = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+</div>
+
+<!-- ── Summary by period accordion ───────────────────────────────────────── -->
+<SfAccordion>
+    @foreach (var pg in _byPeriod)
+    {
+        <AccordionItem>
+            <HeaderTemplate>
+                <div class="pf-acc-hdr">
+                    <span class="pf-acc-period">@pg.Period</span>
+                    <span class="pf-acc-entries">@pg.Entries.Count entries</span>
+                    <span class="pf-acc-pipeline pf-mono pf-bold">@pg.TotalForecast.ToString("C0") pipeline</span>
+                    <span class="pf-acc-weighted pf-mono">@pg.TotalWeighted.ToString("C0") weighted</span>
+                </div>
+            </HeaderTemplate>
+            <ContentTemplate>
+                <div class="pf-acc-body">
+                    <SfGrid TValue="ForecastRow" DataSource="pg.Entries"
+                            AllowSorting="true" EnableHover="true" RowHeight="52">
+                        <GridColumns>
+                            <GridColumn Field="@nameof(ForecastRow.OpportunityName)" HeaderText="Opportunity" MinWidth="200" />
+                            <GridColumn Field="@nameof(ForecastRow.Category)"        HeaderText="Category"    Width="130">
+                                <Template>@{ var r = (ForecastRow)context; }<span class="@CatBadge(r.Category)">@r.Category</span></Template>
+                            </GridColumn>
+                            <GridColumn Field="@nameof(ForecastRow.ForecastAmount)"  HeaderText="Forecast Amt" Width="150" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <Template>@{ var r = (ForecastRow)context; }<span class="pf-mono pf-bold">@r.ForecastAmount.ToString("C0")</span></Template>
+                            </GridColumn>
+                            <GridColumn Field="@nameof(ForecastRow.PipelineAmount)"  HeaderText="Pipeline Amt" Width="150" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <Template>@{ var r = (ForecastRow)context; }<span class="pf-mono">@r.PipelineAmount.ToString("C0")</span></Template>
+                            </GridColumn>
+                            <GridColumn Field="@nameof(ForecastRow.WinProbability)"  HeaderText="Win %"        Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <Template>
+                                    @{ var r = (ForecastRow)context; }
+                                    <div class="pf-win-wrap">
+                                        <div class="pf-win-bar" style="width:@r.WinProbability%;background:@WinColor((int)r.WinProbability)"></div>
+                                        <span class="pf-win-num">@r.WinProbability.ToString("F0")%</span>
+                                    </div>
+                                </Template>
+                            </GridColumn>
+                        </GridColumns>
+                    </SfGrid>
+                </div>
+            </ContentTemplate>
+        </AccordionItem>
+    }
+</SfAccordion>
+
+<!-- ── Add/Edit Drawer ──────────────────────────────────────────────────── -->
+<AppCrudDrawer @bind-Visible="_showAdd" 
+               Title="@(_editingId == Guid.Empty ? "Add Forecast Entry" : "Edit Forecast Entry")"
+               Icon="bi-graph-up-arrow"
+               OnConfirm="SaveAsync" 
+               IsBusy="_saving"
+               Width="420px">
+    <Content>
+        <div class="form-row">
+            <label class="form-label">Opportunity <span class="form-required">*</span></label>
+            <SfDropDownList TValue="Guid" TItem="object"
+                            Placeholder="Select opportunity">
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Period <span class="form-required">*</span></label>
+            <SfDropDownList TValue="string" TItem="LV" 
+                            DataSource="_periodOpts"
+                            Placeholder="Select period">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Category <span class="form-required">*</span></label>
+            <SfDropDownList TValue="string" TItem="LV" 
+                            DataSource="_catOpts"
+                            Placeholder="Select category">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Forecast Amount <span class="form-required">*</span></label>
+            <input type="number" class="form-control" placeholder="0.00" step="0.01" min="0" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Pipeline Amount <span class="form-required">*</span></label>
+            <input type="number" class="form-control" placeholder="0.00" step="0.01" min="0" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Win Probability (%) <span class="form-required">*</span></label>
+            <input type="number" class="form-control" placeholder="0" step="1" min="0" max="100" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Notes (Optional)</label>
+            <textarea class="form-control" rows="3" placeholder="Additional notes…"></textarea>
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    private class KPI
+    {
+        public int TotalEntries { get; set; }
+        public decimal Pipeline { get; set; }
+        public decimal Commit { get; set; }
+        public decimal BestCase { get; set; }
+        public decimal Weighted { get; set; }
+    }
+
+    private class PeriodGroup
+    {
+        public string Period { get; set; } = string.Empty;
+        public List<ForecastRow> Entries { get; set; } = [];
+        public decimal TotalForecast => Entries.Sum(e => e.ForecastAmount);
+        public decimal TotalWeighted => Entries.Sum(e => e.ForecastAmount * (e.WinProbability / 100m));
+    }
+
+    private class ForecastRow
+    {
+        public Guid Id { get; set; }
+        public string OpportunityName { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public decimal ForecastAmount { get; set; }
+        public decimal PipelineAmount { get; set; }
+        public decimal WinProbability { get; set; }
+    }
+
+    private class LV
+    {
+        public string Label { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+    }
+
+    private SfToast? _toast;
+    private List<ForecastRow> _items = [];
+    private List<ForecastRow> _filtered = [];
+    private List<PeriodGroup> _byPeriod = [];
+    private List<LV> _periodOpts = [];
+    private List<LV> _catOpts = [];
+    private KPI _kpi = new();
+    private string _search = string.Empty;
+    private string _filterPeriod = string.Empty;
+    private string _filterCat = string.Empty;
+    private bool _loading = false;
+    private bool _saving = false;
+    private bool _showAdd = false;
+    private Guid _editingId = Guid.Empty;
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("CRM", "/crm"), new("Pipeline Forecast", "/crm/forecast"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _loading = true;
+            var result = await Api.SearchForecastEntriesAsync(_tenantId);
+            _items = result?.Items?.Select(MapToForecastRow).ToList() ?? [];
+            _filtered = _items;
+
+            _periodOpts = new()
+            {
+                new LV { Label = "Q1 2025", Value = "Q1-2025" },
+                new LV { Label = "Q2 2025", Value = "Q2-2025" },
+                new LV { Label = "Q3 2025", Value = "Q3-2025" },
+                new LV { Label = "Q4 2025", Value = "Q4-2025" }
+            };
+
+            _catOpts = new()
+            {
+                new LV { Label = "Commit", Value = "Commit" },
+                new LV { Label = "Likely", Value = "Likely" },
+                new LV { Label = "Upside", Value = "Upside" }
+            };
+
+            UpdateKpi();
+            UpdateGrouping();
+        }
+        catch (Exception ex)
+        {
+            await _toast?.ShowAsync(new ToastModel { Title = "Error", Content = ex.Message, CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private ForecastRow MapToForecastRow(ForecastEntryDto dto)
+    {
+        return new ForecastRow
+        {
+            Id = dto.ForecastEntryId,
+            OpportunityName = dto.OpportunityName ?? string.Empty,
+            Category = GetCategoryLabel(dto.CategoryCode),
+            ForecastAmount = dto.ForecastAmount,
+            PipelineAmount = dto.PipelineAmount,
+            WinProbability = dto.WinProbability
+        };
+    }
+
+    private string GetCategoryLabel(string code) => code switch
+    {
+        "Commit" => "Commit",
+        "BestCase" => "Likely",
+        "Pipeline" => "Upside",
+        _ => code
+    };
+
+    private void ApplyFilters()
+    {
+        _filtered = _items
+            .Where(x => string.IsNullOrEmpty(_search) || x.OpportunityName.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            .Where(x => string.IsNullOrEmpty(_filterPeriod) || x.OpportunityName.Contains(_filterPeriod))
+            .Where(x => string.IsNullOrEmpty(_filterCat) || x.Category == _filterCat)
+            .ToList();
+        UpdateGrouping();
+    }
+
+    private void UpdateKpi()
+    {
+        _kpi = new KPI
+        {
+            TotalEntries = _items.Count,
+            Pipeline = _items.Sum(x => x.PipelineAmount),
+            Commit = _items.Where(x => x.Category == "Commit").Sum(x => x.ForecastAmount),
+            BestCase = _items.Sum(x => x.ForecastAmount),
+            Weighted = _items.Sum(x => x.ForecastAmount * (x.WinProbability / 100m))
+        };
+    }
+
+    private void UpdateGrouping()
+    {
+        _byPeriod = _filtered
+            .GroupBy(x => x.OpportunityName)
+            .Select(g => new PeriodGroup { Period = g.Key, Entries = g.ToList() })
+            .ToList();
+    }
+
+    private async Task SaveAsync()
+    {
+        try
+        {
+            _saving = true;
+            await _toast?.ShowAsync(new ToastModel { Title = "Success", Content = "Entry saved", CssClass = "e-toast-success" });
+            _showAdd = false;
+            _editingId = Guid.Empty;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast?.ShowAsync(new ToastModel { Title = "Error", Content = ex.Message, CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private string CatBadge(string cat) => cat switch
+    {
+        "Commit" => "pf-cat-commit",
+        "Likely" => "pf-cat-likely",
+        "Upside" => "pf-cat-upside",
+        _ => "pf-cat-other"
+    };
+
+    private string WinColor(int prob) => prob switch
+    {
+        >= 75 => "#16a34a",
+        >= 50 => "#b45309",
+        _ => "#dc2626"
+    };
+}

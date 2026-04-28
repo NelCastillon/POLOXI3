@@ -33,13 +33,13 @@
 
 <!-- KPI strip -->
 <div class="sr-kpi-strip">
-    @KpiCard("bi-send",             "Total",       _rows.Count.ToString(),                                 "sr-kpi-total")
-    @KpiCard("bi-pencil-square",    "New",         _rows.Count(r=>r.Status=="New").ToString(),             "sr-kpi-new")
-    @KpiCard("bi-hourglass-split",  "In Review",   _rows.Count(r=>r.Status=="In Review").ToString(),      "sr-kpi-review")
-    @KpiCard("bi-journal-text",     "Quoted",      _rows.Count(r=>r.Status=="Quoted").ToString(),         "sr-kpi-quoted")
-    @KpiCard("bi-shield-check",     "Bound",       _rows.Count(r=>r.Status=="Bound").ToString(),          "sr-kpi-bound")
-    @KpiCard("bi-x-circle",         "Declined",    _rows.Count(r=>r.Status=="Declined").ToString(),       "sr-kpi-declined")
-    @KpiCard("bi-cash-stack",       "Quoted Premium", _rows.Where(r=>r.QuotedPremium>0).Sum(r=>r.QuotedPremium).ToString("C0"), "sr-kpi-prem")
+    @KpiCard("bi-send",             "Total",          _rows.Count.ToString(),                                        "sr-kpi-total",   null)
+    @KpiCard("bi-pencil-square",    "New",            _rows.Count(r=>r.Status=="New").ToString(),                    "sr-kpi-new",     "New")
+    @KpiCard("bi-hourglass-split",  "In Review",      _rows.Count(r=>r.Status=="In Review").ToString(),             "sr-kpi-review",  "In Review")
+    @KpiCard("bi-journal-text",     "Quoted",         _rows.Count(r=>r.Status=="Quoted").ToString(),                "sr-kpi-quoted",  "Quoted")
+    @KpiCard("bi-shield-check",     "Bound",          _rows.Count(r=>r.Status=="Bound").ToString(),                 "sr-kpi-bound",   "Bound")
+    @KpiCard("bi-x-circle",         "Declined",       _rows.Count(r=>r.Status=="Declined").ToString(),              "sr-kpi-declined","Declined")
+    @KpiCard("bi-cash-stack",       "Quoted Premium", _rows.Where(r=>r.QuotedPremium>0).Sum(r=>r.QuotedPremium).ToString("C0"), "sr-kpi-prem", "__premium")
 </div>
 
 <!-- Advanced filter -->
@@ -120,10 +120,11 @@
     SfGrid<SubRow> _grid = default!;
     SfQueryBuilder<SubRow>? _qb;
 
-    bool   _loading   = false;
-    bool   _showQb    = false;
-    string _activeTab = "all";
-    SubRow _selected  = new();
+    bool    _loading    = false;
+    bool    _showQb     = false;
+    string  _activeTab  = "all";
+    string? _kpiFilter  = null;
+    SubRow  _selected   = new();
 
     sealed record CtxItem(string Text, string IconCss);
 
@@ -158,7 +159,7 @@
         new TabDef("lob",      "By LOB",      "bi-layers"          ),
     };
 
-    IEnumerable<SubRow> TabRows => _activeTab switch
+    IEnumerable<SubRow> BaseTabRows => _activeTab switch
     {
         "new"      => _rows.Where(r => r.Status == "New"),
         "review"   => _rows.Where(r => r.Status == "In Review"),
@@ -166,6 +167,13 @@
         "bound"    => _rows.Where(r => r.Status == "Bound"),
         "declined" => _rows.Where(r => r.Status is "Declined" or "Withdrawn"),
         _          => _rows,
+    };
+
+    IEnumerable<SubRow> TabRows => _kpiFilter switch
+    {
+        null           => BaseTabRows,
+        "__premium"    => BaseTabRows.Where(r => r.QuotedPremium > 0),
+        var f          => BaseTabRows.Where(r => r.Status == f),
     };
 
     string TabCount(string key) => key switch
@@ -187,6 +195,7 @@
         new("Bind",             "bi bi-shield-check"      ),
         new("Copy",             "bi bi-copy"              ),
         new("Create Policy",    "bi bi-shield-plus"       ),
+        new("Initiate Workflow", "bi bi-diagram-3"          ),
         new("Decline",          "bi bi-x-circle"          ),
     };
 
@@ -244,8 +253,9 @@
 
     void OnCtxSelected(MenuEventArgs<CtxItem> args)
     {
-        if (args.Item.Text == "Open")          Nav.NavigateTo($"/submissions/{_selected.SubId}");
-        if (args.Item.Text == "Create Policy") Nav.NavigateTo("/policies/new");
+        if (args.Item.Text == "Open")             Nav.NavigateTo($"/submissions/{_selected.SubId}");
+        if (args.Item.Text == "Create Policy")    Nav.NavigateTo("/policies/new");
+        if (args.Item.Text == "Initiate Workflow") Nav.NavigateTo($"/workflow?entity=Submission&entityId={_selected.SubId}");
     }
 
     RenderFragment SubNoLink(SubRow r) =>
@@ -282,9 +292,14 @@
             <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
         </button>;
 
-    RenderFragment KpiCard(string icon, string label, string val, string css) =>
-        @<div class="sr-kpi-card @css">
+    RenderFragment KpiCard(string icon, string label, string val, string css, string? filterKey)
+    {
+        var isActive = _kpiFilter == filterKey && filterKey is not null;
+        return @<button class="sr-kpi-card @css @(isActive ? "sr-kpi-active" : "")"
+                        @onclick="() => _kpiFilter = isActive ? null : filterKey"
+                        title="@(filterKey is null ? "Show all" : (isActive ? "Clear filter" : $"Filter by {label}"))">
             <div class="sr-kpi-val">@val</div>
             <div class="sr-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
-        </div>;
+        </button>;
+    }
 }

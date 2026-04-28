@@ -86,4 +86,25 @@ VALUES
             PageSize = pageSize
         };
     }
+
+    public async Task<IReadOnlyList<LeadScoringRuleDto>> GetScoringRulesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT 
+    LeadScoringRuleId,
+    TenantId,
+    RuleName,
+    RuleDescription,
+    PointValue,
+    IsActive,
+    CreatedDateUtc
+FROM CRM.LeadScoringRule
+WHERE TenantId = @TenantId AND IsActive = 1
+ORDER BY PointValue DESC, RuleName";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rules = await cn.QueryAsync<LeadScoringRuleDto>(
+            new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));
+        return rules.ToList();
+    }
 }

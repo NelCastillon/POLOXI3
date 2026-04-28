@@ -29,7 +29,7 @@
         <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
             <i class="bi bi-arrow-clockwise @(_loading ? "op-spin" : "")" aria-hidden="true"></i>
         </button>
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/crm/opportunities/new")'>
+        <button class="um-btn um-btn-primary" @onclick='() => _showAdd = true'>
             <i class="bi bi-plus-lg" aria-hidden="true"></i> New Opportunity
         </button>
     </Actions>
@@ -107,7 +107,7 @@
                 <GridEvents TValue="OppRow" RowSelected="OnRowSelected" RowDeselected="OnRowDeselected" />
                 <GridColumns>
                     <GridColumn Type="ColumnType.CheckBox" Width="48" />
-                    <GridColumn HeaderText="Opportunity" Width="240" Field="@nameof(OppRow.Name)">
+                    <GridColumn HeaderText="Opportunity" Width="220" Field="@nameof(OppRow.Name)">
                         <Template>
                             @{ var r = (OppRow)context; }
                             <div class="op-name-cell">
@@ -293,6 +293,7 @@
     private SfGrid<OppRow>?   _grid;
     private string            _view    = "grid";
     private bool              _loading = false;
+    private bool              _showAdd = false;
 
     private record ViewDef(string Id, string Label, string Icon);
     private static readonly List<ViewDef> _views =
@@ -355,12 +356,44 @@
         _loading = true; StateHasChanged();
         try
         {
-            await Task.Delay(0); // TODO: Api.SearchOpportunitiesAsync
-            _opps = [];
+            var response = await Api.SearchOpportunitiesAsync(_tenantId);
+            _opps = response?.Items?.Select(MapToOppRow).ToList() ?? [];
             RebuildDerived();
+        }
+        catch (Exception ex)
+        {
+            await _toast!.ShowAsync(new ToastModel { Content = $"Error loading opportunities: {ex.Message}", CssClass = "e-toast-danger" });
+            _opps = [];
         }
         finally { _loading = false; }
     }
+
+    private OppRow MapToOppRow(OpportunityDto dto)
+    {
+        return new OppRow
+        {
+            OppId = dto.OpportunityId,
+            Name = dto.OpportunityName,
+            AccountName = dto.AccountName ?? string.Empty,
+            Stage = GetStageName(dto.StatusCode),
+            Amount = dto.EstimatedAmount,
+            WinPct = (int)dto.WinProbability,
+            ForecastCategory = dto.ForecastCategoryCode ?? "Pipeline",
+            Owner = string.Empty,
+            CloseDate = dto.CloseDate ?? DateTime.UtcNow.AddDays(30)
+        };
+    }
+
+    private string GetStageName(int statusCode) => statusCode switch
+    {
+        1 => "Qualification",
+        2 => "Needs Analysis",
+        3 => "Proposal",
+        4 => "Negotiation",
+        5 => "Closed Won",
+        6 => "Closed Lost",
+        _ => "Qualification"
+    };
 
     private void RebuildDerived()
     {

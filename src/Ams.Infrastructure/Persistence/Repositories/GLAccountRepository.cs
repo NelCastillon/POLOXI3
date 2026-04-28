@@ -12,14 +12,23 @@ public sealed class GLAccountRepository : IGLAccountRepository
 
     public async Task<GLAccountDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        const string sql = "SELECT GLAccountId, TenantId, AccountCode, AccountName, AccountTypeCode, ParentGLAccountId, IsActive, CreatedDateUtc FROM Finance.GLAccount WHERE GLAccountId = @Id AND IsDeleted = 0;";
+        const string sql = @"
+SELECT 
+    GLAccountId, TenantId, AccountCode, AccountName, AccountTypeCode, 
+    Description, ParentGLAccountId, IsActive, CreatedDateUtc 
+FROM Finance.GLAccount 
+WHERE GLAccountId = @Id AND IsDeleted = 0";
+        
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await cn.QuerySingleOrDefaultAsync<GLAccountDto>(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }
 
     public async Task<PagedResult<GLAccountDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
-        var sql = RepositorySql.BuildPagedSearchSql("Finance.GLAccount", "GLAccountId, TenantId, AccountCode, AccountName, AccountTypeCode, ParentGLAccountId, IsActive, CreatedDateUtc", "AccountName LIKE '%' + @SearchTerm + '%' OR AccountCode LIKE '%' + @SearchTerm + '%'", "AccountCode ASC");
+        var selectColumns = "GLAccountId, TenantId, AccountCode, AccountName, AccountTypeCode, Description, ParentGLAccountId, IsActive, CreatedDateUtc";
+        var searchPredicate = "AccountName LIKE '%' + @SearchTerm + '%' OR AccountCode LIKE '%' + @SearchTerm + '%'";
+        var sql = RepositorySql.BuildPagedSearchSql("Finance.GLAccount", selectColumns, searchPredicate, "AccountCode ASC");
+        
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm, Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: cancellationToken));
         var items = (await multi.ReadAsync<GLAccountDto>()).AsList();

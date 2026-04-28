@@ -23,4 +23,7 @@ public sealed class LeadService : ILeadService
 
     public Task<PagedResult<LeadDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
+
+    public Task<IReadOnlyList<LeadScoringRuleDto>> GetScoringRulesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetScoringRulesAsync(tenantId, cancellationToken);
 }

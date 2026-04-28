@@ -3,78 +3,302 @@
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
 
-<PageTitle>Business Rules — AMS</PageTitle>
+<PageTitle>Business Rules — System Administration</PageTitle>
 
-<AppPageHeader Title="Branch / Business Rules"
-               Subtitle="Configure platform-wide business rules governing workflows, data validation, and operational logic"
-               Icon="bi-node-plus">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="()=>_showCreate=true"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Rule</button>
-    </Actions>
-</AppPageHeader>
-
-<div class="br-filter-bar">
-    <div class="br-search-wrap"><i class="bi bi-search" aria-hidden="true"></i><input class="br-search" placeholder="Search rules…" @bind="_search" @bind:event="oninput" /></div>
-    <select class="br-sel" @bind="_catFilter"><option value="">All Categories</option><option value="Policy">Policy</option><option value="Billing">Billing</option><option value="Claims">Claims</option><option value="Compliance">Compliance</option><option value="Workflow">Workflow</option></select>
-    <select class="br-sel" @bind="_statusFilter"><option value="">All</option><option value="Active">Active</option><option value="Inactive">Inactive</option><option value="Draft">Draft</option></select>
-</div>
-
-<div class="br-table-wrap">
-    <SfGrid TValue="BusinessRule" DataSource="Filtered.ToList()" AllowSorting="true" AllowPaging="true" EnableHover="true" RowHeight="54">
-        <GridPageSettings PageSize="20" />
-        <GridColumns>
-            <GridColumn Field="@nameof(BusinessRule.Name)"        HeaderText="Rule Name" MinWidth="180" />
-            <GridColumn Field="@nameof(BusinessRule.Category)"    HeaderText="Category" Width="120" />
-            <GridColumn Field="@nameof(BusinessRule.Trigger)"     HeaderText="Trigger" Width="180" />
-            <GridColumn Field="@nameof(BusinessRule.Priority)"    HeaderText="Priority" Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
-                <Template>@{ var r=(BusinessRule)context; }<span class="br-pri-badge br-pri-@r.Priority.ToLower()">@r.Priority</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(BusinessRule.Status)"      HeaderText="Status" Width="100">
-                <Template>@{ var r=(BusinessRule)context; }<span class="@StatusBadge(r.Status)">@r.Status</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(BusinessRule.LastModified)" HeaderText="Modified" Width="130" />
-            <GridColumn HeaderText="" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>@{ var r=(BusinessRule)context; }
-                    <div class="br-row-actions">
-                        <button class="um-btn um-btn-ghost um-btn-xs" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ToggleStatus(r)" title="Toggle">
-                            <i class="bi bi-@(r.Status=="Active"?"pause":"play")-circle" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<SfDialog @bind-Visible="_showCreate" Width="460px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header>New Business Rule</Header>
-        <Content>
-            <div class="br-dlg">
-                <label class="br-label">Rule Name</label><input class="br-input" placeholder="e.g. Require prior carrier on new business" />
-                <label class="br-label">Category</label>
-                <select class="br-input"><option>Policy</option><option>Billing</option><option>Claims</option><option>Compliance</option><option>Workflow</option></select>
-                <label class="br-label">Trigger</label>
-                <select class="br-input"><option>On record save</option><option>On status change</option><option>On field change</option><option>On schedule</option></select>
-                <label class="br-label">Condition (pseudo-code)</label>
-                <textarea class="br-input br-ta" placeholder="e.g. policy.type == 'Commercial' AND policy.prior_carrier IS NULL"></textarea>
-                <label class="br-label">Action</label>
-                <select class="br-input"><option>Block save with message</option><option>Show warning</option><option>Auto-set field</option><option>Create task</option><option>Send notification</option></select>
+<div class="ap-page-container">
+    <!-- Professional Header -->
+    <div class="ap-page-header">
+        <div class="ap-page-header__content">
+            <div class="ap-page-header__icon">
+                <i class="bi bi-node-plus"></i>
             </div>
-        </Content>
-        <FooterTemplate>
-            <button class="um-btn um-btn-ghost" @onclick="()=>_showCreate=false">Cancel</button>
-            <button class="um-btn um-btn-primary" @onclick="()=>_showCreate=false"><i class="bi bi-check2" aria-hidden="true"></i> Create Rule</button>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+            <div>
+                <h1 class="ap-page-header__title">Business Rules</h1>
+                <p class="ap-page-header__subtitle">
+                    Configure platform-wide business rules governing workflows, data validation, and operational logic
+                </p>
+            </div>
+        </div>
+        <div class="ap-page-header__actions">
+            <button class="ap-btn ap-btn--ghost" title="Refresh data" @onclick="RefreshAsync">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+            <button class="ap-btn ap-btn--primary" title="Create new rule" @onclick="@(() => { _editingRule = new BusinessRule { Id = 0, Status = "Draft" }; _showModal = true; })">
+                <i class="bi bi-plus-lg"></i> New Rule
+            </button>
+        </div>
+    </div>
+
+    <!-- Content Area -->
+    <div class="ap-content">
+        <!-- KPI Strip -->
+        <div class="ap-kpi-strip">
+            <div class="ap-kpi-card @(_activeFilter == "all" ? "ap-kpi-card--active" : "")" 
+                 @onclick="@(() => SetActiveFilter("all"))" role="button" tabindex="0">
+                <span class="ap-kpi-icon ap-kpi-icon--primary">
+                    <i class="bi bi-diagram-3-fill"></i>
+                </span>
+                <div>
+                    <div class="ap-kpi-value">@_rules.Count</div>
+                    <div class="ap-kpi-label">Total Rules</div>
+                </div>
+            </div>
+
+            <div class="ap-kpi-card @(_activeFilter == "active" ? "ap-kpi-card--active" : "")" 
+                 @onclick="@(() => SetActiveFilter("active"))" role="button" tabindex="0">
+                <span class="ap-kpi-icon ap-kpi-icon--success">
+                    <i class="bi bi-check-circle-fill"></i>
+                </span>
+                <div>
+                    <div class="ap-kpi-value">@_rules.Count(r => r.Status == "Active")</div>
+                    <div class="ap-kpi-label">Active</div>
+                </div>
+            </div>
+
+            <div class="ap-kpi-card">
+                <span class="ap-kpi-icon ap-kpi-icon--warning">
+                    <i class="bi bi-exclamation-circle-fill"></i>
+                </span>
+                <div>
+                    <div class="ap-kpi-value">@_rules.Count(r => r.Status == "Draft")</div>
+                    <div class="ap-kpi-label">Draft</div>
+                </div>
+            </div>
+
+            <div class="ap-kpi-card">
+                <span class="ap-kpi-icon ap-kpi-icon--danger">
+                    <i class="bi bi-exclamation-triangle-fill"></i>
+                </span>
+                <div>
+                    <div class="ap-kpi-value">@_rules.Count(r => r.Priority == "High")</div>
+                    <div class="ap-kpi-label">High Priority</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filter Bar -->
+        <div class="ap-filter-bar">
+            <div class="ap-search-box">
+                <i class="bi bi-search"></i>
+                <input type="text" placeholder="Search rule name or description…" 
+                       @bind="_search" @bind:event="oninput" />
+            </div>
+            <div class="ap-filter-group">
+                <label class="ap-filter-label">Category:</label>
+                <select class="ap-filter-select" @bind="_catFilter">
+                    <option value="">All Categories</option>
+                    <option value="Policy">Policy</option>
+                    <option value="Billing">Billing</option>
+                    <option value="Claims">Claims</option>
+                    <option value="Compliance">Compliance</option>
+                    <option value="Workflow">Workflow</option>
+                </select>
+            </div>
+            <div class="ap-filter-group">
+                <label class="ap-filter-label">Status:</label>
+                <select class="ap-filter-select" @bind="_statusFilter">
+                    <option value="">All Statuses</option>
+                    <option value="Active">Active</option>
+                    <option value="Draft">Draft</option>
+                    <option value="Inactive">Inactive</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Data Table -->
+        @if (_rules.Count == 0)
+        {
+            <div class="ap-card">
+                <div class="ap-empty-state">
+                    <i class="bi bi-inbox ap-empty-icon"></i>
+                    <h3 class="ap-empty-title">No rules found</h3>
+                    <p class="ap-empty-message">Create your first business rule to get started.</p>
+                    <button class="ap-btn ap-btn--primary" @onclick="@(() => { _editingRule = new BusinessRule { Id = 0, Status = "Draft" }; _showModal = true; })">
+                        <i class="bi bi-plus-lg"></i> Create Rule
+                    </button>
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="ap-table-wrapper">
+                <table class="ap-table">
+                    <thead>
+                        <tr>
+                            <th>Rule Name</th>
+                            <th>Category</th>
+                            <th>Trigger</th>
+                            <th style="text-align: center;">Priority</th>
+                            <th style="text-align: center;">Status</th>
+                            <th>Modified</th>
+                            <th style="text-align: right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var rule in Filtered)
+                        {
+                            <tr>
+                                <td><strong>@rule.Name</strong></td>
+                                <td><span class="ap-badge ap-badge--info">@rule.Category</span></td>
+                                <td class="ap-text-secondary">@rule.Trigger</td>
+                                <td style="text-align: center;">
+                                    <span class="ap-badge @GetPriorityBadgeClass(rule.Priority)">@rule.Priority</span>
+                                </td>
+                                <td style="text-align: center;">
+                                    <span class="ap-badge @GetStatusBadgeClass(rule.Status)">@rule.Status</span>
+                                </td>
+                                <td class="ap-text-secondary">@rule.LastModified</td>
+                                <td style="text-align: right;">
+                                    <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+                                        <button class="ap-btn ap-btn--ghost ap-btn--sm" 
+                                                @onclick="@(() => OpenEditModal(rule))" 
+                                                title="Edit rule">
+                                            <i class="bi bi-pencil"></i>
+                                        </button>
+                                        <button class="ap-btn ap-btn--ghost ap-btn--sm" 
+                                                @onclick="@(() => ToggleStatusAsync(rule))" 
+                                                title="@(rule.Status == "Active" ? "Deactivate" : "Activate")">
+                                            <i class="bi bi-@(rule.Status == "Active" ? "pause" : "play")-circle"></i>
+                                        </button>
+                                        <button class="ap-btn ap-btn--ghost ap-btn--sm" 
+                                                @onclick="@(() => DeleteRuleAsync(rule.Id))" 
+                                                title="Delete rule">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+<!-- Create/Edit Modal -->
+@if (_showModal)
+{
+    <div class="ap-modal-backdrop" @onclick="CloseModal">
+        <div class="ap-modal-container" @onclick:stopPropagation>
+            <div class="ap-modal">
+                <div class="ap-modal-header">
+                    <div class="ap-modal-header__content">
+                        <i class="bi bi-@(_editingRule?.Id == 0 ? "plus-circle-fill" : "pencil-fill")"></i>
+                        <div>
+                            <h2 class="ap-modal-title">
+                                @(_editingRule?.Id == 0 ? "Create New Business Rule" : "Edit Business Rule")
+                            </h2>
+                            <p class="ap-modal-subtitle">Define the conditions and actions for this rule</p>
+                        </div>
+                    </div>
+                    <button class="ap-modal-close" @onclick="CloseModal" aria-label="Close modal">
+                        <i class="bi bi-x"></i>
+                    </button>
+                </div>
+
+                <div class="ap-modal-body">
+                    @if (_editingRule != null)
+                    {
+                        <form class="ap-form">
+                            <!-- Row 1: Name and Category -->
+                            <div class="ap-form-row">
+                                <div class="ap-form-group">
+                                    <label class="ap-form-label ap-required">Rule Name</label>
+                                    <input type="text" class="ap-form-input" 
+                                           @bind="_editingRule.Name" placeholder="e.g. Require prior carrier on new business" />
+                                </div>
+
+                                <div class="ap-form-group">
+                                    <label class="ap-form-label ap-required">Category</label>
+                                    <select class="ap-form-select" @bind="_editingRule.Category">
+                                        <option value="">Select category</option>
+                                        <option value="Policy">Policy</option>
+                                        <option value="Billing">Billing</option>
+                                        <option value="Claims">Claims</option>
+                                        <option value="Compliance">Compliance</option>
+                                        <option value="Workflow">Workflow</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Row 2: Trigger and Priority -->
+                            <div class="ap-form-row">
+                                <div class="ap-form-group">
+                                    <label class="ap-form-label ap-required">Trigger</label>
+                                    <select class="ap-form-select" @bind="_editingRule.Trigger">
+                                        <option value="">Select trigger</option>
+                                        <option value="On record save">On record save</option>
+                                        <option value="On status change">On status change</option>
+                                        <option value="On field change">On field change</option>
+                                        <option value="On schedule">On schedule</option>
+                                    </select>
+                                </div>
+
+                                <div class="ap-form-group">
+                                    <label class="ap-form-label ap-required">Priority</label>
+                                    <select class="ap-form-select" @bind="_editingRule.Priority">
+                                        <option value="">Select priority</option>
+                                        <option value="High">High</option>
+                                        <option value="Medium">Medium</option>
+                                        <option value="Low">Low</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Condition -->
+                            <div class="ap-form-group">
+                                <label class="ap-form-label">Condition <span class="ap-label-hint">(optional, pseudo-code)</span></label>
+                                <textarea class="ap-form-textarea" 
+                                          placeholder="e.g. policy.type == 'Commercial' AND policy.prior_carrier IS NULL"
+                                          style="font-family: 'Monaco', 'Courier New', monospace; font-size: 0.875rem;"></textarea>
+                            </div>
+
+                            <!-- Row 3: Action and Status -->
+                            <div class="ap-form-row">
+                                <div class="ap-form-group">
+                                    <label class="ap-form-label ap-required">Action</label>
+                                    <select class="ap-form-select">
+                                        <option value="">Select action</option>
+                                        <option value="Block save with message">Block save with message</option>
+                                        <option value="Show warning">Show warning</option>
+                                        <option value="Auto-set field">Auto-set field</option>
+                                        <option value="Create task">Create task</option>
+                                        <option value="Send notification">Send notification</option>
+                                    </select>
+                                </div>
+
+                                <div class="ap-form-group">
+                                    <label class="ap-form-label">Status</label>
+                                    <select class="ap-form-select" @bind="_editingRule.Status">
+                                        <option value="Active">Active</option>
+                                        <option value="Draft">Draft</option>
+                                        <option value="Inactive">Inactive</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </form>
+                    }
+                </div>
+
+                <div class="ap-modal-footer">
+                    <button class="ap-btn ap-btn--ghost" @onclick="CloseModal">Cancel</button>
+                    <button class="ap-btn ap-btn--primary" @onclick="SaveRuleAsync">
+                        <i class="bi bi-check2"></i> Save Rule
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
 
 @code {
     private string _search = string.Empty;
     private string _catFilter = string.Empty;
     private string _statusFilter = string.Empty;
-    private bool _showCreate;
+    private string _activeFilter = "all";
+    private bool _showModal;
+    private BusinessRule? _editingRule;
 
     private List<BusinessRule> _rules = [];
 
@@ -85,7 +309,7 @@
 
     protected override void OnInitialized()
     {
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Administration","/admin"), new("Business Rules",""));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Administration", "/admin"), new("Business Rules", ""));
         _rules =
         [
             new BusinessRule { Id=1,  Name="Require prior carrier for new business",         Category="Policy",     Trigger="On record save",    Priority="High",   Status="Active",   LastModified="Jun 1" },
@@ -97,13 +321,86 @@
             new BusinessRule { Id=7,  Name="Auto-set renewal owner to current producer",     Category="Workflow",   Trigger="On schedule",       Priority="Low",    Status="Active",   LastModified="Feb 18" },
             new BusinessRule { Id=8,  Name="Require signed ACORD 25 before bind",            Category="Compliance", Trigger="On status change",  Priority="High",   Status="Active",   LastModified="Jan 30" },
             new BusinessRule { Id=9,  Name="Send 60-day payment past due notice",            Category="Billing",    Trigger="On schedule",       Priority="Medium", Status="Inactive", LastModified="Jan 12" },
-            new BusinessRule { Id=10, Name="Prevent duplicate policy number across carriers",Category="Policy",   Trigger="On record save",    Priority="High",   Status="Draft",    LastModified="Jun 10" },
+            new BusinessRule { Id=10, Name="Prevent duplicate policy number across carriers", Category="Policy",    Trigger="On record save",    Priority="High",   Status="Draft",    LastModified="Jun 10" },
         ];
     }
 
-    private static string StatusBadge(string s) => s switch { "Active"=>"br-st br-st--ok","Inactive"=>"br-st br-st--off","Draft"=>"br-st br-st--draft",_=>"br-st" };
+    private string GetPriorityBadgeClass(string priority) => priority switch
+    {
+        "High" => "ap-badge--danger",
+        "Medium" => "ap-badge--warning",
+        "Low" => "ap-badge--info",
+        _ => "ap-badge--neutral"
+    };
 
-    private static void ToggleStatus(BusinessRule r) => r.Status = r.Status == "Active" ? "Inactive" : "Active";
+    private string GetStatusBadgeClass(string status) => status switch
+    {
+        "Active" => "ap-badge--success",
+        "Draft" => "ap-badge--warning",
+        "Inactive" => "ap-badge--neutral",
+        _ => "ap-badge--info"
+    };
 
-    private sealed class BusinessRule { public int Id{get;set;} public string Name{get;set;}=string.Empty; public string Category{get;set;}=string.Empty; public string Trigger{get;set;}=string.Empty; public string Priority{get;set;}=string.Empty; public string Status{get;set;}=string.Empty; public string LastModified{get;set;}=string.Empty; }
+    private void OpenEditModal(BusinessRule rule)
+    {
+        _editingRule = rule;
+        _showModal = true;
+    }
+
+    private void CloseModal()
+    {
+        _showModal = false;
+        _editingRule = null;
+    }
+
+    private async Task SaveRuleAsync()
+    {
+        if (_editingRule != null)
+        {
+            if (_editingRule.Id == 0)
+            {
+                _editingRule.Id = _rules.Max(r => r.Id) + 1;
+                _rules.Add(_editingRule);
+            }
+            CloseModal();
+            StateHasChanged();
+        }
+    }
+
+    private async Task ToggleStatusAsync(BusinessRule rule)
+    {
+        rule.Status = rule.Status == "Active" ? "Inactive" : "Active";
+        StateHasChanged();
+    }
+
+    private async Task DeleteRuleAsync(int id)
+    {
+        var rule = _rules.FirstOrDefault(r => r.Id == id);
+        if (rule != null)
+        {
+            _rules.Remove(rule);
+            StateHasChanged();
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        StateHasChanged();
+    }
+
+    private void SetActiveFilter(string filter)
+    {
+        _activeFilter = filter == _activeFilter ? "all" : filter;
+    }
+
+    private sealed class BusinessRule
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public string Trigger { get; set; } = string.Empty;
+        public string Priority { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string LastModified { get; set; } = string.Empty;
+    }
 }

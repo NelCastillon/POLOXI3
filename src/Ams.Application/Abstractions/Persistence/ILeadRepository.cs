@@ -9,4 +9,5 @@ public interface ILeadRepository
     Task<Guid> CreateAsync(CreateLeadRequest request, CancellationToken cancellationToken = default);
     Task<LeadDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<PagedResult<LeadDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<LeadScoringRuleDto>> GetScoringRulesAsync(Guid tenantId, CancellationToken cancellationToken = default);
 }

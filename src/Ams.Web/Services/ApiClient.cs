@@ -42,6 +42,7 @@ using Ams.Application.Features.Carriers;
 using Ams.Application.Features.Lobs;
 using Ams.Application.Features.Appetite;
 using Ams.Application.Features.Communications;
+using Ams.Application.Features.Submissions;
 
 namespace Ams.Web.Services;
 
@@ -54,11 +55,11 @@ public sealed class ApiClient
         _httpClient = httpClient;
     }
 
-    // ── Dashboard ────────────────────────────────────────────
+    // -- Dashboard --------------------------------------------
     public Task<DashboardKpiDto?> GetDashboardKpiAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<DashboardKpiDto>($"api/dashboard?tenantId={tenantId}", cancellationToken);
 
-    // ── Platform Core ────────────────────────────────────────
+    // -- Platform Core ----------------------------------------
     public Task<PagedResult<TenantDto>?> SearchTenantsAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<TenantDto>>($"api/tenants?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
@@ -97,7 +98,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Tenant Domains ───────────────────────────────────────
+    // -- Tenant Domains ---------------------------------------
     public Task<PagedResult<TenantDomainDto>?> SearchTenantDomainsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<TenantDomainDto>>($"api/tenant-domains?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
@@ -139,7 +140,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Plans ────────────────────────────────────────────────
+    // -- Plans ------------------------------------------------
     public Task<PagedResult<PlanDto>?> SearchPlansAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<PlanDto>>($"api/plans?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
@@ -184,7 +185,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Plan Sub-entities ─────────────────────────────────────
+    // -- Plan Sub-entities -------------------------------------
     public Task<IReadOnlyList<PlanFeatureDto>?> GetPlanFeaturesAsync(Guid planId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<PlanFeatureDto>>($"api/plans/{planId}/features", cancellationToken);
 
@@ -236,11 +237,11 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Platform Usage ─────────────────────────────────────────
+    // -- Platform Usage -----------------------------------------
     public Task<PlatformUsageDto?> GetPlatformUsageAsync(CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PlatformUsageDto>("api/usage", cancellationToken);
 
-    // ── Feature Catalog ────────────────────────────────────────
+    // -- Feature Catalog ----------------------------------------
     public Task<PagedResult<FeatureCatalogDto>?> SearchFeaturesAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<FeatureCatalogDto>>($"api/features?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
@@ -270,7 +271,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Tenant Features ────────────────────────────────────────
+    // -- Tenant Features ----------------------------------------
     public Task<IReadOnlyList<TenantFeatureDto>?> GetTenantFeaturesAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<TenantFeatureDto>>($"api/tenants/{tenantId}/features", cancellationToken);
 
@@ -293,33 +294,33 @@ public sealed class ApiClient
     }
 
     public Task<PagedResult<UsageEventDto>?> GetUsageEventsAsync(
-        Guid?   tenantId      = null,
-        string? metricType    = null,
+        Guid? tenantId = null,
+        string? metricType = null,
         string? sourceService = null,
-        int     pageNumber    = 1,
-        int     pageSize      = 50,
+        int pageNumber = 1,
+        int pageSize = 50,
         CancellationToken cancellationToken = default)
     {
         var url = $"api/usage/events?pageNumber={pageNumber}&pageSize={pageSize}";
-        if (tenantId.HasValue)                    url += $"&tenantId={tenantId}";
-        if (!string.IsNullOrEmpty(metricType))    url += $"&metricType={Uri.EscapeDataString(metricType)}";
+        if (tenantId.HasValue) url += $"&tenantId={tenantId}";
+        if (!string.IsNullOrEmpty(metricType)) url += $"&metricType={Uri.EscapeDataString(metricType)}";
         if (!string.IsNullOrEmpty(sourceService)) url += $"&sourceService={Uri.EscapeDataString(sourceService)}";
         return _httpClient.GetFromJsonAsync<PagedResult<UsageEventDto>>(url, cancellationToken);
     }
 
-    // ── Subscriptions ─────────────────────────────────────────
+    // -- Subscriptions -----------------------------------------
     public Task<SubscriptionDto?> GetSubscriptionByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<SubscriptionDto>($"api/subscriptions/{id}", cancellationToken);
 
     public Task<PagedResult<SubscriptionDto>?> SearchSubscriptionsAsync(string? searchTerm = null, Guid? tenantId = null, Guid? planId = null, string? statusCode = null, string? renewalType = null, string? billingCycle = null, bool? pastDue = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/subscriptions?pageNumber={pageNumber}&pageSize={pageSize}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}";
-        if (tenantId.HasValue)                          url += $"&tenantId={tenantId}";
-        if (planId.HasValue)                            url += $"&planId={planId}";
-        if (!string.IsNullOrEmpty(statusCode))          url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
-        if (!string.IsNullOrEmpty(renewalType))         url += $"&renewalType={Uri.EscapeDataString(renewalType)}";
-        if (!string.IsNullOrEmpty(billingCycle))        url += $"&billingCycle={Uri.EscapeDataString(billingCycle)}";
-        if (pastDue.HasValue)                           url += $"&pastDue={pastDue.Value}";
+        if (tenantId.HasValue) url += $"&tenantId={tenantId}";
+        if (planId.HasValue) url += $"&planId={planId}";
+        if (!string.IsNullOrEmpty(statusCode)) url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        if (!string.IsNullOrEmpty(renewalType)) url += $"&renewalType={Uri.EscapeDataString(renewalType)}";
+        if (!string.IsNullOrEmpty(billingCycle)) url += $"&billingCycle={Uri.EscapeDataString(billingCycle)}";
+        if (pastDue.HasValue) url += $"&pastDue={pastDue.Value}";
         return _httpClient.GetFromJsonAsync<PagedResult<SubscriptionDto>>(url, cancellationToken);
     }
 
@@ -361,7 +362,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── IAM ──────────────────────────────────────────────────
+    // -- IAM --------------------------------------------------
     public Task<UserDto?> GetUserByIdAsync(Guid userId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<UserDto>($"api/users/{userId}", cancellationToken);
 
@@ -646,7 +647,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── CRM ──────────────────────────────────────────────────
+    // -- CRM --------------------------------------------------
     public async Task<Guid> CreateLeadAsync(CreateLeadRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/leads", request, cancellationToken);
@@ -660,7 +661,10 @@ public sealed class ApiClient
     public Task<PagedResult<OpportunityDto>?> SearchOpportunitiesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<OpportunityDto>>($"api/opportunities?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
-    // ── Client & Account ─────────────────────────────────────
+    public Task<IReadOnlyList<LeadScoringRuleDto>?> GetLeadScoringRulesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadScoringRuleDto>>($"api/leads/scoring-rules?tenantId={tenantId}", cancellationToken);
+
+    // -- Client & Account -------------------------------------
     public async Task<Guid> CreateAccountAsync(CreateAccountRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/accounts", request, cancellationToken);
@@ -713,7 +717,7 @@ public sealed class ApiClient
     public Task<PagedResult<AccountOwnerHistoryDto>?> SearchAccountOwnershipAsync(Guid tenantId, Guid? accountId = null, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<AccountOwnerHistoryDto>>($"api/client/account-ownership?tenantId={tenantId}&accountId={accountId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
-    // ── Operations ───────────────────────────────────────────
+    // -- Operations -------------------------------------------
     public Task<PagedResult<AgreementDto>?> SearchAgreementsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<AgreementDto>>($"api/agreements?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -783,7 +787,7 @@ public sealed class ApiClient
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
     }
 
-    // ── Billing ──────────────────────────────────────────────
+    // -- Billing ----------------------------------------------
     public Task<PagedResult<InvoiceDto>?> SearchInvoicesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<InvoiceDto>>($"api/invoices?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -796,7 +800,7 @@ public sealed class ApiClient
     public Task<PagedResult<PaymentDto>?> SearchPaymentsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<PaymentDto>>($"api/payments?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
-    // ── Billing extended engine ───────────────────────────────
+    // -- Billing extended engine -------------------------------
     public Task<PagedResult<RateCardDto>?> SearchRateCardsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<RateCardDto>>($"api/billing/rate-cards?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -833,7 +837,7 @@ public sealed class ApiClient
     public Task<PagedResult<CollectionsNoteDto>?> SearchCollectionsNotesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CollectionsNoteDto>>($"api/billing/collections?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
-    // ── Finance ──────────────────────────────────────────────
+    // -- Finance ----------------------------------------------
     public Task<PagedResult<GLAccountDto>?> SearchGLAccountsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<GLAccountDto>>($"api/finance/glaccounts?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -879,7 +883,7 @@ public sealed class ApiClient
     public Task<IReadOnlyList<JournalEntryLineDto>?> GetJournalEntryLinesAsync(Guid journalEntryId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<JournalEntryLineDto>>($"api/finance/journal-entry-lines?journalEntryId={journalEntryId}", cancellationToken);
 
-    // ── Commission ───────────────────────────────────────────
+    // -- Commission -------------------------------------------
     public Task<PagedResult<CommissionPlanDto>?> SearchCommissionPlansAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CommissionPlanDto>>($"api/commissionplans?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -916,11 +920,55 @@ public sealed class ApiClient
     public Task<PagedResult<CommissionAccrualEntryDto>?> SearchCommissionAccrualEntriesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CommissionAccrualEntryDto>>($"api/commissions/accruals?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
-    // ── Workflow & Approval ──────────────────────────────────
+    // -- Submissions ------------------------------------------
+    public Task<PagedResult<SubmissionDto>?> SearchSubmissionsAsync(Guid tenantId, string? searchTerm = null, string? status = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<SubmissionDto>>($"api/submissions?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<SubmissionDto?> GetSubmissionByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<SubmissionDto>($"api/submissions/{id}", cancellationToken);
+
+    public async Task<Guid> CreateSubmissionAsync(CreateSubmissionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/submissions", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task<Guid> InitiateWorkflowForSubmissionAsync(Guid submissionId, Guid tenantId, Guid? workflowDefinitionId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/workflow/initiate", new { TenantId = tenantId, TargetEntityName = "Submission", TargetEntityId = submissionId, WorkflowDefinitionId = workflowDefinitionId }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    // -- Workflow & Approval ----------------------------------
     public Task<PagedResult<WorkflowInstanceDto>?> SearchWorkflowAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<WorkflowInstanceDto>>($"api/workflow?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
-    // ── Documents ────────────────────────────────────────────
+    public Task<PagedResult<WorkflowApprovalHistoryDto>?> GetWorkflowHistoryAsync(Guid tenantId, Guid workflowInstanceId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<WorkflowApprovalHistoryDto>>($"api/audit/approval-history?tenantId={tenantId}&workflowInstanceId={workflowInstanceId}", cancellationToken);
+
+    public async Task ApproveWorkflowStepAsync(Guid workflowInstanceId, string? notes, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/workflow/{workflowInstanceId}/approve", new { Notes = notes }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RejectWorkflowStepAsync(Guid workflowInstanceId, string reason, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/workflow/{workflowInstanceId}/reject", new { Reason = reason }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ReturnWorkflowStepAsync(Guid workflowInstanceId, string reason, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/workflow/{workflowInstanceId}/return", new { Reason = reason }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // -- Documents --------------------------------------------
     public Task<PagedResult<DocumentDto>?> SearchDocumentsAsync(Guid tenantId, string? categoryCode = null, string? entityName = null, Guid? entityId = null, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<DocumentDto>>($"api/documents?tenantId={tenantId}&categoryCode={Uri.EscapeDataString(categoryCode ?? string.Empty)}&entityName={Uri.EscapeDataString(entityName ?? string.Empty)}&entityId={entityId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -993,7 +1041,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── E-Sign ───────────────────────────────────────────────
+    // -- E-Sign -----------------------------------------------
     public Task<IReadOnlyList<ESignRequestDto>?> GetESignRequestsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<ESignRequestDto>>($"api/esign?tenantId={tenantId}", cancellationToken);
 
@@ -1017,7 +1065,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Communications — Inbox ───────────────────────────────
+    // -- Communications — Inbox -------------------------------
     public Task<IReadOnlyList<MessageThreadDto>?> GetMessageThreadsAsync(Guid tenantId, string? channel = null, string? status = null, string? assignedTo = null, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<MessageThreadDto>>($"api/messages?tenantId={tenantId}&channel={Uri.EscapeDataString(channel ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}&assignedTo={Uri.EscapeDataString(assignedTo ?? string.Empty)}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -1062,7 +1110,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Communications — Templates ───────────────────────────
+    // -- Communications — Templates ---------------------------
     public Task<IReadOnlyList<CommTemplateDto>?> GetCommTemplatesAsync(Guid tenantId, string? channel = null, string? category = null, string? status = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<CommTemplateDto>>($"api/commtemplates?tenantId={tenantId}&channel={Uri.EscapeDataString(channel ?? string.Empty)}&category={Uri.EscapeDataString(category ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}", cancellationToken);
 
@@ -1092,7 +1140,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Audit ────────────────────────────────────────────────
+    // -- Audit ------------------------------------------------
     public Task<PagedResult<AuditLogDto>?> SearchAuditAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<AuditLogDto>>($"api/audit?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -1181,11 +1229,11 @@ public sealed class ApiClient
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
     }
 
-    // ── Assistant ────────────────────────────────────────────
+    // -- Assistant --------------------------------------------
     public Task<PagedResult<AssistantConversationDto>?> SearchAssistantAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<AssistantConversationDto>>($"api/assistant?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
-    // ── Platform Core engines ────────────────────────────────
+    // -- Platform Core engines --------------------------------
     public Task<PagedResult<TenantBrandingDto>?> SearchTenantBrandingAsync(string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<TenantBrandingDto>>($"api/platform/branding?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -1225,7 +1273,7 @@ public sealed class ApiClient
     public Task<PagedResult<UserSessionDto>?> SearchUserSessionsAsync(Guid tenantId, Guid? userId = null, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<UserSessionDto>>($"api/platform/sessions?tenantId={tenantId}&userId={userId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
-    // ── IAM extended engines ─────────────────────────────────
+    // -- IAM extended engines ---------------------------------
     public Task<PagedResult<UserGroupDto>?> SearchUserGroupsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<UserGroupDto>>($"api/iam/user-groups?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -1250,7 +1298,7 @@ public sealed class ApiClient
     public Task<PagedResult<UserAccessReviewDto>?> SearchAccessReviewsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<UserAccessReviewDto>>($"api/iam/pam/reviews?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
-    // ── CRM extended ─────────────────────────────────────────
+    // -- CRM extended -----------------------------------------
     public async Task<Guid> CreateOpportunityAsync(CreateOpportunityRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/opportunities", request, cancellationToken);
@@ -1301,7 +1349,7 @@ public sealed class ApiClient
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
     }
 
-    // ── Security / MFA ────────────────────────────────────────────────────────
+    // -- Security / MFA --------------------------------------------------------
 
     public Task<PagedResult<UserMfaStatusDto>?> SearchUsersWithMfaAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<UserMfaStatusDto>>($"api/security/mfa/users?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
@@ -1344,13 +1392,13 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Security / Trusted Devices ────────────────────────────────────────────
+    // -- Security / Trusted Devices --------------------------------------------
 
     public Task<PagedResult<TrustedDeviceDto>?> SearchTrustedDevicesAsync(Guid tenantId, Guid? userId = null, string? searchTerm = null, bool? isActive = null, bool? highRiskOnly = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/security/trusted-devices?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}";
-        if (userId.HasValue)    url += $"&userId={userId}";
-        if (isActive.HasValue)  url += $"&isActive={isActive.Value}";
+        if (userId.HasValue) url += $"&userId={userId}";
+        if (isActive.HasValue) url += $"&isActive={isActive.Value}";
         if (highRiskOnly == true) url += "&highRiskOnly=true";
         return _httpClient.GetFromJsonAsync<PagedResult<TrustedDeviceDto>>(url, cancellationToken);
     }
@@ -1371,7 +1419,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Security / User Status ─────────────────────────────────────────────────
+    // -- Security / User Status -------------------------------------------------
 
     public Task<PagedResult<UserDto>?> SearchUsersForStatusAsync(Guid tenantId, string? searchTerm = null, string? statusCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
@@ -1386,7 +1434,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Governance / Access Requests ──────────────────────────────────────────
+    // -- Governance / Access Requests ------------------------------------------
 
     public Task<AccessRequestDto?> GetAccessRequestByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<AccessRequestDto>($"api/governance/access-requests/{id}", cancellationToken);
@@ -1394,11 +1442,11 @@ public sealed class ApiClient
     public Task<PagedResult<AccessRequestDto>?> SearchAccessRequestsAsync(Guid tenantId, string? searchTerm = null, string? requestTypeCode = null, string? statusCode = null, Guid? requestedForUserId = null, Guid? requestedByUserId = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/governance/access-requests?tenantId={tenantId}&pageNumber={pageNumber}&pageSize={pageSize}";
-        if (!string.IsNullOrEmpty(searchTerm))      url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
         if (!string.IsNullOrEmpty(requestTypeCode)) url += $"&requestTypeCode={Uri.EscapeDataString(requestTypeCode)}";
-        if (!string.IsNullOrEmpty(statusCode))      url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
-        if (requestedForUserId.HasValue)             url += $"&requestedForUserId={requestedForUserId}";
-        if (requestedByUserId.HasValue)              url += $"&requestedByUserId={requestedByUserId}";
+        if (!string.IsNullOrEmpty(statusCode)) url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        if (requestedForUserId.HasValue) url += $"&requestedForUserId={requestedForUserId}";
+        if (requestedByUserId.HasValue) url += $"&requestedByUserId={requestedByUserId}";
         return _httpClient.GetFromJsonAsync<PagedResult<AccessRequestDto>>(url, cancellationToken);
     }
 
@@ -1416,7 +1464,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Governance / Access Review Campaigns ──────────────────────────────────
+    // -- Governance / Access Review Campaigns ----------------------------------
 
     public Task<PagedResult<AccessReviewCampaignDto>?> SearchAccessReviewCampaignsAsync(Guid tenantId, string? searchTerm = null, string? statusCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
@@ -1470,15 +1518,15 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── SoD / Rules ───────────────────────────────────────────────────────────
+    // -- SoD / Rules -----------------------------------------------------------
 
     public Task<PagedResult<SegregationOfDutyRuleDto>?> SearchSodRulesAsync(Guid? tenantId = null, string? searchTerm = null, string? severityCode = null, bool? isActive = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/sod/rules?pageNumber={pageNumber}&pageSize={pageSize}";
-        if (tenantId.HasValue)                url += $"&tenantId={tenantId}";
-        if (!string.IsNullOrEmpty(searchTerm))   url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (tenantId.HasValue) url += $"&tenantId={tenantId}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
         if (!string.IsNullOrEmpty(severityCode)) url += $"&severityCode={Uri.EscapeDataString(severityCode)}";
-        if (isActive.HasValue)                url += $"&isActive={isActive.Value}";
+        if (isActive.HasValue) url += $"&isActive={isActive.Value}";
         return _httpClient.GetFromJsonAsync<PagedResult<SegregationOfDutyRuleDto>>(url, cancellationToken);
     }
 
@@ -1502,7 +1550,7 @@ public sealed class ApiClient
     public async Task SetSodRuleActiveAsync(Guid id, bool isActive, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
     {
         var action = isActive ? "activate" : "deactivate";
-        var url    = $"api/sod/rules/{id}/{action}?modifiedByUserId={modifiedByUserId}";
+        var url = $"api/sod/rules/{id}/{action}?modifiedByUserId={modifiedByUserId}";
         var response = await _httpClient.PatchAsync(url, null, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
@@ -1515,7 +1563,7 @@ public sealed class ApiClient
         return result?.Id ?? Guid.Empty;
     }
 
-    // ── SoD Conflicts ──────────────────────────────────────────────────────────
+    // -- SoD Conflicts ----------------------------------------------------------
 
     public Task<PagedResult<SodConflictDto>?> SearchSodConflictsAsync(
         Guid? tenantId = null, string? searchTerm = null, string? statusCode = null,
@@ -1555,7 +1603,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Compliance ──────────────────────────────────────────
+    // -- Compliance ------------------------------------------
     public Task<PagedResult<PolicyDocumentDto>?> SearchPolicyDocumentsAsync(
         Guid? tenantId = null, string? searchTerm = null, string? typeCode = null,
         string? statusCode = null, bool? isActive = null,
@@ -1563,11 +1611,11 @@ public sealed class ApiClient
         CancellationToken cancellationToken = default)
     {
         var url = $"api/compliance/policies?pageNumber={pageNumber}&pageSize={pageSize}";
-        if (tenantId.HasValue)                   url += $"&tenantId={tenantId}";
-        if (!string.IsNullOrEmpty(searchTerm))   url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
-        if (!string.IsNullOrEmpty(typeCode))     url += $"&typeCode={Uri.EscapeDataString(typeCode)}";
-        if (!string.IsNullOrEmpty(statusCode))   url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
-        if (isActive.HasValue)                   url += $"&isActive={isActive.Value}";
+        if (tenantId.HasValue) url += $"&tenantId={tenantId}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(typeCode)) url += $"&typeCode={Uri.EscapeDataString(typeCode)}";
+        if (!string.IsNullOrEmpty(statusCode)) url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        if (isActive.HasValue) url += $"&isActive={isActive.Value}";
         return _httpClient.GetFromJsonAsync<PagedResult<PolicyDocumentDto>>(url, cancellationToken);
     }
 
@@ -1623,7 +1671,7 @@ public sealed class ApiClient
     public Task<HttpResponseMessage> RemovePolicyAudienceMemberAsync(Guid id, Guid audienceId, CancellationToken cancellationToken = default)
         => _httpClient.DeleteAsync($"api/compliance/policies/{id}/audience/{audienceId}", cancellationToken);
 
-    // ── Compliance — Acknowledgements ─────────────────────────────────────────
+    // -- Compliance — Acknowledgements -----------------------------------------
 
     public Task<AcknowledgementSummaryDto?> GetAcknowledgementSummaryAsync(Guid? tenantId = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<AcknowledgementSummaryDto>($"api/compliance/acknowledgements/summary{(tenantId.HasValue ? $"?tenantId={tenantId}" : string.Empty)}", cancellationToken);
@@ -1650,13 +1698,13 @@ public sealed class ApiClient
     private static string BuildAckUrl(string path, Guid? tenantId, Guid? policyId, string? searchTerm)
     {
         var parts = new List<string>();
-        if (tenantId.HasValue)                              parts.Add($"tenantId={tenantId}");
-        if (policyId.HasValue)                              parts.Add($"policyId={policyId}");
-        if (!string.IsNullOrWhiteSpace(searchTerm))         parts.Add($"searchTerm={Uri.EscapeDataString(searchTerm)}");
+        if (tenantId.HasValue) parts.Add($"tenantId={tenantId}");
+        if (policyId.HasValue) parts.Add($"policyId={policyId}");
+        if (!string.IsNullOrWhiteSpace(searchTerm)) parts.Add($"searchTerm={Uri.EscapeDataString(searchTerm)}");
         return parts.Count > 0 ? $"{path}?{string.Join("&", parts)}" : path;
     }
 
-    // ── Regions ──────────────────────────────────────────────
+    // -- Regions ----------------------------------------------
     public Task<PagedResult<RegionDto>?> SearchRegionsAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<RegionDto>>($"api/regions?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
@@ -1690,7 +1738,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Deployment Bindings ───────────────────────────────────
+    // -- Deployment Bindings -----------------------------------
     public Task<PagedResult<DeploymentBindingDto>?> SearchDeploymentBindingsAsync(string? searchTerm = null, string? statusCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/deployment-bindings?pageNumber={pageNumber}&pageSize={pageSize}";
@@ -1728,7 +1776,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Deployment Stamps ─────────────────────────────────────
+    // -- Deployment Stamps -------------------------------------
     public Task<PagedResult<DeploymentStampDto>?> SearchDeploymentStampsAsync(string? searchTerm = null, string? statusCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/deployment-stamps?pageNumber={pageNumber}&pageSize={pageSize}";
@@ -1766,7 +1814,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Tenant Deployment Assignments ─────────────────────────
+    // -- Tenant Deployment Assignments -------------------------
     public Task<TenantDeploymentAssignmentDto?> GetTenantDeploymentAssignmentAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<TenantDeploymentAssignmentDto>($"api/tenant-deployment-assignments/{tenantId}", cancellationToken);
 
@@ -1784,7 +1832,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Quota Rules ───────────────────────────────────────
+    // -- Quota Rules ---------------------------------------
     public Task<PagedResult<QuotaRuleDto>?> SearchQuotaRulesAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/quota-rules?pageNumber={pageNumber}&pageSize={pageSize}";
@@ -1835,7 +1883,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Tenant Quotas ─────────────────────────────────────────
+    // -- Tenant Quotas -----------------------------------------
     public Task<PagedResult<TenantQuotaDto>?> SearchTenantQuotasAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/tenant-quotas?pageNumber={pageNumber}&pageSize={pageSize}";
@@ -1878,12 +1926,12 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Quota Violations ──────────────────────────────────────
+    // -- Quota Violations --------------------------------------
     public Task<PagedResult<QuotaViolationDto>?> SearchQuotaViolationsAsync(string? searchTerm = null, string? statusCode = null, string? severityCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/quota-violations?pageNumber={pageNumber}&pageSize={pageSize}";
-        if (!string.IsNullOrEmpty(searchTerm))   url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
-        if (!string.IsNullOrEmpty(statusCode))   url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(statusCode)) url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
         if (!string.IsNullOrEmpty(severityCode)) url += $"&severityCode={Uri.EscapeDataString(severityCode)}";
         return _httpClient.GetFromJsonAsync<PagedResult<QuotaViolationDto>>(url, cancellationToken);
     }
@@ -1930,7 +1978,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Health Checks ─────────────────────────────────────────
+    // -- Health Checks -----------------------------------------
     public Task<PagedResult<HealthCheckDto>?> SearchHealthChecksAsync(string? searchTerm = null, string? statusCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/health-checks?pageNumber={pageNumber}&pageSize={pageSize}";
@@ -1962,16 +2010,16 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Alerts ────────────────────────────────────────────────
+    // -- Alerts ------------------------------------------------
     public Task<PagedResult<AlertDto>?> SearchAlertsAsync(string? searchTerm = null, string? statusCode = null, string? severityCode = null, string? regionCode = null, Guid? tenantId = null, bool? openOnly = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/alerts?pageNumber={pageNumber}&pageSize={pageSize}";
-        if (!string.IsNullOrEmpty(searchTerm))   url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
-        if (!string.IsNullOrEmpty(statusCode))   url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(statusCode)) url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
         if (!string.IsNullOrEmpty(severityCode)) url += $"&severityCode={Uri.EscapeDataString(severityCode)}";
-        if (!string.IsNullOrEmpty(regionCode))   url += $"&regionCode={Uri.EscapeDataString(regionCode)}";
-        if (tenantId.HasValue)                   url += $"&tenantId={tenantId.Value}";
-        if (openOnly == true)                    url += "&openOnly=true";
+        if (!string.IsNullOrEmpty(regionCode)) url += $"&regionCode={Uri.EscapeDataString(regionCode)}";
+        if (tenantId.HasValue) url += $"&tenantId={tenantId.Value}";
+        if (openOnly == true) url += "&openOnly=true";
         return _httpClient.GetFromJsonAsync<PagedResult<AlertDto>>(url, cancellationToken);
     }
 
@@ -2005,11 +2053,11 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── SLA Definitions ──────────────────────────────────────
+    // -- SLA Definitions --------------------------------------
     public Task<PagedResult<SlaDefinitionDto>?> SearchSlaDefinitionsAsync(string? searchTerm = null, string? complianceStatus = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/sla-definitions?pageNumber={pageNumber}&pageSize={pageSize}";
-        if (!string.IsNullOrEmpty(searchTerm))       url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
         if (!string.IsNullOrEmpty(complianceStatus)) url += $"&complianceStatus={Uri.EscapeDataString(complianceStatus)}";
         return _httpClient.GetFromJsonAsync<PagedResult<SlaDefinitionDto>>(url, cancellationToken);
     }
@@ -2037,24 +2085,24 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Audit Logs ───────────────────────────────────────────
+    // -- Audit Logs -------------------------------------------
     public Task<PagedResult<AuditLogDto>?> SearchAuditLogsAsync(string? searchTerm = null, string? eventTypeCode = null, string? actor = null, string? entityName = null, string? tenantId = null, DateTime? fromDate = null, DateTime? toDate = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/audit-logs?pageNumber={pageNumber}&pageSize={pageSize}";
-        if (!string.IsNullOrEmpty(searchTerm))    url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
         if (!string.IsNullOrEmpty(eventTypeCode)) url += $"&eventTypeCode={Uri.EscapeDataString(eventTypeCode)}";
-        if (!string.IsNullOrEmpty(actor))         url += $"&actor={Uri.EscapeDataString(actor)}";
-        if (!string.IsNullOrEmpty(entityName))    url += $"&entityName={Uri.EscapeDataString(entityName)}";
-        if (!string.IsNullOrEmpty(tenantId))      url += $"&tenantId={Uri.EscapeDataString(tenantId)}";
-        if (fromDate.HasValue)                    url += $"&fromDate={fromDate.Value:O}";
-        if (toDate.HasValue)                      url += $"&toDate={toDate.Value:O}";
+        if (!string.IsNullOrEmpty(actor)) url += $"&actor={Uri.EscapeDataString(actor)}";
+        if (!string.IsNullOrEmpty(entityName)) url += $"&entityName={Uri.EscapeDataString(entityName)}";
+        if (!string.IsNullOrEmpty(tenantId)) url += $"&tenantId={Uri.EscapeDataString(tenantId)}";
+        if (fromDate.HasValue) url += $"&fromDate={fromDate.Value:O}";
+        if (toDate.HasValue) url += $"&toDate={toDate.Value:O}";
         return _httpClient.GetFromJsonAsync<PagedResult<AuditLogDto>>(url, cancellationToken);
     }
 
     public Task<AuditLogDto?> GetAuditLogByIdAsync(Guid auditLogId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<AuditLogDto>($"api/audit-logs/{auditLogId}", cancellationToken);
 
-    // ── Field Change Logs ────────────────────────────────────
+    // -- Field Change Logs ------------------------------------
     public Task<PagedResult<FieldChangeLogDto>?> SearchFieldChangeLogsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/field-change-logs?tenantId={tenantId}&pageNumber={pageNumber}&pageSize={pageSize}";
@@ -2062,32 +2110,32 @@ public sealed class ApiClient
         return _httpClient.GetFromJsonAsync<PagedResult<FieldChangeLogDto>>(url, cancellationToken);
     }
 
-    // ── Security Event Logs ──────────────────────────────────
+    // -- Security Event Logs ----------------------------------
     public Task<PagedResult<SecurityEventLogDto>?> SearchSecurityEventLogsAsync(string? searchTerm = null, string? eventTypeCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/security-event-logs?pageNumber={pageNumber}&pageSize={pageSize}";
-        if (!string.IsNullOrEmpty(searchTerm))    url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
         if (!string.IsNullOrEmpty(eventTypeCode)) url += $"&eventTypeCode={Uri.EscapeDataString(eventTypeCode)}";
         return _httpClient.GetFromJsonAsync<PagedResult<SecurityEventLogDto>>(url, cancellationToken);
     }
 
-    // ── System Logs ─────────────────────────────────────────
+    // -- System Logs -----------------------------------------
     public Task<PagedResult<SystemLogDto>?> SearchSystemLogsAsync(string? keyword = null, string? level = null, string? serviceName = null, string? regionCode = null, string? correlationId = null, string? tenantId = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/system-logs?pageNumber={pageNumber}&pageSize={pageSize}";
-        if (!string.IsNullOrEmpty(keyword))       url += $"&keyword={Uri.EscapeDataString(keyword)}";
-        if (!string.IsNullOrEmpty(level))          url += $"&level={Uri.EscapeDataString(level)}";
-        if (!string.IsNullOrEmpty(serviceName))    url += $"&serviceName={Uri.EscapeDataString(serviceName)}";
-        if (!string.IsNullOrEmpty(regionCode))     url += $"&regionCode={Uri.EscapeDataString(regionCode)}";
-        if (!string.IsNullOrEmpty(correlationId))  url += $"&correlationId={Uri.EscapeDataString(correlationId)}";
-        if (!string.IsNullOrEmpty(tenantId))       url += $"&tenantId={Uri.EscapeDataString(tenantId)}";
+        if (!string.IsNullOrEmpty(keyword)) url += $"&keyword={Uri.EscapeDataString(keyword)}";
+        if (!string.IsNullOrEmpty(level)) url += $"&level={Uri.EscapeDataString(level)}";
+        if (!string.IsNullOrEmpty(serviceName)) url += $"&serviceName={Uri.EscapeDataString(serviceName)}";
+        if (!string.IsNullOrEmpty(regionCode)) url += $"&regionCode={Uri.EscapeDataString(regionCode)}";
+        if (!string.IsNullOrEmpty(correlationId)) url += $"&correlationId={Uri.EscapeDataString(correlationId)}";
+        if (!string.IsNullOrEmpty(tenantId)) url += $"&tenantId={Uri.EscapeDataString(tenantId)}";
         return _httpClient.GetFromJsonAsync<PagedResult<SystemLogDto>>(url, cancellationToken);
     }
 
     public Task<SystemLogDto?> GetSystemLogByIdAsync(Guid systemLogId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<SystemLogDto>($"api/system-logs/{systemLogId}", cancellationToken);
 
-    // ── Platform Configuration ───────────────────────────────
+    // -- Platform Configuration -------------------------------
     public Task<List<ConfigurationSettingDto>?> GetConfigurationByScopeAsync(string scopeCode, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<List<ConfigurationSettingDto>>($"api/platform/configuration/scope/{Uri.EscapeDataString(scopeCode)}", cancellationToken);
 
@@ -2097,16 +2145,16 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Platform Events ────────────────────────────────────────
+    // -- Platform Events ----------------------------------------
     public Task<PagedResult<PlatformEventDto>?> SearchPlatformEventsAsync(string? searchTerm = null, string? eventTypeCode = null, string? processingStatus = null, string? sourceService = null, Guid? tenantId = null, string? correlationId = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/platform-events?pageNumber={pageNumber}&pageSize={pageSize}";
-        if (!string.IsNullOrEmpty(searchTerm))       url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
-        if (!string.IsNullOrEmpty(eventTypeCode))    url += $"&eventTypeCode={Uri.EscapeDataString(eventTypeCode)}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(eventTypeCode)) url += $"&eventTypeCode={Uri.EscapeDataString(eventTypeCode)}";
         if (!string.IsNullOrEmpty(processingStatus)) url += $"&processingStatus={Uri.EscapeDataString(processingStatus)}";
-        if (!string.IsNullOrEmpty(sourceService))    url += $"&sourceService={Uri.EscapeDataString(sourceService)}";
-        if (tenantId.HasValue)                        url += $"&tenantId={tenantId}";
-        if (!string.IsNullOrEmpty(correlationId))    url += $"&correlationId={Uri.EscapeDataString(correlationId)}";
+        if (!string.IsNullOrEmpty(sourceService)) url += $"&sourceService={Uri.EscapeDataString(sourceService)}";
+        if (tenantId.HasValue) url += $"&tenantId={tenantId}";
+        if (!string.IsNullOrEmpty(correlationId)) url += $"&correlationId={Uri.EscapeDataString(correlationId)}";
         return _httpClient.GetFromJsonAsync<PagedResult<PlatformEventDto>>(url, cancellationToken);
     }
 
@@ -2119,17 +2167,17 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Background Jobs ───────────────────────────────────────
+    // -- Background Jobs ---------------------------------------
     public Task<PagedResult<BackgroundJobDto>?> SearchBackgroundJobsAsync(string? searchTerm = null, string? jobTypeCode = null, string? statusCode = null, Guid? tenantId = null, bool? failedOnly = null, DateTime? fromDateUtc = null, DateTime? toDateUtc = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/background-jobs?pageNumber={pageNumber}&pageSize={pageSize}";
-        if (!string.IsNullOrEmpty(searchTerm))   url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
-        if (!string.IsNullOrEmpty(jobTypeCode))   url += $"&jobTypeCode={Uri.EscapeDataString(jobTypeCode)}";
-        if (!string.IsNullOrEmpty(statusCode))    url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
-        if (tenantId.HasValue)                     url += $"&tenantId={tenantId}";
-        if (failedOnly == true)                    url += "&failedOnly=true";
-        if (fromDateUtc.HasValue)                  url += $"&fromDateUtc={fromDateUtc.Value:O}";
-        if (toDateUtc.HasValue)                    url += $"&toDateUtc={toDateUtc.Value:O}";
+        if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
+        if (!string.IsNullOrEmpty(jobTypeCode)) url += $"&jobTypeCode={Uri.EscapeDataString(jobTypeCode)}";
+        if (!string.IsNullOrEmpty(statusCode)) url += $"&statusCode={Uri.EscapeDataString(statusCode)}";
+        if (tenantId.HasValue) url += $"&tenantId={tenantId}";
+        if (failedOnly == true) url += "&failedOnly=true";
+        if (fromDateUtc.HasValue) url += $"&fromDateUtc={fromDateUtc.Value:O}";
+        if (toDateUtc.HasValue) url += $"&toDateUtc={toDateUtc.Value:O}";
         return _httpClient.GetFromJsonAsync<PagedResult<BackgroundJobDto>>(url, cancellationToken);
     }
 
@@ -2156,7 +2204,7 @@ public sealed class ApiClient
 
     private sealed class IdResult { public Guid Id { get; set; } }
 
-    // ── Tenant Configuration ─────────────────────────────────
+    // -- Tenant Configuration ---------------------------------
     public Task<IEnumerable<ConfigurationSettingDto>?> GetTenantConfigurationAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IEnumerable<ConfigurationSettingDto>>($"api/platform/configuration/tenant/{tenantId}", cancellationToken);
 
@@ -2166,7 +2214,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Agency Profile ───────────────────────────────────────
+    // -- Agency Profile ---------------------------------------
     public Task<AgencyProfileDto?> GetAgencyProfileAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<AgencyProfileDto>($"api/agency/{tenantId}", cancellationToken);
 
@@ -2192,7 +2240,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Carriers ─────────────────────────────────────────────
+    // -- Carriers ---------------------------------------------
     public Task<PagedResult<CarrierDto>?> SearchCarriersAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CarrierDto>>($"api/carriers?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
@@ -2210,7 +2258,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Lines of Business ────────────────────────────────────
+    // -- Lines of Business ------------------------------------
     public Task<PagedResult<LineOfBusinessDto>?> SearchLobsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<LineOfBusinessDto>>($"api/lobs?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
@@ -2228,7 +2276,7 @@ public sealed class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    // ── Appetite Rules ───────────────────────────────────────
+    // -- Appetite Rules ---------------------------------------
     public Task<PagedResult<AppetiteRuleDto>?> SearchAppetiteRulesAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<AppetiteRuleDto>>($"api/appetite?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 

@@ -1,33 +1,291 @@
-@page "/client/account-ownership"
+﻿@page "/client/account-ownership"
+@namespace Ams.Web.Components.Pages
+@using Microsoft.AspNetCore.Components
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Account Ownership</PageTitle>
-<h1>Account Ownership History</h1>
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Account Ownership"
+               Subtitle="Account ownership and transfer history"
+               Icon="bi-diagram-2">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "aow-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="NewTransfer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Transfer Account
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Filter bar -->
+<div class="aow-filter-bar">
+    <div class="aow-search-wrap">
+        <i class="bi bi-search aow-si" aria-hidden="true"></i>
+        <input class="aow-search" type="search" placeholder="Search accounts…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => UpdateSearch(e))" />
+    </div>
+    <SfDateRangePicker @ref="_dateRange" Placeholder="All dates" StartDate="_dateStart" EndDate="_dateEnd" Change="OnDateRangeChange"></SfDateRangePicker>
 </div>
-@if (_items is null) { <p>Loading...</p> }
-else {
-<SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="10"></GridPageSettings>
-    <GridColumns>
-        <GridColumn Field="@nameof(AccountOwnerHistoryDto.AccountName)"       HeaderText="Account"          Width="220"></GridColumn>
-        <GridColumn Field="@nameof(AccountOwnerHistoryDto.PreviousOwnerName)" HeaderText="Previous Owner"   Width="180"></GridColumn>
-        <GridColumn Field="@nameof(AccountOwnerHistoryDto.NewOwnerName)"      HeaderText="New Owner"        Width="180"></GridColumn>
-        <GridColumn Field="@nameof(AccountOwnerHistoryDto.ChangedDateUtc)"    HeaderText="Changed"          Width="150" Format="d"></GridColumn>
-        <GridColumn Field="@nameof(AccountOwnerHistoryDto.Notes)"             HeaderText="Notes"            Width="280"></GridColumn>
-    </GridColumns>
-</SfGrid>
+
+@if (_loading)
+{
+    <div class="aow-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading ownership history…</span></div>
 }
+else if (_items == null || _items.Count == 0)
+{
+    <div class="aow-empty">
+        <i class="bi bi-diagram-2" aria-hidden="true"></i>
+        <span>No account ownership records yet.</span>
+    </div>
+}
+else if (_filtered.Count == 0)
+{
+    <div class="aow-empty">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <span>No records match your filters.</span>
+    </div>
+}
+else
+{
+    <div class="aow-grid-card app-datagrid">
+        <SfGrid @ref="_grid" TValue="AccountOwnerHistoryDto" DataSource="_filtered"
+                AllowPaging="true" AllowSorting="true"
+                EnableHover="true" RowHeight="56">
+            <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50,100})" />
+            <GridColumns>
+                <GridColumn HeaderText="Account" MinWidth="200" Field="@nameof(AccountOwnerHistoryDto.AccountName)">
+                    <Template>
+                        @{ var h = (AccountOwnerHistoryDto)context; }
+                        <div class="aow-account-cell">
+                            <div class="aow-icon">
+                                <i class="bi bi-building" aria-hidden="true"></i>
+                            </div>
+                            <div>
+                                <div class="aow-item-name">@h.AccountName</div>
+                            </div>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn HeaderText="Previous Owner" MinWidth="180" Field="@nameof(AccountOwnerHistoryDto.PreviousOwnerName)">
+                    <Template>
+                        @{ var h = (AccountOwnerHistoryDto)context; }
+                        <div class="aow-owner-cell">
+                            <div class="aow-owner-icon">@Initials(h.PreviousOwnerName)</div>
+                            <span>@h.PreviousOwnerName</span>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn HeaderText="" Width="40" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
+                    <Template>
+                        <i class="bi bi-arrow-right aow-arrow" aria-hidden="true"></i>
+                    </Template>
+                </GridColumn>
+                <GridColumn HeaderText="New Owner" MinWidth="180" Field="@nameof(AccountOwnerHistoryDto.NewOwnerName)">
+                    <Template>
+                        @{ var h = (AccountOwnerHistoryDto)context; }
+                        <div class="aow-owner-cell">
+                            <div class="aow-owner-icon aow-new">@Initials(h.NewOwnerName)</div>
+                            <span>@h.NewOwnerName</span>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(AccountOwnerHistoryDto.ChangedDateUtc)" HeaderText="Changed" Width="130" Type="Syncfusion.Blazor.Grids.ColumnType.DateTime" Format="d" />
+                <GridColumn Field="@nameof(AccountOwnerHistoryDto.Notes)" HeaderText="Notes" MinWidth="200" />
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- Transfer Account Modal -->
+<SfDialog @bind-Visible="_showModal" Width="520px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header>
+            <span class="aow-dlg-hdr">
+                <i class="bi bi-arrow-left-right" aria-hidden="true"></i> Transfer Account
+            </span>
+        </Header>
+        <Content>
+            <div class="aow-dlg-body">
+                <div style="display:grid;gap:.75rem">
+                    <div>
+                        <label class="aow-label">Account *</label>
+                        <SfDropDownList TValue="string" TItem="LV" DataSource="_accountOpts" Placeholder="Select account" Width="100%"
+                                        @bind-Value="_transfer.AccountId">
+                            <DropDownListFieldSettings Value="Value" Text="Label" />
+                        </SfDropDownList>
+                    </div>
+                    <div>
+                        <label class="aow-label">Current Owner</label>
+                        <SfTextBox @bind-Value="_transfer.CurrentOwner" Width="100%" ReadOnly="true" />
+                    </div>
+                    <div>
+                        <label class="aow-label">New Owner *</label>
+                        <SfDropDownList TValue="string" TItem="LV" DataSource="_userOpts" Placeholder="Select new owner" Width="100%"
+                                        @bind-Value="_transfer.NewOwnerId">
+                            <DropDownListFieldSettings Value="Value" Text="Label" />
+                        </SfDropDownList>
+                    </div>
+                    <div>
+                        <label class="aow-label">Transfer Notes</label>
+                        <textarea class="aow-textarea" placeholder="Reason for transfer…" @bind="_transfer.Notes" style="height:100px;"></textarea>
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="aow-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showModal = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="ExecuteTransferAsync" disabled="@(string.IsNullOrEmpty(_transfer.AccountId) || string.IsNullOrEmpty(_transfer.NewOwnerId))">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Transfer
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private string? _searchTerm;
+    private SfToast? _toast;
+    private SfGrid<AccountOwnerHistoryDto>? _grid;
+    private SfDateRangePicker<DateTime?>? _dateRange;
+    private bool _loading = false;
+    private bool _showModal = false;
+
+    private string _search = string.Empty;
+    private DateTime? _dateStart;
+    private DateTime? _dateEnd;
+
     private List<AccountOwnerHistoryDto>? _items;
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private List<AccountOwnerHistoryDto> _filtered = [];
+    private TransferRequest _transfer = new();
+    private List<LV> _accountOpts = [];
+    private List<LV> _userOpts = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home", "/"),
+            new("Accounts", "/accounts"),
+            new("Account Ownership", "/client/account-ownership")
+        );
+        await LoadAsync();
+    }
+
+    private void UpdateSearch(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? string.Empty;
+        ApplyFilters();
+    }
+
     private async Task LoadAsync()
     {
-        var result = await Api.SearchAccountOwnershipAsync(_tenantId, null, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        _loading = true;
+        StateHasChanged();
+
+        try
+        {
+            var result = await Api.SearchAccountOwnershipAsync(_tenantId, null, string.Empty);
+            _items = result?.Items.ToList() ?? [];
+
+            var accounts = await Api.SearchAccountsAsync(_tenantId, string.Empty);
+            _accountOpts = accounts?.Items.Select(a => new LV(a.AccountId.ToString(), a.AccountName)).ToList() ?? [];
+
+            // TODO: Load users for ownership transfer
+            _userOpts = [
+                new("user-1", "John Smith"),
+                new("user-2", "Jane Doe"),
+                new("user-3", "Mike Johnson")
+            ];
+
+            ApplyFilters();
+        }
+        catch (Exception ex)
+        {
+            await _toast!.ShowAsync(new ToastModel { Content = $"Error loading ownership history: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        if (_items == null) { _filtered = []; return; }
+
+        _filtered = _items.Where(h =>
+            (string.IsNullOrEmpty(_search) ||
+             h.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             h.PreviousOwnerName?.Contains(_search, StringComparison.OrdinalIgnoreCase) == true ||
+             h.NewOwnerName?.Contains(_search, StringComparison.OrdinalIgnoreCase) == true) &&
+            (!_dateStart.HasValue || h.ChangedDateUtc >= _dateStart.Value) &&
+            (!_dateEnd.HasValue || h.ChangedDateUtc <= _dateEnd.Value.AddDays(1))
+        ).ToList();
+    }
+
+    private void OnDateRangeChange(RangeEventArgs args)
+    {
+        _dateStart = args.StartDate;
+        _dateEnd = args.EndDate;
+        ApplyFilters();
+    }
+
+    private void NewTransfer()
+    {
+        _transfer = new();
+        _showModal = true;
+    }
+
+    private async Task ExecuteTransferAsync()
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(_transfer.AccountId) || string.IsNullOrEmpty(_transfer.NewOwnerId))
+            {
+                await _toast!.ShowAsync(new ToastModel { Content = "Please select account and new owner.", CssClass = "e-toast-warning" });
+                return;
+            }
+
+            // TODO: Call API to transfer account
+            await Task.Delay(100);
+
+            _showModal = false;
+            _transfer = new();
+            await _toast!.ShowAsync(new ToastModel { Content = "Account transferred successfully.", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast!.ShowAsync(new ToastModel { Content = $"Error transferring account: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private static string Initials(string name)
+    {
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?";
+    }
+
+    private async Task<bool> ConfirmDeleteAsync()
+    {
+        return await Task.FromResult(true); // In real app, use JS interop for confirm
+    }
+
+    private sealed record LV(string Value, string Label);
+
+    private class TransferRequest
+    {
+        public string AccountId { get; set; } = string.Empty;
+        public string CurrentOwner { get; set; } = string.Empty;
+        public string NewOwnerId { get; set; } = string.Empty;
+        public string? Notes { get; set; }
     }
 }

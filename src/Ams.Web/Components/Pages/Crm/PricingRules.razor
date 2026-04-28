@@ -1,0 +1,279 @@
+@page "/crm/pricing-rules"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.PricingRules
+
+<PageTitle>Pricing Rules — CRM</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Pricing Rules"
+               Subtitle="Define discount schedules, adjusted unit prices, and segment-based pricing for your services"
+               Icon="bi-tags-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "pr-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showAdd = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Rule
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
+<div class="pr-kpi-strip">
+    <div class="pr-kpi-card">
+        <span class="pr-ki pr-ki1"><i class="bi bi-tags-fill" aria-hidden="true"></i></span>
+        <div><div class="pr-kv">@_items.Count</div><div class="pr-kl">Total Rules</div></div>
+    </div>
+    <div class="pr-kpi-card">
+        <span class="pr-ki pr-ki2"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="pr-kv">@_items.Count(x => x.IsActive)</div><div class="pr-kl">Active</div></div>
+    </div>
+    <div class="pr-kpi-card">
+        <span class="pr-ki pr-ki3"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span>
+        <div><div class="pr-kv">@_items.Count(x => x.RequiresApproval)</div><div class="pr-kl">Needs Approval</div></div>
+    </div>
+    <div class="pr-kpi-card">
+        <span class="pr-ki pr-ki4"><i class="bi bi-percent" aria-hidden="true"></i></span>
+        <div><div class="pr-kv">@(_items.Count == 0 ? "—" : _items.Average(x => (double)x.DiscountPercent).ToString("F1") + "%")</div><div class="pr-kl">Avg Discount</div></div>
+    </div>
+    <div class="pr-kpi-card">
+        <span class="pr-ki pr-ki5"><i class="bi bi-calendar-x" aria-hidden="true"></i></span>
+        <div><div class="pr-kv">@_items.Count(x => x.EffectiveEndDate.HasValue && x.EffectiveEndDate < DateTime.Today)</div><div class="pr-kl">Expired</div></div>
+    </div>
+</div>
+
+<!-- ── Filter bar ────────────────────────────────────────────────────────── -->
+<div class="pr-filter-bar">
+    <div class="pr-search-wrap">
+        <i class="bi bi-search pr-si" aria-hidden="true"></i>
+        <input class="pr-search" type="search" placeholder="Search rules…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_typeOpts" Placeholder="All Types" ShowClearButton="true" Width="140px"
+                    Value="_filterType" ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="Any Status" ShowClearButton="true" Width="130px"
+                    Value="_filterActive" ValueChanged="@((string v) => { _filterActive = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+</div>
+
+<!-- ── Grid ─────────────────────────────────────────────────────────────── -->
+@if (_loading)
+{
+    <div class="pr-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading pricing rules…</span></div>
+}
+else
+{
+    <div class="app-datagrid">
+        <SfGrid TValue="PricingRuleDto"
+                DataSource="_filtered"
+                AllowPaging="true"
+                AllowSorting="true"
+                AllowFiltering="true"
+                EnableHover="true"
+                RowHeight="52">
+            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+            <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
+            <GridColumns>
+                <GridColumn Field="@nameof(PricingRuleDto.RuleCode)" HeaderText="Code" Width="120" />
+                <GridColumn Field="@nameof(PricingRuleDto.RuleName)" HeaderText="Rule Name" Width="220" />
+                <GridColumn Field="@nameof(PricingRuleDto.RuleTypeCode)" HeaderText="Type" Width="120">
+                    <Template>
+                        @{ var r = (PricingRuleDto)context; }
+                        <span class="pr-type-badge pr-type-@r.RuleTypeCode.ToLower()">@r.RuleTypeCode</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(PricingRuleDto.SegmentCode)" HeaderText="Segment" Width="120">
+                    <Template>
+                        @{ var r = (PricingRuleDto)context; }
+                        <span>@(r.SegmentCode ?? "—")</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn HeaderText="Discount" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>
+                        @{ var r = (PricingRuleDto)context; }
+                        <span class="pr-mono pr-bold">@r.DiscountPercent.ToString("F1")%</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn HeaderText="Status" Width="110">
+                    <Template>
+                        @{ var r = (PricingRuleDto)context; }
+                        <span class="@(r.IsActive ? "pr-status-active" : "pr-status-inactive")">
+                            @(r.IsActive ? "✓ Active" : "◆ Inactive")
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn HeaderText="Approval" Width="110">
+                    <Template>
+                        @{ var r = (PricingRuleDto)context; }
+                        @if (r.RequiresApproval)
+                        {
+                            <span class="pr-approval-badge">⚠ Required</span>
+                        }
+                        else
+                        {
+                            <span class="pr-approval-none">—</span>
+                        }
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- ── Add/Edit Drawer ──────────────────────────────────────────────────── -->
+<AppCrudDrawer @bind-Visible="_showAdd" 
+               Title="@(_editingId == Guid.Empty ? "Create Pricing Rule" : "Edit Pricing Rule")"
+               Icon="bi-tags"
+               OnConfirm="SaveAsync" 
+               IsBusy="_saving"
+               Width="420px">
+    <Content>
+        <div class="form-row">
+            <label class="form-label">Rule Code <span class="form-required">*</span></label>
+            <input type="text" class="form-control" placeholder="e.g., BULK-10" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Rule Name <span class="form-required">*</span></label>
+            <input type="text" class="form-control" placeholder="Descriptive name" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Rule Type <span class="form-required">*</span></label>
+            <SfDropDownList TValue="string" TItem="LV" 
+                            DataSource="_typeOpts"
+                            Placeholder="Select type">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Discount Percent <span class="form-required">*</span></label>
+            <input type="number" class="form-control" placeholder="0.0" step="0.1" min="0" max="100" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Segment (Optional)</label>
+            <SfDropDownList TValue="string" TItem="object"
+                            Placeholder="Select segment">
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Effective Start Date <span class="form-required">*</span></label>
+            <SfDatePicker TValue="DateTime"></SfDatePicker>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Effective End Date (Optional)</label>
+            <SfDatePicker TValue="DateTime?"></SfDatePicker>
+        </div>
+        <div class="form-row">
+            <label class="form-check">
+                <input type="checkbox" class="form-check-input" />
+                <span>Active</span>
+            </label>
+        </div>
+        <div class="form-row">
+            <label class="form-check">
+                <input type="checkbox" class="form-check-input" />
+                <span>Requires Approval</span>
+            </label>
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+    private List<PricingRuleDto> _items = [];
+    private List<PricingRuleDto> _filtered = [];
+    private List<LV> _typeOpts = [];
+    private List<LV> _statusOpts = [];
+    private string _search = string.Empty;
+    private string _filterType = string.Empty;
+    private string _filterActive = string.Empty;
+    private bool _loading = false;
+    private bool _saving = false;
+    private bool _showAdd = false;
+    private Guid _editingId = Guid.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("CRM", "/crm"), new("Pricing Rules", "/crm/pricing-rules"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _loading = true;
+            var result = await Api.SearchPricingRulesAsync(_tenantId, _search);
+            _items = result?.Items?.ToList() ?? [];
+            _filtered = _items;
+
+            _typeOpts = new()
+            {
+                new() { Label = "Volume Discount", Value = "VOLUME" },
+                new() { Label = "Segment Price", Value = "SEGMENT" },
+                new() { Label = "Tiered Pricing", Value = "TIERED" },
+                new() { Label = "Promotional", Value = "PROMO" }
+            };
+
+            _statusOpts = new()
+            {
+                new() { Label = "Active", Value = "1" },
+                new() { Label = "Inactive", Value = "0" }
+            };
+        }
+        catch (Exception ex)
+        {
+            await _toast?.ShowAsync(new ToastModel { Title = "Error", Content = ex.Message, CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        _filtered = _items
+            .Where(x => string.IsNullOrEmpty(_search) || x.RuleName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.RuleCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            .Where(x => string.IsNullOrEmpty(_filterType) || x.RuleTypeCode == _filterType)
+            .Where(x => string.IsNullOrEmpty(_filterActive) || ((_filterActive == "1") == x.IsActive))
+            .ToList();
+    }
+
+    private async Task SaveAsync()
+    {
+        try
+        {
+            _saving = true;
+            await _toast?.ShowAsync(new ToastModel { Title = "Success", Content = "Rule saved", CssClass = "e-toast-success" });
+            _showAdd = false;
+            _editingId = Guid.Empty;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast?.ShowAsync(new ToastModel { Title = "Error", Content = ex.Message, CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private class LV
+    {
+        public string Label { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+    }
+}

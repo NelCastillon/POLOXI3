@@ -1,0 +1,393 @@
+@page "/workbench/notifications"
+@namespace Ams.Web.Components.Pages.Workbench
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Notifications — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
+    <MenuFieldSettings Text="Text" IconCss="IconCss" />
+</SfContextMenu>
+
+<AppPageHeader Title="Notifications"
+               Subtitle="Alerts, reminders, approvals and system messages"
+               Icon="bi-bell">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        </button>
+        @if (Unread > 0)
+        {
+            <button class="um-btn um-btn-ghost" @onclick="MarkAllRead">
+                <i class="bi bi-check2-all" aria-hidden="true"></i> Mark All Read
+            </button>
+        }
+        <button class="um-btn um-btn-ghost" @onclick="DeleteRead">
+            <i class="bi bi-trash" aria-hidden="true"></i> Delete Read
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="mn-kpi-strip">
+    @KpiCard("bi-bell-fill",       "All",       _rows.Count.ToString(),                                                    "mn-kpi-all",      null)
+    @KpiCard("bi-circle-fill",     "Unread",    Unread.ToString(),                                                         "mn-kpi-unread",   "__unread")
+    @KpiCard("bi-exclamation-triangle-fill","Alerts",  _rows.Count(r => r.Type == "Alert").ToString(),                    "mn-kpi-alert",    "Alert")
+    @KpiCard("bi-alarm-fill",      "Reminders", _rows.Count(r => r.Type == "Reminder").ToString(),                        "mn-kpi-reminder", "Reminder")
+    @KpiCard("bi-check-circle-fill","Approvals",_rows.Count(r => r.Type == "Approval").ToString(),                        "mn-kpi-approval", "Approval")
+    @KpiCard("bi-info-circle-fill","Info",      _rows.Count(r => r.Type == "Info").ToString(),                            "mn-kpi-info",     "Info")
+    @KpiCard("bi-gear-fill",       "System",    _rows.Count(r => r.Type == "System").ToString(),                          "mn-kpi-system",   "System")
+</div>
+
+<!-- Filter bar -->
+<div class="mn-filter-bar">
+    <input class="e-input mn-search" @bind="_search" @bind:event="oninput"
+           placeholder="Search notifications…" />
+    <label class="mn-toggle">
+        <input type="checkbox" @bind="_unreadOnly" /> Unread only
+    </label>
+    <select class="e-input mn-filter-sel" @bind="_dateFilter">
+        <option value="0">All time</option>
+        <option value="1">Today</option>
+        <option value="7">Last 7 days</option>
+        <option value="30">Last 30 days</option>
+    </select>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+        <i class="bi bi-x" aria-hidden="true"></i> Reset
+    </button>
+    <span class="mn-filter-count">@Filtered.Count() notification(s)</span>
+</div>
+
+<!-- View tabs -->
+<div class="mn-view-tabs">
+    @foreach (var t in _tabs)
+    {
+        <button class="mn-view-tab @(_activeTab == t.Key ? "mn-view-tab--active" : "")"
+                @onclick="() => _activeTab = t.Key">
+            <i class="bi @t.Icon" aria-hidden="true"></i> @t.Label
+            <span class="mn-tab-count">@Filtered.Count()</span>
+        </button>
+    }
+</div>
+
+<!-- Content -->
+<div class="mn-content">
+
+    @if (_activeTab == "feed")
+    {
+        <div class="mn-feed">
+            @foreach (var grp in NotifGroups)
+            {
+                <div class="mn-date-sep"><span>@grp.Label</span></div>
+                @foreach (var n in grp.Items)
+                {
+                    <div class="mn-item @(!n.IsRead ? "mn-item-unread" : "")"
+                         @onclick="() => Open(n)"
+                         @oncontextmenu:preventDefault="true"
+                         @oncontextmenu="(e) => { _selected = n; _ctx.Open(e.ClientX, e.ClientY); }">
+
+                        <!-- Unread dot -->
+                        <div class="mn-unread-dot-wrap">
+                            @if (!n.IsRead)
+                            {
+                                <span class="mn-unread-dot" aria-label="Unread"></span>
+                            }
+                        </div>
+
+                        <!-- Type icon -->
+                        <div class="mn-icon mn-icon-@n.Type.ToLower()">
+                            <i class="bi @TypeIcon(n.Type)" aria-hidden="true"></i>
+                        </div>
+
+                        <!-- Body -->
+                        <div class="mn-body">
+                            <div class="mn-hdr">
+                                <span class="mn-title">@n.Title</span>
+                                <span class="mn-type-chip mn-tc-@n.Type.ToLower()">@n.Type</span>
+                                @if (n.IsActionable && !n.IsActioned)
+                                {
+                                    <span class="mn-action-badge"><i class="bi bi-hand-index-fill" aria-hidden="true"></i> Action needed</span>
+                                }
+                            </div>
+                            <div class="mn-msg">@n.Message</div>
+                            @if (n.IsActionable && !n.IsActioned)
+                            {
+                                <div class="mn-action-btns">
+                                    <button class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick="() => Approve(n)">
+                                        <i class="bi bi-check-lg" aria-hidden="true"></i> Approve
+                                    </button>
+                                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => Decline(n)">
+                                        <i class="bi bi-x-lg" aria-hidden="true"></i> Decline
+                                    </button>
+                                </div>
+                            }
+                        </div>
+
+                        <!-- Time + actions -->
+                        <div class="mn-right">
+                            <span class="mn-time">@FormatAge(n.ReceivedAt)</span>
+                            <button class="um-btn um-btn-ghost um-btn-xs mn-ctx-btn"
+                                    @onclick:stopPropagation="true"
+                                    @onclick="(e) => { _selected = n; _ctx.Open(e.ClientX, e.ClientY); }">
+                                <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </div>
+                }
+            }
+            @if (!Filtered.Any())
+            {
+                <div class="mn-empty">
+                    <i class="bi bi-bell-slash mn-empty-icon" aria-hidden="true"></i>
+                    <span>You're all caught up — no notifications here.</span>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <SfGrid DataSource="@Filtered.ToList()" AllowSorting="true" AllowPaging="true"
+                AllowResizing="true" RowHeight="46" @ref="_grid">
+            <GridPageSettings PageSize="25" />
+            <GridColumns>
+                <GridColumn HeaderText="" Width="40" AllowSorting="false">
+                    <Template>
+                        @{ var n = (NotifRow)context; }
+                        @if (!n.IsRead) { <span class="mn-unread-dot" title="Unread"></span> }
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="Type" HeaderText="Type" Width="115">
+                    <Template>
+                        @{ var n = (NotifRow)context; }
+                        <span class="mn-type-chip mn-tc-@n.Type.ToLower()">
+                            <i class="bi @TypeIcon(n.Type)" aria-hidden="true"></i> @n.Type
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="Title"   HeaderText="Title"     MinWidth="220" />
+                <GridColumn Field="Message" HeaderText="Message"   MinWidth="260">
+                    <Template>
+                        @{ var n = (NotifRow)context; }
+                        <span class="mn-grid-msg">@n.Message</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="ReceivedAt" HeaderText="Received" Width="160">
+                    <Template>
+                        @{ var n = (NotifRow)context; }
+                        <span>@n.ReceivedAt.ToString("MM/dd/yyyy h:mm tt")</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="IsRead" HeaderText="Read" Width="70" DisplayAsCheckBox="true" />
+                <GridColumn HeaderText="" Width="52" AllowSorting="false">
+                    <Template>
+                        @{ var n = (NotifRow)context; }
+                        <button class="um-btn um-btn-ghost um-btn-xs"
+                                @onclick:stopPropagation="true"
+                                @onclick="(e) => { _selected = n; _ctx.Open(e.ClientX, e.ClientY); }">
+                            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                        </button>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    }
+
+</div>
+
+@code {
+    SfToast _toast = default!;
+    SfContextMenu<CtxItem> _ctx = default!;
+    SfGrid<NotifRow>? _grid;
+
+    string _search     = "";
+    bool   _unreadOnly = false;
+    int    _dateFilter = 0;
+    string _activeTab  = "feed";
+    string _typeFilter = "";
+
+    NotifRow? _selected;
+
+    sealed record TabDef(string Key, string Label, string Icon);
+    readonly TabDef[] _tabs =
+    [
+        new("feed", "Notification Feed", "bi-rss"),
+        new("grid", "Grid View",         "bi-table"),
+    ];
+
+    sealed record CtxItem(string Text, string IconCss);
+    readonly List<CtxItem> _ctxItems =
+    [
+        new("Mark as Read",    "bi bi-check-circle"),
+        new("Mark as Unread",  "bi bi-circle"),
+        new("Open",            "bi bi-arrow-right-circle"),
+        new("Delete",          "bi bi-trash"),
+    ];
+
+    sealed class NotifRow
+    {
+        public Guid     Id           { get; set; }
+        public string   Type         { get; set; } = "";   // Alert | Reminder | Approval | Info | System
+        public string   Title        { get; set; } = "";
+        public string   Message      { get; set; } = "";
+        public DateTime ReceivedAt   { get; set; }
+        public bool     IsRead       { get; set; }
+        public bool     IsActionable { get; set; }
+        public bool     IsActioned   { get; set; }
+    }
+
+    sealed record NotifGroup(string Label, List<NotifRow> Items);
+
+    readonly List<NotifRow> _rows = new();
+
+    int Unread => _rows.Count(r => !r.IsRead);
+
+    IEnumerable<NotifRow> Filtered => _rows.Where(r =>
+        (string.IsNullOrEmpty(_typeFilter) || (_typeFilter == "__unread" ? !r.IsRead : r.Type == _typeFilter))
+        && (!_unreadOnly || !r.IsRead)
+        && (string.IsNullOrEmpty(_search) ||
+            r.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+            r.Message.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        && (_dateFilter == 0 || r.ReceivedAt >= DateTime.Now.AddDays(-_dateFilter))
+    ).OrderByDescending(r => r.ReceivedAt);
+
+    IEnumerable<NotifGroup> NotifGroups =>
+        Filtered.GroupBy(r => r.ReceivedAt.Date)
+                .OrderByDescending(g => g.Key)
+                .Select(g => new NotifGroup(FormatDateLabel(g.Key), g.ToList()));
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("Notifications", "/workbench/notifications"));
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        var rnd   = new Random(17);
+        var types = new[]{ "Alert","Alert","Reminder","Reminder","Approval","Info","System" };
+
+        var data = new (string Type, string Title, string Msg, bool Actionable)[]
+        {
+            ("Alert",    "Policy Expiring in 7 Days",          "Sullivan Mfg. LLC — GL policy #HBP-44892 expires on {date}. Renewal quote required.",                                                  false),
+            ("Alert",    "High-Risk Account Flag",             "Apex Medical Group has been flagged by underwriting for loss ratio >75%. Review required before binding.",                              false),
+            ("Alert",    "Payment Overdue",                    "Metro Freight Co. premium payment is 14 days past due. Total outstanding: $4,820.00.",                                                  false),
+            ("Alert",    "Coverage Gap Detected",              "Dallas Roofing LLC has no active umbrella policy. Estimated exposure: $2.2M.",                                                          false),
+            ("Reminder", "Renewal Call Scheduled Tomorrow",    "Bridgewater Hotels renewal review call is scheduled for tomorrow at 10:00 AM. Prepare quote comparison.",                              false),
+            ("Reminder", "Submit ACORD Before COB",            "ACORD 25 for Pioneer Automotive must be submitted before 5:00 PM today.",                                                               false),
+            ("Reminder", "Q2 Goals Due Friday",                "Your Q2 written premium goal submission is due this Friday. Current progress: 71%.",                                                    false),
+            ("Reminder", "Annual Review Due",                  "Greenleaf Nurseries is due for its annual policy review. Last review was 14 months ago.",                                              false),
+            ("Approval", "Endorsement Request — Pending",      "Pioneer Automotive has submitted an endorsement request to add a scheduled vehicle. Effective date: {date}. Awaiting your approval.",  true),
+            ("Approval", "Bind Authority Request",             "CSR James Park is requesting bind authority for a new BOP policy. Premium: $3,400/yr. Account: Sun Valley Resort.",                    true),
+            ("Approval", "Quote Release — Approval Needed",    "A $47,500 annual premium quote for Laredo Steel Works is pending your release to the client.",                                         true),
+            ("Info",     "Market Update: E&S Capacity",        "Markel and Lloyd's have announced reduced capacity for habitational risks effective next quarter.",                                     false),
+            ("Info",     "Carrier: Hartford Rate Change",      "Hartford has filed a 6.2% rate increase for commercial auto in TX. Effective next renewal cycle.",                                     false),
+            ("Info",     "New Account Assigned to You",        "Coastal Seafood Distribution has been assigned to your book of business by Team Leader Maria Santos.",                                 false),
+            ("Info",     "CE Credit Reminder",                 "You have 4.0 CE credits remaining to complete before your license renewal deadline in 60 days.",                                       false),
+            ("System",   "Password Expires in 7 Days",        "Your AMS portal password will expire in 7 days. Please update it to avoid service interruption.",                                       false),
+            ("System",   "Scheduled Maintenance Tonight",      "AMS will undergo maintenance from 11:00 PM – 2:00 AM. The system will be read-only during this window.",                              false),
+            ("System",   "Two-Factor Auth Enabled",            "Two-factor authentication has been successfully enabled for your account.",                                                             false),
+            ("System",   "Report Ready: Monthly Production",  "Your monthly production report for {month} is ready to download from the Reports section.",                                            false),
+        };
+
+        _rows.Clear();
+        for (int i = 0; i < 45; i++)
+        {
+            var d    = data[rnd.Next(data.Length)];
+            var ago  = rnd.Next(0, 20 * 24 * 60);
+            var date = DateTime.Now.AddMinutes(-ago).ToString("MMM d");
+            _rows.Add(new NotifRow
+            {
+                Id           = Guid.NewGuid(),
+                Type         = d.Type,
+                Title        = d.Title,
+                Message      = d.Msg.Replace("{date}", DateTime.Today.AddDays(rnd.Next(3,30)).ToString("MMM d"))
+                                    .Replace("{month}", DateTime.Today.AddMonths(-1).ToString("MMMM yyyy")),
+                ReceivedAt   = DateTime.Now.AddMinutes(-ago),
+                IsRead       = rnd.Next(3) != 0,
+                IsActionable = d.Actionable,
+                IsActioned   = false,
+            });
+        }
+        // Ensure some unread
+        foreach (var r in _rows.OrderBy(_ => rnd.Next()).Take(8))
+            r.IsRead = false;
+
+        _rows.Sort((a, b) => b.ReceivedAt.CompareTo(a.ReceivedAt));
+    }
+
+    void Open(NotifRow n)
+    {
+        n.IsRead = true;
+    }
+
+    async Task Approve(NotifRow n)
+    {
+        n.IsActioned = true; n.IsRead = true;
+        await _toast.ShowAsync(new ToastModel { Title="Approved", Content=n.Title, CssClass="e-toast-success" });
+    }
+
+    async Task Decline(NotifRow n)
+    {
+        n.IsActioned = true; n.IsRead = true;
+        await _toast.ShowAsync(new ToastModel { Title="Declined", Content=n.Title, CssClass="e-toast-warning" });
+    }
+
+    void MarkAllRead() { foreach (var r in _rows) r.IsRead = true; }
+
+    void DeleteRead()  { _rows.RemoveAll(r => r.IsRead); }
+
+    void Refresh()      => BuildStub();
+    void ResetFilters() { _search=""; _unreadOnly=false; _dateFilter=0; }
+    void ToggleKpi(string? filter)  => _typeFilter = _typeFilter == (filter ?? string.Empty) ? string.Empty : (filter ?? string.Empty);
+
+    async Task OnCtxSelected(MenuEventArgs<CtxItem> args)
+    {
+        if (_selected is null) return;
+        switch (args.Item.Text)
+        {
+            case "Mark as Read":   _selected.IsRead = true;  break;
+            case "Mark as Unread": _selected.IsRead = false; break;
+            case "Delete":         _rows.Remove(_selected);  break;
+            default:
+                await _toast.ShowAsync(new ToastModel { Title=args.Item.Text, Content=_selected.Title, CssClass="e-toast-info" });
+                break;
+        }
+    }
+
+    static string TypeIcon(string t) => t switch
+    {
+        "Alert"    => "bi-exclamation-triangle-fill",
+        "Reminder" => "bi-alarm-fill",
+        "Approval" => "bi-check-circle-fill",
+        "Info"     => "bi-info-circle-fill",
+        "System"   => "bi-gear-fill",
+        _          => "bi-bell-fill"
+    };
+
+    static string FormatDateLabel(DateTime d)
+    {
+        if (d.Date == DateTime.Today)            return "Today";
+        if (d.Date == DateTime.Today.AddDays(-1)) return "Yesterday";
+        return d.ToString("dddd, MMMM d");
+    }
+
+    static string FormatAge(DateTime dt)
+    {
+        var diff = DateTime.Now - dt;
+        if (diff.TotalMinutes < 60)  return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalHours   < 24)  return $"{(int)diff.TotalHours}h ago";
+        if (diff.TotalDays    < 7)   return $"{(int)diff.TotalDays}d ago";
+        return dt.ToString("MMM d");
+    }
+
+    RenderFragment KpiCard(string icon, string label, string val, string css, string? filter) =>
+        @<button class="mn-kpi-card @css @(_typeFilter == (filter ?? string.Empty) ? "mn-kpi-active" : "")"
+                 @onclick="() => ToggleKpi(filter)">
+            <div class="mn-kpi-val">@val</div>
+            <div class="mn-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </button>;
+}

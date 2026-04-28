@@ -1,0 +1,274 @@
+@page "/submissions/applications"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Applications — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
+    <MenuFieldSettings Text="Text" IconCss="IconCss" />
+</SfContextMenu>
+
+<AppPageHeader Title="Applications"
+               Subtitle="Insurance applications submitted to carriers — track status, completeness, and outstanding requirements"
+               Icon="bi-clipboard">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "sa-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/submissions/new")'>
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Application
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="sa-kpi-strip">
+    @KpiCard("bi-clipboard",        "Total",          _rows.Count.ToString(),                                           "sa-kpi-total",      null)
+    @KpiCard("bi-pencil-square",    "Draft",          _rows.Count(r => r.Status == "Draft").ToString(),                "sa-kpi-draft",      "Draft")
+    @KpiCard("bi-send",             "Submitted",      _rows.Count(r => r.Status == "Submitted").ToString(),            "sa-kpi-submitted",  "Submitted")
+    @KpiCard("bi-hourglass-split",  "Under Review",   _rows.Count(r => r.Status == "Under Review").ToString(),        "sa-kpi-review",     "Under Review")
+    @KpiCard("bi-exclamation-circle","Requirements",  _rows.Count(r => r.Status == "Requirements Pending").ToString(),"sa-kpi-reqs",       "Requirements Pending")
+    @KpiCard("bi-check-circle",     "Approved",       _rows.Count(r => r.Status == "Approved").ToString(),            "sa-kpi-approved",   "Approved")
+    @KpiCard("bi-x-circle",         "Rejected",       _rows.Count(r => r.Status == "Rejected").ToString(),            "sa-kpi-rejected",   "Rejected")
+</div>
+
+<!-- View tabs -->
+<div class="sa-view-tabs">
+    @foreach (var t in _tabs)
+    {
+        <button class="sa-view-tab @(_activeTab == t.Key ? "sa-view-tab--active" : "")"
+                @onclick="() => _activeTab = t.Key">
+            <i class="bi @t.Icon" aria-hidden="true"></i> @t.Label
+            <span class="sa-tab-count">@TabCount(t.Key)</span>
+        </button>
+    }
+</div>
+
+<!-- Grid -->
+<div class="sa-grid-wrap">
+    @if (_loading)
+    {
+        <div class="sa-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <SfGrid DataSource="@TabRows" AllowSorting="true" AllowPaging="true" AllowResizing="true"
+                RowHeight="42" @ref="_grid">
+            <GridPageSettings PageSize="20" />
+            <GridEvents TValue="AppRow" RowSelected="OnRowSelected" />
+            <GridColumns>
+                <GridColumn Field="AppNo"          HeaderText="App #"         Width="145"
+                            Template="@(ctx => AppNoLink((AppRow)ctx))" />
+                <GridColumn Field="SubmissionNo"   HeaderText="Submission #"  Width="145"
+                            Template="@(ctx => SubLink((AppRow)ctx))" />
+                <GridColumn Field="Account"        HeaderText="Account"       Width="185" />
+                <GridColumn Field="Lob"            HeaderText="LOB"           Width="155"
+                            Template="@(ctx => LobChip(((AppRow)ctx).Lob))" />
+                <GridColumn Field="Carrier"        HeaderText="Carrier"       Width="165" />
+                <GridColumn Field="Status"         HeaderText="Status"        Width="160"
+                            Template="@(ctx => StatusChip(((AppRow)ctx).Status))" />
+                <GridColumn Field="Completeness"   HeaderText="Complete"      Width="110"
+                            Template="@(ctx => CompletenessBar(((AppRow)ctx).Completeness))" />
+                <GridColumn Field="SubmittedDate"  HeaderText="Submitted"     Width="115" Format="MM/dd/yyyy" />
+                <GridColumn Field="DueDate"        HeaderText="Due"           Width="110"
+                            Template="@(ctx => DueCell(((AppRow)ctx).DueDate))" />
+                <GridColumn Field="Producer"       HeaderText="Producer"      Width="165" />
+                <GridColumn HeaderText=""          Width="52" AllowSorting="false"
+                            Template="@(ctx => CtxBtn((AppRow)ctx))" />
+            </GridColumns>
+        </SfGrid>
+    }
+</div>
+
+@code {
+    SfToast _toast = default!;
+    SfContextMenu<CtxItem> _ctx = default!;
+    SfGrid<AppRow> _grid = default!;
+
+    bool    _loading   = false;
+    string  _activeTab = "all";
+    string? _kpiFilter = null;
+    AppRow  _selected  = new();
+
+    sealed record CtxItem(string Text, string IconCss);
+
+    sealed class AppRow
+    {
+        public Guid     AppId          { get; set; } = Guid.NewGuid();
+        public string   AppNo          { get; set; } = "";
+        public string   SubmissionNo   { get; set; } = "";
+        public Guid     SubId          { get; set; } = Guid.NewGuid();
+        public string   Account        { get; set; } = "";
+        public string   Lob            { get; set; } = "";
+        public string   Carrier        { get; set; } = "";
+        public string   Status         { get; set; } = "";
+        public int      Completeness   { get; set; }
+        public DateTime SubmittedDate  { get; set; }
+        public DateTime DueDate        { get; set; }
+        public string   Producer       { get; set; } = "";
+    }
+
+    record TabDef(string Key, string Label, string Icon);
+
+    readonly TabDef[] _tabs =
+    [
+        new("all",      "All",                "bi-stack"            ),
+        new("draft",    "Draft",              "bi-pencil-square"    ),
+        new("submitted","Submitted",          "bi-send"             ),
+        new("review",   "Under Review",       "bi-hourglass-split"  ),
+        new("reqs",     "Requirements",       "bi-exclamation-circle"),
+        new("approved", "Approved",           "bi-check-circle"     ),
+        new("rejected", "Rejected",           "bi-x-circle"         ),
+        new("carrier",  "By Carrier",         "bi-building"         ),
+    ];
+
+    readonly List<AppRow> _rows = [];
+
+    IEnumerable<AppRow> BaseTabRows => _activeTab switch
+    {
+        "draft"     => _rows.Where(r => r.Status == "Draft"),
+        "submitted" => _rows.Where(r => r.Status == "Submitted"),
+        "review"    => _rows.Where(r => r.Status == "Under Review"),
+        "reqs"      => _rows.Where(r => r.Status == "Requirements Pending"),
+        "approved"  => _rows.Where(r => r.Status == "Approved"),
+        "rejected"  => _rows.Where(r => r.Status == "Rejected"),
+        _           => _rows,
+    };
+
+    IEnumerable<AppRow> TabRows => _kpiFilter is null
+        ? BaseTabRows
+        : BaseTabRows.Where(r => r.Status == _kpiFilter);
+
+    string TabCount(string key) => key switch
+    {
+        "all"       => _rows.Count.ToString(),
+        "draft"     => _rows.Count(r => r.Status == "Draft").ToString(),
+        "submitted" => _rows.Count(r => r.Status == "Submitted").ToString(),
+        "review"    => _rows.Count(r => r.Status == "Under Review").ToString(),
+        "reqs"      => _rows.Count(r => r.Status == "Requirements Pending").ToString(),
+        "approved"  => _rows.Count(r => r.Status == "Approved").ToString(),
+        "rejected"  => _rows.Count(r => r.Status == "Rejected").ToString(),
+        _           => "",
+    };
+
+    readonly List<CtxItem> _ctxItems =
+    [
+        new("Open",               "bi bi-box-arrow-up-right"),
+        new("Submit to Carrier",  "bi bi-send"              ),
+        new("Add Requirements",   "bi bi-paperclip"         ),
+        new("Request Info",       "bi bi-question-circle"   ),
+        new("Mark Approved",      "bi bi-check-circle"      ),
+        new("Reject",             "bi bi-x-circle"          ),
+        new("Download App",       "bi bi-file-earmark-pdf"  ),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"), new("Applications", "/submissions/applications"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(0);
+        if (_rows.Count == 0) BuildStub();
+        _loading = false;
+    }
+
+    void BuildStub()
+    {
+        var rng       = new Random(77);
+        var lobs      = new[] { "General Liability", "Commercial Property", "Commercial Auto", "Workers Comp", "Umbrella / Excess", "Professional Liab.", "Home / Dwelling", "Personal Auto" };
+        var statuses  = new[] { "Draft", "Submitted", "Submitted", "Under Review", "Under Review", "Requirements Pending", "Approved", "Approved", "Approved", "Rejected" };
+        var carriers  = new[] { "Travelers", "Chubb", "Zurich", "AIG", "Liberty Mutual", "Hartford", "Nationwide", "CNA" };
+        var accounts  = new[] { "Sullivan Mfg. LLC", "Bridgewater Hotels", "Metro Freight Co.", "PineCrest Builders", "Omega Tech Corp.", "BlueSky Aviation", "Harbor Fresh Foods", "Summit Properties LLC" };
+        var producers = new[] { "Thornton & Associates", "Pacific Bridge Insurance", "Allied Risk Group", "Midwest Coverage Partners" };
+
+        for (int i = 1; i <= 60; i++)
+        {
+            var sub = DateTime.Today.AddDays(-rng.Next(0, 90));
+            _rows.Add(new AppRow
+            {
+                AppNo         = $"APP-2025-{i:D4}",
+                SubmissionNo  = $"SUB-2025-{rng.Next(1, 66):D4}",
+                Account       = accounts[rng.Next(accounts.Length)],
+                Lob           = lobs[rng.Next(lobs.Length)],
+                Carrier       = carriers[rng.Next(carriers.Length)],
+                Status        = statuses[rng.Next(statuses.Length)],
+                Completeness  = rng.Next(40, 101),
+                SubmittedDate = sub,
+                DueDate       = sub.AddDays(rng.Next(10, 30)),
+                Producer      = producers[rng.Next(producers.Length)],
+            });
+        }
+    }
+
+    void OnRowSelected(RowSelectEventArgs<AppRow> args) =>
+        Nav.NavigateTo($"/submissions/{args.Data.SubId}");
+
+    void OnCtxSelected(MenuEventArgs<CtxItem> args)
+    {
+        if (args.Item.Text == "Open") Nav.NavigateTo($"/submissions/{_selected.SubId}");
+    }
+
+    RenderFragment AppNoLink(AppRow r) =>
+        @<button class="sa-link um-btn um-btn-ghost um-btn-xs"
+                 @onclick='() => Nav.NavigateTo($"/submissions/{r.SubId}")'>
+            @r.AppNo
+        </button>;
+
+    RenderFragment SubLink(AppRow r) =>
+        @<button class="sa-sub-link um-btn um-btn-ghost um-btn-xs"
+                 @onclick='() => Nav.NavigateTo($"/submissions/{r.SubId}")'>
+            @r.SubmissionNo
+        </button>;
+
+    RenderFragment LobChip(string lob) =>
+        @<span class="sa-lob-chip">@lob</span>;
+
+    RenderFragment StatusChip(string s)
+    {
+        var css = s.ToLower().Replace(" ", "-").Replace("_", "-");
+        return @<span class="sa-status sa-status-@css">@s</span>;
+    }
+
+    RenderFragment CompletenessBar(int pct)
+    {
+        var color = pct >= 80 ? "#059669" : pct >= 50 ? "#d97706" : "#dc2626";
+        return @<div class="sa-complete-wrap" title="@pct% complete">
+            <div class="sa-complete-bar" style="width:@pct%;background:@color"></div>
+            <span class="sa-complete-lbl">@pct%</span>
+        </div>;
+    }
+
+    RenderFragment DueCell(DateTime d)
+    {
+        var days = (d - DateTime.Today).TotalDays;
+        var css  = days < 0 ? "sa-due-late" : days <= 3 ? "sa-due-soon" : "";
+        return @<span class="@css">@d.ToString("MM/dd/yyyy")</span>;
+    }
+
+    RenderFragment CtxBtn(AppRow row) =>
+        @<button class="um-btn um-btn-ghost um-btn-xs sa-ctx-btn"
+                 @onclick:stopPropagation="true"
+                 @onclick="(e) => { _selected = row; _ctx.Open(e.ClientX, e.ClientY); }">
+            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+        </button>;
+
+    RenderFragment KpiCard(string icon, string label, string val, string css, string? filterKey)
+    {
+        var isActive = _kpiFilter == filterKey && filterKey is not null;
+        return @<button class="sa-kpi-card @css @(isActive ? "sa-kpi-active" : "")"
+                        @onclick="() => _kpiFilter = isActive ? null : filterKey"
+                        title="@(filterKey is null ? "Show all" : (isActive ? "Clear filter" : $"Filter by {label}"))">
+            <div class="sa-kpi-val">@val</div>
+            <div class="sa-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </button>;
+    }
+}

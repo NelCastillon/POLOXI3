@@ -1,0 +1,268 @@
+@page "/submissions/declines"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Declines — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
+    <MenuFieldSettings Text="Text" IconCss="IconCss" />
+</SfContextMenu>
+
+<AppPageHeader Title="Declines"
+               Subtitle="Declined and withdrawn submissions — understand decline reasons and identify remarketing opportunities"
+               Icon="bi-x-circle">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "sd-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/renewals/remarketing")'>
+            <i class="bi bi-megaphone" aria-hidden="true"></i> Remarketing
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/submissions/new")'>
+            <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Re-submit
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="sd-kpi-strip">
+    @KpiCard("bi-x-circle",         "Total Declines",    _rows.Count.ToString(),                                              "sd-kpi-total",     null)
+    @KpiCard("bi-building-x",       "Carrier Declined",  _rows.Count(r => r.DeclineType == "Carrier").ToString(),            "sd-kpi-carrier",   "Carrier")
+    @KpiCard("bi-person-x",         "Client Withdrawn",  _rows.Count(r => r.DeclineType == "Withdrawn").ToString(),          "sd-kpi-withdrawn", "Withdrawn")
+    @KpiCard("bi-clipboard-x",      "Non-Renewals",      _rows.Count(r => r.DeclineType == "Non-Renewal").ToString(),        "sd-kpi-nonrenew",  "Non-Renewal")
+    @KpiCard("bi-arrow-repeat",     "Remarketing",       _rows.Count(r => r.RemarketingStatus == "Pending").ToString(),      "sd-kpi-remarket",  "__remarket")
+    @KpiCard("bi-cash",             "Lost Premium",      _rows.Sum(r => r.LostPremium).ToString("C0"),                       "sd-kpi-lost",      "__lost")
+    @KpiCard("bi-graph-down-arrow", "30-Day Trend",      (_rows.Count(r => r.DeclineDate >= DateTime.Today.AddDays(-30))).ToString(), "sd-kpi-trend", "__trend30")
+</div>
+
+<!-- View tabs -->
+<div class="sd-view-tabs">
+    @foreach (var t in _tabs)
+    {
+        <button class="sd-view-tab @(_activeTab == t.Key ? "sd-view-tab--active" : "")"
+                @onclick="() => _activeTab = t.Key">
+            <i class="bi @t.Icon" aria-hidden="true"></i> @t.Label
+            <span class="sd-tab-count">@TabCount(t.Key)</span>
+        </button>
+    }
+</div>
+
+<!-- Grid -->
+<div class="sd-grid-wrap">
+    @if (_loading)
+    {
+        <div class="sd-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <SfGrid DataSource="@TabRows" AllowSorting="true" AllowPaging="true" AllowResizing="true"
+                RowHeight="42" @ref="_grid">
+            <GridPageSettings PageSize="20" />
+            <GridEvents TValue="DeclineRow" RowSelected="OnRowSelected" />
+            <GridColumns>
+                <GridColumn Field="SubmissionNo"      HeaderText="Submission #"  Width="145"
+                            Template="@(ctx => SubLink((DeclineRow)ctx))" />
+                <GridColumn Field="Account"           HeaderText="Account"       Width="185" />
+                <GridColumn Field="Lob"               HeaderText="LOB"           Width="155"
+                            Template="@(ctx => LobChip(((DeclineRow)ctx).Lob))" />
+                <GridColumn Field="Carrier"           HeaderText="Carrier"       Width="155" />
+                <GridColumn Field="DeclineType"       HeaderText="Type"          Width="130"
+                            Template="@(ctx => TypeChip(((DeclineRow)ctx).DeclineType))" />
+                <GridColumn Field="DeclineReason"     HeaderText="Reason"        Width="200" />
+                <GridColumn Field="DeclineDate"       HeaderText="Declined"      Width="115" Format="MM/dd/yyyy" />
+                <GridColumn Field="LostPremium"       HeaderText="Lost Premium"  Width="125"
+                            Template="@(ctx => PremCell(((DeclineRow)ctx).LostPremium))" />
+                <GridColumn Field="RemarketingStatus" HeaderText="Remarketing"   Width="120"
+                            Template="@(ctx => RemarketChip(((DeclineRow)ctx).RemarketingStatus))" />
+                <GridColumn Field="Producer"          HeaderText="Producer"      Width="165" />
+                <GridColumn HeaderText=""             Width="52" AllowSorting="false"
+                            Template="@(ctx => CtxBtn((DeclineRow)ctx))" />
+            </GridColumns>
+        </SfGrid>
+    }
+</div>
+
+@code {
+    SfToast _toast = default!;
+    SfContextMenu<CtxItem> _ctx = default!;
+    SfGrid<DeclineRow> _grid = default!;
+
+    bool       _loading   = false;
+    string     _activeTab = "all";
+    string?    _kpiFilter = null;
+    DeclineRow _selected  = new();
+
+    sealed record CtxItem(string Text, string IconCss);
+
+    sealed class DeclineRow
+    {
+        public Guid     DeclineId         { get; set; } = Guid.NewGuid();
+        public string   SubmissionNo      { get; set; } = "";
+        public Guid     SubId             { get; set; } = Guid.NewGuid();
+        public string   Account           { get; set; } = "";
+        public string   Lob               { get; set; } = "";
+        public string   Carrier           { get; set; } = "";
+        public string   DeclineType       { get; set; } = "";
+        public string   DeclineReason     { get; set; } = "";
+        public DateTime DeclineDate       { get; set; }
+        public decimal  LostPremium       { get; set; }
+        public string   RemarketingStatus { get; set; } = "";
+        public string   Producer          { get; set; } = "";
+    }
+
+    record TabDef(string Key, string Label, string Icon);
+
+    readonly TabDef[] _tabs =
+    [
+        new("all",       "All",             "bi-stack"          ),
+        new("carrier",   "Carrier Declined","bi-building-x"     ),
+        new("withdrawn", "Withdrawn",       "bi-person-x"       ),
+        new("nonrenew",  "Non-Renewals",    "bi-clipboard-x"    ),
+        new("remarket",  "Remarketing",     "bi-arrow-repeat"   ),
+        new("30days",    "Last 30 Days",    "bi-calendar-range" ),
+        new("producer",  "By Producer",     "bi-person-workspace"),
+    ];
+
+    readonly List<DeclineRow> _rows = [];
+
+    IEnumerable<DeclineRow> BaseTabRows => _activeTab switch
+    {
+        "carrier"   => _rows.Where(r => r.DeclineType == "Carrier"),
+        "withdrawn" => _rows.Where(r => r.DeclineType == "Withdrawn"),
+        "nonrenew"  => _rows.Where(r => r.DeclineType == "Non-Renewal"),
+        "remarket"  => _rows.Where(r => r.RemarketingStatus == "Pending"),
+        "30days"    => _rows.Where(r => r.DeclineDate >= DateTime.Today.AddDays(-30)),
+        _           => _rows,
+    };
+
+    IEnumerable<DeclineRow> TabRows => _kpiFilter switch
+    {
+        null          => BaseTabRows,
+        "__remarket"  => BaseTabRows.Where(r => r.RemarketingStatus == "Pending"),
+        "__lost"      => BaseTabRows.Where(r => r.LostPremium > 0),
+        "__trend30"   => BaseTabRows.Where(r => r.DeclineDate >= DateTime.Today.AddDays(-30)),
+        var f         => BaseTabRows.Where(r => r.DeclineType == f),
+    };
+
+    string TabCount(string key) => key switch
+    {
+        "all"       => _rows.Count.ToString(),
+        "carrier"   => _rows.Count(r => r.DeclineType == "Carrier").ToString(),
+        "withdrawn" => _rows.Count(r => r.DeclineType == "Withdrawn").ToString(),
+        "nonrenew"  => _rows.Count(r => r.DeclineType == "Non-Renewal").ToString(),
+        "remarket"  => _rows.Count(r => r.RemarketingStatus == "Pending").ToString(),
+        "30days"    => _rows.Count(r => r.DeclineDate >= DateTime.Today.AddDays(-30)).ToString(),
+        _           => "",
+    };
+
+    readonly List<CtxItem> _ctxItems =
+    [
+        new("Open",             "bi bi-box-arrow-up-right"),
+        new("Re-submit",        "bi bi-arrow-repeat"      ),
+        new("Start Remarketing","bi bi-megaphone"         ),
+        new("Assign Producer",  "bi bi-person-check"      ),
+        new("View Submission",  "bi bi-send"              ),
+        new("Archive",          "bi bi-archive"           ),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"), new("Declines", "/submissions/declines"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(0);
+        if (_rows.Count == 0) BuildStub();
+        _loading = false;
+    }
+
+    void BuildStub()
+    {
+        var rng       = new Random(99);
+        var lobs      = new[] { "General Liability", "Commercial Property", "Commercial Auto", "Workers Comp", "Umbrella / Excess", "Professional Liab.", "Home / Dwelling", "Personal Auto" };
+        var types     = new[] { "Carrier", "Carrier", "Carrier", "Withdrawn", "Withdrawn", "Non-Renewal" };
+        var reasons   = new[] { "Prior losses", "Occupancy class", "Capacity constraints", "Rate adequacy", "Client opted not to renew", "Underwriting appetite", "Loss ratio concern", "Binding guidelines exceeded" };
+        var carriers  = new[] { "Travelers", "Chubb", "Zurich", "AIG", "Liberty Mutual", "Hartford", "Nationwide", "CNA" };
+        var accounts  = new[] { "Sullivan Mfg. LLC", "Bridgewater Hotels", "Metro Freight Co.", "PineCrest Builders", "Omega Tech Corp.", "BlueSky Aviation", "Harbor Fresh Foods", "Summit Properties LLC" };
+        var producers = new[] { "Thornton & Associates", "Pacific Bridge Insurance", "Allied Risk Group", "Midwest Coverage Partners" };
+        var remarket  = new[] { "Pending", "Pending", "In Progress", "Completed", "Not Started" };
+
+        for (int i = 1; i <= 48; i++)
+        {
+            _rows.Add(new DeclineRow
+            {
+                SubmissionNo      = $"SUB-2025-{rng.Next(1, 66):D4}",
+                Account           = accounts[rng.Next(accounts.Length)],
+                Lob               = lobs[rng.Next(lobs.Length)],
+                Carrier           = carriers[rng.Next(carriers.Length)],
+                DeclineType       = types[rng.Next(types.Length)],
+                DeclineReason     = reasons[rng.Next(reasons.Length)],
+                DeclineDate       = DateTime.Today.AddDays(-rng.Next(0, 120)),
+                LostPremium       = (decimal)rng.Next(4000, 75000),
+                RemarketingStatus = remarket[rng.Next(remarket.Length)],
+                Producer          = producers[rng.Next(producers.Length)],
+            });
+        }
+    }
+
+    void OnRowSelected(RowSelectEventArgs<DeclineRow> args) =>
+        Nav.NavigateTo($"/submissions/{args.Data.SubId}");
+
+    void OnCtxSelected(MenuEventArgs<CtxItem> args)
+    {
+        if (args.Item.Text == "Open" || args.Item.Text == "View Submission")
+            Nav.NavigateTo($"/submissions/{_selected.SubId}");
+        if (args.Item.Text == "Start Remarketing")
+            Nav.NavigateTo("/renewals/remarketing");
+    }
+
+    RenderFragment SubLink(DeclineRow r) =>
+        @<button class="sd-link um-btn um-btn-ghost um-btn-xs"
+                 @onclick='() => Nav.NavigateTo($"/submissions/{r.SubId}")'>
+            @r.SubmissionNo
+        </button>;
+
+    RenderFragment LobChip(string lob) =>
+        @<span class="sd-lob-chip">@lob</span>;
+
+    RenderFragment TypeChip(string t)
+    {
+        var css = t.ToLower().Replace(" ", "-").Replace("-", "_");
+        return @<span class="sd-type sd-type-@css">@t</span>;
+    }
+
+    RenderFragment PremCell(decimal v) =>
+        @<span class="sd-prem">@v.ToString("C0")</span>;
+
+    RenderFragment RemarketChip(string s)
+    {
+        var css = s.ToLower().Replace(" ", "-");
+        return @<span class="sd-remarket sd-remarket-@css">@s</span>;
+    }
+
+    RenderFragment CtxBtn(DeclineRow row) =>
+        @<button class="um-btn um-btn-ghost um-btn-xs sd-ctx-btn"
+                 @onclick:stopPropagation="true"
+                 @onclick="(e) => { _selected = row; _ctx.Open(e.ClientX, e.ClientY); }">
+            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+        </button>;
+
+    RenderFragment KpiCard(string icon, string label, string val, string css, string? filterKey)
+    {
+        var isActive = _kpiFilter == filterKey && filterKey is not null;
+        return @<button class="sd-kpi-card @css @(isActive ? "sd-kpi-active" : "")"
+                        @onclick="() => _kpiFilter = isActive ? null : filterKey"
+                        title="@(filterKey is null ? "Show all" : (isActive ? "Clear filter" : $"Filter by {label}"))">
+            <div class="sd-kpi-val">@val</div>
+            <div class="sd-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </button>;
+    }
+}

@@ -1,0 +1,778 @@
+@page "/crm/leads/scoring"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Lead Scoring — CRM</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Lead Scoring"
+               Subtitle="Configure scoring rules, view lead scores, and track scoring effectiveness"
+               Icon="bi-fire">
+    <Actions>
+        <div class="ls-view-toggle" role="group" aria-label="View mode">
+            @foreach (var v in _views)
+            {
+                <button class="ls-view-btn @(_view == v.Id ? "ls-view-btn--active" : "")"
+                        @onclick="() => _view = v.Id"
+                        title="@v.Label"
+                        aria-pressed="@(_view == v.Id)">
+                    <i class="bi @v.Icon" aria-hidden="true"></i>
+                    <span class="ls-view-lbl">@v.Label</span>
+                </button>
+            }
+        </div>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ls-spin" : "")" aria-hidden="true"></i>
+        </button>
+        @if (_view == "rules")
+        {
+            <button class="um-btn um-btn-primary" @onclick='() => OpenRuleDrawer()'>
+                <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Rule
+            </button>
+        }
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
+<div class="ls-kpi-strip">
+    <div class="ls-kpi-card">
+        <span class="ls-kpi-icon ls-ki1"><i class="bi bi-fire" aria-hidden="true"></i></span>
+        <div>
+            <div class="ls-kpi-val">@_kpi.TotalLeads</div>
+            <div class="ls-kpi-lbl">Total Leads Scored</div>
+        </div>
+    </div>
+    <div class="ls-kpi-card">
+        <span class="ls-kpi-icon ls-ki2"><i class="bi bi-lightning-charge" aria-hidden="true"></i></span>
+        <div>
+            <div class="ls-kpi-val">@_kpi.HotLeads</div>
+            <div class="ls-kpi-lbl">Hot Leads (80+)</div>
+        </div>
+    </div>
+    <div class="ls-kpi-card">
+        <span class="ls-kpi-icon ls-ki3"><i class="bi bi-thermometer-half" aria-hidden="true"></i></span>
+        <div>
+            <div class="ls-kpi-val">@_kpi.WarmLeads</div>
+            <div class="ls-kpi-lbl">Warm Leads (50-79)</div>
+        </div>
+    </div>
+    <div class="ls-kpi-card">
+        <span class="ls-kpi-icon ls-ki4"><i class="bi bi-snowflake" aria-hidden="true"></i></span>
+        <div>
+            <div class="ls-kpi-val">@_kpi.ColdLeads</div>
+            <div class="ls-kpi-lbl">Cold Leads (&lt;50)</div>
+        </div>
+    </div>
+    <div class="ls-kpi-card">
+        <span class="ls-kpi-icon ls-ki5"><i class="bi bi-bar-chart-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="ls-kpi-val">@_kpi.AvgScore.ToString("F0")</div>
+            <div class="ls-kpi-lbl">Average Score</div>
+        </div>
+    </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: SCORING RULES
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "rules")
+{
+    @if (_loading)
+    {
+        <div class="ls-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <div class="ls-rules-grid">
+            @foreach (var rule in _rules)
+            {
+                <div class="ls-rule-card">
+                    <div class="ls-rule-hdr">
+                        <div class="ls-rule-title">@rule.Name</div>
+                        <div class="ls-rule-actions">
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => EditRule(rule)" title="Edit">
+                                <i class="bi bi-pencil" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DeleteRule(rule.Id)" title="Delete">
+                                <i class="bi bi-trash" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="ls-rule-meta">
+                        <span class="ls-rule-type">@rule.Type</span>
+                        <span class="ls-rule-points">@rule.Points pts</span>
+                    </div>
+                    <div class="ls-rule-desc">@rule.Description</div>
+                    @if (!string.IsNullOrEmpty(rule.Condition))
+                    {
+                        <div class="ls-rule-cond">
+                            <strong>Condition:</strong> @rule.Condition
+                        </div>
+                    }
+                    <div class="ls-rule-status">
+                        <label class="ls-toggle-label">
+                            <input type="checkbox" checked="@rule.IsActive" @onchange="(e) => ToggleRuleActive(rule, (bool)e.Value)" />
+                            <span>Active</span>
+                        </label>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @if (_rules.Count == 0)
+        {
+            <div class="ls-empty">
+                <i class="bi bi-inbox" aria-hidden="true"></i>
+                <p>No scoring rules configured yet</p>
+                <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => OpenRuleDrawer()'>
+                    <i class="bi bi-plus-lg" aria-hidden="true"></i> Create First Rule
+                </button>
+            </div>
+        }
+    }
+}
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: LEAD SCORES
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "scores")
+{
+    @if (_loading)
+    {
+        <div class="ls-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <!-- ── Filter bar ────────────────────────────────────────────────────── -->
+        <div class="ls-filter-bar">
+            <div class="ls-search-wrap">
+                <i class="bi bi-search ls-search-icon" aria-hidden="true"></i>
+                <input class="ls-search-input" type="search" placeholder="Search leads…"
+                       value="@_search"
+                       @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
+            </div>
+            <SfDropDownList TValue="string" TItem="LV" DataSource="_scoreRanges" Placeholder="All Scores" ShowClearButton="true" Width="140px"
+                            Value="_filterScore" ValueChanged="@((string v) => { _filterScore = v; ApplyFilters(); })">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+            <SfDropDownList TValue="string" TItem="LV" DataSource="_sourceOptions" Placeholder="All Sources" ShowClearButton="true" Width="140px"
+                            Value="_filterSource" ValueChanged="@((string v) => { _filterSource = v; ApplyFilters(); })">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+
+        <!-- ── Leads grid ────────────────────────────────────────────────────── -->
+        <div class="ls-grid-card app-datagrid">
+            <SfGrid TValue="LeadScoreRow" DataSource="_filteredLeads" AllowSorting="true" AllowPaging="true" EnableHover="true" RowHeight="56">
+                <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
+                <GridColumns>
+                    <GridColumn HeaderText="Rating" Width="100" Field="@nameof(LeadScoreRow.Rating)">
+                        <Template>
+                            @{ var r = (LeadScoreRow)context; }
+                            <div class="ls-rating-badge @RatingClass(r.Score)">
+                                <i class="bi @RatingIcon(r.Score)" aria-hidden="true"></i>
+                                <span>@RatingLabel(r.Score)</span>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Lead" Width="220" Field="@nameof(LeadScoreRow.Name)">
+                        <Template>
+                            @{ var r = (LeadScoreRow)context; }
+                            <div class="ls-lead-cell">
+                                <div class="ls-avatar @AvatarColor(r.Name)">@Initials(r.Name)</div>
+                                <div>
+                                    <div class="ls-lead-name">@r.Name</div>
+                                    <div class="ls-lead-company">@r.Company</div>
+                                </div>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(LeadScoreRow.Source)" HeaderText="Source" Width="120">
+                        <Template>
+                            @{ var r = (LeadScoreRow)context; }
+                            <span class="ls-badge ls-badge-@SourceClass(r.Source)">@r.Source</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Score" Width="140">
+                        <Template>
+                            @{ var r = (LeadScoreRow)context; }
+                            <div class="ls-score-display">
+                                <div class="ls-score-bar" style="width:@(r.Score)%;background:@ScoreColor(r.Score)"></div>
+                                <span class="ls-score-num">@r.Score</span>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Breakdown" Width="300">
+                        <Template>
+                            @{ var r = (LeadScoreRow)context; }
+                            <div class="ls-breakdown-wrap">
+                                @if (r.EngagementScore > 0)
+                                {
+                                    <div class="ls-breakdown-item" title="Engagement">
+                                        <span class="ls-breakdown-label">E</span>
+                                        <span class="ls-breakdown-value">@r.EngagementScore</span>
+                                    </div>
+                                }
+                                @if (r.ProfileScore > 0)
+                                {
+                                    <div class="ls-breakdown-item" title="Profile">
+                                        <span class="ls-breakdown-label">P</span>
+                                        <span class="ls-breakdown-value">@r.ProfileScore</span>
+                                    </div>
+                                }
+                                @if (r.BehaviorScore > 0)
+                                {
+                                    <div class="ls-breakdown-item" title="Behavior">
+                                        <span class="ls-breakdown-label">B</span>
+                                        <span class="ls-breakdown-value">@r.BehaviorScore</span>
+                                    </div>
+                                }
+                                @if (r.RecencyScore > 0)
+                                {
+                                    <div class="ls-breakdown-item" title="Recency">
+                                        <span class="ls-breakdown-label">R</span>
+                                        <span class="ls-breakdown-value">@r.RecencyScore</span>
+                                    </div>
+                                }
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                        <Template>
+                            @{ var r = (LeadScoreRow)context; }
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/crm/leads/{r.LeadId}")' title="View">
+                                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                            </button>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        </div>
+    }
+}
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: ANALYTICS
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "analytics")
+{
+    @if (_loading)
+    {
+        <div class="ls-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <div class="ls-analytics-layout">
+            <!-- Score distribution -->
+            <div class="ls-analytics-card">
+                <h3 class="ls-analytics-title">Score Distribution</h3>
+                <div class="ls-score-dist">
+                    @foreach (var bucket in _scoreDistribution)
+                    {
+                        var pct = _totalLeads > 0 ? (double)bucket.Count / _totalLeads * 100 : 0;
+                        <div class="ls-dist-row">
+                            <span class="ls-dist-label">@bucket.Range</span>
+                            <div class="ls-dist-bar">
+                                <div class="ls-dist-fill" style="width:@pct.ToString("F0")%;background:@BucketColor(bucket.MinScore)"></div>
+                            </div>
+                            <span class="ls-dist-count">@bucket.Count (@pct.ToString("F0")%)</span>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- Top scoring sources -->
+            <div class="ls-analytics-card">
+                <h3 class="ls-analytics-title">Top Sources by Avg Score</h3>
+                <SfGrid TValue="SourceStats" DataSource="_sourceStats" AllowSorting="true" EnableHover="true" RowHeight="48">
+                    <GridColumns>
+                        <GridColumn Field="@nameof(SourceStats.Source)" HeaderText="Source" MinWidth="120" />
+                        <GridColumn Field="@nameof(SourceStats.LeadCount)" HeaderText="Leads" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                        <GridColumn Field="@nameof(SourceStats.AvgScore)" HeaderText="Avg Score" Width="120">
+                            <Template>
+                                @{ var s = (SourceStats)context; }
+                                <div class="ls-score-display">
+                                    <div class="ls-score-bar" style="width:@(s.AvgScore)%;background:@ScoreColor((int)s.AvgScore)"></div>
+                                    <span class="ls-score-num">@s.AvgScore.ToString("F0")</span>
+                                </div>
+                            </Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(SourceStats.ConversionRate)" HeaderText="Conv. Rate" Width="110">
+                            <Template>
+                                @{ var s = (SourceStats)context; }
+                                <span class="@(s.ConversionRate >= 30 ? "ls-good" : s.ConversionRate >= 15 ? "ls-mid" : "ls-low")">
+                                    @s.ConversionRate.ToString("F0")%
+                                </span>
+                            </Template>
+                        </GridColumn>
+                    </GridColumns>
+                </SfGrid>
+            </div>
+
+            <!-- Rule effectiveness -->
+            <div class="ls-analytics-card">
+                <h3 class="ls-analytics-title">Rule Effectiveness</h3>
+                <SfGrid TValue="RuleStats" DataSource="_ruleStats" AllowSorting="true" EnableHover="true" RowHeight="48">
+                    <GridColumns>
+                        <GridColumn Field="@nameof(RuleStats.RuleName)" HeaderText="Rule" MinWidth="160" />
+                        <GridColumn Field="@nameof(RuleStats.TimesTriggered)" HeaderText="Triggered" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                        <GridColumn Field="@nameof(RuleStats.AvgContribution)" HeaderText="Avg Pts" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                            <Template>@{ var r = (RuleStats)context; }<span class="ls-mono">@r.AvgContribution.ToString("F1")</span></Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(RuleStats.ConvertedLeads)" HeaderText="Converted" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                    </GridColumns>
+                </SfGrid>
+            </div>
+        </div>
+    }
+}
+
+<!-- ── Rule Drawer ──────────────────────────────────────────────────────── -->
+<AppCrudDrawer @bind-Visible="_showRuleDrawer"
+               Title="@(_editingRuleId == Guid.Empty ? "Create Scoring Rule" : "Edit Scoring Rule")"
+               Icon="bi-lightning-charge"
+               OnConfirm="SaveRuleAsync"
+               IsBusy="_savingRule"
+               Width="480px">
+    <Content>
+        <div class="form-row">
+            <label class="form-label">Rule Name <span class="form-required">*</span></label>
+            <input type="text" class="form-control" placeholder="e.g., Email Opens" @bind="_ruleForm.Name" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Rule Type <span class="form-required">*</span></label>
+            <SfDropDownList TValue="string" TItem="LV" DataSource="_ruleTypes" Placeholder="Select type"
+                            Value="_ruleForm.Type" ValueChanged="@((string v) => _ruleForm.Type = v)">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Points to Award <span class="form-required">*</span></label>
+            <input type="number" class="form-control" placeholder="0" step="1" min="0" max="100" @bind="_ruleForm.Points" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Description</label>
+            <textarea class="form-control" rows="2" placeholder="Rule description…" @bind="_ruleForm.Description"></textarea>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Condition (Optional)</label>
+            <textarea class="form-control" rows="2" placeholder="e.g., Opened email in last 7 days…" @bind="_ruleForm.Condition"></textarea>
+        </div>
+        <div class="form-row">
+            <label class="ls-toggle-label">
+                <input type="checkbox" @bind="_ruleForm.IsActive" />
+                <span>Active</span>
+            </label>
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    private string _view = "scores";
+    private bool _loading = false;
+    private bool _savingRule = false;
+    private bool _showRuleDrawer = false;
+    private Guid _editingRuleId = Guid.Empty;
+    private string _search = string.Empty;
+    private string _filterScore = string.Empty;
+    private string _filterSource = string.Empty;
+    private SfToast? _toast;
+
+    private List<ScoringRuleRow> _rules = [];
+    private List<LeadScoreRow> _leads = [];
+    private List<LeadScoreRow> _filteredLeads = [];
+    private List<ScoreBucket> _scoreDistribution = [];
+    private List<SourceStats> _sourceStats = [];
+    private List<RuleStats> _ruleStats = [];
+    private ScoringKpi _kpi = new();
+    private ScoringRuleForm _ruleForm = new();
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private int _totalLeads = 0;
+
+    private record ViewDef(string Id, string Label, string Icon);
+    private static readonly List<ViewDef> _views =
+    [
+        new("rules", "Rules", "bi-lightning-charge"),
+        new("scores", "Lead Scores", "bi-list"),
+        new("analytics", "Analytics", "bi-bar-chart-fill"),
+    ];
+
+    private static readonly List<LV> _scoreRanges =
+    [
+        new("80+", "80+"),
+        new("50-79", "50-79"),
+        new("0-49", "0-49"),
+    ];
+
+    private static readonly List<LV> _sourceOptions =
+    [
+        new("Website", "Website"),
+        new("Email", "Email"),
+        new("Referral", "Referral"),
+        new("Cold Call", "Cold Call"),
+        new("Event", "Event"),
+        new("Social", "Social"),
+    ];
+
+    private static readonly List<LV> _ruleTypes =
+    [
+        new("Engagement", "Engagement"),
+        new("Profile", "Profile Fit"),
+        new("Behavior", "Behavior"),
+        new("Recency", "Recency"),
+        new("Activity", "Activity"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Lead Scoring", "/crm/leads/scoring"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            // Load leads from database
+            var leadsResult = await Api.SearchLeadsAsync(_tenantId);
+            if (leadsResult?.Items != null)
+            {
+                _leads = leadsResult.Items
+                    .Select(l => new LeadScoreRow
+                    {
+                        LeadId = l.LeadId,
+                        Name = $"{l.FirstName} {l.LastName}",
+                        Company = l.AccountName ?? "Unknown",
+                        Source = l.SourceCode ?? "Direct",
+                        Score = l.Score ?? 0,
+                        EngagementScore = (l.Score ?? 0) > 0 ? Math.Max((l.Score.Value / 4), 0) : 0,
+                        ProfileScore = (l.Score ?? 0) > 0 ? Math.Max((l.Score.Value / 4), 0) : 0,
+                        BehaviorScore = (l.Score ?? 0) > 0 ? Math.Max((l.Score.Value / 4), 0) : 0,
+                        RecencyScore = (l.Score ?? 0) > 0 ? Math.Max((l.Score.Value / 4), 0) : 0,
+                    })
+                    .ToList();
+            }
+
+            // Load scoring rules from API
+            var rulesData = await Api.GetLeadScoringRulesAsync(_tenantId);
+            if (rulesData != null)
+            {
+                _rules = rulesData
+                    .Select(r => new ScoringRuleRow
+                    {
+                        Id = r.LeadScoringRuleId,
+                        Name = r.RuleName,
+                        Description = r.RuleDescription,
+                        Points = r.PointValue,
+                        IsActive = r.IsActive,
+                        Type = "Custom",
+                    })
+                    .ToList();
+            }
+            else
+            {
+                _rules = [];
+            }
+
+            _filteredLeads = _leads;
+            _totalLeads = _leads.Count;
+            BuildAnalytics();
+            UpdateKpi();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error loading leads: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void BuildAnalytics()
+    {
+        // Build score distribution
+        _scoreDistribution =
+        [
+            new ScoreBucket { Range = "80-100", MinScore = 80, Count = _leads.Count(l => l.Score >= 80) },
+            new ScoreBucket { Range = "60-79", MinScore = 60, Count = _leads.Count(l => l.Score >= 60 && l.Score < 80) },
+            new ScoreBucket { Range = "40-59", MinScore = 40, Count = _leads.Count(l => l.Score >= 40 && l.Score < 60) },
+            new ScoreBucket { Range = "20-39", MinScore = 20, Count = _leads.Count(l => l.Score >= 20 && l.Score < 40) },
+            new ScoreBucket { Range = "0-19", MinScore = 0, Count = _leads.Count(l => l.Score < 20) },
+        ];
+
+        // Build source stats
+        var sources = _leads.Select(l => l.Source).Distinct();
+        _sourceStats = sources
+            .Select(src => new SourceStats
+            {
+                Source = src,
+                LeadCount = _leads.Count(l => l.Source == src),
+                AvgScore = _leads.Where(l => l.Source == src).Any()
+                    ? _leads.Where(l => l.Source == src).Average(l => l.Score)
+                    : 0,
+                ConversionRate = _leads.Where(l => l.Source == src).Any()
+                    ? (_leads.Where(l => l.Source == src).Count(l => l.Score >= 50) / (double)_leads.Count(l => l.Source == src)) * 100
+                    : 0,
+            })
+            .OrderByDescending(s => s.AvgScore)
+            .ToList();
+
+        // Build rule stats
+        _ruleStats = _rules
+            .Select(r => new RuleStats
+            {
+                RuleName = r.Name,
+                TimesTriggered = _leads.Count(l => l.Score >= r.Points),
+                AvgContribution = r.Points,
+                ConvertedLeads = _leads.Count(l => l.Score >= 50),
+            })
+            .OrderByDescending(r => r.TimesTriggered)
+            .ToList();
+    }
+
+    private void UpdateKpi()
+    {
+        _kpi = new ScoringKpi
+        {
+            TotalLeads = _leads.Count,
+            HotLeads = _leads.Count(l => l.Score >= 80),
+            WarmLeads = _leads.Count(l => l.Score >= 50 && l.Score < 80),
+            ColdLeads = _leads.Count(l => l.Score < 50),
+            AvgScore = _leads.Any() ? _leads.Average(l => l.Score) : 0,
+        };
+    }
+
+    private void ApplyFilters()
+    {
+        _filteredLeads = _leads
+            .Where(l => string.IsNullOrEmpty(_search) || l.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || l.Company.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            .Where(l => string.IsNullOrEmpty(_filterScore) || 
+                (_filterScore == "80+" && l.Score >= 80) ||
+                (_filterScore == "50-79" && l.Score >= 50 && l.Score < 80) ||
+                (_filterScore == "0-49" && l.Score < 50))
+            .Where(l => string.IsNullOrEmpty(_filterSource) || l.Source == _filterSource)
+            .ToList();
+    }
+
+    private void OpenRuleDrawer()
+    {
+        _editingRuleId = Guid.Empty;
+        _ruleForm = new ScoringRuleForm();
+        _showRuleDrawer = true;
+    }
+
+    private void EditRule(ScoringRuleRow rule)
+    {
+        _editingRuleId = rule.Id;
+        _ruleForm = new ScoringRuleForm
+        {
+            Name = rule.Name,
+            Type = rule.Type,
+            Points = rule.Points,
+            Description = rule.Description,
+            Condition = rule.Condition,
+            IsActive = rule.IsActive,
+        };
+        _showRuleDrawer = true;
+    }
+
+    private async Task SaveRuleAsync()
+    {
+        try
+        {
+            _savingRule = true;
+            // TODO: Call API to save rule when endpoint is available
+            // if (_editingRuleId == Guid.Empty)
+            //     await Api.CreateScoringRuleAsync(new CreateScoringRuleRequest { ... });
+            // else
+            //     await Api.UpdateScoringRuleAsync(_editingRuleId, new UpdateScoringRuleRequest { ... });
+
+            await Task.Delay(500);
+            _showRuleDrawer = false;
+            await ShowToastAsync("Rule saved successfully", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error saving rule: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _savingRule = false;
+        }
+    }
+
+    private async Task DeleteRule(Guid ruleId)
+    {
+        try
+        {
+            // TODO: Call API to delete rule when endpoint is available
+            // await Api.DeleteScoringRuleAsync(ruleId);
+            _rules.RemoveAll(r => r.Id == ruleId);
+            await ShowToastAsync("Rule deleted", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error deleting rule: {ex.Message}", "e-toast-danger");
+        }
+    }
+
+    private async Task ToggleRuleActive(ScoringRuleRow rule, bool isActive)
+    {
+        try
+        {
+            rule.IsActive = isActive;
+            // TODO: Call API to update rule status
+            // await Api.UpdateScoringRuleAsync(rule.Id, new UpdateScoringRuleRequest { IsActive = isActive });
+            await ShowToastAsync($"Rule {(isActive ? "activated" : "deactivated")}", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error updating rule: {ex.Message}", "e-toast-danger");
+        }
+    }
+
+    private async Task ShowToastAsync(string msg, string css = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = css });
+    }
+
+    // ── Badge/Style helpers ───────────────────────────────────────────────
+    private string RatingClass(int score) => score switch
+    {
+        >= 80 => "ls-rating--hot",
+        >= 50 => "ls-rating--warm",
+        _ => "ls-rating--cold",
+    };
+
+    private string RatingIcon(int score) => score switch
+    {
+        >= 80 => "bi-fire",
+        >= 50 => "bi-thermometer-half",
+        _ => "bi-snowflake",
+    };
+
+    private string RatingLabel(int score) => score switch
+    {
+        >= 80 => "Hot",
+        >= 50 => "Warm",
+        _ => "Cold",
+    };
+
+    private string ScoreColor(int score) => score switch
+    {
+        >= 80 => "#dc2626",
+        >= 60 => "#f59e0b",
+        >= 40 => "#3b82f6",
+        _ => "#64748b",
+    };
+
+    private string BucketColor(int minScore) => minScore switch
+    {
+        >= 80 => "#dc2626",
+        >= 60 => "#f59e0b",
+        >= 40 => "#3b82f6",
+        _ => "#9ca3af",
+    };
+
+    private string AvatarColor(string name)
+    {
+        var colors = new[] { "ls-av1", "ls-av2", "ls-av3", "ls-av4", "ls-av5", "ls-av6" };
+        return colors[Math.Abs(name.GetHashCode()) % colors.Length];
+    }
+
+    private string Initials(string name)
+    {
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?";
+    }
+
+    private string SourceClass(string source) => source switch
+    {
+        "Website" => "website",
+        "Email" => "email",
+        "Referral" => "referral",
+        "Cold Call" => "call",
+        "Event" => "event",
+        "Social" => "social",
+        _ => "other",
+    };
+
+    // ── Data models ───────────────────────────────────────────────────────
+    private class ScoringKpi
+    {
+        public int TotalLeads { get; set; }
+        public int HotLeads { get; set; }
+        public int WarmLeads { get; set; }
+        public int ColdLeads { get; set; }
+        public double AvgScore { get; set; }
+    }
+
+    private class ScoringRuleRow
+    {
+        public Guid Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public int Points { get; set; }
+        public string Description { get; set; } = string.Empty;
+        public string Condition { get; set; } = string.Empty;
+        public bool IsActive { get; set; }
+    }
+
+    private class ScoringRuleForm
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public int Points { get; set; }
+        public string Description { get; set; } = string.Empty;
+        public string Condition { get; set; } = string.Empty;
+        public bool IsActive { get; set; } = true;
+    }
+
+    private class LeadScoreRow
+    {
+        public Guid LeadId { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Company { get; set; } = string.Empty;
+        public string Source { get; set; } = string.Empty;
+        public int Score { get; set; }
+        public int EngagementScore { get; set; }
+        public int ProfileScore { get; set; }
+        public int BehaviorScore { get; set; }
+        public int RecencyScore { get; set; }
+        public string Rating { get; set; } = "Cold";
+    }
+
+    private class ScoreBucket
+    {
+        public string Range { get; set; } = string.Empty;
+        public int MinScore { get; set; }
+        public int Count { get; set; }
+    }
+
+    private class SourceStats
+    {
+        public string Source { get; set; } = string.Empty;
+        public int LeadCount { get; set; }
+        public double AvgScore { get; set; }
+        public double ConversionRate { get; set; }
+    }
+
+    private class RuleStats
+    {
+        public string RuleName { get; set; } = string.Empty;
+        public int TimesTriggered { get; set; }
+        public double AvgContribution { get; set; }
+        public int ConvertedLeads { get; set; }
+    }
+
+    private record LV(string Label, string Value);
+}

@@ -1,0 +1,347 @@
+@page "/renewals/pipeline"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Renewal Pipeline — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
+    <MenuFieldSettings Text="Text" IconCss="IconCss" />
+</SfContextMenu>
+
+<AppPageHeader Title="Renewal Pipeline"
+               Subtitle="Visualise every renewal by stage, urgency, and premium at stake — move deals forward before they slip"
+               Icon="bi-funnel">
+    <Actions>
+        <button class="um-btn um-btn-ghost @(_view == "kanban" ? "um-btn-active" : "")"
+                @onclick='() => _view = "kanban"' title="Kanban view">
+            <i class="bi bi-kanban" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost @(_view == "list" ? "um-btn-active" : "")"
+                @onclick='() => _view = "list"' title="List view">
+            <i class="bi bi-list-ul" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh">
+            <i class="bi bi-arrow-clockwise @(_loading ? "rp-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/renewals")'>
+            <i class="bi bi-grid" aria-hidden="true"></i> Dashboard
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="rp-kpi-strip">
+    @KpiCard("bi-stack",           "Total",          _rows.Count.ToString(),                                             "rp-kpi-total",   null)
+    @KpiCard("bi-hourglass",       "Not Started",    _rows.Count(r => r.Stage == "Not Started").ToString(),             "rp-kpi-ns",      "Not Started")
+    @KpiCard("bi-arrow-clockwise", "In Progress",    _rows.Count(r => r.Stage == "In Progress").ToString(),             "rp-kpi-ip",      "In Progress")
+    @KpiCard("bi-quote",           "Quoted",         _rows.Count(r => r.Stage == "Quoted").ToString(),                  "rp-kpi-qt",      "Quoted")
+    @KpiCard("bi-check-circle",    "Renewed",        _rows.Count(r => r.Stage == "Renewed").ToString(),                 "rp-kpi-rn",      "Renewed")
+    @KpiCard("bi-x-circle",        "Lost",           _rows.Count(r => r.Stage is "Lost" or "Non-Renewed").ToString(),   "rp-kpi-lo",      "__lost")
+    @KpiCard("bi-currency-dollar", "Premium at Stake", PremiumAtStake.ToString("C0"),                                   "rp-kpi-prem",    "__premium")
+</div>
+
+<!-- Filter bar -->
+<div class="rp-filter-bar">
+    <input class="e-input rp-search" @bind="_search" @bind:event="oninput"
+           placeholder="Search account, policy #, carrier…" />
+    <select class="e-input rp-filter-sel" @bind="_lobFilter">
+        <option value="">All Lines</option>
+        @foreach (var l in _lobs) { <option>@l</option> }
+    </select>
+    <select class="e-input rp-filter-sel" @bind="_producerFilter">
+        <option value="">All Producers</option>
+        @foreach (var p in _producers) { <option>@p</option> }
+    </select>
+    <select class="e-input rp-filter-sel rp-days-sel" @bind="_daysFilter">
+        <option value="0">All expiries</option>
+        <option value="30">Expiring &lt; 30 days</option>
+        <option value="60">Expiring &lt; 60 days</option>
+        <option value="90">Expiring &lt; 90 days</option>
+    </select>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+        <i class="bi bi-x" aria-hidden="true"></i> Reset
+    </button>
+    <span class="rp-filter-count">@Filtered.Count() records</span>
+</div>
+
+@if (_view == "kanban")
+{
+    <!-- Kanban board -->
+    <div class="rp-kanban">
+        @foreach (var stage in _stages)
+        {
+            var cards = Filtered.Where(r => r.Stage == stage.Key).ToList();
+            <div class="rp-lane">
+                <div class="rp-lane-header rp-lane-@StageCss(stage.Key)">
+                    <i class="bi @stage.Icon" aria-hidden="true"></i>
+                    <span class="rp-lane-title">@stage.Label</span>
+                    <span class="rp-lane-count">@cards.Count</span>
+                </div>
+                <div class="rp-lane-prem-row">@cards.Sum(c => c.CurrentPremium).ToString("C0")</div>
+                <div class="rp-lane-body">
+                    @if (cards.Count == 0)
+                    {
+                        <div class="rp-lane-empty"><i class="bi bi-inbox" aria-hidden="true"></i> None</div>
+                    }
+                    @foreach (var r in cards.OrderBy(c => c.DaysToExpiry))
+                    {
+                        <div class="rp-card rp-card-@UrgencyCss(r.DaysToExpiry)"
+                             @onclick="() => OpenDetail(r)">
+                            <div class="rp-card-acct">@r.AccountName</div>
+                            <div class="rp-card-meta">
+                                <span class="rp-card-pol">@r.PolicyNumber</span>
+                                <span class="rp-card-lob">@r.Lob</span>
+                            </div>
+                            <div class="rp-card-footer">
+                                <span class="rp-card-days rp-days-@UrgencyCss(r.DaysToExpiry)">
+                                    <i class="bi bi-calendar" aria-hidden="true"></i>
+                                    @DaysLabel(r.DaysToExpiry)
+                                </span>
+                                <span class="rp-card-prem">@r.CurrentPremium.ToString("C0")</span>
+                            </div>
+                            <div class="rp-card-risk">
+                                <div class="rp-risk-bar" style="width:@r.RetentionRiskScore%;background:@RiskColor(r.RetentionRiskScore)"></div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <!-- List view -->
+    <div class="rp-grid-wrap">
+        @if (_loading)
+        {
+            <div class="rp-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+        }
+        else
+        {
+            <SfGrid DataSource="@Filtered.ToList()" AllowSorting="true" AllowPaging="true" AllowResizing="true"
+                    RowHeight="50" @ref="_grid">
+                <GridPageSettings PageSize="20" />
+                <GridEvents TValue="RenewalRow" RowSelected="OnRowSelected" />
+                <GridColumns>
+                    <GridColumn Field="AccountName"        HeaderText="Account"      MinWidth="180">
+                        <Template>
+                            @{ var r = (RenewalRow)context; }
+                            <div>
+                                <button class="rp-acct-link" @onclick="() => OpenDetail(r)">@r.AccountName</button>
+                                <div class="rp-meta">@r.PolicyNumber · @r.Lob</div>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="Carrier"            HeaderText="Carrier"      Width="155" />
+                    <GridColumn Field="Stage"              HeaderText="Stage"        Width="130">
+                        <Template>
+                            @{ var r = (RenewalRow)context; }
+                            <span class="rp-stage rp-st-@StageCss(r.Stage)">@r.Stage</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="ExpiryDate"         HeaderText="Expiry"       Width="120">
+                        <Template>
+                            @{ var r = (RenewalRow)context; }
+                            <div>
+                                <div class="rp-exp-date">@r.ExpiryDate.ToString("MM/dd/yyyy")</div>
+                                <span class="rp-days-badge rp-db-@UrgencyCss(r.DaysToExpiry)">@DaysLabel(r.DaysToExpiry)</span>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="RetentionRiskScore" HeaderText="Risk"         Width="100">
+                        <Template>
+                            @{ var r = (RenewalRow)context; }
+                            <div class="rp-risk-cell">
+                                <div class="rp-risk-wrap"><div class="rp-risk-fill" style="width:@r.RetentionRiskScore%;background:@RiskColor(r.RetentionRiskScore)"></div></div>
+                                <span style="color:@RiskColor(r.RetentionRiskScore);font-weight:700;font-size:.75rem">@r.RetentionRiskScore</span>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="CurrentPremium"     HeaderText="Premium"      Width="120"
+                                TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                        <Template>
+                            @{ var r = (RenewalRow)context; }
+                            <span class="rp-prem">@r.CurrentPremium.ToString("C0")</span>
+                        </Template>
+                    </GridColumn>
+                    <GridColumn Field="Producer"           HeaderText="Producer"     Width="145" />
+                    <GridColumn HeaderText=""              Width="52"  AllowSorting="false">
+                        <Template>
+                            @{ var r = (RenewalRow)context; }
+                            <button class="um-btn um-btn-ghost um-btn-xs rp-ctx-btn"
+                                    @onclick:stopPropagation="true"
+                                    @onclick="(e) => { _selected = r; _ctx.Open(e.ClientX, e.ClientY); }">
+                                <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                            </button>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        }
+    </div>
+}
+
+@code {
+    SfToast _toast = default!;
+    SfContextMenu<CtxItem> _ctx = default!;
+    SfGrid<RenewalRow>? _grid;
+
+    bool      _loading        = false;
+    string    _view           = "kanban";
+    string    _search         = "";
+    string?   _kpiFilter      = null;
+    string    _lobFilter      = "";
+    string    _producerFilter = "";
+    int       _daysFilter     = 0;
+    RenewalRow _selected      = new();
+
+    sealed record CtxItem(string Text, string IconCss);
+    record StageInfo(string Key, string Label, string Icon);
+
+    sealed class RenewalRow
+    {
+        public Guid     RenewalId           { get; set; } = Guid.NewGuid();
+        public Guid     PolicyId            { get; set; } = Guid.NewGuid();
+        public string   AccountName         { get; set; } = "";
+        public string   PolicyNumber        { get; set; } = "";
+        public string   Lob                 { get; set; } = "";
+        public string   Carrier             { get; set; } = "";
+        public DateTime ExpiryDate          { get; set; }
+        public int      DaysToExpiry        { get; set; }
+        public string   Stage               { get; set; } = "";
+        public int      RetentionRiskScore  { get; set; }
+        public decimal  CurrentPremium      { get; set; }
+        public string   Producer            { get; set; } = "";
+    }
+
+    readonly StageInfo[] _stages =
+    [
+        new("Not Started", "Not Started", "bi-hourglass"       ),
+        new("In Progress", "In Progress", "bi-arrow-clockwise" ),
+        new("Quoted",      "Quoted",      "bi-quote"           ),
+        new("Renewed",     "Renewed",     "bi-check-circle"    ),
+        new("Lost",        "Lost",        "bi-x-circle"        ),
+        new("Non-Renewed", "Non-Renewed", "bi-slash-circle"    ),
+    ];
+
+    readonly string[] _lobs      = { "General Liability","Commercial Auto","Commercial Property","Workers Comp","Umbrella","Professional Liab.","Home/Dwelling","Personal Auto" };
+    readonly string[] _producers = { "Maria Santos","James Park","Kevin Obi","Sarah Kim","Lisa Chen" };
+
+    readonly List<RenewalRow> _rows = [];
+
+    IEnumerable<RenewalRow> Filtered => _rows
+        .Where(r =>
+            (string.IsNullOrEmpty(_search) ||
+             r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             r.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             r.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase))
+         && (string.IsNullOrEmpty(_lobFilter) || r.Lob == _lobFilter)
+         && (string.IsNullOrEmpty(_producerFilter) || r.Producer == _producerFilter)
+         && (_daysFilter == 0 || r.DaysToExpiry <= _daysFilter)
+         && (_kpiFilter is null
+             || _kpiFilter == "__lost"    && r.Stage is "Lost" or "Non-Renewed"
+             || _kpiFilter == "__premium" && r.Stage is not "Renewed" and not "Lost" and not "Non-Renewed"
+             || r.Stage == _kpiFilter))
+        .OrderBy(r => r.DaysToExpiry);
+
+    decimal PremiumAtStake => _rows
+        .Where(r => r.Stage is not "Renewed" and not "Lost" and not "Non-Renewed")
+        .Sum(r => r.CurrentPremium);
+
+    readonly List<CtxItem> _ctxItems =
+    [
+        new("Open",             "bi bi-box-arrow-up-right"),
+        new("Move to Quoted",   "bi bi-quote"             ),
+        new("Mark Renewed",     "bi bi-check-circle"      ),
+        new("Mark Lost",        "bi bi-x-circle"          ),
+        new("View Policy",      "bi bi-shield"            ),
+        new("Assign Producer",  "bi bi-person-check"      ),
+        new("Add Activity",     "bi bi-lightning"         ),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Renewals","/renewals"), new("Pipeline","/renewals/pipeline"));
+        await Task.Delay(0);
+        BuildStub();
+    }
+
+    void Refresh() { _rows.Clear(); BuildStub(); }
+
+    void BuildStub()
+    {
+        var rng      = new Random(31);
+        var lobs     = _lobs;
+        var stages   = new[]{"Not Started","Not Started","In Progress","In Progress","Quoted","Quoted","Renewed","Lost","Non-Renewed"};
+        var carriers = new[]{"Travelers","Chubb","Zurich","AIG","Liberty Mutual","Hartford","Nationwide","CNA"};
+        var accounts = new[]{"Sullivan Mfg. LLC","Bridgewater Hotels","Metro Freight Co.","PineCrest Builders","Omega Tech Corp.","BlueSky Aviation","Harbor Fresh Foods","Summit Properties LLC","Apex Medical Group","Pioneer Automotive"};
+
+        for (int i = 1; i <= 60; i++)
+        {
+            var days = rng.Next(-20, 130);
+            _rows.Add(new RenewalRow
+            {
+                PolicyNumber       = $"POL-2024-{i:D4}",
+                AccountName        = accounts[rng.Next(accounts.Length)],
+                Lob                = lobs[rng.Next(lobs.Length)],
+                Carrier            = carriers[rng.Next(carriers.Length)],
+                ExpiryDate         = DateTime.Today.AddDays(days),
+                DaysToExpiry       = days,
+                Stage              = stages[rng.Next(stages.Length)],
+                RetentionRiskScore = rng.Next(10, 95),
+                CurrentPremium     = (decimal)rng.Next(5000, 60000),
+                Producer           = _producers[rng.Next(_producers.Length)],
+            });
+        }
+    }
+
+    void ResetFilters() { _search = ""; _lobFilter = ""; _producerFilter = ""; _daysFilter = 0; _kpiFilter = null; }
+
+    void OpenDetail(RenewalRow r) => Nav.NavigateTo($"/renewals/{r.RenewalId}");
+
+    void OnRowSelected(RowSelectEventArgs<RenewalRow> args) => OpenDetail(args.Data);
+
+    void OnCtxSelected(MenuEventArgs<CtxItem> args)
+    {
+        if (args.Item.Text == "Open")        OpenDetail(_selected);
+        if (args.Item.Text == "View Policy") Nav.NavigateTo($"/policies/{_selected.PolicyId}");
+    }
+
+    static string StageCss(string stage) => stage switch
+    {
+        "Not Started" => "ns",
+        "In Progress" => "ip",
+        "Quoted"      => "qt",
+        "Renewed"     => "rn",
+        "Lost"        => "lo",
+        "Non-Renewed" => "nr",
+        _             => "ns",
+    };
+
+    static string UrgencyCss(int days) =>
+        days <= 0 ? "expired" : days <= 30 ? "red" : days <= 60 ? "amber" : "blue";
+
+    static string DaysLabel(int days) =>
+        days <= 0   ? $"Expired {Math.Abs(days)}d" :
+        days == 1   ? "1 day left" : $"{days}d left";
+
+    static string RiskColor(int score) =>
+        score >= 70 ? "#dc2626" : score >= 40 ? "#d97706" : "#059669";
+
+    RenderFragment KpiCard(string icon, string label, string val, string css, string? filterKey)
+    {
+        var isActive = _kpiFilter == filterKey && filterKey is not null;
+        return @<button class="rp-kpi-card @css @(isActive ? "rp-kpi-active" : "")"
+                        @onclick="() => _kpiFilter = isActive ? null : filterKey"
+                        title="@(filterKey is null ? "Show all" : (isActive ? "Clear filter" : $"Filter by {label}"))">
+            <div class="rp-kpi-val">@val</div>
+            <div class="rp-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </button>;
+    }
+}

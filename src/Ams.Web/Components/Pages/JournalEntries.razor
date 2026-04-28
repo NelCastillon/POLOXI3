@@ -1,0 +1,198 @@
+@page "/finance/journalentries"
+@namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Journal Entries</PageTitle>
+
+<AppPageHeader Title="Journal Entries"
+               Subtitle="Review and manage general ledger journal entries"
+               Icon="bi-journal-text">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "fa-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Entry
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── Search & Filter ──────────────────────────────────────────────────── -->
+<div class="fin-toolbar">
+    <div class="fin-search-box">
+        <i class="bi bi-search fin-search-icon" aria-hidden="true"></i>
+        <input class="e-input fin-search-input"
+               placeholder="Search journal entries…"
+               @bind="_searchTerm"
+               @bind:event="oninput"
+               @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" />
+    </div>
+    <div class="fin-filter-buttons">
+        <button class="um-btn um-btn-ghost um-btn-sm @(_filterActive ? "um-btn-active" : "")"
+                @onclick="() => _filterActive = !_filterActive">
+            <i class="bi bi-funnel" aria-hidden="true"></i> Filter
+        </button>
+    </div>
+</div>
+
+@if (_filterActive)
+{
+    <div class="fin-filter-panel">
+        <div class="fin-filter-group">
+            <label class="fin-filter-label">Status</label>
+            <select class="e-input" @bind="_filterStatus">
+                <option value="">All</option>
+                <option value="Draft">Draft</option>
+                <option value="Posted">Posted</option>
+            </select>
+        </div>
+    </div>
+}
+
+<!-- ── KPI Cards ──────────────────────────────────────────────────────── -->
+@if (_stats is not null)
+{
+    <div class="fin-kpi-strip">
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #dbeafe; color: #1d4ed8;"><i class="bi bi-journal-fill" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.TotalEntries</div>
+                <div class="fin-kpi-label">Total Entries</div>
+            </div>
+        </div>
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #d1fae5; color: #047857;"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.PostedEntries</div>
+                <div class="fin-kpi-label">Posted</div>
+            </div>
+        </div>
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #fef3c7; color: #b45309;"><i class="bi bi-pencil-square" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.DraftEntries</div>
+                <div class="fin-kpi-label">Draft</div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- ── Content ──────────────────────────────────────────────────────── -->
+@if (_error is not null)
+{
+    <div class="fin-alert fin-alert-warning">
+        <div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></div>
+        <div class="fin-alert-body">
+            <div class="fin-alert-title">⚠️ Database Schema Issue</div>
+            <p>@_error</p>
+        </div>
+    </div>
+}
+else if (_loading)
+{
+    <div class="fin-loading">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading Journal Entries…</span>
+    </div>
+}
+else if (_items?.Count == 0)
+{
+    <div class="fin-empty-state">
+        <i class="bi bi-inbox fin-empty-icon" aria-hidden="true"></i>
+        <h3>No Journal Entries Found</h3>
+        <p>@(_searchTerm != null ? $"No entries match \"{_searchTerm}\"." : "No journal entries have been created yet.")</p>
+    </div>
+}
+else
+{
+    <div class="fin-grid-container">
+        <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="600px">
+            <GridPageSettings PageSize="15"></GridPageSettings>
+            <GridColumns>
+                <GridColumn Field="@nameof(JournalEntryDto.EntryNumber)" HeaderText="Entry #" Width="120" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(JournalEntryDto.EntryDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(JournalEntryDto.Description)" HeaderText="Description" Width="280"></GridColumn>
+                <GridColumn Field="@nameof(JournalEntryDto.TotalDebit)" HeaderText="Debit" Format="C2" Width="110" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(JournalEntryDto.TotalCredit)" HeaderText="Credit" Format="C2" Width="110" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(JournalEntryDto.StatusCode)" HeaderText="Status" Width="100" AllowSorting="true">
+                    <Template>
+                        @{
+                            var entry = context as JournalEntryDto;
+                            var badgeClass = entry?.StatusCode switch
+                            {
+                                "Posted" => "fin-badge-success",
+                                "Draft" => "fin-badge-secondary",
+                                _ => "fin-badge-warning"
+                            };
+                        }
+                        <span class="fin-badge @badgeClass">@entry?.StatusCode</span>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private string? _searchTerm;
+    private string _filterStatus = "";
+    private bool _filterActive = false;
+    private bool _loading = false;
+    private List<JournalEntryDto>? _items;
+    private string? _error;
+
+    private class Stats
+    {
+        public int TotalEntries { get; set; }
+        public int PostedEntries { get; set; }
+        public int DraftEntries { get; set; }
+    }
+
+    private Stats? _stats;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home", "/"),
+            new("Finance", "/finance"),
+            new("Journal Entries", "/finance/journalentries"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        _items = null;
+        try
+        {
+            var result = await Api.SearchJournalEntriesAsync(_tenantId, _searchTerm);
+            _items = result?.Items.ToList() ?? [];
+
+            if (!string.IsNullOrEmpty(_filterStatus))
+                _items = _items.Where(x => x.StatusCode == _filterStatus).ToList();
+
+            _stats = new Stats
+            {
+                TotalEntries = _items.Count,
+                PostedEntries = _items.Where(x => x.StatusCode == "Posted").Count(),
+                DraftEntries = _items.Where(x => x.StatusCode == "Draft").Count()
+            };
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            if (ex.Message.Contains("Invalid column name") || ex.Message.Contains("JournalEntry"))
+            {
+                _error = "Database schema mismatch. Please ensure 00_schema_migration.sql has been applied to your database. See db/README.md for setup instructions.";
+            }
+            _items = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+}

@@ -1,0 +1,315 @@
+@page "/workbench/activities"
+@namespace Ams.Web.Components.Pages.Workbench
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>My Activities — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
+    <MenuFieldSettings Text="Text" IconCss="IconCss" />
+</SfContextMenu>
+
+<AppPageHeader Title="My Activities"
+               Subtitle="All calls, emails, meetings, tasks and notes logged by you"
+               Icon="bi-lightning">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="LogActivity">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Log Activity
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="ma-kpi-strip">
+    @KpiCard("bi-lightning",      "Total",    _rows.Count.ToString(),                                          "ma-kpi-total",   null)
+    @KpiCard("bi-telephone",      "Calls",    _rows.Count(r => r.Type == "Call").ToString(),                  "ma-kpi-call",    "Call")
+    @KpiCard("bi-envelope",       "Emails",   _rows.Count(r => r.Type == "Email").ToString(),                 "ma-kpi-email",   "Email")
+    @KpiCard("bi-calendar-event", "Meetings", _rows.Count(r => r.Type == "Meeting").ToString(),               "ma-kpi-meet",    "Meeting")
+    @KpiCard("bi-check2-square",  "Tasks",    _rows.Count(r => r.Type == "Task").ToString(),                  "ma-kpi-task",    "Task")
+    @KpiCard("bi-sticky",         "Notes",    _rows.Count(r => r.Type == "Note").ToString(),                  "ma-kpi-note",    "Note")
+    @KpiCard("bi-check-circle",   "Completed",_rows.Count(r => r.IsCompleted).ToString(),                     "ma-kpi-done",    "__completed")
+</div>
+
+<!-- Filter bar -->
+<div class="ma-filter-bar">
+    <input class="e-input ma-search" @bind="_search" @bind:event="oninput"
+           placeholder="Search account, subject, notes…" />
+    <div class="ma-type-pills">
+        @foreach (var t in _typePills)
+        {
+            <button class="ma-pill @(_typeFilter == t ? "ma-pill-active" : "")"
+                    @onclick="() => ToggleType(t)">@t</button>
+        }
+    </div>
+    <select class="e-input ma-filter-sel" @bind="_dateFilter">
+        <option value="0">All dates</option>
+        <option value="7">Last 7 days</option>
+        <option value="14">Last 14 days</option>
+        <option value="30">Last 30 days</option>
+    </select>
+    <label class="ma-toggle">
+        <input type="checkbox" @bind="_showCompleted" /> Show completed
+    </label>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+        <i class="bi bi-x" aria-hidden="true"></i> Reset
+    </button>
+    <span class="ma-filter-count">@Filtered.Count() activities</span>
+</div>
+
+<!-- View tabs -->
+<div class="ma-view-tabs">
+    @foreach (var t in _tabs)
+    {
+        <button class="ma-view-tab @(_activeTab == t.Key ? "ma-view-tab--active" : "")"
+                @onclick="() => _activeTab = t.Key">
+            <i class="bi @t.Icon" aria-hidden="true"></i> @t.Label
+            <span class="ma-tab-count">@Filtered.Count()</span>
+        </button>
+    }
+</div>
+
+<div class="ma-content">
+
+    @if (_activeTab == "feed")
+    {
+        <div class="ma-feed">
+            @foreach (var grp in Filtered.GroupBy(r => r.ActivityDate.Date).OrderByDescending(g => g.Key))
+            {
+                <div class="ma-date-sep"><span>@FormatDateGroup(grp.Key)</span></div>
+                @foreach (var r in grp.OrderByDescending(x => x.ActivityDate))
+                {
+                    <div class="ma-feed-item @(r.IsCompleted ? "ma-item-done" : "")"
+                         @onclick="() => OpenDetail(r)">
+                        <div class="ma-feed-icon ma-type-@r.Type.ToLower()">
+                            <i class="bi @TypeIcon(r.Type)" aria-hidden="true"></i>
+                        </div>
+                        <div class="ma-feed-body">
+                            <div class="ma-feed-hdr">
+                                <span class="ma-feed-acct">@r.Account</span>
+                                <span class="ma-type-chip ma-tc-@r.Type.ToLower()">@r.Type</span>
+                                @if (r.IsCompleted) {
+                                    <span class="ma-done-chip"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> Done</span>
+                                }
+                            </div>
+                            <div class="ma-feed-subj">@r.Subject</div>
+                            @if (!string.IsNullOrEmpty(r.Notes))
+                            {
+                                <div class="ma-feed-notes">@r.Notes</div>
+                            }
+                            <div class="ma-feed-meta">
+                                <span><i class="bi bi-clock" aria-hidden="true"></i> @r.ActivityDate.ToString("h:mm tt")</span>
+                                @if (r.DurationMinutes > 0) {
+                                    <span><i class="bi bi-stopwatch" aria-hidden="true"></i> @r.DurationMinutes min</span>
+                                }
+                                @if (!string.IsNullOrEmpty(r.Outcome)) {
+                                    <span class="ma-outcome-chip ma-oc-@r.Outcome.ToLower().Replace(" ","-")">@r.Outcome</span>
+                                }
+                            </div>
+                        </div>
+                        <button class="um-btn um-btn-ghost um-btn-xs ma-ctx-btn"
+                                @onclick:stopPropagation="true"
+                                @onclick="(e) => { _selected = r; _ctx.Open(e.ClientX, e.ClientY); }">
+                            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                }
+            }
+            @if (!Filtered.Any())
+            {
+                <div class="ma-empty"><i class="bi bi-lightning ma-empty-icon" aria-hidden="true"></i><span>No activities match the current filters.</span></div>
+            }
+        </div>
+    }
+    else
+    {
+        <SfGrid DataSource="@Filtered.ToList()" AllowSorting="true" AllowPaging="true"
+                AllowResizing="true" RowHeight="44" @ref="_grid">
+            <GridPageSettings PageSize="25" />
+            <GridColumns>
+                <GridColumn Field="Account"      HeaderText="Account"   MinWidth="175" />
+                <GridColumn Field="Type"         HeaderText="Type"      Width="110">
+                    <Template>
+                        @{ var r = (ActivityRow)context; }
+                        <span class="ma-type-chip ma-tc-@r.Type.ToLower()">
+                            <i class="bi @TypeIcon(r.Type)" aria-hidden="true"></i> @r.Type
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="Subject"      HeaderText="Subject"   MinWidth="200" />
+                <GridColumn Field="ActivityDate" HeaderText="Date"      Width="130">
+                    <Template>
+                        @{ var r = (ActivityRow)context; }
+                        <span>@r.ActivityDate.ToString("MM/dd/yyyy h:mm tt")</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="DurationMinutes" HeaderText="Duration" Width="100">
+                    <Template>@{ var r = (ActivityRow)context; }@(r.DurationMinutes > 0 ? $"{r.DurationMinutes} min" : "—")</Template>
+                </GridColumn>
+                <GridColumn Field="Outcome"      HeaderText="Outcome"   Width="130">
+                    <Template>
+                        @{ var r = (ActivityRow)context; }
+                        @if (!string.IsNullOrEmpty(r.Outcome)) {
+                            <span class="ma-outcome-chip ma-oc-@r.Outcome.ToLower().Replace(" ","-")">@r.Outcome</span>
+                        } else { <span style="color:var(--text-muted)">—</span> }
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="IsCompleted"  HeaderText="Done"      Width="70" DisplayAsCheckBox="true" />
+                <GridColumn HeaderText="" Width="52" AllowSorting="false">
+                    <Template>
+                        @{ var r = (ActivityRow)context; }
+                        <button class="um-btn um-btn-ghost um-btn-xs"
+                                @onclick:stopPropagation="true"
+                                @onclick="(e) => { _selected = r; _ctx.Open(e.ClientX, e.ClientY); }">
+                            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                        </button>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    }
+
+</div>
+
+@code {
+    SfToast _toast = default!;
+    SfContextMenu<CtxItem> _ctx = default!;
+    SfGrid<ActivityRow>? _grid;
+
+    string _search        = "";
+    string _typeFilter    = "";
+    int    _dateFilter    = 0;
+    bool   _showCompleted = false;
+    string _activeTab     = "feed";
+
+    ActivityRow? _selected;
+
+    sealed record TabDef(string Key, string Label, string Icon);
+    readonly TabDef[] _tabs = [new("feed","Activity Feed","bi-rss"), new("grid","Grid View","bi-table")];
+
+    readonly string[] _typePills = ["Call","Email","Meeting","Task","Note"];
+
+    sealed record CtxItem(string Text, string IconCss);
+    readonly List<CtxItem> _ctxItems =
+    [
+        new("Open Detail",    "bi bi-arrow-right-circle"),
+        new("Edit",           "bi bi-pencil"),
+        new("Mark Complete",  "bi bi-check-circle"),
+        new("Delete",         "bi bi-trash"),
+    ];
+
+    sealed class ActivityRow
+    {
+        public Guid     Id              { get; set; }
+        public string   Account         { get; set; } = "";
+        public string   Type            { get; set; } = "";
+        public string   Subject         { get; set; } = "";
+        public string   Notes           { get; set; } = "";
+        public string   Outcome         { get; set; } = "";
+        public DateTime ActivityDate    { get; set; }
+        public int      DurationMinutes { get; set; }
+        public bool     IsCompleted     { get; set; }
+    }
+
+    readonly List<ActivityRow> _rows = new();
+
+    IEnumerable<ActivityRow> Filtered => _rows.Where(r =>
+        (_showCompleted || !r.IsCompleted || r.Type != "Task")
+        && (string.IsNullOrEmpty(_search) ||
+            r.Account.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+            r.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+            r.Notes.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        && (string.IsNullOrEmpty(_typeFilter) || _typeFilter == "__completed" ? (_typeFilter == "__completed" ? r.IsCompleted : true) : r.Type == _typeFilter)
+        && (_dateFilter == 0 || r.ActivityDate >= DateTime.Now.AddDays(-_dateFilter))
+    );
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("My Activities", "/workbench/activities"));
+        BuildStub();
+    }
+
+    void BuildStub()
+    {
+        var rnd      = new Random(11);
+        var accounts = new[]{ "Sullivan Mfg. LLC","Metro Freight Co.","Apex Medical Group","Dallas Roofing LLC","Bridgewater Hotels","Pioneer Automotive","Greenleaf Nurseries","Sun Valley Resort","Coastal Seafood Dist." };
+        var types    = new[]{ "Call","Call","Email","Email","Meeting","Task","Note" };
+        var outcomes = new[]{ "Completed","Left Voicemail","No Answer","Sent","Scheduled","In Progress","" };
+        var subjects = new Dictionary<string, string[]>
+        {
+            ["Call"]    = ["Discussed renewal options","Followed up on quote","Left renewal reminder","Confirmed receipt of documents"],
+            ["Email"]   = ["Sent proposal document","Forwarded endorsement request","Emailed quote summary","Shared market update"],
+            ["Meeting"] = ["Conducted policy review","Held renewal strategy meeting","Onboarding call completed","Annual review meeting"],
+            ["Task"]    = ["Prepare ACORD 25","Request loss runs","Update pipeline forecast","Submit endorsement request"],
+            ["Note"]    = ["Client prefers email contact","Decision expected next week","Waiting on underwriter clearance","Prior carrier non-renewing"],
+        };
+
+        _rows.Clear();
+        for (int i = 0; i < 60; i++)
+        {
+            var type    = types[rnd.Next(types.Length)];
+            var subList = subjects[type];
+            _rows.Add(new ActivityRow
+            {
+                Id              = Guid.NewGuid(),
+                Account         = accounts[rnd.Next(accounts.Length)],
+                Type            = type,
+                Subject         = subList[rnd.Next(subList.Length)],
+                Notes           = rnd.Next(3) == 0 ? "Follow-up required before end of week." : "",
+                Outcome         = outcomes[rnd.Next(outcomes.Length)],
+                ActivityDate    = DateTime.Now.AddMinutes(-rnd.Next(1, 60 * 24 * 30)),
+                DurationMinutes = type is "Call" or "Meeting" ? rnd.Next(1,8) * 15 : 0,
+                IsCompleted     = rnd.Next(4) == 0,
+            });
+        }
+        _rows.Sort((a, b) => b.ActivityDate.CompareTo(a.ActivityDate));
+    }
+
+    void Refresh()      => BuildStub();
+    void ResetFilters() { _search=""; _typeFilter=""; _dateFilter=0; _showCompleted=false; }
+    void ToggleType(string t)       => _typeFilter = _typeFilter == t ? string.Empty : t;
+    void ToggleKpi(string? filter)  => _typeFilter = _typeFilter == (filter ?? string.Empty) ? string.Empty : (filter ?? string.Empty);
+
+    async Task LogActivity()
+    {
+        await _toast.ShowAsync(new ToastModel { Title="Log Activity", Content="Activity logging form coming soon.", CssClass="e-toast-info" });
+    }
+
+    void OpenDetail(ActivityRow r) =>
+        Nav.NavigateTo($"/accounts");   // placeholder
+
+    async Task OnCtxSelected(MenuEventArgs<CtxItem> args)
+    {
+        if (_selected is null) return;
+        await _toast.ShowAsync(new ToastModel { Title=args.Item.Text, Content=_selected.Subject, CssClass="e-toast-info" });
+    }
+
+    static string TypeIcon(string t) => t switch
+    {
+        "Call"    => "bi-telephone-fill",
+        "Email"   => "bi-envelope-fill",
+        "Meeting" => "bi-calendar-event-fill",
+        "Task"    => "bi-check2-square",
+        _         => "bi-sticky-fill"
+    };
+
+    static string FormatDateGroup(DateTime d)
+    {
+        if (d.Date == DateTime.Today)           return "Today";
+        if (d.Date == DateTime.Today.AddDays(-1)) return "Yesterday";
+        return d.ToString("dddd, MMMM d");
+    }
+
+    RenderFragment KpiCard(string icon, string label, string val, string css, string? filter) =>
+        @<button class="ma-kpi-card @css @(_typeFilter == (filter ?? string.Empty) ? "ma-kpi-active" : "")"
+                 @onclick="() => ToggleKpi(filter)">
+            <div class="ma-kpi-val">@val</div>
+            <div class="ma-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </button>;
+}

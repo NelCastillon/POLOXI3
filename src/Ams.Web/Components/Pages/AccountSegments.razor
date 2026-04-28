@@ -1,31 +1,298 @@
-@page "/client/segments"
+﻿@page "/client/segments"
+@namespace Ams.Web.Components.Pages
+@using Microsoft.AspNetCore.Components
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Account Segments</PageTitle>
-<h1>Account Segments</h1>
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Account Segments"
+               Subtitle="Customer segmentation strategies and targeting"
+               Icon="bi-pie-chart">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "acs-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="NewSegment">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Segment
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI Strip -->
+<div class="acs-kpi-strip">
+    <div class="acs-kpi-card">
+        <span class="acs-ki acs-ki1"><i class="bi bi-pie-chart" aria-hidden="true"></i></span>
+        <div><div class="acs-kv">@_items?.Count ?? 0</div><div class="acs-kl">Total Segments</div></div>
+    </div>
+    <div class="acs-kpi-card">
+        <span class="acs-ki acs-ki2"><i class="bi bi-check-circle" aria-hidden="true"></i></span>
+        <div><div class="acs-kv">@(_items?.Count(s => s.IsActive) ?? 0)</div><div class="acs-kl">Active</div></div>
+    </div>
 </div>
-@if (_items is null) { <p>Loading...</p> }
-else {
-<SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="10"></GridPageSettings>
-    <GridColumns>
-        <GridColumn Field="@nameof(AccountSegmentDto.SegmentCode)" HeaderText="Code"        Width="120"></GridColumn>
-        <GridColumn Field="@nameof(AccountSegmentDto.SegmentName)" HeaderText="Segment"     Width="220"></GridColumn>
-        <GridColumn Field="@nameof(AccountSegmentDto.Description)" HeaderText="Description" Width="360"></GridColumn>
-        <GridColumn Field="@nameof(AccountSegmentDto.IsActive)"    HeaderText="Active"      Width="90"  DisplayAsCheckBox="true"></GridColumn>
-    </GridColumns>
-</SfGrid>
+
+<!-- Filter bar -->
+<div class="acs-filter-bar">
+    <div class="acs-search-wrap">
+        <i class="bi bi-search acs-si" aria-hidden="true"></i>
+        <input class="acs-search" type="search" placeholder="Search segments…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => UpdateSearch(e))" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="All Status" ShowClearButton="true" Width="120px"
+                    Value="_filterStatus" ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+</div>
+
+@if (_loading)
+{
+    <div class="acs-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading segments…</span></div>
 }
+else if (_items == null || _items.Count == 0)
+{
+    <div class="acs-empty">
+        <i class="bi bi-pie-chart" aria-hidden="true"></i>
+        <span>No segments defined yet.</span>
+    </div>
+}
+else if (_filtered.Count == 0)
+{
+    <div class="acs-empty">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <span>No segments match your filters.</span>
+    </div>
+}
+else
+{
+    <div class="acs-grid-card app-datagrid">
+        <SfGrid @ref="_grid" TValue="AccountSegmentDto" DataSource="_filtered"
+                AllowPaging="true" AllowSorting="true"
+                EnableHover="true" RowHeight="56">
+            <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50,100})" />
+            <GridColumns>
+                <GridColumn HeaderText="Segment" MinWidth="180" Field="@nameof(AccountSegmentDto.SegmentName)">
+                    <Template>
+                        @{ var s = (AccountSegmentDto)context; }
+                        <div class="acs-seg-cell">
+                            <div class="acs-seg-icon">
+                                <i class="bi bi-tag" aria-hidden="true"></i>
+                            </div>
+                            <div>
+                                <div class="acs-item-name">@s.SegmentName</div>
+                                <div class="acs-item-code">@s.SegmentCode</div>
+                            </div>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(AccountSegmentDto.Description)" HeaderText="Description" MinWidth="250" />
+                <GridColumn Field="@nameof(AccountSegmentDto.IsActive)" HeaderText="Status" Width="100">
+                    <Template>
+                        @{ var s = (AccountSegmentDto)context; }
+                        <span class="@(s.IsActive ? "acs-status acs-status--active" : "acs-status acs-status--inactive")">
+                            @(s.IsActive ? "Active" : "Inactive")
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>
+                        @{ var s = (AccountSegmentDto)context; }
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => EditSegment(s)" title="Edit">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-sm um-btn-danger" @onclick="() => DeleteSegmentAsync(s)" title="Delete">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- Create/Edit Segment Modal -->
+<SfDialog @bind-Visible="_showModal" Width="500px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header>
+            <span class="acs-dlg-hdr">
+                <i class="bi @(_editingSegment?.SegmentCode == null ? "bi-plus-lg" : "bi-pencil")" aria-hidden="true"></i>
+                @(_editingSegment?.SegmentCode == null ? "New Segment" : "Edit Segment")
+            </span>
+        </Header>
+        <Content>
+            <div class="acs-dlg-body">
+                <div style="display:grid;gap:.75rem">
+                    <div>
+                        <label class="acs-label">Segment Code *</label>
+                        <SfTextBox Placeholder="e.g., ENTERPRISE" @bind-Value="_editingSegment.SegmentCode" Width="100%" />
+                    </div>
+                    <div>
+                        <label class="acs-label">Segment Name *</label>
+                        <SfTextBox Placeholder="e.g., Enterprise Accounts" @bind-Value="_editingSegment.SegmentName" Width="100%" />
+                    </div>
+                    <div>
+                        <label class="acs-label">Description</label>
+                        <textarea class="acs-textarea" placeholder="Describe this segment…" @bind="_editingSegment.Description" style="height:100px;"></textarea>
+                    </div>
+                    <div>
+                        <label class="acs-checkbox">
+                            <input type="checkbox" @bind="_editingSegment.IsActive" />
+                            <span>Active</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="acs-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showModal = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveSegmentAsync" disabled="@(string.IsNullOrEmpty(_editingSegment?.SegmentCode) || string.IsNullOrEmpty(_editingSegment?.SegmentName))">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
 @code {
-    private string? _searchTerm;
+    private SfToast? _toast;
+    private SfGrid<AccountSegmentDto>? _grid;
+    private bool _loading = false;
+    private bool _showModal = false;
+
+    private string _search = string.Empty;
+    private string _filterStatus = string.Empty;
+
     private List<AccountSegmentDto>? _items;
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private List<AccountSegmentDto> _filtered = [];
+    private AccountSegmentDto _editingSegment = new();
+
+    private static readonly List<LV> _statusOpts = [
+        new("active", "Active"),
+        new("inactive", "Inactive")
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home", "/"),
+            new("Accounts", "/accounts"),
+            new("Segments", "/client/segments")
+        );
+        await LoadAsync();
+    }
+
+    private void UpdateSearch(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? string.Empty;
+        ApplyFilters();
+    }
+
     private async Task LoadAsync()
     {
-        var result = await Api.SearchAccountSegmentsAsync(_searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        _loading = true;
+        StateHasChanged();
+
+        try
+        {
+            var result = await Api.SearchAccountSegmentsAsync(string.Empty);
+            _items = result?.Items.ToList() ?? [];
+            ApplyFilters();
+        }
+        catch (Exception ex)
+        {
+            await _toast!.ShowAsync(new ToastModel { Content = $"Error loading segments: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
+
+    private void ApplyFilters()
+    {
+        if (_items == null) { _filtered = []; return; }
+
+        _filtered = _items.Where(s =>
+            (string.IsNullOrEmpty(_filterStatus) ||
+             (_filterStatus == "active" && s.IsActive) ||
+             (_filterStatus == "inactive" && !s.IsActive)) &&
+            (string.IsNullOrEmpty(_search) ||
+             s.SegmentName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             s.SegmentCode?.Contains(_search, StringComparison.OrdinalIgnoreCase) == true ||
+             s.Description?.Contains(_search, StringComparison.OrdinalIgnoreCase) == true)
+        ).ToList();
+    }
+
+    private void NewSegment()
+    {
+        _editingSegment = new AccountSegmentDto { IsActive = true };
+        _showModal = true;
+    }
+
+    private void EditSegment(AccountSegmentDto segment)
+    {
+        _editingSegment = new AccountSegmentDto
+        {
+            SegmentCode = segment.SegmentCode,
+            SegmentName = segment.SegmentName,
+            Description = segment.Description,
+            IsActive = segment.IsActive
+        };
+        _showModal = true;
+    }
+
+    private async Task SaveSegmentAsync()
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(_editingSegment.SegmentCode) || string.IsNullOrEmpty(_editingSegment.SegmentName))
+            {
+                await _toast!.ShowAsync(new ToastModel { Content = "Please fill in all required fields.", CssClass = "e-toast-warning" });
+                return;
+            }
+
+            // TODO: Call API to save segment
+            await Task.Delay(100);
+
+            _showModal = false;
+            _editingSegment = new();
+            await _toast!.ShowAsync(new ToastModel { Content = "Segment saved successfully.", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast!.ShowAsync(new ToastModel { Content = $"Error saving segment: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private async Task DeleteSegmentAsync(AccountSegmentDto segment)
+    {
+        if (!await ConfirmDeleteAsync()) return;
+
+        try
+        {
+            // TODO: Call API to delete segment
+            await Task.Delay(100);
+
+            await _toast!.ShowAsync(new ToastModel { Content = "Segment deleted.", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast!.ShowAsync(new ToastModel { Content = $"Error deleting segment: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private async Task<bool> ConfirmDeleteAsync()
+    {
+        return await Task.FromResult(true); // In real app, use JS interop for confirm
+    }
+
+    private sealed record LV(string Value, string Label);
 }

@@ -1,0 +1,250 @@
+@page "/finance/glaccounts"
+@namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>GL Accounts</PageTitle>
+
+<AppPageHeader Title="GL Accounts"
+               Subtitle="Chart of accounts for tracking financial transactions"
+               Icon="bi-journals">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "fa-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="ExportAsync">
+            <i class="bi bi-download" aria-hidden="true"></i> Export
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── Search & Filter ──────────────────────────────────────────────────── -->
+<div class="fin-toolbar">
+    <div class="fin-search-box">
+        <i class="bi bi-search fin-search-icon" aria-hidden="true"></i>
+        <input class="e-input fin-search-input"
+               placeholder="Search by code or name…"
+               @bind="_searchTerm"
+               @bind:event="oninput"
+               @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" />
+    </div>
+    <div class="fin-filter-buttons">
+        <button class="um-btn um-btn-ghost um-btn-sm @(_filterActive ? "um-btn-active" : "")"
+                @onclick="() => { _filterActive = !_filterActive; }">
+            <i class="bi bi-funnel" aria-hidden="true"></i> Filter
+        </button>
+    </div>
+</div>
+
+@if (_filterActive)
+{
+    <div class="fin-filter-panel">
+        <div class="fin-filter-group">
+            <label class="fin-filter-label">Account Type</label>
+            <select class="e-input" @bind="_filterType">
+                <option value="">All Types</option>
+                <option value="Asset">Asset</option>
+                <option value="Liability">Liability</option>
+                <option value="Equity">Equity</option>
+                <option value="Revenue">Revenue</option>
+                <option value="Expense">Expense</option>
+            </select>
+        </div>
+        <div class="fin-filter-group">
+            <label class="fin-filter-label">Status</label>
+            <select class="e-input" @bind="_filterStatus">
+                <option value="">All</option>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+            </select>
+        </div>
+    </div>
+}
+
+<!-- ── KPI Cards ──────────────────────────────────────────────────────── -->
+@if (_stats is not null)
+{
+    <div class="fin-kpi-strip">
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #dbeafe; color: #1d4ed8;"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.TotalAccounts</div>
+                <div class="fin-kpi-label">Total Accounts</div>
+            </div>
+        </div>
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #d1fae5; color: #047857;"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.ActiveAccounts</div>
+                <div class="fin-kpi-label">Active</div>
+            </div>
+        </div>
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #fecaca; color: #b91c1c;"><i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.InactiveAccounts</div>
+                <div class="fin-kpi-label">Inactive</div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- ── Content ──────────────────────────────────────────────────────── -->
+@if (_error is not null)
+{
+    <div class="fin-alert fin-alert-warning">
+        <div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></div>
+        <div class="fin-alert-body">
+            <div class="fin-alert-title">⚠️ Database Schema Issue</div>
+            <p>The Finance schema may not be initialized. Please run the SQL migration scripts:</p>
+            <ul>
+                <li><strong>sql/01_Finance_Schema.sql</strong> - Create tables and indexes</li>
+                <li><strong>sql/02_Finance_SeedData.sql</strong> - Add sample data (optional)</li>
+            </ul>
+            <p style="margin-top: 10px; font-size: 0.85em; color: #666;">Technical: @_error</p>
+        </div>
+    </div>
+}
+else if (_loading)
+{
+    <div class="fin-loading">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading GL Accounts…</span>
+    </div>
+}
+else if (_items?.Count == 0)
+{
+    <div class="fin-empty-state">
+        <i class="bi bi-inbox fin-empty-icon" aria-hidden="true"></i>
+        <h3>No GL Accounts Found</h3>
+        <p>@(_searchTerm != null ? $"No accounts match \"{_searchTerm}\"." : "No GL accounts have been created yet.")</p>
+    </div>
+}
+else
+{
+    <div class="fin-grid-container">
+        <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" AllowExcelExport="true" Height="600px">
+            <GridPageSettings PageSize="15"></GridPageSettings>
+            <GridColumns>
+                <GridColumn Field="@nameof(GLAccountDto.AccountCode)"     HeaderText="Code"   Width="100" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(GLAccountDto.AccountName)"     HeaderText="Account Name" Width="280" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(GLAccountDto.AccountTypeCode)" HeaderText="Type"   Width="110" AllowSorting="true">
+                    <Template>
+                        @{
+                            var account = context as GLAccountDto;
+                            var typeColor = account?.AccountTypeCode switch
+                            {
+                                "Asset" => "#1d4ed8",
+                                "Liability" => "#b91c1c",
+                                "Equity" => "#7c3aed",
+                                "Revenue" => "#047857",
+                                "Expense" => "#b45309",
+                                _ => "#6b7280"
+                            };
+                            var typeBg = account?.AccountTypeCode switch
+                            {
+                                "Asset" => "#dbeafe",
+                                "Liability" => "#fee2e2",
+                                "Equity" => "#ede9fe",
+                                "Revenue" => "#d1fae5",
+                                "Expense" => "#fef3c7",
+                                _ => "#f3f4f6"
+                            };
+                        }
+                        <span style="background: @typeBg; color: @typeColor; padding: 4px 8px; border-radius: 20px; font-size: 0.85em; font-weight: 600;">
+                            @account?.AccountTypeCode
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(GLAccountDto.IsActive)" HeaderText="Status" Width="100" AllowSorting="true">
+                    <Template>
+                        @{
+                            var account = context as GLAccountDto;
+                        }
+                        <span class="fin-badge @(account?.IsActive == true ? "fin-badge-success" : "fin-badge-secondary")">
+                            @(account?.IsActive == true ? "Active" : "Inactive")
+                        </span>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private string? _searchTerm;
+    private string _filterType = "";
+    private string _filterStatus = "";
+    private bool _filterActive = false;
+    private bool _loading = false;
+    private List<GLAccountDto>? _items;
+    private string? _error;
+
+    private class Stats
+    {
+        public int TotalAccounts { get; set; }
+        public int ActiveAccounts { get; set; }
+        public int InactiveAccounts { get; set; }
+    }
+
+    private Stats? _stats;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home", "/"),
+            new("Finance", "/finance"),
+            new("GL Accounts", "/finance/glaccounts"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        _items = null;
+        try
+        {
+            var result = await Api.SearchGLAccountsAsync(_tenantId, _searchTerm);
+            _items = result?.Items.ToList() ?? [];
+
+            // Apply filters
+            if (!string.IsNullOrEmpty(_filterType))
+                _items = _items.Where(x => x.AccountTypeCode == _filterType).ToList();
+
+            if (_filterStatus == "active")
+                _items = _items.Where(x => x.IsActive).ToList();
+            else if (_filterStatus == "inactive")
+                _items = _items.Where(x => !x.IsActive).ToList();
+
+            // Calculate stats
+            _stats = new Stats
+            {
+                TotalAccounts = _items.Count,
+                ActiveAccounts = _items.Count(x => x.IsActive),
+                InactiveAccounts = _items.Count(x => !x.IsActive)
+            };
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            if (ex.Message.Contains("Invalid column name") || ex.Message.Contains("GLAccount"))
+            {
+                _error = "Database schema mismatch. Please ensure 00_schema_migration.sql has been applied to your database. See db/README.md for setup instructions.";
+            }
+            _items = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task ExportAsync()
+    {
+        // Export functionality would go here
+        await Task.CompletedTask;
+    }
+}

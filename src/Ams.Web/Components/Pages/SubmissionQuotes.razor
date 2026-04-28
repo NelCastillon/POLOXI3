@@ -1,0 +1,266 @@
+@page "/submissions/quotes"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Quotes — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
+    <MenuFieldSettings Text="Text" IconCss="IconCss" />
+</SfContextMenu>
+
+<AppPageHeader Title="Quotes"
+               Subtitle="All quoted submissions — compare premiums, carriers, and expiry dates"
+               Icon="bi-file-text">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "sq-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/submissions/new")'>
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Submission
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="sq-kpi-strip">
+    @KpiCard("bi-file-text",    "Total Quotes",    _rows.Count.ToString(),                                              "sq-kpi-total",   null)
+    @KpiCard("bi-hourglass",    "Pending",         _rows.Count(r => r.Status == "Pending").ToString(),                 "sq-kpi-pending", "Pending")
+    @KpiCard("bi-check-circle", "Accepted",        _rows.Count(r => r.Status == "Accepted").ToString(),               "sq-kpi-accepted","Accepted")
+    @KpiCard("bi-x-circle",     "Declined",        _rows.Count(r => r.Status == "Declined").ToString(),               "sq-kpi-declined","Declined")
+    @KpiCard("bi-clock-history","Expired",         _rows.Count(r => r.Status == "Expired").ToString(),                "sq-kpi-expired", "Expired")
+    @KpiCard("bi-cash-stack",   "Total Premium",   _rows.Sum(r => r.QuotedPremium).ToString("C0"),                    "sq-kpi-prem",    "__all_prem")
+    @KpiCard("bi-graph-up",     "Avg Premium",     (_rows.Count > 0 ? _rows.Where(r=>r.QuotedPremium>0).Average(r => r.QuotedPremium) : 0).ToString("C0"), "sq-kpi-avg", "__avg_prem")
+</div>
+
+<!-- View tabs -->
+<div class="sq-view-tabs">
+    @foreach (var t in _tabs)
+    {
+        <button class="sq-view-tab @(_activeTab == t.Key ? "sq-view-tab--active" : "")"
+                @onclick="() => _activeTab = t.Key">
+            <i class="bi @t.Icon" aria-hidden="true"></i> @t.Label
+            <span class="sq-tab-count">@TabCount(t.Key)</span>
+        </button>
+    }
+</div>
+
+<!-- Grid -->
+<div class="sq-grid-wrap">
+    @if (_loading)
+    {
+        <div class="sq-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <SfGrid DataSource="@TabRows" AllowSorting="true" AllowPaging="true" AllowResizing="true"
+                RowHeight="42" @ref="_grid">
+            <GridPageSettings PageSize="20" />
+            <GridEvents TValue="QuoteRow" RowSelected="OnRowSelected" />
+            <GridColumns>
+                <GridColumn Field="QuoteNo"        HeaderText="Quote #"       Width="145"
+                            Template="@(ctx => QuoteNoLink((QuoteRow)ctx))" />
+                <GridColumn Field="SubmissionNo"   HeaderText="Submission #"  Width="145"
+                            Template="@(ctx => SubLink((QuoteRow)ctx))" />
+                <GridColumn Field="Account"        HeaderText="Account"       Width="185" />
+                <GridColumn Field="Lob"            HeaderText="LOB"           Width="155"
+                            Template="@(ctx => LobChip(((QuoteRow)ctx).Lob))" />
+                <GridColumn Field="Carrier"        HeaderText="Carrier"       Width="170" />
+                <GridColumn Field="Status"         HeaderText="Status"        Width="115"
+                            Template="@(ctx => StatusChip(((QuoteRow)ctx).Status))" />
+                <GridColumn Field="QuotedPremium"  HeaderText="Premium"       Width="120"
+                            Template="@(ctx => PremCell(((QuoteRow)ctx).QuotedPremium))" />
+                <GridColumn Field="EffDate"        HeaderText="Effective"     Width="115" Format="MM/dd/yyyy" />
+                <GridColumn Field="ExpiryDate"     HeaderText="Expires"       Width="110"
+                            Template="@(ctx => ExpiryCell(((QuoteRow)ctx).ExpiryDate))" />
+                <GridColumn Field="Producer"       HeaderText="Producer"      Width="165" />
+                <GridColumn HeaderText=""          Width="52" AllowSorting="false"
+                            Template="@(ctx => CtxBtn((QuoteRow)ctx))" />
+            </GridColumns>
+        </SfGrid>
+    }
+</div>
+
+@code {
+    SfToast _toast = default!;
+    SfContextMenu<CtxItem> _ctx = default!;
+    SfGrid<QuoteRow> _grid = default!;
+
+    bool     _loading   = false;
+    string   _activeTab = "all";
+    string?  _kpiFilter = null;
+    QuoteRow _selected  = new();
+
+    sealed record CtxItem(string Text, string IconCss);
+
+    sealed class QuoteRow
+    {
+        public Guid     QuoteId       { get; set; } = Guid.NewGuid();
+        public string   QuoteNo       { get; set; } = "";
+        public string   SubmissionNo  { get; set; } = "";
+        public Guid     SubId         { get; set; } = Guid.NewGuid();
+        public string   Account       { get; set; } = "";
+        public string   Lob           { get; set; } = "";
+        public string   Carrier       { get; set; } = "";
+        public string   Status        { get; set; } = "";
+        public decimal  QuotedPremium { get; set; }
+        public DateTime EffDate       { get; set; }
+        public DateTime ExpiryDate    { get; set; }
+        public string   Producer      { get; set; } = "";
+    }
+
+    record TabDef(string Key, string Label, string Icon);
+
+    readonly TabDef[] _tabs =
+    [
+        new("all",      "All",      "bi-stack"           ),
+        new("pending",  "Pending",  "bi-hourglass"       ),
+        new("accepted", "Accepted", "bi-check-circle"    ),
+        new("declined", "Declined", "bi-x-circle"        ),
+        new("expired",  "Expired",  "bi-clock-history"   ),
+        new("carrier",  "By Carrier","bi-building"       ),
+        new("lob",      "By LOB",   "bi-layers"          ),
+    ];
+
+    readonly List<QuoteRow> _rows = [];
+
+    IEnumerable<QuoteRow> BaseTabRows => _activeTab switch
+    {
+        "pending"  => _rows.Where(r => r.Status == "Pending"),
+        "accepted" => _rows.Where(r => r.Status == "Accepted"),
+        "declined" => _rows.Where(r => r.Status == "Declined"),
+        "expired"  => _rows.Where(r => r.Status == "Expired"),
+        _          => _rows,
+    };
+
+    IEnumerable<QuoteRow> TabRows => _kpiFilter switch
+    {
+        null          => BaseTabRows,
+        "__all_prem"  => BaseTabRows.Where(r => r.QuotedPremium > 0),
+        "__avg_prem"  => BaseTabRows.Where(r => r.QuotedPremium > 0),
+        var f         => BaseTabRows.Where(r => r.Status == f),
+    };
+
+    string TabCount(string key) => key switch
+    {
+        "all"      => _rows.Count.ToString(),
+        "pending"  => _rows.Count(r => r.Status == "Pending").ToString(),
+        "accepted" => _rows.Count(r => r.Status == "Accepted").ToString(),
+        "declined" => _rows.Count(r => r.Status == "Declined").ToString(),
+        "expired"  => _rows.Count(r => r.Status == "Expired").ToString(),
+        _          => "",
+    };
+
+    readonly List<CtxItem> _ctxItems =
+    [
+        new("Open",          "bi bi-box-arrow-up-right"),
+        new("Accept Quote",  "bi bi-check-circle"     ),
+        new("Decline Quote", "bi bi-x-circle"         ),
+        new("Request Revision","bi bi-pencil"         ),
+        new("Bind",          "bi bi-shield-check"     ),
+        new("Compare",       "bi bi-columns-gap"      ),
+        new("Download PDF",  "bi bi-file-earmark-pdf" ),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"), new("Quotes", "/submissions/quotes"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(0);
+        if (_rows.Count == 0) BuildStub();
+        _loading = false;
+    }
+
+    void BuildStub()
+    {
+        var rng      = new Random(42);
+        var lobs     = new[] { "General Liability", "Commercial Property", "Commercial Auto", "Workers Comp", "Umbrella / Excess", "Professional Liab.", "Home / Dwelling", "Personal Auto" };
+        var statuses = new[] { "Pending", "Pending", "Accepted", "Accepted", "Accepted", "Declined", "Expired" };
+        var carriers = new[] { "Travelers", "Chubb", "Zurich", "AIG", "Liberty Mutual", "Hartford", "Nationwide", "CNA" };
+        var accounts = new[] { "Sullivan Mfg. LLC", "Bridgewater Hotels", "Metro Freight Co.", "PineCrest Builders", "Omega Tech Corp.", "BlueSky Aviation", "Harbor Fresh Foods", "Summit Properties LLC" };
+        var producers = new[] { "Thornton & Associates", "Pacific Bridge Insurance", "Allied Risk Group", "Midwest Coverage Partners" };
+
+        for (int i = 1; i <= 55; i++)
+        {
+            var eff    = DateTime.Today.AddDays(rng.Next(30, 180));
+            var expiry = DateTime.Today.AddDays(rng.Next(-15, 45));
+            _rows.Add(new QuoteRow
+            {
+                QuoteNo       = $"QUO-2025-{i:D4}",
+                SubmissionNo  = $"SUB-2025-{rng.Next(1, 66):D4}",
+                Account       = accounts[rng.Next(accounts.Length)],
+                Lob           = lobs[rng.Next(lobs.Length)],
+                Carrier       = carriers[rng.Next(carriers.Length)],
+                Status        = statuses[rng.Next(statuses.Length)],
+                QuotedPremium = (decimal)rng.Next(5000, 90000),
+                EffDate       = eff,
+                ExpiryDate    = expiry,
+                Producer      = producers[rng.Next(producers.Length)],
+            });
+        }
+    }
+
+    void OnRowSelected(RowSelectEventArgs<QuoteRow> args) =>
+        Nav.NavigateTo($"/submissions/{args.Data.SubId}");
+
+    void OnCtxSelected(MenuEventArgs<CtxItem> args)
+    {
+        if (args.Item.Text == "Open") Nav.NavigateTo($"/submissions/{_selected.SubId}");
+        if (args.Item.Text == "Bind") Nav.NavigateTo($"/submissions/{_selected.SubId}");
+    }
+
+    RenderFragment QuoteNoLink(QuoteRow r) =>
+        @<button class="sq-link um-btn um-btn-ghost um-btn-xs"
+                 @onclick='() => Nav.NavigateTo($"/submissions/{r.SubId}")'>
+            @r.QuoteNo
+        </button>;
+
+    RenderFragment SubLink(QuoteRow r) =>
+        @<button class="sq-sub-link um-btn um-btn-ghost um-btn-xs"
+                 @onclick='() => Nav.NavigateTo($"/submissions/{r.SubId}")'>
+            @r.SubmissionNo
+        </button>;
+
+    RenderFragment LobChip(string lob) =>
+        @<span class="sq-lob-chip">@lob</span>;
+
+    RenderFragment StatusChip(string s) =>
+        @<span class="sq-status sq-status-@s.ToLower()">@s</span>;
+
+    RenderFragment PremCell(decimal v) =>
+        @<span class="sq-prem">@v.ToString("C0")</span>;
+
+    RenderFragment ExpiryCell(DateTime d)
+    {
+        var days = (d - DateTime.Today).TotalDays;
+        var css  = days < 0 ? "sq-exp-late" : days <= 7 ? "sq-exp-soon" : "";
+        return @<span class="@css">@d.ToString("MM/dd/yyyy")</span>;
+    }
+
+    RenderFragment CtxBtn(QuoteRow row) =>
+        @<button class="um-btn um-btn-ghost um-btn-xs sq-ctx-btn"
+                 @onclick:stopPropagation="true"
+                 @onclick="(e) => { _selected = row; _ctx.Open(e.ClientX, e.ClientY); }">
+            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+        </button>;
+
+    RenderFragment KpiCard(string icon, string label, string val, string css, string? filterKey)
+    {
+        var isActive = _kpiFilter == filterKey && filterKey is not null;
+        return @<button class="sq-kpi-card @css @(isActive ? "sq-kpi-active" : "")"
+                        @onclick="() => _kpiFilter = isActive ? null : filterKey"
+                        title="@(filterKey is null ? "Show all" : (isActive ? "Clear filter" : $"Filter by {label}"))">
+            <div class="sq-kpi-val">@val</div>
+            <div class="sq-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+        </button>;
+    }
+}

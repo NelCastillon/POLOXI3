@@ -1,0 +1,276 @@
+@page "/crm/lead-activities"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.LeadActivities
+
+<PageTitle>Lead Activities — CRM</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Lead Activities"
+               Subtitle="Log and track every call, meeting, email and task against your leads and opportunities"
+               Icon="bi-lightning-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "la-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showAdd = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Log Activity
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
+<div class="la-kpi-strip">
+    <div class="la-kpi-card">
+        <span class="la-ki la-ki1"><i class="bi bi-lightning-fill" aria-hidden="true"></i></span>
+        <div><div class="la-kv">@_items.Count</div><div class="la-kl">Total Activities</div></div>
+    </div>
+    <div class="la-kpi-card">
+        <span class="la-ki la-ki2"><i class="bi bi-check2-circle" aria-hidden="true"></i></span>
+        <div><div class="la-kv">@_items.Count(x => x.IsCompleted)</div><div class="la-kl">Completed</div></div>
+    </div>
+    <div class="la-kpi-card">
+        <span class="la-ki la-ki3"><i class="bi bi-hourglass-split" aria-hidden="true"></i></span>
+        <div><div class="la-kv">@_items.Count(x => !x.IsCompleted)</div><div class="la-kl">Open</div></div>
+    </div>
+    <div class="la-kpi-card">
+        <span class="la-ki la-ki4"><i class="bi bi-telephone" aria-hidden="true"></i></span>
+        <div><div class="la-kv">@_items.Count(x => x.ActivityTypeCode == "Call")</div><div class="la-kl">Calls</div></div>
+    </div>
+    <div class="la-kpi-card">
+        <span class="la-ki la-ki5"><i class="bi bi-clock" aria-hidden="true"></i></span>
+        <div><div class="la-kv">@(_items.Where(x => x.DurationMinutes.HasValue).Sum(x => x.DurationMinutes!.Value))</div><div class="la-kl">Total Minutes</div></div>
+    </div>
+</div>
+
+<!-- ── Filter bar ────────────────────────────────────────────────────────── -->
+<div class="la-filter-bar">
+    <div class="la-search-wrap">
+        <i class="bi bi-search la-si" aria-hidden="true"></i>
+        <input class="la-search" type="search" placeholder="Search activities…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_typeOpts" Placeholder="All Types" ShowClearButton="true" Width="140px"
+                    Value="_filterType" ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_outcomeOpts" Placeholder="All Outcomes" ShowClearButton="true" Width="150px"
+                    Value="_filterOutcome" ValueChanged="@((string v) => { _filterOutcome = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_completedOpts" Placeholder="Any Status" ShowClearButton="true" Width="140px"
+                    Value="_filterCompleted" ValueChanged="@((string v) => { _filterCompleted = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+</div>
+
+<!-- ── Grid ─────────────────────────────────────────────────────────────── -->
+@if (_loading)
+{
+    <div class="la-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading activities…</span></div>
+}
+else
+{
+    <div class="app-datagrid">
+        <SfGrid TValue="LeadActivityDto"
+                DataSource="_filtered"
+                AllowPaging="true"
+                AllowSorting="true"
+                AllowFiltering="true"
+                EnableHover="true"
+                RowHeight="52">
+            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
+            <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
+            <GridColumns>
+                <GridColumn HeaderText="Type" Width="120" Field="@nameof(LeadActivityDto.ActivityTypeCode)">
+                    <Template>
+                        @{ var r = (LeadActivityDto)context; }
+                        <span class="la-type-badge la-type-@r.ActivityTypeCode.ToLower()">
+                            <i class="bi @TypeIcon(r.ActivityTypeCode)" aria-hidden="true"></i> @r.ActivityTypeCode
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(LeadActivityDto.Subject)" HeaderText="Subject" Width="240" />
+                <GridColumn Field="@nameof(LeadActivityDto.LeadName)" HeaderText="Lead" Width="180" />
+                <GridColumn Field="@nameof(LeadActivityDto.ActivityDate)" HeaderText="Date" Width="140" Type="ColumnType.DateTime" Format="yMd" />
+                <GridColumn Field="@nameof(LeadActivityDto.DurationMinutes)" HeaderText="Duration" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                    <Template>
+                        @{ var r = (LeadActivityDto)context; }
+                        <span>@(r.DurationMinutes.HasValue ? r.DurationMinutes + " min" : "—")</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn HeaderText="Status" Width="120">
+                    <Template>
+                        @{ var r = (LeadActivityDto)context; }
+                        <span class="@(r.IsCompleted ? "la-status-completed" : "la-status-open")">
+                            @(r.IsCompleted ? "✓ Completed" : "◆ Open")
+                        </span>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- ── Add/Edit Drawer ──────────────────────────────────────────────────── -->
+<AppCrudDrawer @bind-Visible="_showAdd" 
+               Title="@(_editingId == Guid.Empty ? "Log New Activity" : "Edit Activity")"
+               Icon="bi-lightning"
+               OnConfirm="SaveAsync" 
+               IsBusy="_saving"
+               Width="420px">
+    <Content>
+        @if (_editingId == Guid.Empty)
+        {
+            <div class="form-row">
+                <label class="form-label">Activity Type <span class="form-required">*</span></label>
+                <SfDropDownList TValue="string" TItem="LV" 
+                                DataSource="_typeOpts" 
+                                @bind-Value="_formType"
+                                Placeholder="Select type">
+                    <DropDownListFieldSettings Value="Value" Text="Label" />
+                </SfDropDownList>
+            </div>
+        }
+        <div class="form-row">
+            <label class="form-label">Lead <span class="form-required">*</span></label>
+            <SfDropDownList TValue="Guid" TItem="object"
+                            Placeholder="Select lead">
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Subject <span class="form-required">*</span></label>
+            <input type="text" class="form-control" placeholder="Activity subject" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Activity Date <span class="form-required">*</span></label>
+            <SfDatePicker TValue="DateTime"></SfDatePicker>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Duration (minutes)</label>
+            <input type="number" class="form-control" placeholder="0" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Notes</label>
+            <textarea class="form-control" rows="3" placeholder="Additional notes…"></textarea>
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+    private List<LeadActivityDto> _items = [];
+    private List<LeadActivityDto> _filtered = [];
+    private List<LV> _typeOpts = [];
+    private List<LV> _outcomeOpts = [];
+    private List<LV> _completedOpts = [];
+    private string _search = string.Empty;
+    private string _filterType = string.Empty;
+    private string _filterOutcome = string.Empty;
+    private string _filterCompleted = string.Empty;
+    private bool _loading = false;
+    private bool _saving = false;
+    private bool _showAdd = false;
+    private Guid _editingId = Guid.Empty;
+    private string _formType = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/lead-activities"), new("Lead Activities", "/crm/lead-activities"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _loading = true;
+            var result = await Api.SearchLeadActivitiesAsync(_tenantId) ?? new();
+            _items = result.Items?.ToList() ?? [];
+            _filtered = _items;
+
+            _typeOpts = new()
+            {
+                new() { Label = "Call", Value = "Call" },
+                new() { Label = "Email", Value = "Email" },
+                new() { Label = "Meeting", Value = "Meeting" },
+                new() { Label = "Task", Value = "Task" },
+                new() { Label = "Note", Value = "Note" }
+            };
+
+            _outcomeOpts = new()
+            {
+                new() { Label = "Positive", Value = "Positive" },
+                new() { Label = "Negative", Value = "Negative" },
+                new() { Label = "Neutral", Value = "Neutral" }
+            };
+
+            _completedOpts = new()
+            {
+                new() { Label = "Open", Value = "0" },
+                new() { Label = "Completed", Value = "1" }
+            };
+        }
+        catch (Exception ex)
+        {
+            await _toast?.ShowAsync(new ToastModel { Title = "Error", Content = ex.Message, CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters()
+    {
+        _filtered = _items
+            .Where(x => string.IsNullOrEmpty(_search) || x.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            .Where(x => string.IsNullOrEmpty(_filterType) || x.ActivityTypeCode == _filterType)
+            .Where(x => string.IsNullOrEmpty(_filterCompleted) || ((_filterCompleted == "1") == x.IsCompleted))
+            .ToList();
+    }
+
+    private async Task SaveAsync()
+    {
+        try
+        {
+            _saving = true;
+            await _toast?.ShowAsync(new ToastModel { Title = "Success", Content = "Activity saved", CssClass = "e-toast-success" });
+            _showAdd = false;
+            _editingId = Guid.Empty;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast?.ShowAsync(new ToastModel { Title = "Error", Content = ex.Message, CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private string TypeIcon(string type) => type switch
+    {
+        "Call" => "bi-telephone-fill",
+        "Email" => "bi-envelope-fill",
+        "Meeting" => "bi-calendar-event-fill",
+        "Task" => "bi-check2-square",
+        "Note" => "bi-sticky-fill",
+        _ => "bi-lightning"
+    };
+
+    private class LV 
+    { 
+        public string Label { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+    }
+}

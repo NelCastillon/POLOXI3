@@ -5,6 +5,8 @@ using Ams.Infrastructure.Configuration;
 using Ams.Infrastructure.Persistence;
 using Ams.Infrastructure.Persistence.ConnectionFactory;
 using Ams.Infrastructure.Persistence.Repositories;
+using Ams.Infrastructure.Persistence.TypeHandlers;
+using Dapper;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -14,6 +16,9 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        // ── Register Dapper custom type handlers ──────────────────────
+        SqlMapper.AddTypeHandler(new DateOnlyTypeHandler());
+
         services.Configure<SqlOptions>(options =>
         {
             options.ConnectionString = configuration.GetConnectionString("DefaultConnection") ?? string.Empty;
@@ -181,6 +186,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILeadActivityService, LeadActivityService>();
         services.AddScoped<IPricingRuleService, PricingRuleService>();
         services.AddScoped<IForecastService, ForecastService>();
+        services.AddScoped<IProducerWorkbenchRepository, ProducerWorkbenchRepository>();
+        services.AddScoped<IProducerWorkbenchService, ProducerWorkbenchService>();
 
         // ── Client and Account engines ───────────────────────────────
         services.AddScoped<IAccountNoteRepository, AccountNoteRepository>();

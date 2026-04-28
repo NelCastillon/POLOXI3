@@ -1,0 +1,851 @@
+@page "/crm/leads/assignment"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Lead Assignment — CRM</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Lead Assignment"
+               Subtitle="Assign unassigned leads, manage producer workload, and configure assignment rules"
+               Icon="bi-person-check">
+    <Actions>
+        <div class="la-view-toggle" role="group" aria-label="View mode">
+            @foreach (var v in _views)
+            {
+                <button class="la-view-btn @(_view == v.Id ? "la-view-btn--active" : "")"
+                        @onclick="() => _view = v.Id"
+                        title="@v.Label"
+                        aria-pressed="@(_view == v.Id)">
+                    <i class="bi @v.Icon" aria-hidden="true"></i>
+                    <span class="la-view-lbl">@v.Label</span>
+                </button>
+            }
+        </div>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "la-spin" : "")" aria-hidden="true"></i>
+        </button>
+        @if (_view == "leads" && _selectedLeads.Count > 0)
+        {
+            <button class="um-btn um-btn-primary" @onclick="OpenBulkAssignDrawer">
+                <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Assign @_selectedLeads.Count
+            </button>
+        }
+        @if (_view == "rules")
+        {
+            <button class="um-btn um-btn-primary" @onclick="OpenRuleDrawer">
+                <i class="bi bi-plus-lg" aria-hidden="true"></i> New Rule
+            </button>
+        }
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
+<div class="la-kpi-strip">
+    <div class="la-kpi-card">
+        <span class="la-kpi-icon la-ki1"><i class="bi bi-inbox-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="la-kpi-val">@_kpi.UnassignedLeads</div>
+            <div class="la-kpi-lbl">Unassigned Leads</div>
+        </div>
+    </div>
+    <div class="la-kpi-card">
+        <span class="la-kpi-icon la-ki2"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="la-kpi-val">@_kpi.TotalProducers</div>
+            <div class="la-kpi-lbl">Active Producers</div>
+        </div>
+    </div>
+    <div class="la-kpi-card">
+        <span class="la-kpi-icon la-ki3"><i class="bi bi-bar-chart-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="la-kpi-val">@_kpi.AvgLeadsPerProducer.ToString("F1")</div>
+            <div class="la-kpi-lbl">Avg Leads per Producer</div>
+        </div>
+    </div>
+    <div class="la-kpi-card">
+        <span class="la-kpi-icon la-ki4"><i class="bi bi-percent" aria-hidden="true"></i></span>
+        <div>
+            <div class="la-kpi-val">@_kpi.WorkloadBalance.ToString("F0")%</div>
+            <div class="la-kpi-lbl">Workload Balance</div>
+        </div>
+    </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: UNASSIGNED LEADS
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "leads")
+{
+    <div class="la-leads-container">
+        <div class="la-filter-bar">
+            <div class="la-search-wrap">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input type="search" 
+                       class="la-search-input" 
+                       placeholder="Search leads…"
+                       @bind="_query"
+                       @bind:event="oninput"
+                       aria-label="Search leads" />
+            </div>
+            <SfDropDownList TItem="string" 
+                           TValue="string" 
+                           DataSource="_leadSources"
+                           @bind-Value="_sourceFilter"
+                           Placeholder="All Sources"
+                           CssClass="la-filter-select"
+                           AllowFiltering="true"
+                           AllowClear="true">
+            </SfDropDownList>
+            <SfDropDownList TItem="string" 
+                           TValue="string" 
+                           DataSource="_scoreRanges"
+                           @bind-Value="_scoreFilter"
+                           Placeholder="All Scores"
+                           CssClass="la-filter-select"
+                           AllowFiltering="true"
+                           AllowClear="true">
+            </SfDropDownList>
+        </div>
+
+        @if (_loading)
+        {
+            <div class="la-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+        }
+        else if (GetVisibleLeads().Count == 0)
+        {
+            <div class="la-empty">
+                <i class="bi bi-inbox" aria-hidden="true"></i>
+                <p>No unassigned leads match your filters</p>
+                <button class="um-btn um-btn-ghost" @onclick="ClearFilters">Clear Filters</button>
+            </div>
+        }
+        else
+        {
+            <div class="la-leads-grid">
+                <table role="grid" class="la-leads-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 40px;">
+                                <input type="checkbox" 
+                                       @onchange="e => SelectAllLeads((bool)e.Value)"
+                                       aria-label="Select all leads"
+                                       title="Select all visible leads" />
+                            </th>
+                            <th>Lead Name</th>
+                            <th>Company</th>
+                            <th>Score</th>
+                            <th>Source</th>
+                            <th>Contact</th>
+                            <th>Created</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var lead in GetVisibleLeads())
+                        {
+                            var isSelected = _selectedLeads.Contains(lead.Id);
+                            <tr class="@(isSelected ? "la-row--selected" : "")">
+                                <td>
+                                    <input type="checkbox"
+                                           checked="@isSelected"
+                                           @onchange="e => ToggleLead(lead.Id, (bool)e.Value)"
+                                           aria-label="Select @lead.Name" />
+                                </td>
+                                <td>
+                                    <div class="la-lead-name">
+                                        <span class="la-avatar" style="background: @GetAvatarColor(lead.Id);">
+                                            @lead.Name.First()
+                                        </span>
+                                        <span>@lead.Name</span>
+                                    </div>
+                                </td>
+                                <td>@lead.Company</td>
+                                <td>
+                                    <span class="la-score @GetScoreBadgeClass(lead.Score)">
+                                        @lead.Score
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="la-source-badge">@lead.Source</span>
+                                </td>
+                                <td>
+                                    <a href="mailto:@lead.Email" class="la-link">@lead.Email</a>
+                                </td>
+                                <td class="la-date">@lead.CreatedDate.ToString("MMM dd")</td>
+                                <td>
+                                    <button class="um-btn um-btn-ghost um-btn-sm"
+                                            @onclick="() => OpenAssignDrawer(lead)"
+                                            title="Assign lead to producer">
+                                        <i class="bi bi-arrow-right-circle" aria-hidden="true"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+}
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: PRODUCER WORKLOAD
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "workload")
+{
+    @if (_loading)
+    {
+        <div class="la-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <div class="la-workload-container">
+            <div class="la-workload-grid">
+                @foreach (var producer in _producers.OrderByDescending(p => p.LeadCount))
+                {
+                    var capacity = producer.Capacity;
+                    var count = producer.LeadCount;
+                    var pct = capacity > 0 ? (count / (double)capacity) * 100 : 0;
+                    var status = pct >= 100 ? "over" : pct >= 80 ? "high" : pct >= 50 ? "med" : "low";
+
+                    <div class="la-workload-card">
+                        <div class="la-workload-hdr">
+                            <div>
+                                <div class="la-producer-name">@producer.Name</div>
+                                <div class="la-producer-title">@producer.Title</div>
+                            </div>
+                            <span class="la-workload-status la-workload-@status">@pct.ToString("F0")%</span>
+                        </div>
+
+                        <div class="la-workload-bar">
+                            <div class="la-workload-fill la-workload-@status" style="width: @Math.Min(pct, 100).ToString("F0")%;"></div>
+                        </div>
+
+                        <div class="la-workload-stats">
+                            <div class="la-stat">
+                                <span class="la-stat-val">@count</span>
+                                <span class="la-stat-lbl">Current Leads</span>
+                            </div>
+                            <div class="la-stat">
+                                <span class="la-stat-val">@capacity</span>
+                                <span class="la-stat-lbl">Capacity</span>
+                            </div>
+                            <div class="la-stat">
+                                <span class="la-stat-val">@(capacity - count)</span>
+                                <span class="la-stat-lbl">Available</span>
+                            </div>
+                        </div>
+
+                        <div class="la-workload-actions">
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => EditProducerCapacity(producer)">
+                                <i class="bi bi-pencil" aria-hidden="true"></i> Capacity
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+}
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: ASSIGNMENT RULES
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "rules")
+{
+    @if (_loading)
+    {
+        <div class="la-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <div class="la-rules-container">
+            @if (_rules.Count == 0)
+            {
+                <div class="la-empty">
+                    <i class="bi bi-sliders2" aria-hidden="true"></i>
+                    <p>No assignment rules configured</p>
+                    <button class="um-btn um-btn-primary" @onclick="OpenRuleDrawer">Create First Rule</button>
+                </div>
+            }
+            else
+            {
+                <div class="la-rules-grid">
+                    @foreach (var rule in _rules)
+                    {
+                        <div class="la-rule-card">
+                            <div class="la-rule-hdr">
+                                <div>
+                                    <div class="la-rule-name">@rule.Name</div>
+                                    <div class="la-rule-strategy">Strategy: @rule.Strategy</div>
+                                </div>
+                                <div class="la-rule-actions">
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => EditRule(rule)">
+                                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                                    </button>
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DeleteRule(rule.Id)">
+                                        <i class="bi bi-trash" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="la-rule-detail">
+                                <div class="la-rule-row">
+                                    <span class="la-rule-label">Criteria:</span>
+                                    <span class="la-rule-value">@rule.Criteria</span>
+                                </div>
+                                <div class="la-rule-row">
+                                    <span class="la-rule-label">Target Group:</span>
+                                    <span class="la-rule-value">@rule.ProducerGroup</span>
+                                </div>
+                                <div class="la-rule-row">
+                                    <span class="la-rule-label">Max Assignments:</span>
+                                    <span class="la-rule-value">@(rule.MaxAssignments == 0 ? "Unlimited" : rule.MaxAssignments)</span>
+                                </div>
+                            </div>
+
+                            <div class="la-rule-status">
+                                <label class="la-toggle-label">
+                                    <input type="checkbox" 
+                                           checked="@rule.Active"
+                                           @onchange="e => ToggleRuleActive(rule.Id, (bool)e.Value)" />
+                                    <span>@(rule.Active ? "Active" : "Inactive")</span>
+                                </label>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+}
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: ASSIGNMENT HISTORY
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "history")
+{
+    <div class="la-history-container">
+        <div class="la-history-filter">
+            <SfDropDownList TItem="string" 
+                           TValue="string" 
+                           DataSource="_historyPeriods"
+                           @bind-Value="_historyFilter"
+                           Placeholder="All Time"
+                           CssClass="la-filter-select"
+                           AllowFiltering="true"
+                           AllowClear="true">
+            </SfDropDownList>
+        </div>
+
+        @if (_loading)
+        {
+            <div class="la-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+        }
+        else if (_history.Count == 0)
+        {
+            <div class="la-empty">
+                <i class="bi bi-clock-history" aria-hidden="true"></i>
+                <p>No assignment history</p>
+            </div>
+        }
+        else
+        {
+            <div class="la-history-list">
+                @foreach (var item in _history.OrderByDescending(h => h.AssignedDate))
+                {
+                    <div class="la-history-item">
+                        <div class="la-history-icon">
+                            <i class="bi bi-arrow-right-circle-fill" aria-hidden="true"></i>
+                        </div>
+                        <div class="la-history-content">
+                            <div class="la-history-title">
+                                @item.LeadName assigned to @item.ProducerName
+                            </div>
+                            <div class="la-history-meta">
+                                <span class="la-history-date">@item.AssignedDate.ToString("MMM dd, yyyy h:mm tt")</span>
+                                <span class="la-history-method">@item.Method</span>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     DRAWER: ASSIGN SINGLE LEAD
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_drawerMode == "assign-single" && _selectedLead != null && _drawerOpen)
+{
+    <div class="la-drawer-overlay" @onclick='() => _drawerOpen = false'></div>
+    <div class="la-drawer-panel">
+        <div class="la-drawer-hdr">
+            <h2>Assign Lead</h2>
+            <button class="um-btn um-btn-ghost" @onclick="() => _drawerOpen = false" title="Close">
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+            </button>
+        </div>
+
+        <div class="la-drawer-body">
+            <div class="la-form-group">
+                <label>Lead</label>
+                <div class="la-lead-summary">
+                    <span class="la-avatar" style="background: @GetAvatarColor(_selectedLead.Id);">
+                        @_selectedLead.Name.First()
+                    </span>
+                    <div>
+                        <div class="la-lead-summary-name">@_selectedLead.Name</div>
+                        <div class="la-lead-summary-company">@_selectedLead.Company</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="la-form-group">
+                <label for="producer">Assign to Producer</label>
+                <SfDropDownList TItem="ProducerRow" 
+                               TValue="int" 
+                               DataSource="_producers"
+                               @bind-Value="_selectedProducerId"
+                               ID="producer"
+                               TextField="Name"
+                               ValueField="Id"
+                               Placeholder="Select producer…"
+                               AllowFiltering="true">
+                </SfDropDownList>
+            </div>
+
+            <div class="la-form-group">
+                <label>Notes</label>
+                <textarea class="la-textarea" @bind="_assignmentNotes" placeholder="Add notes about this assignment…"></textarea>
+            </div>
+        </div>
+
+        <div class="la-drawer-ft">
+            <button class="um-btn um-btn-ghost" @onclick="() => _drawerOpen = false">Cancel</button>
+            <button class="um-btn um-btn-primary" @onclick="AssignLead">Assign Lead</button>
+        </div>
+    </div>
+}
+else if (_drawerMode == "assign-bulk" && _drawerOpen)
+{
+    <div class="la-drawer-overlay" @onclick='() => _drawerOpen = false'></div>
+    <div class="la-drawer-panel">
+        <div class="la-drawer-hdr">
+            <h2>Bulk Assign Leads</h2>
+            <button class="um-btn um-btn-ghost" @onclick="() => _drawerOpen = false" title="Close">
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+            </button>
+        </div>
+
+        <div class="la-drawer-body">
+            <div class="la-form-group">
+                <label>Leads to Assign</label>
+                <div class="la-bulk-summary">
+                    @_selectedLeads.Count lead(s) selected
+                </div>
+            </div>
+
+            <div class="la-form-group">
+                <label>Strategy</label>
+                <SfDropDownList TItem="string" 
+                               TValue="string" 
+                               DataSource="_assignmentStrategies"
+                               @bind-Value="_bulkStrategy"
+                               Placeholder="Select strategy…"
+                               AllowFiltering="true">
+                </SfDropDownList>
+            </div>
+
+            @if (_bulkStrategy.Equals("Manual", StringComparison.OrdinalIgnoreCase))
+            {
+                <div class="la-form-group">
+                    <label for="bulk-producer">Assign All to</label>
+                    <SfDropDownList TItem="ProducerRow" 
+                                   TValue="int" 
+                                   DataSource="_producers"
+                                   @bind-Value="_selectedProducerId"
+                                   ID="bulk-producer"
+                                   TextField="Name"
+                                   ValueField="Id"
+                                   Placeholder="Select producer…"
+                                   AllowFiltering="true">
+                    </SfDropDownList>
+                </div>
+            }
+            else if (_bulkStrategy.Equals("Round-Robin", StringComparison.OrdinalIgnoreCase))
+            {
+                <div class="la-form-group">
+                    <label for="roundrobin-group">Producer Group</label>
+                    <SfDropDownList TItem="string" 
+                                   TValue="string" 
+                                   DataSource="_producerGroups"
+                                   @bind-Value="_bulkGroup"
+                                   ID="roundrobin-group"
+                                   Placeholder="Select group…"
+                                   AllowFiltering="true">
+                    </SfDropDownList>
+                </div>
+            }
+        </div>
+
+        <div class="la-drawer-ft">
+            <button class="um-btn um-btn-ghost" @onclick="() => _drawerOpen = false">Cancel</button>
+            <button class="um-btn um-btn-primary" @onclick="BulkAssignLeads">Assign @_selectedLeads.Count Leads</button>
+        </div>
+    </div>
+}
+
+@code {
+    // ── Types ───────────────────────────────────────────────────────────
+    private sealed record View(string Id, string Label, string Icon);
+    private sealed record LeadRow(int Id, string Name, string Company, int Score, string Source, string Email, DateTime CreatedDate);
+    private sealed record ProducerRow(int Id, string Name, string Title, int LeadCount, int Capacity);
+    private sealed record RuleRow(int Id, string Name, string Strategy, string Criteria, string ProducerGroup, int MaxAssignments, bool Active);
+    private sealed record HistoryRow(int Id, string LeadName, string ProducerName, DateTime AssignedDate, string Method);
+    private sealed record KpiData(int UnassignedLeads, int TotalProducers, double AvgLeadsPerProducer, double WorkloadBalance);
+
+    // ── State ────────────────────────────────────────────────────────────
+    private readonly View[] _views = [
+        new("leads", "Leads", "bi-inbox"),
+        new("workload", "Workload", "bi-diagram-3"),
+        new("rules", "Rules", "bi-sliders2"),
+        new("history", "History", "bi-clock-history"),
+    ];
+
+    private string _view = "leads";
+    private bool _loading;
+    private string _query = string.Empty;
+    private string _sourceFilter = string.Empty;
+    private string _scoreFilter = string.Empty;
+    private string _historyFilter = string.Empty;
+
+    private List<LeadRow> _leads = [];
+    private List<ProducerRow> _producers = [];
+    private List<RuleRow> _rules = [];
+    private List<HistoryRow> _history = [];
+    private HashSet<int> _selectedLeads = [];
+    private LeadRow? _selectedLead;
+    private int _selectedProducerId;
+    private string _drawerMode = string.Empty;
+    private bool _drawerOpen;
+    private string _assignmentNotes = string.Empty;
+    private string _bulkStrategy = "Manual";
+    private string _bulkGroup = "All";
+
+    private KpiData _kpi = new(0, 0, 0, 0);
+    private SfToast? _toast;
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    private readonly string[] _leadSources = ["Web", "Referral", "Direct", "Partner", "Organic"];
+    private readonly string[] _scoreRanges = ["80+", "50-79", "<50"];
+    private readonly string[] _historyPeriods = ["Last 7 Days", "Last 30 Days", "Last 90 Days", "All Time"];
+    private readonly string[] _assignmentStrategies = ["Manual", "Round-Robin", "Score-Based", "Territory-Based"];
+    private readonly string[] _producerGroups = ["All", "Senior Producers", "New Producers", "Team A", "Team B"];
+    private readonly string[] _avatarColors = ["#dc2626", "#f59e0b", "#10b981", "#0369a1", "#7c3aed", "#db2777"];
+
+    // ── Lifecycle ────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("CRM", "/crm"),
+            new("Leads", "/crm/leads"),
+            new("Assignment", null)
+        );
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            // Load unassigned leads from database
+            var leadsResult = await Api.SearchLeadsAsync(_tenantId);
+            if (leadsResult?.Items != null)
+            {
+                _leads = leadsResult.Items
+                    .Where(l => l.AssignedToUserId == null) // Only unassigned leads
+                    .Select(l => new LeadRow(
+                        (int)l.LeadId.GetHashCode(),
+                        $"{l.FirstName} {l.LastName}",
+                        l.AccountName ?? "Unknown",
+                        l.Score ?? 0,
+                        l.SourceCode ?? "Direct",
+                        l.Email ?? "",
+                        l.CreatedDateUtc
+                    ))
+                    .ToList();
+            }
+
+            // Load producers/users from database
+            var usersResult = await Api.SearchUsersAsync(_tenantId);
+            if (usersResult?.Items != null)
+            {
+                _producers = usersResult.Items
+                    .Where(u => u.StatusCode == "Active") // Only active users
+                    .Select(u => new ProducerRow(
+                        (int)u.UserId.GetHashCode(),
+                        u.FullName,
+                        u.JobTitle ?? "Producer",
+                        0, // TODO: Load actual lead count from database
+                        20  // TODO: Load actual capacity from database
+                    ))
+                    .ToList();
+            }
+
+            // TODO: Load assignment rules from API when endpoint is available
+            // var rulesResult = await Api.SearchAssignmentRulesAsync(_tenantId);
+            _rules = [];
+
+            // TODO: Load assignment history from API when endpoint is available
+            // var historyResult = await Api.GetAssignmentHistoryAsync(_tenantId);
+            _history = [];
+
+            UpdateKpi();
+            _loading = false;
+        }
+        catch (Exception ex)
+        {
+            await ShowToast("error", "Failed to load data", ex.Message);
+            _loading = false;
+        }
+    }
+
+    private void UpdateKpi()
+    {
+        var totalProducers = _producers.Count;
+        var totalLeads = _producers.Sum(p => p.LeadCount);
+        var avgLeads = totalProducers > 0 ? totalLeads / (double)totalProducers : 0;
+        var totalCapacity = _producers.Sum(p => p.Capacity);
+        var workloadBalance = totalCapacity > 0 ? Math.Round((totalLeads / (double)totalCapacity) * 100, 1) : 0;
+
+        _kpi = new(
+            _leads.Count,
+            totalProducers,
+            avgLeads,
+            workloadBalance
+        );
+    }
+
+    // ── Filtering ────────────────────────────────────────────────────────
+    private List<LeadRow> GetVisibleLeads()
+    {
+        var q = _query.Trim().ToLower();
+        var result = _leads.Where(l =>
+        {
+            if (!string.IsNullOrEmpty(q) && !l.Name.ToLower().Contains(q) && !l.Company.ToLower().Contains(q))
+                return false;
+
+            if (!string.IsNullOrEmpty(_sourceFilter) && !l.Source.Equals(_sourceFilter, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (!string.IsNullOrEmpty(_scoreFilter))
+            {
+                var match = _scoreFilter switch
+                {
+                    "80+" => l.Score >= 80,
+                    "50-79" => l.Score >= 50 && l.Score < 80,
+                    "<50" => l.Score < 50,
+                    _ => true,
+                };
+                if (!match) return false;
+            }
+
+            return true;
+        }).ToList();
+
+        return result;
+    }
+
+    private void ClearFilters()
+    {
+        _query = string.Empty;
+        _sourceFilter = string.Empty;
+        _scoreFilter = string.Empty;
+    }
+
+    // ── Selection ────────────────────────────────────────────────────────
+    private void ToggleLead(int id, bool selected)
+    {
+        if (selected) _selectedLeads.Add(id);
+        else _selectedLeads.Remove(id);
+    }
+
+    private void SelectAllLeads(bool selected)
+    {
+        if (selected)
+            _selectedLeads = new HashSet<int>(GetVisibleLeads().Select(l => l.Id));
+        else
+            _selectedLeads.Clear();
+    }
+
+    // ── Assignment ───────────────────────────────────────────────────────
+    private void OpenAssignDrawer(LeadRow lead)
+    {
+        _drawerMode = "assign-single";
+        _selectedLead = lead;
+        _selectedProducerId = 0;
+        _assignmentNotes = string.Empty;
+        _drawerOpen = true;
+    }
+
+    private void OpenBulkAssignDrawer()
+    {
+        _drawerMode = "assign-bulk";
+        _bulkStrategy = "Manual";
+        _bulkGroup = "All";
+        _selectedProducerId = 0;
+        _drawerOpen = true;
+    }
+
+    private async Task AssignLead()
+    {
+        if (_selectedLead == null || _selectedProducerId == 0)
+        {
+            await ShowToast("warning", "Invalid Selection", "Please select both lead and producer");
+            return;
+        }
+
+        var producer = _producers.FirstOrDefault(p => p.Id == _selectedProducerId);
+        if (producer == null) return;
+
+        try
+        {
+            // TODO: Call API to assign lead
+            // var request = new AssignLeadRequest 
+            // { 
+            //     LeadId = _selectedLead.Id,
+            //     ProducerId = producer.Id,
+            //     Notes = _assignmentNotes
+            // };
+            // await Api.AssignLeadAsync(request);
+
+            _leads.Remove(_selectedLead);
+            _history.Insert(0, new(
+                _history.Count + 1,
+                _selectedLead.Name,
+                producer.Name,
+                DateTime.Now,
+                "Manual"
+            ));
+
+            UpdateKpi();
+            _drawerOpen = false;
+            await ShowToast("success", "Lead Assigned", $"{_selectedLead.Name} assigned to {producer.Name}");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast("error", "Assignment Failed", ex.Message);
+        }
+    }
+
+    private async Task BulkAssignLeads()
+    {
+        if (_selectedLeads.Count == 0) return;
+
+        var leadsToAssign = _leads.Where(l => _selectedLeads.Contains(l.Id)).ToList();
+
+        try
+        {
+            // TODO: Call API to bulk assign leads
+            // var request = new BulkAssignLeadsRequest
+            // {
+            //     LeadIds = _selectedLeads.ToList(),
+            //     Strategy = _bulkStrategy,
+            //     ProducerId = _selectedProducerId,
+            //     ProducerGroup = _bulkGroup
+            // };
+            // await Api.BulkAssignLeadsAsync(request);
+
+            foreach (var lead in leadsToAssign)
+            {
+                var producer = _bulkStrategy.Equals("Manual", StringComparison.OrdinalIgnoreCase)
+                    ? _producers.FirstOrDefault(p => p.Id == _selectedProducerId)
+                    : _producers.FirstOrDefault();
+
+                if (producer != null)
+                {
+                    _history.Insert(0, new(
+                        _history.Count + 1,
+                        lead.Name,
+                        producer.Name,
+                        DateTime.Now,
+                        $"Bulk ({_bulkStrategy})"
+                    ));
+                }
+
+                _leads.Remove(lead);
+            }
+
+            _selectedLeads.Clear();
+            UpdateKpi();
+            _drawerOpen = false;
+            await ShowToast("success", "Bulk Assignment Complete", $"{leadsToAssign.Count} leads assigned");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast("error", "Bulk Assignment Failed", ex.Message);
+        }
+    }
+
+    // ── Rules ────────────────────────────────────────────────────────────
+    private void OpenRuleDrawer()
+    {
+        _drawerMode = "rule";
+        _drawerOpen = true;
+    }
+
+    private void EditRule(RuleRow rule)
+    {
+        _drawerMode = "rule";
+        _drawerOpen = true;
+    }
+
+    private void ToggleRuleActive(int ruleId, bool active)
+    {
+        var rule = _rules.FirstOrDefault(r => r.Id == ruleId);
+        if (rule != null)
+        {
+            var idx = _rules.IndexOf(rule);
+            _rules[idx] = rule with { Active = active };
+        }
+    }
+
+    private async Task DeleteRule(int ruleId)
+    {
+        _rules.RemoveAll(r => r.Id == ruleId);
+        await ShowToast("success", "Rule Deleted", "Assignment rule has been removed");
+    }
+
+    private void EditProducerCapacity(ProducerRow producer)
+    {
+        // TODO: Open capacity editor drawer
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+    private string GetAvatarColor(int id)
+    {
+        if (_avatarColors?.Length == 0) return "#cccccc";
+        return _avatarColors[Math.Abs(id) % _avatarColors.Length];
+    }
+
+    private string GetScoreBadgeClass(int score) => score switch
+    {
+        >= 80 => "la-score--hot",
+        >= 50 => "la-score--warm",
+        _ => "la-score--cold",
+    };
+
+    private async Task ShowToast(string type, string title, string message)
+    {
+        if (_toast is null) return;
+        await _toast.ShowAsync(new ToastModel { Title = title, Content = message, CssClass = $"e-toast-{type}" });
+    }
+}

@@ -1,0 +1,402 @@
+@page "/crm/opportunities/pipeline"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Pipeline View — CRM</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Pipeline View"
+               Subtitle="Analyze your sales pipeline by stage and forecast"
+               Icon="bi-funnel">
+    <Actions>
+        <div class="op-pipeline-controls">
+            <SfDropDownList TValue="string" TItem="FilterOption"
+                            DataSource="_timeFilters"
+                            Placeholder="Select timeframe"
+                            Value="_selectedTimeFilter"
+                            ValueChanged="@((string v) => { _selectedTimeFilter = v; ApplyFilters(); })">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <button class="um-btn um-btn-ghost" @onclick="LoadPipelineAsync" disabled="@_loading">
+                <i class="bi bi-arrow-clockwise @(_loading ? "op-spin" : "")" aria-hidden="true"></i>
+            </button>
+        </div>
+    </Actions>
+</AppPageHeader>
+
+<div class="op-pipeline-container">
+    @if (_loading)
+    {
+        <div class="op-pipeline-loading">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading pipeline…</span>
+        </div>
+    }
+    else
+    {
+        <!-- Summary Section -->
+        <div class="op-pipeline-summary">
+            <div class="op-summary-card">
+                <div class="op-summary-label">Total Pipeline</div>
+                <div class="op-summary-value">@_summary.TotalPipeline.ToString("C0")</div>
+                <div class="op-summary-detail">@_summary.TotalOpportunities opportunities</div>
+            </div>
+            <div class="op-summary-card">
+                <div class="op-summary-label">Weighted Pipeline</div>
+                <div class="op-summary-value">@_summary.WeightedPipeline.ToString("C0")</div>
+                <div class="op-summary-detail">Based on win probability</div>
+            </div>
+            <div class="op-summary-card">
+                <div class="op-summary-label">Avg. Win Probability</div>
+                <div class="op-summary-value">@_summary.AvgWinProbability.ToString("F0")%</div>
+                <div class="op-summary-detail">Across all stages</div>
+            </div>
+            <div class="op-summary-card">
+                <div class="op-summary-label">This Month</div>
+                <div class="op-summary-value">@_summary.ThisMonthClose.ToString("C0")</div>
+                <div class="op-summary-detail">@_summary.ClosingThisMonth closing</div>
+            </div>
+        </div>
+
+        <!-- Stage Breakdown Section -->
+        <div class="op-pipeline-stages">
+            <h2 class="op-section-title">Pipeline by Stage</h2>
+
+            <div class="op-stage-bars">
+                @foreach (var stage in _stageMetrics)
+                {
+                    var percentOfTotal = _summary.TotalPipeline > 0
+                        ? (stage.TotalAmount / _summary.TotalPipeline * 100)
+                        : 0;
+
+                    <div class="op-stage-row">
+                        <div class="op-stage-label">
+                            <span class="op-stage-name">@stage.StageName</span>
+                            <span class="op-stage-count">@stage.Count opps</span>
+                        </div>
+                        <div class="op-stage-bar-container">
+                            <div class="op-stage-bar" style="width: @percentOfTotal.ToString("F1")%; background: @GetStageColor(stage.StageName);">
+                                <span class="op-stage-amount" title="@stage.TotalAmount.ToString("C0")">
+                                    @stage.TotalAmount.ToString("C0")
+                                </span>
+                            </div>
+                        </div>
+                        <div class="op-stage-stats">
+                            <span class="op-stat-item">Avg: @stage.AverageAmount.ToString("C0")</span>
+                            <span class="op-stat-item">Weighted: @stage.WeightedAmount.ToString("C0")</span>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Forecast Category Section -->
+        <div class="op-pipeline-forecast">
+            <h2 class="op-section-title">Forecast Distribution</h2>
+
+            <div class="op-forecast-grid">
+                @foreach (var forecast in _forecastMetrics)
+                {
+                    <div class="op-forecast-card">
+                        <div class="op-forecast-header">
+                            <span class="op-forecast-name">@forecast.CategoryName</span>
+                            <span class="op-forecast-count">@forecast.Count</span>
+                        </div>
+                        <div class="op-forecast-value">@forecast.TotalAmount.ToString("C0")</div>
+                        <div class="op-forecast-bar">
+                            <div class="op-forecast-fill"
+                                 style="width: @((forecast.TotalAmount / _forecastMetrics.Max(f => f.TotalAmount) * 100).ToString("F1"))%; background: @GetForecastColor(forecast.CategoryName);">
+                            </div>
+                        </div>
+                        <div class="op-forecast-detail">@forecast.AverageAmount.ToString("C0") avg</div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Win Rate Analysis Section -->
+        <div class="op-pipeline-winrate">
+            <h2 class="op-section-title">Win Rate Analysis</h2>
+
+            <div class="op-winrate-chart">
+                @foreach (var bucket in _winRateBuckets)
+                {
+                    <div class="op-winrate-row">
+                        <div class="op-winrate-label">@bucket.Label</div>
+                        <div class="op-winrate-bar-wrapper">
+                            <div class="op-winrate-bar" style="width: @((bucket.Count / (double)_opportunities.Count * 100).ToString("F1"))%; background: @GetWinRateColor(bucket.MinProb, bucket.MaxProb);">
+                                <span class="op-winrate-count">@bucket.Count</span>
+                            </div>
+                        </div>
+                        <div class="op-winrate-stats">
+                            <span>@bucket.TotalAmount.ToString("C0")</span>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Data Table Section -->
+        <div class="op-pipeline-table">
+            <h2 class="op-section-title">All Opportunities</h2>
+
+            <div class="app-datagrid">
+                <SfGrid TValue="PipelineOpportunity" DataSource="_opportunities" AllowPaging="true">
+                    <GridPageSettings PageSize="25"></GridPageSettings>
+                    <GridColumns>
+                        <GridColumn Field="@nameof(PipelineOpportunity.Name)" HeaderText="Opportunity" Width="250" />
+                        <GridColumn Field="@nameof(PipelineOpportunity.AccountName)" HeaderText="Account" Width="200" />
+                        <GridColumn Field="@nameof(PipelineOpportunity.Stage)" HeaderText="Stage" Width="120" />
+                        <GridColumn Field="@nameof(PipelineOpportunity.Amount)" HeaderText="Amount" Width="120" TextAlign="TextAlign.Right" />
+                        <GridColumn Field="@nameof(PipelineOpportunity.WinProbability)" HeaderText="Win %" Width="80" TextAlign="TextAlign.Center" />
+                        <GridColumn Field="@nameof(PipelineOpportunity.WeightedAmount)" HeaderText="Weighted" Width="120" TextAlign="TextAlign.Right" />
+                        <GridColumn Field="@nameof(PipelineOpportunity.CloseDate)" HeaderText="Close Date" Width="120" TextAlign="TextAlign.Center" Type="ColumnType.Date" Format="yMd" />
+                    </GridColumns>
+                </SfGrid>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private record FilterOption(string Value, string Label);
+    private record PipelineOpportunity(
+        Guid Id,
+        string Name,
+        string AccountName,
+        decimal Amount,
+        decimal WeightedAmount,
+        int WinProbability,
+        DateTime CloseDate,
+        string Stage,
+        string ForecastCategory
+    );
+
+    private record PipelineSummary(
+        decimal TotalPipeline,
+        decimal WeightedPipeline,
+        int TotalOpportunities,
+        double AvgWinProbability,
+        decimal ThisMonthClose,
+        int ClosingThisMonth
+    );
+
+    private record StageMetric(
+        string StageName,
+        int Count,
+        decimal TotalAmount,
+        decimal AverageAmount,
+        decimal WeightedAmount
+    );
+
+    private record ForecastMetric(
+        string CategoryName,
+        int Count,
+        decimal TotalAmount,
+        decimal AverageAmount
+    );
+
+    private record WinRateBucket(
+        string Label,
+        int MinProb,
+        int MaxProb,
+        int Count,
+        decimal TotalAmount
+    );
+
+    private SfToast _toast = null!;
+    private bool _loading = false;
+    private string _selectedTimeFilter = "all";
+
+    private List<FilterOption> _timeFilters =
+    [
+        new("all", "All Time"),
+        new("thisMonth", "This Month"),
+        new("nextMonth", "Next Month"),
+        new("thisQuarter", "This Quarter"),
+        new("thisYear", "This Year"),
+    ];
+
+    private List<PipelineOpportunity> _opportunities = [];
+    private PipelineSummary _summary = new(0, 0, 0, 0, 0, 0);
+    private List<StageMetric> _stageMetrics = [];
+    private List<ForecastMetric> _forecastMetrics = [];
+    private List<WinRateBucket> _winRateBuckets = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPipelineAsync();
+        Breadcrumbs.SetBreadcrumb("Pipeline View", "/crm/opportunities/pipeline");
+    }
+
+    private async Task LoadPipelineAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.GetAsync<List<PipelineOpportunity>>($"api/opportunities/pipeline?timeFilter={_selectedTimeFilter}");
+            if (result?.Success == true)
+            {
+                _opportunities = result.Data ?? [];
+                CalculateMetrics();
+            }
+        }
+        catch (Exception ex)
+        {
+            await ShowToast("Error", ex.Message, "Error");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void CalculateMetrics()
+    {
+        if (!_opportunities.Any())
+        {
+            _summary = new(0, 0, 0, 0, 0, 0);
+            _stageMetrics.Clear();
+            _forecastMetrics.Clear();
+            _winRateBuckets.Clear();
+            return;
+        }
+
+        // Summary metrics
+        var totalPipeline = _opportunities.Sum(o => o.Amount);
+        var weightedPipeline = _opportunities.Sum(o => o.WeightedAmount);
+        var avgWinProb = _opportunities.Average(o => o.WinProbability);
+        var thisMonth = _opportunities
+            .Where(o => o.CloseDate.Month == DateTime.Now.Month && o.CloseDate.Year == DateTime.Now.Year)
+            .Sum(o => o.Amount);
+        var closingThisMonth = _opportunities
+            .Count(o => o.CloseDate.Month == DateTime.Now.Month && o.CloseDate.Year == DateTime.Now.Year);
+
+        _summary = new(totalPipeline, weightedPipeline, _opportunities.Count, avgWinProb, thisMonth, closingThisMonth);
+
+        // Stage metrics
+        _stageMetrics = _opportunities
+            .GroupBy(o => o.Stage)
+            .Select(g => new StageMetric(
+                g.Key,
+                g.Count(),
+                g.Sum(o => o.Amount),
+                g.Average(o => o.Amount),
+                g.Sum(o => o.WeightedAmount)
+            ))
+            .OrderByDescending(s => s.TotalAmount)
+            .ToList();
+
+        // Forecast metrics
+        _forecastMetrics = _opportunities
+            .GroupBy(o => o.ForecastCategory)
+            .Select(g => new ForecastMetric(
+                g.Key,
+                g.Count(),
+                g.Sum(o => o.Amount),
+                g.Average(o => o.Amount)
+            ))
+            .OrderByDescending(f => f.TotalAmount)
+            .ToList();
+
+        // Win rate buckets
+        _winRateBuckets =
+        [
+            new("0-25%", 0, 25, _opportunities.Count(o => o.WinProbability <= 25), _opportunities.Where(o => o.WinProbability <= 25).Sum(o => o.Amount)),
+            new("26-50%", 26, 50, _opportunities.Count(o => o.WinProbability > 25 && o.WinProbability <= 50), _opportunities.Where(o => o.WinProbability > 25 && o.WinProbability <= 50).Sum(o => o.Amount)),
+            new("51-75%", 51, 75, _opportunities.Count(o => o.WinProbability > 50 && o.WinProbability <= 75), _opportunities.Where(o => o.WinProbability > 50 && o.WinProbability <= 75).Sum(o => o.Amount)),
+            new("76-100%", 76, 100, _opportunities.Count(o => o.WinProbability > 75), _opportunities.Where(o => o.WinProbability > 75).Sum(o => o.Amount)),
+        ];
+    }
+
+    private void ApplyFilters()
+    {
+        _opportunities.Clear();
+        StateHasChanged();
+    }
+
+    private string GetStageColor(string stage) => stage switch
+    {
+        "Qualified" => "#3b82f6",
+        "Proposal" => "#8b5cf6",
+        "Negotiation" => "#f59e0b",
+        "ClosedWon" => "#22c55e",
+        "ClosedLost" => "#ef4444",
+        _ => "#6b7280"
+    };
+
+    private string GetForecastColor(string forecast) => forecast switch
+    {
+        "Pipeline" => "#3b82f6",
+        "BestCase" => "#10b981",
+        "CommitmentForecast" => "#f59e0b",
+        "Forecast" => "#8b5cf6",
+        _ => "#6b7280"
+    };
+
+    private string GetWinRateColor(int minProb, int maxProb)
+    {
+        var avg = (minProb + maxProb) / 2;
+        return avg switch
+        {
+            <= 25 => "#ef4444",
+            <= 50 => "#f59e0b",
+            <= 75 => "#3b82f6",
+            _ => "#22c55e"
+        };
+    }
+
+    private RenderFragment StageTemplate => context =>
+    {
+        var opp = context as PipelineOpportunity;
+        if (opp == null) return;
+    };
+
+    private RenderFragment AmountTemplate => context =>
+    {
+        var opp = context as PipelineOpportunity;
+        if (opp == null) return;
+    };
+
+    private RenderFragment WinProbTemplate => context =>
+    {
+        var opp = context as PipelineOpportunity;
+        if (opp == null) return;
+    };
+
+    private RenderFragment WeightedTemplate => context =>
+    {
+        var opp = context as PipelineOpportunity;
+        if (opp == null) return;
+    };
+
+    private string GetWinProbabilityColor(int probability)
+    {
+        return probability switch
+        {
+            >= 75 => "#22c55e",
+            >= 50 => "#3b82f6",
+            >= 25 => "#f59e0b",
+            _ => "#ef4444"
+        };
+    }
+
+    private async Task ShowToast(string title, string message, string cssClass)
+    {
+        if (_toast != null)
+        {
+            await _toast.ShowAsync(new ToastModel
+            {
+                Title = title,
+                Content = message,
+                CssClass = cssClass
+            });
+        }
+    }
+}

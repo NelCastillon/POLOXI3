@@ -1,33 +1,211 @@
-@page "/finance/ap-payments"
+﻿@page "/finance/ap-payments"
+@namespace Ams.Web.Components.Pages
 @inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
 
 <PageTitle>AP Payments</PageTitle>
-<h1>AP Payments</h1>
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+
+<AppPageHeader Title="Accounts Payable Payments"
+               Subtitle="Track vendor payments and payment history"
+               Icon="bi-arrow-up-right-circle">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "fa-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Payment
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── Search & Filter ──────────────────────────────────────────────────── -->
+<div class="fin-toolbar">
+    <div class="fin-search-box">
+        <i class="bi bi-search fin-search-icon" aria-hidden="true"></i>
+        <input class="e-input fin-search-input"
+               placeholder="Search payments…"
+               @bind="_searchTerm"
+               @bind:event="oninput"
+               @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" />
+    </div>
+    <div class="fin-filter-buttons">
+        <button class="um-btn um-btn-ghost um-btn-sm @(_filterActive ? "um-btn-active" : "")"
+                @onclick="() => _filterActive = !_filterActive">
+            <i class="bi bi-funnel" aria-hidden="true"></i> Filter
+        </button>
+    </div>
 </div>
-@if (_items is null) { <p>Loading...</p> }
-else {
-<SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="10"></GridPageSettings>
-    <GridColumns>
-        <GridColumn Field="@nameof(ApPaymentDto.PaymentDate)"       HeaderText="Date"          Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
-        <GridColumn Field="@nameof(ApPaymentDto.Amount)"            HeaderText="Amount"        Format="C2" Width="120"></GridColumn>
-        <GridColumn Field="@nameof(ApPaymentDto.PaymentMethodCode)" HeaderText="Method"        Width="110"></GridColumn>
-        <GridColumn Field="@nameof(ApPaymentDto.ReferenceNumber)"   HeaderText="Reference"     Width="160"></GridColumn>
-        <GridColumn Field="@nameof(ApPaymentDto.StatusCode)"        HeaderText="Status"        Width="100"></GridColumn>
-    </GridColumns>
-</SfGrid>
+
+@if (_filterActive)
+{
+    <div class="fin-filter-panel">
+        <div class="fin-filter-group">
+            <label class="fin-filter-label">Payment Method</label>
+            <select class="e-input" @bind="_filterMethod">
+                <option value="">All Methods</option>
+                <option value="ACH">ACH</option>
+                <option value="Check">Check</option>
+                <option value="Wire">Wire Transfer</option>
+                <option value="Credit Card">Credit Card</option>
+            </select>
+        </div>
+        <div class="fin-filter-group">
+            <label class="fin-filter-label">Status</label>
+            <select class="e-input" @bind="_filterStatus">
+                <option value="">All</option>
+                <option value="Pending">Pending</option>
+                <option value="Processed">Processed</option>
+            </select>
+        </div>
+    </div>
 }
+
+<!-- ── KPI Cards ──────────────────────────────────────────────────────── -->
+@if (_stats is not null)
+{
+    <div class="fin-kpi-strip">
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #d1fae5; color: #047857;"><i class="bi bi-cash-flow" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.TotalPayments</div>
+                <div class="fin-kpi-label">Total Payments</div>
+            </div>
+        </div>
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #ede9fe; color: #6d28d9;"><i class="bi bi-currency-dollar" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.TotalAmount.ToString("C0")</div>
+                <div class="fin-kpi-label">Total Amount</div>
+            </div>
+        </div>
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #fef3c7; color: #b45309;"><i class="bi bi-hourglass-split" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.PendingPayments</div>
+                <div class="fin-kpi-label">Pending</div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- ── Content ──────────────────────────────────────────────────────── -->
+@if (_error is not null)
+{
+    <div class="fin-alert fin-alert-warning">
+        <div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></div>
+        <div class="fin-alert-body">
+            <div class="fin-alert-title">⚠️ Database Schema Issue</div>
+            <p>Finance schema initialization required. Run: <strong>sql/01_Finance_Schema.sql</strong></p>
+        </div>
+    </div>
+}
+else if (_loading)
+{
+    <div class="fin-loading">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading AP Payments…</span>
+    </div>
+}
+else if (_items?.Count == 0)
+{
+    <div class="fin-empty-state">
+        <i class="bi bi-inbox fin-empty-icon" aria-hidden="true"></i>
+        <h3>No Payments Found</h3>
+        <p>@(_searchTerm != null ? $"No payments match \"{_searchTerm}\"." : "No payments have been processed yet.")</p>
+    </div>
+}
+else
+{
+    <div class="fin-grid-container">
+        <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="600px">
+            <GridPageSettings PageSize="12"></GridPageSettings>
+            <GridColumns>
+                <GridColumn Field="@nameof(ApPaymentDto.PaymentDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(ApPaymentDto.Amount)" HeaderText="Amount" Format="C2" Width="120" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(ApPaymentDto.PaymentMethodCode)" HeaderText="Method" Width="110" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(ApPaymentDto.ReferenceNumber)" HeaderText="Reference" Width="140"></GridColumn>
+                <GridColumn Field="@nameof(ApPaymentDto.StatusCode)" HeaderText="Status" Width="100" AllowSorting="true">
+                    <Template>
+                        @{
+                            var payment = context as ApPaymentDto;
+                            var badgeClass = payment?.StatusCode switch
+                            {
+                                "Processed" => "fin-badge-success",
+                                "Pending" => "fin-badge-warning",
+                                _ => "fin-badge-secondary"
+                            };
+                        }
+                        <span class="fin-badge @badgeClass">@payment?.StatusCode</span>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string? _searchTerm;
+    private string _filterMethod = "";
+    private string _filterStatus = "";
+    private bool _filterActive = false;
+    private bool _loading = false;
     private List<ApPaymentDto>? _items;
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private string? _error;
+
+    private class Stats
+    {
+        public int TotalPayments { get; set; }
+        public decimal TotalAmount { get; set; }
+        public int PendingPayments { get; set; }
+    }
+
+    private Stats? _stats;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home", "/"),
+            new("Finance", "/finance"),
+            new("AP Payments", "/finance/ap-payments"));
+        await LoadAsync();
+    }
+
     private async Task LoadAsync()
     {
-        var result = await Api.SearchApPaymentsAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        _loading = true;
+        _error = null;
+        _items = null;
+        try
+        {
+            var result = await Api.SearchApPaymentsAsync(_tenantId, _searchTerm);
+            _items = result?.Items.ToList() ?? [];
+
+            if (!string.IsNullOrEmpty(_filterMethod))
+                _items = _items.Where(x => x.PaymentMethodCode == _filterMethod).ToList();
+
+            if (!string.IsNullOrEmpty(_filterStatus))
+                _items = _items.Where(x => x.StatusCode == _filterStatus).ToList();
+
+            _stats = new Stats
+            {
+                TotalPayments = _items.Count,
+                TotalAmount = _items.Sum(x => x.Amount),
+                PendingPayments = _items.Count(x => x.StatusCode == "Pending")
+            };
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            if (ex.Message.Contains("Invalid column name") || ex.Message.Contains("ApPayment"))
+            {
+                _error = "Database schema mismatch. Please ensure 00_schema_migration.sql has been applied to your database. See db/README.md for setup instructions.";
+            }
+            _items = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 }

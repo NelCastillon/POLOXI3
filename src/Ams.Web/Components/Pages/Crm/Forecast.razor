@@ -1,0 +1,498 @@
+@page "/crm/forecast"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Pipeline Forecast — CRM</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Pipeline Forecast"
+               Subtitle="Analyze and forecast pipeline by stage, forecast category, and producer"
+               Icon="bi-graph-up-arrow">
+    <Actions>
+        <div class="fc-view-toggle" role="group" aria-label="View mode">
+            @foreach (var v in _views)
+            {
+                <button class="fc-view-btn @(_view == v.Id ? "fc-view-btn--active" : "")"
+                        @onclick="() => _view = v.Id"
+                        title="@v.Label"
+                        aria-pressed="@(_view == v.Id)">
+                    <i class="bi @v.Icon" aria-hidden="true"></i>
+                    <span class="fc-view-lbl">@v.Label</span>
+                </button>
+            }
+        </div>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "fc-spin" : "")" aria-hidden="true"></i>
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
+<div class="fc-kpi-strip">
+    <div class="fc-kpi-card">
+        <span class="fc-kpi-icon fc-ki1"><i class="bi bi-trophy-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="fc-kpi-val">@_kpi.TotalOpps</div>
+            <div class="fc-kpi-lbl">Total Opportunities</div>
+        </div>
+    </div>
+    <div class="fc-kpi-card">
+        <span class="fc-kpi-icon fc-ki2"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+        <div>
+            <div class="fc-kpi-val">@_kpi.TotalPipeline.ToString("C0")</div>
+            <div class="fc-kpi-lbl">Total Pipeline</div>
+        </div>
+    </div>
+    <div class="fc-kpi-card">
+        <span class="fc-kpi-icon fc-ki3"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
+        <div>
+            <div class="fc-kpi-val">@_kpi.WeightedPipeline.ToString("C0")</div>
+            <div class="fc-kpi-lbl">Weighted Pipeline</div>
+        </div>
+    </div>
+    <div class="fc-kpi-card">
+        <span class="fc-kpi-icon fc-ki4"><i class="bi bi-percent" aria-hidden="true"></i></span>
+        <div>
+            <div class="fc-kpi-val">@_kpi.AvgWinRate.ToString("F0")%</div>
+            <div class="fc-kpi-lbl">Avg Win Rate</div>
+        </div>
+    </div>
+    <div class="fc-kpi-card">
+        <span class="fc-kpi-icon fc-ki5"><i class="bi bi-check2-circle" aria-hidden="true"></i></span>
+        <div>
+            <div class="fc-kpi-val">@_kpi.ClosingThisMonth.ToString("C0")</div>
+            <div class="fc-kpi-lbl">Closing This Month</div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Filter bar ────────────────────────────────────────────────────────── -->
+<div class="fc-filter-bar">
+    <div class="fc-search-wrap">
+        <i class="bi bi-search fc-search-icon" aria-hidden="true"></i>
+        <input class="fc-search-input" type="search" placeholder="Search opportunities…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_stageOptions" Placeholder="All Stages" ShowClearButton="true" Width="145px" Value="_filterStage" ValueChanged="@((string v) => { _filterStage = v; ApplyFilters(); })"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_forecastOptions" Placeholder="All Forecasts" ShowClearButton="true" Width="150px" Value="_filterForecast" ValueChanged="@((string v) => { _filterForecast = v; ApplyFilters(); })"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_ownerOptions" Placeholder="All Owners" ShowClearButton="true" Width="145px" Value="_filterOwner" ValueChanged="@((string v) => { _filterOwner = v; ApplyFilters(); })"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: FUNNEL
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "funnel")
+{
+    @if (_loading)
+    {
+        <div class="fc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <div class="fc-funnel-layout">
+            <h3 class="fc-section-hdr">Pipeline by Stage</h3>
+            @foreach (var sg in _stageData)
+            {
+                var pct = _maxStageAmount == 0 ? 0 : (double)sg.Amount / (double)_maxStageAmount * 100;
+                <div class="fc-stage-row">
+                    <span class="@StageBadge(sg.Stage)" style="min-width:110px">@sg.Stage</span>
+                    <div class="fc-stage-track">
+                        <div class="fc-stage-fill @StageFill(sg.Stage)" style="width:@pct.ToString("F1",System.Globalization.CultureInfo.InvariantCulture)%"></div>
+                    </div>
+                    <span class="fc-mono fc-bold" style="min-width:100px;text-align:right">@sg.Amount.ToString("C0")</span>
+                    <span class="fc-count">@sg.Count opp@(sg.Count != 1 ? "s" : "")</span>
+                    <span class="fc-weighted">@sg.WeightedAmount.ToString("C0")</span>
+                </div>
+            }
+        </div>
+    }
+}
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: FORECAST CATEGORY
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "forecast")
+{
+    @if (_loading)
+    {
+        <div class="fc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <div class="fc-grid-card app-datagrid">
+            <SfGrid TValue="ForecastRow" DataSource="_forecastData" AllowSorting="true" EnableHover="true" RowHeight="48">
+                <GridColumns>
+                    <GridColumn Field="@nameof(ForecastRow.Category)" HeaderText="Forecast Category" MinWidth="140">
+                        <Template>@{ var f = (ForecastRow)context; }<span class="@ForecastBadge(f.Category)">@f.Category</span></Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(ForecastRow.Count)" HeaderText="Count" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                    <GridColumn Field="@nameof(ForecastRow.TotalAmount)" HeaderText="Total Pipeline" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                        <Template>@{ var f = (ForecastRow)context; }<span class="fc-mono fc-bold">@f.TotalAmount.ToString("C0")</span></Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(ForecastRow.WeightedAmount)" HeaderText="Weighted" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                        <Template>@{ var f = (ForecastRow)context; }<span class="fc-mono">@f.WeightedAmount.ToString("C0")</span></Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(ForecastRow.AvgWinPct)" HeaderText="Avg Win %" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                        <Template>@{ var f = (ForecastRow)context; }<span>@f.AvgWinPct.ToString("F0")%</span></Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Visual" Width="200">
+                        <Template>
+                            @{ var f = (ForecastRow)context; }
+                            <div class="fc-bar-wrap">
+                                <div class="fc-bar" style="width:@f.TotalAmount.ToString("F0")%;background:@CategoryColor(f.Category);max-width:120px"></div>
+                                <span class="fc-bar-label">@f.TotalAmount.ToString("C0")</span>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        </div>
+    }
+}
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: PRODUCER BREAKDOWN
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "producer")
+{
+    @if (_loading)
+    {
+        <div class="fc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <div class="fc-grid-card app-datagrid">
+            <SfGrid TValue="ProducerRow" DataSource="_producerData" AllowSorting="true" EnableHover="true" RowHeight="48">
+                <GridColumns>
+                    <GridColumn Field="@nameof(ProducerRow.Producer)" HeaderText="Producer" MinWidth="160" />
+                    <GridColumn Field="@nameof(ProducerRow.TotalOpps)" HeaderText="Opportunities" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                    <GridColumn Field="@nameof(ProducerRow.TotalPipeline)" HeaderText="Total Pipeline" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                        <Template>@{ var p = (ProducerRow)context; }<span class="fc-mono fc-bold">@p.TotalPipeline.ToString("C0")</span></Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(ProducerRow.WeightedPipeline)" HeaderText="Weighted" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                        <Template>@{ var p = (ProducerRow)context; }<span class="fc-mono">@p.WeightedPipeline.ToString("C0")</span></Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(ProducerRow.AvgDealSize)" HeaderText="Avg Deal Size" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                        <Template>@{ var p = (ProducerRow)context; }<span class="fc-mono">@p.AvgDealSize.ToString("C0")</span></Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(ProducerRow.WinRate)" HeaderText="Win Rate" Width="100">
+                        <Template>@{ var p = (ProducerRow)context; }<span>@p.WinRate.ToString("F0")%</span></Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        </div>
+    }
+}
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     VIEW: TIMELINE (CLOSING SCHEDULE)
+     ════════════════════════════════════════════════════════════════════════ -->
+@if (_view == "timeline")
+{
+    @if (_loading)
+    {
+        <div class="fc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <div class="fc-grid-card app-datagrid">
+            <SfGrid TValue="TimelineRow" DataSource="_timelineData" AllowSorting="true" EnableHover="true" RowHeight="48">
+                <GridColumns>
+                    <GridColumn Field="@nameof(TimelineRow.Period)" HeaderText="Period" Width="120" />
+                    <GridColumn Field="@nameof(TimelineRow.Count)" HeaderText="Closing" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                    <GridColumn Field="@nameof(TimelineRow.TotalAmount)" HeaderText="Total Value" Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                        <Template>@{ var t = (TimelineRow)context; }<span class="fc-mono fc-bold">@t.TotalAmount.ToString("C0")</span></Template>
+                    </GridColumn>
+                    <GridColumn Field="@nameof(TimelineRow.WeightedAmount)" HeaderText="Weighted Value" Width="150" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                        <Template>@{ var t = (TimelineRow)context; }<span class="fc-mono">@t.WeightedAmount.ToString("C0")</span></Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="Confidence" Width="180">
+                        <Template>
+                            @{ var t = (TimelineRow)context; }
+                            <div class="fc-confidence-bar">
+                                <div class="fc-confidence-fill" style="width:@t.AvgWinPct%"></div>
+                                <span class="fc-confidence-label">@t.AvgWinPct.ToString("F0")%</span>
+                            </div>
+                        </Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+        </div>
+    }
+}
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+    private string _view = "funnel";
+    private bool _loading = false;
+
+    // ── Data models ───────────────────────────────────────────────────────────
+    private record ViewDef(string Id, string Label, string Icon);
+    private static readonly List<ViewDef> _views =
+    [
+        new("funnel", "Funnel", "bi-funnel-fill"),
+        new("forecast", "Forecast", "bi-graph-up-arrow"),
+        new("producer", "Producer", "bi-person-badge"),
+        new("timeline", "Timeline", "bi-calendar-event"),
+    ];
+
+    // ── Data ──────────────────────────────────────────────────────────────────
+    private List<StageRow> _stageData = [];
+    private List<ForecastRow> _forecastData = [];
+    private List<ProducerRow> _producerData = [];
+    private List<TimelineRow> _timelineData = [];
+    private ForecastKpi _kpi = new();
+    private decimal _maxStageAmount = 0;
+
+    // ── Filters ───────────────────────────────────────────────────────────────
+    private string _search = string.Empty;
+    private string _filterStage = string.Empty;
+    private string _filterForecast = string.Empty;
+    private string _filterOwner = string.Empty;
+
+    // ── Reference data ────────────────────────────────────────────────────────
+    private static readonly List<LV> _stageOptions =
+    [
+        new("Qualified", "Qualified"),
+        new("Needs Analysis", "Needs Analysis"),
+        new("Proposal", "Proposal"),
+        new("Negotiation", "Negotiation"),
+    ];
+
+    private static readonly List<LV> _forecastOptions =
+    [
+        new("Best Case", "Best Case"),
+        new("Commit", "Commit"),
+        new("Pipeline", "Pipeline"),
+        new("Closed Won", "Closed Won"),
+    ];
+
+    private static readonly List<LV> _ownerOptions =
+    [
+        new("Alice Carter", "Alice Carter"),
+        new("Bob Martinez", "Bob Martinez"),
+        new("Carol Smith", "Carol Smith"),
+        new("David Lee", "David Lee"),
+        new("Eva Johnson", "Eva Johnson"),
+    ];
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Pipeline Forecast", "/crm/forecast"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; StateHasChanged();
+        try
+        {
+            // Mock data for now — replace with actual API calls
+            await Task.Delay(500);
+            BuildForecastData();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error loading forecast: {ex.Message}", "e-toast-danger");
+        }
+        finally { _loading = false; }
+    }
+
+    private void BuildForecastData()
+    {
+        var stages = new[] { "Qualified", "Needs Analysis", "Proposal", "Negotiation" };
+        _stageData = [];
+        _maxStageAmount = 0;
+
+        foreach (var stage in stages)
+        {
+            var count = Random.Shared.Next(3, 15);
+            var amt = Random.Shared.Next(50000, 500000);
+            var winPct = Random.Shared.Next(20, 80);
+            _stageData.Add(new StageRow
+            {
+                Stage = stage,
+                Count = count,
+                Amount = amt,
+                WeightedAmount = (decimal)amt * winPct / 100,
+            });
+            _maxStageAmount = Math.Max(_maxStageAmount, amt);
+        }
+
+        _forecastData =
+        [
+            new("Best Case", 12, 850000, 680000, 80),
+            new("Commit", 8, 520000, 416000, 80),
+            new("Pipeline", 25, 1200000, 480000, 40),
+            new("Closed Won", 15, 2100000, 2100000, 100),
+        ];
+
+        _producerData =
+        [
+            new("Alice Carter", 18, 950000, 620000, 52777, 72),
+            new("Bob Martinez", 14, 720000, 480000, 51428, 67),
+            new("Carol Smith", 12, 580000, 340000, 48333, 59),
+            new("David Lee", 16, 1100000, 715000, 68750, 65),
+            new("Eva Johnson", 10, 420000, 252000, 42000, 60),
+        ];
+
+        var now = DateTime.UtcNow;
+        _timelineData =
+        [
+            new("This Week", 3, 280000, 196000, 70),
+            new("This Month", 8, 640000, 416000, 65),
+            new("Next Month", 12, 1200000, 480000, 40),
+            new("Q4", 15, 1500000, 600000, 40),
+            new("Q1 2025", 10, 800000, 240000, 30),
+        ];
+
+        _kpi = new ForecastKpi
+        {
+            TotalOpps = _stageData.Sum(s => s.Count),
+            TotalPipeline = _stageData.Sum(s => s.Amount),
+            WeightedPipeline = _stageData.Sum(s => s.WeightedAmount),
+            AvgWinRate = _stageData.Count > 0
+                ? (int)(_stageData.Average(s => (double)s.WeightedAmount / (double)s.Amount * 100))
+                : 0,
+            ClosingThisMonth = _timelineData.FirstOrDefault(t => t.Period == "This Month")?.TotalAmount ?? 0,
+        };
+
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        // Apply filtering logic here
+        StateHasChanged();
+    }
+
+    private async Task ShowToastAsync(string msg, string css = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = css });
+    }
+
+    // ── Badge helpers ─────────────────────────────────────────────────────────
+    private static string StageBadge(string s) => s switch
+    {
+        "Qualified" => "fc-stage fc-stage--qualified",
+        "Needs Analysis" => "fc-stage fc-stage--needs",
+        "Proposal" => "fc-stage fc-stage--proposal",
+        "Negotiation" => "fc-stage fc-stage--negotiation",
+        _ => "fc-stage",
+    };
+
+    private static string StageFill(string s) => s switch
+    {
+        "Qualified" => "fc-sf--qualified",
+        "Needs Analysis" => "fc-sf--needs",
+        "Proposal" => "fc-sf--proposal",
+        "Negotiation" => "fc-sf--negotiation",
+        _ => "fc-sf--default",
+    };
+
+    private static string ForecastBadge(string cat) => cat switch
+    {
+        "Best Case" => "fc-fc--best",
+        "Commit" => "fc-fc--commit",
+        "Pipeline" => "fc-fc--pipeline",
+        "Closed Won" => "fc-fc--closed",
+        _ => "fc-fc--default",
+    };
+
+    private static string CategoryColor(string cat) => cat switch
+    {
+        "Best Case" => "#dbeafe",
+        "Commit" => "#d1fae5",
+        "Pipeline" => "#f3f4f6",
+        "Closed Won" => "#d1fae5",
+        _ => "#e5eaf3",
+    };
+
+    // ── Models ────────────────────────────────────────────────────────────────
+    private sealed class StageRow
+    {
+        public string Stage { get; set; } = string.Empty;
+        public int Count { get; set; }
+        public decimal Amount { get; set; }
+        public decimal WeightedAmount { get; set; }
+    }
+
+    private sealed class ForecastRow
+    {
+        public string Category { get; set; } = string.Empty;
+        public int Count { get; set; }
+        public decimal TotalAmount { get; set; }
+        public decimal WeightedAmount { get; set; }
+        public int AvgWinPct { get; set; }
+
+        public ForecastRow() { }
+        public ForecastRow(string cat, int cnt, decimal tot, decimal wtd, int pct)
+        {
+            Category = cat;
+            Count = cnt;
+            TotalAmount = tot;
+            WeightedAmount = wtd;
+            AvgWinPct = pct;
+        }
+    }
+
+    private sealed class ProducerRow
+    {
+        public string Producer { get; set; } = string.Empty;
+        public int TotalOpps { get; set; }
+        public decimal TotalPipeline { get; set; }
+        public decimal WeightedPipeline { get; set; }
+        public decimal AvgDealSize { get; set; }
+        public int WinRate { get; set; }
+
+        public ProducerRow() { }
+        public ProducerRow(string prod, int opps, decimal tot, decimal wtd, decimal avg, int win)
+        {
+            Producer = prod;
+            TotalOpps = opps;
+            TotalPipeline = tot;
+            WeightedPipeline = wtd;
+            AvgDealSize = avg;
+            WinRate = win;
+        }
+    }
+
+    private sealed class TimelineRow
+    {
+        public string Period { get; set; } = string.Empty;
+        public int Count { get; set; }
+        public decimal TotalAmount { get; set; }
+        public decimal WeightedAmount { get; set; }
+        public int AvgWinPct { get; set; }
+
+        public TimelineRow() { }
+        public TimelineRow(string p, int cnt, decimal tot, decimal wtd, int pct)
+        {
+            Period = p;
+            Count = cnt;
+            TotalAmount = tot;
+            WeightedAmount = wtd;
+            AvgWinPct = pct;
+        }
+    }
+
+    private sealed class ForecastKpi
+    {
+        public int TotalOpps { get; set; }
+        public decimal TotalPipeline { get; set; }
+        public decimal WeightedPipeline { get; set; }
+        public int AvgWinRate { get; set; }
+        public decimal ClosingThisMonth { get; set; }
+    }
+
+    private sealed record LV(string Label, string Value);
+}

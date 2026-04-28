@@ -7,6 +7,7 @@ public sealed class GLAccountDto
     public string AccountCode { get; set; } = string.Empty;
     public string AccountName { get; set; } = string.Empty;
     public string AccountTypeCode { get; set; } = string.Empty;
+    public string? Description { get; set; }
     public Guid? ParentGLAccountId { get; set; }
     public bool IsActive { get; set; }
     public DateTime CreatedDateUtc { get; set; }

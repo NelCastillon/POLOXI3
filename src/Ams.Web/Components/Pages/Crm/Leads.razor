@@ -32,7 +32,7 @@
             <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Import
         </button>
 
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/crm/leads/new")'>
+        <button class="um-btn um-btn-primary" @onclick='OnNewLeadClick'>
             <i class="bi bi-plus-lg" aria-hidden="true"></i> New Lead
         </button>
     </Actions>
@@ -249,7 +249,7 @@
                                 <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenDetail(r)" title="View">
                                     <i class="bi bi-arrow-right" aria-hidden="true"></i>
                                 </button>
-                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenRowMenu(r)" title="More">
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="(e) => OpenRowMenu(r, e)" title="More">
                                     <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
                                 </button>
                             </div>
@@ -607,6 +607,63 @@
     </div>
 }
 
+<!-- ── Add/Edit Drawer ──────────────────────────────────────────────────── -->
+<AppCrudDrawer @bind-Visible="_showAdd" 
+               Title="@(_editingId == Guid.Empty ? "Create New Lead" : "Edit Lead")"
+               Icon="bi-person-plus"
+               OnConfirm="SaveLeadAsync" 
+               IsBusy="_savingLead"
+               Width="420px">
+    <Content>
+        <div class="form-row">
+            <label class="form-label">First Name <span class="form-required">*</span></label>
+            <input type="text" class="form-control" placeholder="John" @bind="_formFirstName" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Last Name <span class="form-required">*</span></label>
+            <input type="text" class="form-control" placeholder="Doe" @bind="_formLastName" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Company <span class="form-required">*</span></label>
+            <input type="text" class="form-control" placeholder="Company Name" @bind="_formCompany" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Email <span class="form-required">*</span></label>
+            <input type="email" class="form-control" placeholder="john@example.com" @bind="_formEmail" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Phone</label>
+            <input type="tel" class="form-control" placeholder="(555) 123-4567" @bind="_formPhone" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Source <span class="form-required">*</span></label>
+            <SfDropDownList TValue="string" TItem="LabelValue" 
+                            DataSource="_sourceOptions"
+                            @bind-Value="_formSource"
+                            Placeholder="Select source">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Owner</label>
+            <SfDropDownList TValue="string" TItem="LabelValue" 
+                            DataSource="_ownerOptions"
+                            @bind-Value="_formOwner"
+                            Placeholder="Assign to owner">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+        </div>
+        <div class="form-row">
+            <label class="form-label">Est. Premium</label>
+            <input type="number" class="form-control" placeholder="0.00" step="0.01" min="0" @bind="_formEstPremium" />
+        </div>
+        <div class="form-row">
+            <label class="form-label">Notes</label>
+            <textarea class="form-control" rows="3" placeholder="Add notes…" @bind="_formNotes"></textarea>
+        </div>
+    </Content>
+</AppCrudDrawer>
+
 <!-- ══════════════════════════════════════════════════════════
      DIALOG — Import Leads
      ══════════════════════════════════════════════════════════ -->
@@ -936,12 +993,26 @@
     private bool   _showMerge     = false;
     private bool   _showConvert   = false;
     private bool   _showCampaign  = false;
+    private bool   _showAdd       = false;
+    private bool   _savingLead    = false;
+    private Guid   _editingId     = Guid.Empty;
 
     // Import
     private List<LeadImportRow> _importPreview = [];
     private List<string>        _importErrors  = [];
     private bool _importDedupe           = true;
     private bool _importAssignRoundRobin = false;
+
+    // Add/Edit Lead Form
+    private string _formFirstName = string.Empty;
+    private string _formLastName = string.Empty;
+    private string _formCompany = string.Empty;
+    private string _formEmail = string.Empty;
+    private string _formPhone = string.Empty;
+    private string _formSource = string.Empty;
+    private string _formOwner = string.Empty;
+    private decimal _formEstPremium = 0;
+    private string _formNotes = string.Empty;
 
     // Assign
     private string _assignTarget = string.Empty;
@@ -1001,11 +1072,37 @@
         _loading = true; StateHasChanged();
         try
         {
-            await Task.Delay(0); // replace with: _leads = await Api.GetLeadsAsync(_tenantId);
-            _leads = [];
+            var response = await Api.SearchLeadsAsync(_tenantId);
+            _leads = response?.Items?.Select(MapToLeadRow).ToList() ?? [];
             RebuildDerived();
         }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error loading leads: {ex.Message}", "e-toast-danger");
+            _leads = [];
+        }
         finally { _loading = false; }
+    }
+
+    private LeadRow MapToLeadRow(LeadDto dto)
+    {
+        return new LeadRow
+        {
+            LeadId = dto.LeadId,
+            FullName = $"{dto.FirstName} {dto.LastName}".Trim(),
+            CompanyName = dto.AccountName ?? string.Empty,
+            Email = dto.Email ?? string.Empty,
+            Phone = dto.Phone ?? string.Empty,
+            Stage = dto.NurturingStageCode ?? "New",
+            Source = dto.SourceCode ?? string.Empty,
+            Owner = string.Empty,
+            Rating = "Cold",
+            Score = dto.Score ?? 0,
+            EstPremium = 0,
+            CreatedAt = dto.CreatedDateUtc,
+            LastActivity = null,
+            Notes = null
+        };
     }
 
     private void RebuildDerived()
@@ -1074,10 +1171,18 @@
     private void OpenDetail(LeadRow r)        => _detail = r;
     private void ClearSelection()             => _selected.Clear();
 
-    private void OpenRowMenu(LeadRow r)
+    private void OnNewLeadClick()
+    {
+        _editingId = Guid.Empty;
+        ClearFormFields();
+        _showAdd = true;
+    }
+
+    private void OpenRowMenu(LeadRow r, Microsoft.AspNetCore.Components.Web.MouseEventArgs e)
     {
         _menuLead = r;
-        _menuX = 200; _menuY = 200; // TODO: use JS interop for cursor position
+        _menuX = e.ClientX;
+        _menuY = e.ClientY;
     }
 
     private void OnRowSelected(RowSelectEventArgs<LeadRow> args)
@@ -1152,6 +1257,53 @@
         _detail              = null;
         await ShowToastAsync($"{_selected.Count} lead(s) enrolled in campaign.", "e-toast-success");
         _selected.Clear();
+    }
+
+    private async Task SaveLeadAsync()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_formFirstName) || string.IsNullOrWhiteSpace(_formLastName) ||
+                string.IsNullOrWhiteSpace(_formEmail) || string.IsNullOrWhiteSpace(_formCompany))
+            {
+                await ShowToastAsync("Please fill in all required fields.", "e-toast-danger");
+                return;
+            }
+
+            _savingLead = true;
+            // TODO: if (_editingId == Guid.Empty)
+            //     await Api.CreateLeadAsync(...)
+            // else
+            //     await Api.UpdateLeadAsync(_editingId, ...)
+            await Task.Delay(0);
+
+            _showAdd = false;
+            _editingId = Guid.Empty;
+            ClearFormFields();
+            await ShowToastAsync("Lead saved successfully.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _savingLead = false;
+        }
+    }
+
+    private void ClearFormFields()
+    {
+        _formFirstName = string.Empty;
+        _formLastName = string.Empty;
+        _formCompany = string.Empty;
+        _formEmail = string.Empty;
+        _formPhone = string.Empty;
+        _formSource = string.Empty;
+        _formOwner = string.Empty;
+        _formEstPremium = 0;
+        _formNotes = string.Empty;
     }
 
     private async Task ShowToastAsync(string msg, string css = "e-toast-info")

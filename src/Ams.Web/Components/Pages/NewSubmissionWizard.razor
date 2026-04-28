@@ -1,0 +1,867 @@
+@page "/submissions/new"
+@namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>New Submission — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="5000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<!-- ── PAGE HEADER ──────────────────────────────────────────────────── -->
+<div class="nsw-page-header">
+    <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmCancel()'>
+        <i class="bi bi-arrow-left" aria-hidden="true"></i> Submissions
+    </button>
+    <div class="nsw-page-title">
+        <div class="nsw-title-icon-wrap"><i class="bi bi-send-plus nsw-title-icon" aria-hidden="true"></i></div>
+        <div>
+            <h1 class="nsw-h1">New Submission</h1>
+            <span class="nsw-subtitle">Complete all steps to create and send a new submission to market.</span>
+        </div>
+    </div>
+    @if (_step > 0)
+    {
+        <div class="nsw-draft-badge">
+            <i class="bi bi-floppy" aria-hidden="true"></i> Draft saved
+        </div>
+    }
+</div>
+
+<!-- ── STEPPER ──────────────────────────────────────────────────────── -->
+<div class="nsw-stepper-wrap">
+    <div class="nsw-custom-stepper">
+        @for (int i = 0; i < 6; i++)
+        {
+            int idx = i;
+            string stepClass = idx == _step ? "nsw-step nsw-step-active" 
+                             : idx < _step  ? "nsw-step nsw-step-done" 
+                             :                "nsw-step";
+            <div class="@stepClass" @onclick="() => _step = idx" style="cursor: pointer;">
+                <div class="nsw-step-badge">
+                    @if (idx < _step)
+                    {
+                        <i class="bi bi-check-lg"></i>
+                    }
+                    else
+                    {
+                        <span>@(idx + 1)</span>
+                    }
+                </div>
+                <div class="nsw-step-label">
+                    @(new[] { "Account", "LOB", "Details", "Markets", "Documents", "Review" }[idx])
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+<!-- ── STEP BODY ────────────────────────────────────────────────────── -->
+<div class="nsw-body">
+    @if      (_step == 0) { @StepAccount() }
+    else if  (_step == 1) { @StepLob() }
+    else if  (_step == 2) { @StepDetails() }
+    else if  (_step == 3) { @StepMarkets() }
+    else if  (_step == 4) { @StepDocuments() }
+    else if  (_step == 5) { @StepReview() }
+</div>
+
+<!-- ── FOOTER ───────────────────────────────────────────────────────── -->
+<div class="nsw-footer">
+    <button class="um-btn um-btn-ghost" disabled="@(_step == 0)" @onclick="GoPrev">
+        <i class="bi bi-chevron-left" aria-hidden="true"></i> Back
+    </button>
+    <div class="nsw-footer-right">
+        <button class="um-btn um-btn-ghost" @onclick="SaveDraftAsync">
+            <i class="bi bi-floppy" aria-hidden="true"></i> Save Draft
+        </button>
+        @if (_step < 5)
+        {
+            <button class="um-btn um-btn-primary" @onclick="GoNext" disabled="@(!CanAdvance())">
+                Next <i class="bi bi-chevron-right" aria-hidden="true"></i>
+            </button>
+        }
+        else
+        {
+            <button class="um-btn um-btn-success" @onclick="SubmitAsync" disabled="@_submitting">
+                @if (_submitting)
+                {
+                    <span class="nsw-spinner" aria-hidden="true"></span><span> Saving...</span>
+                }
+                else
+                {
+                    <i class="bi bi-send-fill" aria-hidden="true"></i><span> Create Submission</span>
+                }
+            </button>
+        }
+    </div>
+</div>
+
+<!-- ── DISCARD DIALOG ───────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showCancelDlg" Width="420px" IsModal="true" ShowCloseIcon="true" Header="Discard Submission?">
+    <DialogTemplates>
+        <Content><p>All unsaved changes will be lost. Are you sure you want to leave?</p></Content>
+        <FooterTemplate>
+            <button class="um-btn um-btn-ghost"  @onclick='() => _showCancelDlg = false'>Stay</button>
+            <button class="um-btn um-btn-danger"  @onclick='() => Nav.NavigateTo("/submissions")'>Discard</button>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    /* ── refs ─────────────────────────────────────────────────────── */
+    SfStepper _stepper = default!;
+    SfToast   _toast   = default!;
+
+    int  _step          = 0;
+    bool _ready         = false;
+    bool _submitting    = false;
+    bool _showCancelDlg = false;
+
+    bool?[] _stepValid = new bool?[6];
+
+    bool? StepValid(int i)    => _stepValid[i];
+    void  OnStepChanged(int i) => _step = i;
+
+    void GoPrev() { if (_step > 0) { _step--; } }
+    void GoNext()
+    {
+        _stepValid[_step] = CanAdvance();
+        if (CanAdvance() && _step < 5) _step++;
+    }
+
+    bool CanAdvance() => _step switch
+    {
+        0 => _s1.AccountId is not null,
+        1 => !string.IsNullOrEmpty(_s2.Lob),
+        2 => _s3.EffectiveDate != default && _s3.ExpirationDate != default && !string.IsNullOrEmpty(_s3.Priority),
+        3 => true,   // markets optional at this stage
+        4 => true,   // docs optional
+        5 => true,
+        _ => false
+    };
+
+    void ConfirmCancel() { if (_step > 0) _showCancelDlg = true; else Nav.NavigateTo("/submissions"); }
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home","/"),
+            new("Submissions","/submissions"),
+            new("New Submission","/submissions/new"));
+        _s3.EffectiveDate  = DateTime.Today.AddDays(30);
+        _s3.ExpirationDate = DateTime.Today.AddDays(365 + 30);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _ready = true;
+            StateHasChanged();
+        }
+        await base.OnAfterRenderAsync(firstRender);
+    }
+
+    async Task SaveDraftAsync()
+    {
+        await _toast.ShowAsync(new ToastModel
+        {
+            Title    = "Draft Saved",
+            Content  = "Your submission draft has been saved.",
+            CssClass = "e-toast-success"
+        });
+    }
+
+    async Task SubmitAsync()
+    {
+        _submitting = true;
+        try
+        {
+            var request = new Ams.Application.Features.Submissions.CreateSubmissionRequest(
+                TenantId:         Guid.Parse("00000000-0000-0000-0000-000000000001"),
+                AccountId:        _s1.AccountId!.Value,
+                LineOfBusiness:   _s2.Lob,
+                Priority:         _s3.Priority,
+                EffectiveDate:    _s3.EffectiveDate,
+                ExpirationDate:   _s3.ExpirationDate,
+                TargetPremium:    _s3.TargetPremium > 0 ? _s3.TargetPremium : null,
+                AssignedToUserId: _s3.AssignedToUserId);
+
+            var newId = await Api.CreateSubmissionAsync(request);
+
+            await _toast.ShowAsync(new ToastModel
+            {
+                Title    = "Submission Created",
+                Content  = $"Submission created successfully.",
+                CssClass = "e-toast-success"
+            });
+
+            await Task.Delay(900);
+            Nav.NavigateTo($"/submissions/{newId}");
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel
+            {
+                Title    = "Error",
+                Content  = ex.Message,
+                CssClass = "e-toast-danger"
+            });
+        }
+        finally { _submitting = false; }
+    }
+
+    /* ════════════════════════════════════════════════════════════════
+       STEP 1 — ACCOUNT
+    ════════════════════════════════════════════════════════════════ */
+    sealed class Step1Model
+    {
+        public Guid?  AccountId   { get; set; }
+        public string AccountName { get; set; } = "";
+        public string AccountType { get; set; } = "";
+        public string SearchText  { get; set; } = "";
+    }
+    Step1Model _s1 = new();
+
+    sealed class AccountNode
+    {
+        public string Id       { get; set; } = "";
+        public string Name     { get; set; } = "";
+        public string ParentId { get; set; } = "";
+        public bool   HasChild { get; set; }
+        public string Type     { get; set; } = "";
+        public string Industry { get; set; } = "";
+    }
+
+    List<AccountNode> _accountTree = new()
+    {
+        new() { Id="grp-comm", Name="Commercial",             ParentId="",       HasChild=true,  Type="Group"        },
+        new() { Id="a-001",    Name="Sullivan Mfg. LLC",      ParentId="grp-comm", HasChild=false, Type="Commercial", Industry="Manufacturing"  },
+        new() { Id="a-002",    Name="Bridgewater Hotels",     ParentId="grp-comm", HasChild=false, Type="Commercial", Industry="Hospitality"    },
+        new() { Id="a-003",    Name="Metro Freight Co.",      ParentId="grp-comm", HasChild=false, Type="Commercial", Industry="Transportation"  },
+        new() { Id="a-004",    Name="PineCrest Builders",     ParentId="grp-comm", HasChild=false, Type="Commercial", Industry="Construction"   },
+        new() { Id="a-005",    Name="Omega Tech Corp.",       ParentId="grp-comm", HasChild=false, Type="Commercial", Industry="Technology"     },
+        new() { Id="a-006",    Name="Apex Medical Group",     ParentId="grp-comm", HasChild=false, Type="Commercial", Industry="Healthcare"     },
+        new() { Id="a-007",    Name="Harbor Fresh Foods",     ParentId="grp-comm", HasChild=false, Type="Commercial", Industry="Food Service"   },
+        new() { Id="a-008",    Name="Summit Properties LLC",  ParentId="grp-comm", HasChild=false, Type="Commercial", Industry="Real Estate"    },
+        new() { Id="grp-pers", Name="Personal",               ParentId="",       HasChild=true,  Type="Group"        },
+        new() { Id="a-010",    Name="James & Lisa Carter",    ParentId="grp-pers", HasChild=false, Type="Personal",   Industry=""               },
+        new() { Id="a-011",    Name="Nguyen, Minh T.",        ParentId="grp-pers", HasChild=false, Type="Personal",   Industry=""               },
+        new() { Id="a-012",    Name="Rodriguez, Carla E.",    ParentId="grp-pers", HasChild=false, Type="Personal",   Industry=""               },
+    };
+
+    List<string> _treeValues = new();
+
+    void OnTreeChanged(List<string> vals)
+    {
+        _treeValues = vals;
+        var node = _accountTree.FirstOrDefault(n => vals.Contains(n.Id) && n.Type != "Group");
+        if (node is not null)
+        {
+            _s1.AccountId   = Guid.NewGuid();
+            _s1.AccountName = node.Name;
+            _s1.AccountType = node.Type;
+        }
+        else { _s1.AccountId = null; _s1.AccountName = ""; }
+    }
+
+    IEnumerable<AccountNode> SearchedAccounts =>
+        string.IsNullOrWhiteSpace(_s1.SearchText)
+            ? _accountTree.Where(n => n.Type != "Group")
+            : _accountTree.Where(n => n.Type != "Group" &&
+                n.Name.Contains(_s1.SearchText, StringComparison.OrdinalIgnoreCase));
+
+    void SelectAccount(AccountNode n)
+    {
+        _s1.AccountId   = Guid.NewGuid();
+        _s1.AccountName = n.Name;
+        _s1.AccountType = n.Type;
+        _treeValues     = new List<string>{ n.Id };
+    }
+
+    RenderFragment StepAccount() =>
+        @<div class="nsw-step-wrap">
+            <div class="nsw-step-hdr">
+                <div class="nsw-step-num">1</div>
+                <div>
+                    <div class="nsw-step-title">Select Account</div>
+                    <div class="nsw-step-sub">Choose the account this submission is for. You can search by name or browse the account tree.</div>
+                </div>
+            </div>
+
+            @if (_s1.AccountId is not null)
+            {
+                <div class="nsw-selected-banner">
+                    <div class="nsw-selected-icon"><i class="bi bi-building-check" aria-hidden="true"></i></div>
+                    <div class="nsw-selected-info">
+                        <div class="nsw-selected-name">@_s1.AccountName</div>
+                        <div class="nsw-selected-type">@_s1.AccountType Account</div>
+                    </div>
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => { _s1.AccountId=null; _s1.AccountName=string.Empty; _treeValues=new(); }">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
+                    </button>
+                </div>
+            }
+
+            <!-- Search -->
+            <div class="nsw-search-row">
+                <div class="nsw-search-box">
+                    <i class="bi bi-search nsw-search-icon" aria-hidden="true"></i>
+                    <input class="e-input nsw-search-input"
+                           placeholder="Search accounts…"
+                           @bind="_s1.SearchText" @bind:event="oninput" />
+                </div>
+                <button class="um-btn um-btn-ghost um-btn-sm nsw-new-acct-btn"
+                        @onclick='() => _toast.ShowAsync(new ToastModel{ Title="Coming Soon", Content="New account creation opens in a separate workflow.", CssClass="e-toast-info" })'>
+                    <i class="bi bi-building-add" aria-hidden="true"></i> New Account
+                </button>
+            </div>
+
+            <!-- Account cards -->
+            <div class="nsw-acct-grid">
+                @foreach (var n in SearchedAccounts)
+                {
+                    var sel = _s1.AccountId is not null && _s1.AccountName == n.Name;
+                    <button class="nsw-acct-card @(sel ? "nsw-acct-card--sel" : "")"
+                            @onclick="() => SelectAccount(n)">
+                        <div class="nsw-acct-card-icon nsw-acct-@n.Type.ToLower()">
+                            <i class="bi @(n.Type=="Personal" ? "bi-person" : "bi-building")" aria-hidden="true"></i>
+                        </div>
+                        <div class="nsw-acct-card-body">
+                            <div class="nsw-acct-name">@n.Name</div>
+                            <div class="nsw-acct-meta">
+                                <span class="nsw-acct-badge">@n.Type</span>
+                                @if (!string.IsNullOrEmpty(n.Industry))
+                                {
+                                    <span class="nsw-acct-ind">@n.Industry</span>
+                                }
+                            </div>
+                        </div>
+                        @if (sel)
+                        {
+                            <i class="bi bi-check-circle-fill nsw-acct-check" aria-hidden="true"></i>
+                        }
+                    </button>
+                }
+                @if (!SearchedAccounts.Any())
+                {
+                    <div class="nsw-empty"><i class="bi bi-search" aria-hidden="true"></i> No accounts match "@_s1.SearchText".</div>
+                }
+            </div>
+        </div>;
+
+    /* ════════════════════════════════════════════════════════════════
+       STEP 2 — LINE OF BUSINESS
+    ════════════════════════════════════════════════════════════════ */
+    sealed class Step2Model
+    {
+        public string Lob     { get; set; } = "";
+        public string SubLine { get; set; } = "";
+    }
+    Step2Model _s2 = new();
+
+    record LobCard(string Key, string Label, string Icon, string Color, string[] SubLines);
+
+    readonly LobCard[] _lobCards =
+    [
+        new("General Liability",   "General Liability",   "bi-shield",         "#2563EB", ["Commercial General Liability","Products-Completed Ops","Premises Ops"]),
+        new("Commercial Property", "Commercial Property", "bi-building",       "#7C3AED", ["Building Only","Contents Only","Building & Contents","BOP"]),
+        new("Commercial Auto",     "Commercial Auto",     "bi-truck",          "#D97706", ["Business Auto","Hired & Non-Owned","Fleet Auto"]),
+        new("Workers Comp",        "Workers Comp",        "bi-person-badge",   "#059669", ["Standard WC","USL&H","Employers Liability"]),
+        new("Umbrella / Excess",   "Umbrella / Excess",   "bi-umbrella",       "#DC2626", ["Commercial Umbrella","Excess Liability"]),
+        new("Professional Liab.",  "Professional Liab.",  "bi-briefcase",      "#0891B2", ["E&O","D&O","Cyber","EPLI"]),
+        new("Home / Dwelling",     "Home / Dwelling",     "bi-house",          "#65A30D", ["Homeowners","Dwelling Fire","Renters"]),
+        new("Personal Auto",       "Personal Auto",       "bi-car-front",      "#F59E0B", ["Personal Auto","Motorcycle","Collector Car"]),
+    ];
+
+    RenderFragment StepLob() =>
+        @<div class="nsw-step-wrap">
+            <div class="nsw-step-hdr">
+                <div class="nsw-step-num">2</div>
+                <div>
+                    <div class="nsw-step-title">Line of Business</div>
+                    <div class="nsw-step-sub">Select the primary line of business for this submission.</div>
+                </div>
+            </div>
+
+            <div class="nsw-lob-grid">
+                @foreach (var card in _lobCards)
+                {
+                    var sel = _s2.Lob == card.Key;
+                    <button class="nsw-lob-card @(sel ? "nsw-lob-card--sel" : "")"
+                            style="--lob-color:@card.Color"
+                            @onclick="() => { _s2.Lob = card.Key; _s2.SubLine = string.Empty; }">
+                        <div class="nsw-lob-icon"><i class="bi @card.Icon" aria-hidden="true"></i></div>
+                        <div class="nsw-lob-label">@card.Label</div>
+                        @if (sel) { <i class="bi bi-check-circle-fill nsw-lob-check" aria-hidden="true"></i> }
+                    </button>
+                }
+            </div>
+
+            @if (!string.IsNullOrEmpty(_s2.Lob))
+            {
+                var card = _lobCards.First(c => c.Key == _s2.Lob);
+                <div class="nsw-subline-panel">
+                    <div class="nsw-subline-label">Sub-line / Coverage Type <span class="nsw-optional">(optional)</span></div>
+                    <div class="nsw-subline-pills">
+                        @foreach (var sl in card.SubLines)
+                        {
+                            <button class="nsw-subline-pill @(_s2.SubLine == sl ? "nsw-subline-pill--sel" : "")"
+                                    @onclick="() => _s2.SubLine = _s2.SubLine == sl ? string.Empty : sl">@sl</button>
+                        }
+                    </div>
+                </div>
+            }
+        </div>;
+
+    /* ════════════════════════════════════════════════════════════════
+       STEP 3 — SUBMISSION DETAILS
+    ════════════════════════════════════════════════════════════════ */
+    sealed class Step3Model
+    {
+        public DateTime EffectiveDate   { get; set; }
+        public DateTime ExpirationDate  { get; set; }
+        public string   Priority        { get; set; } = "Standard";
+        public decimal  TargetPremium   { get; set; }
+        public string   NamedInsured    { get; set; } = "";
+        public string   RiskState       { get; set; } = "TX";
+        public string   Description     { get; set; } = "";
+        public string   InternalNotes   { get; set; } = "";
+        public Guid?    AssignedToUserId{ get; set; }
+        public string   AssignedToName  { get; set; } = "";
+        public string   CsrName         { get; set; } = "";
+        public bool     IsRush          { get; set; }
+    }
+    Step3Model _s3 = new();
+
+    readonly string[] _priorities  = ["Standard","High","Urgent","Low"];
+    readonly string[] _states      = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN",
+                                       "IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV",
+                                       "NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN",
+                                       "TX","UT","VT","VA","WA","WV","WI","WY"];
+    readonly string[] _producers   = ["Thornton & Associates","Pacific Bridge Insurance","Allied Risk Group","Midwest Coverage Partners"];
+    readonly string[] _csrs        = ["Maria Santos","James Patel","Chen Li","Aisha Williams"];
+
+    string _producer = "";
+
+    RenderFragment StepDetails() =>
+        @<div class="nsw-step-wrap">
+            <div class="nsw-step-hdr">
+                <div class="nsw-step-num">3</div>
+                <div>
+                    <div class="nsw-step-title">Submission Details</div>
+                    <div class="nsw-step-sub">Enter coverage dates, priority, risk details, and team assignment.</div>
+                </div>
+            </div>
+
+            <div class="nsw-form-grid">
+
+                <!-- Effective / Expiration -->
+                <div class="nsw-field">
+                    <label class="nsw-label nsw-required">Effective Date</label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_s3.EffectiveDate" Format="MM/dd/yyyy"
+                                  CssClass="nsw-datepicker" Placeholder="MM/DD/YYYY" />
+                </div>
+                <div class="nsw-field">
+                    <label class="nsw-label nsw-required">Expiration Date</label>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_s3.ExpirationDate" Format="MM/dd/yyyy"
+                                  CssClass="nsw-datepicker" Min="_s3.EffectiveDate.AddDays(1)"
+                                  Placeholder="MM/DD/YYYY" />
+                </div>
+
+                <!-- Priority -->
+                <div class="nsw-field">
+                    <label class="nsw-label nsw-required">Priority</label>
+                    <div class="nsw-priority-pills">
+                        @foreach (var p in _priorities)
+                        {
+                            <button class="nsw-pri-pill nsw-pri-@p.ToLower() @(_s3.Priority == p ? "nsw-pri-pill--sel" : "")"
+                                    @onclick="() => _s3.Priority = p">@p</button>
+                        }
+                    </div>
+                </div>
+
+                <!-- Rush toggle -->
+                <div class="nsw-field nsw-field-center">
+                    <label class="nsw-label">Rush Submission</label>
+                    <label class="nsw-toggle-wrap">
+                        <SfSwitch @bind-Checked="_s3.IsRush" />
+                        <span class="nsw-toggle-lbl">@(_s3.IsRush ? "Yes — mark as rush" : "No")</span>
+                    </label>
+                </div>
+
+                <!-- Named Insured -->
+                <div class="nsw-field nsw-span-2">
+                    <label class="nsw-label">Named Insured <span class="nsw-optional">(if different from account)</span></label>
+                    <input class="e-input" @bind="_s3.NamedInsured" placeholder="Full legal name of insured…" />
+                </div>
+
+                <!-- State -->
+                <div class="nsw-field">
+                    <label class="nsw-label">Primary Risk State</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="@_states"
+                                    @bind-Value="_s3.RiskState" CssClass="nsw-ddl"
+                                    Placeholder="Select state…" AllowFiltering="true" />
+                </div>
+
+                <!-- Target Premium -->
+                <div class="nsw-field">
+                    <label class="nsw-label">Target Premium <span class="nsw-optional">(optional)</span></label>
+                    <div class="nsw-input-prefix-wrap">
+                        <span class="nsw-input-prefix">$</span>
+                        <SfNumericTextBox TValue="decimal" @bind-Value="_s3.TargetPremium"
+                                          Format="n0" Min="0" Placeholder="0"
+                                          CssClass="nsw-numeric" />
+                    </div>
+                </div>
+
+                <!-- Producer -->
+                <div class="nsw-field">
+                    <label class="nsw-label">Producer</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="@_producers"
+                                    @bind-Value="_producer" CssClass="nsw-ddl"
+                                    Placeholder="Select producer…" />
+                </div>
+
+                <!-- CSR -->
+                <div class="nsw-field">
+                    <label class="nsw-label">Assigned CSR</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="@_csrs"
+                                    @bind-Value="_s3.CsrName" CssClass="nsw-ddl"
+                                    Placeholder="Select CSR…" />
+                </div>
+
+                <!-- Description -->
+                <div class="nsw-field nsw-span-2">
+                    <label class="nsw-label">Submission Description <span class="nsw-optional">(optional)</span></label>
+                    <textarea class="e-input nsw-textarea" rows="3" @bind="_s3.Description"
+                              placeholder="Brief description of the risk, coverage needs, or special considerations…"></textarea>
+                </div>
+
+                <!-- Internal Notes -->
+                <div class="nsw-field nsw-span-2">
+                    <label class="nsw-label">Internal Notes <span class="nsw-optional">(internal only — not shared with carrier)</span></label>
+                    <textarea class="e-input nsw-textarea" rows="2" @bind="_s3.InternalNotes"
+                              placeholder="Notes for internal team members only…"></textarea>
+                </div>
+
+            </div>
+        </div>;
+
+    /* ════════════════════════════════════════════════════════════════
+       STEP 4 — MARKETS
+    ════════════════════════════════════════════════════════════════ */
+    record CarrierRow(string Id, string Name, string AMBest, string[] AppetiteLobs, bool Preferred, string[] States);
+
+    readonly CarrierRow[] _carriers =
+    [
+        new("c-01","Travelers Indemnity",      "A++", ["General Liability","Commercial Property","Commercial Auto","Workers Comp","Umbrella / Excess"], true,  ["TX","CA","FL","NY","IL"]),
+        new("c-02","Hartford Fire & Casualty", "A+",  ["General Liability","Commercial Property","Commercial Auto","Workers Comp"],                    true,  ["TX","CA","FL","NY"]),
+        new("c-03","Liberty Mutual Insurance", "A",   ["General Liability","Commercial Property","Commercial Auto","Workers Comp","Umbrella / Excess"], true,  ["TX","CA","FL"]),
+        new("c-04","Zurich American",          "A+",  ["General Liability","Commercial Property","Commercial Auto","Umbrella / Excess","Professional Liab."], false, ["TX","NY","IL"]),
+        new("c-05","CNA Insurance",            "A",   ["General Liability","Commercial Property","Professional Liab.","Umbrella / Excess"],             false, ["TX","CA","NY"]),
+        new("c-06","Markel Insurance",         "A",   ["Professional Liab.","Umbrella / Excess","General Liability"],                                  false, ["TX","CA","FL","NY"]),
+        new("c-07","EMPLOYERS Ins. Co.",       "A-",  ["Workers Comp"],                                                                                false, ["TX","CA","FL","NV"]),
+        new("c-08","State Auto",               "A-",  ["Home / Dwelling","Personal Auto","General Liability"],                                         false, ["TX","OH","IN","KY"]),
+        new("c-09","Nationwide Insurance",     "A+",  ["General Liability","Commercial Property","Personal Auto","Home / Dwelling"],                   false, ["TX","CA","FL","OH"]),
+        new("c-10","Chubb Insurance",          "A++", ["General Liability","Commercial Property","Umbrella / Excess","Professional Liab."],             true,  ["TX","CA","NY","IL"]),
+    ];
+
+    HashSet<string> _selectedCarrierIds = new();
+
+    void ToggleCarrier(string id)
+    {
+        if (!_selectedCarrierIds.Add(id)) _selectedCarrierIds.Remove(id);
+    }
+
+    IEnumerable<CarrierRow> SuggestedCarriers =>
+        string.IsNullOrEmpty(_s2.Lob)
+            ? _carriers
+            : _carriers.Where(c => c.AppetiteLobs.Contains(_s2.Lob));
+
+    IEnumerable<CarrierRow> OtherCarriers =>
+        _carriers.Except(SuggestedCarriers);
+
+    RenderFragment StepMarkets() =>
+        @<div class="nsw-step-wrap">
+            <div class="nsw-step-hdr">
+                <div class="nsw-step-num">4</div>
+                <div>
+                    <div class="nsw-step-title">Target Markets</div>
+                    <div class="nsw-step-sub">Select the carriers to submit to. Highlighted carriers have appetite for <strong>@_s2.Lob</strong>.</div>
+                </div>
+            </div>
+
+            <div class="nsw-mkt-summary">
+                <span class="nsw-mkt-count">@_selectedCarrierIds.Count selected</span>
+                @if (_selectedCarrierIds.Any())
+                {
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _selectedCarrierIds.Clear()">
+                        Clear all
+                    </button>
+                }
+            </div>
+
+            <div class="nsw-carrier-section-label">Recommended for @(_s2.Lob)</div>
+            <div class="nsw-carrier-grid">
+                @foreach (var c in SuggestedCarriers.OrderByDescending(c => c.Preferred))
+                {
+                    var sel = _selectedCarrierIds.Contains(c.Id);
+                    <button class="nsw-carrier-card @(sel ? "nsw-carrier-card--sel" : "")"
+                            @onclick="() => ToggleCarrier(c.Id)">
+                        <div class="nsw-carrier-hdr">
+                            <span class="nsw-carrier-name">@c.Name</span>
+                            @if (c.Preferred) { <span class="nsw-carrier-pref">Preferred</span> }
+                            @if (sel) { <i class="bi bi-check-circle-fill nsw-carrier-check" aria-hidden="true"></i> }
+                        </div>
+                        <div class="nsw-carrier-meta">
+                            <span class="nsw-ambest">AM Best: @c.AMBest</span>
+                            <span class="nsw-carrier-states">@string.Join(", ", c.States.Take(3))@(c.States.Length > 3 ? "…" : "")</span>
+                        </div>
+                    </button>
+                }
+            </div>
+
+            @if (OtherCarriers.Any())
+            {
+                <div class="nsw-carrier-section-label nsw-section-other">Other Carriers</div>
+                <div class="nsw-carrier-grid">
+                    @foreach (var c in OtherCarriers)
+                    {
+                        var sel = _selectedCarrierIds.Contains(c.Id);
+                        <button class="nsw-carrier-card nsw-carrier-card--dim @(sel ? "nsw-carrier-card--sel" : "")"
+                                @onclick="() => ToggleCarrier(c.Id)">
+                            <div class="nsw-carrier-hdr">
+                                <span class="nsw-carrier-name">@c.Name</span>
+                                @if (sel) { <i class="bi bi-check-circle-fill nsw-carrier-check" aria-hidden="true"></i> }
+                            </div>
+                            <div class="nsw-carrier-meta">
+                                <span class="nsw-ambest">AM Best: @c.AMBest</span>
+                            </div>
+                        </button>
+                    }
+                </div>
+            }
+        </div>;
+
+    /* ════════════════════════════════════════════════════════════════
+       STEP 5 — DOCUMENTS
+    ════════════════════════════════════════════════════════════════ */
+    sealed class AcordForm
+    {
+        public string Id      { get; set; } = "";
+        public string Number  { get; set; } = "";
+        public string Title   { get; set; } = "";
+        public string Lobs    { get; set; } = "";
+        public bool   Required{ get; set; }
+    }
+
+    readonly AcordForm[] _acordForms =
+    [
+        new() { Id="af-125", Number="ACORD 125", Title="Commercial Insurance Application",      Lobs="All",                  Required=true  },
+        new() { Id="af-126", Number="ACORD 126", Title="Commercial General Liability Section",  Lobs="General Liability",    Required=false },
+        new() { Id="af-140", Number="ACORD 140", Title="Property Section",                      Lobs="Commercial Property",  Required=false },
+        new() { Id="af-163", Number="ACORD 163", Title="Workers Compensation Application",      Lobs="Workers Comp",         Required=false },
+        new() { Id="af-137", Number="ACORD 137", Title="Commercial Auto Section",               Lobs="Commercial Auto",      Required=false },
+        new() { Id="af-131", Number="ACORD 131", Title="Excess / Umbrella Application",         Lobs="Umbrella / Excess",    Required=false },
+        new() { Id="af-828", Number="ACORD 828", Title="Cyber & Data Breach Application",       Lobs="Professional Liab.",   Required=false },
+    ];
+
+    HashSet<string> _selectedFormIds = new();
+    List<string>    _uploadedFiles   = new();
+
+    void ToggleForm(string id) { if (!_selectedFormIds.Add(id)) _selectedFormIds.Remove(id); }
+
+    RenderFragment StepDocuments() =>
+        @<div class="nsw-step-wrap">
+            <div class="nsw-step-hdr">
+                <div class="nsw-step-num">5</div>
+                <div>
+                    <div class="nsw-step-title">ACORD Forms &amp; Documents</div>
+                    <div class="nsw-step-sub">Select required ACORD forms and attach any supporting documents.</div>
+                </div>
+            </div>
+
+            <div class="nsw-docs-section-label">ACORD Forms</div>
+            <div class="nsw-forms-list">
+                @foreach (var f in _acordForms)
+                {
+                    var sel = _selectedFormIds.Contains(f.Id);
+                    <div class="nsw-form-row @(sel ? "nsw-form-row--sel" : "")">
+                        <label class="nsw-form-check">
+                            <input type="checkbox" checked="@sel" @onchange="() => ToggleForm(f.Id)" />
+                            <span class="nsw-form-num">@f.Number</span>
+                        </label>
+                        <div class="nsw-form-info">
+                            <div class="nsw-form-title">@f.Title</div>
+                            <div class="nsw-form-lobs">@f.Lobs</div>
+                        </div>
+                        @if (f.Required) { <span class="nsw-form-req">Required</span> }
+                        <button class="um-btn um-btn-ghost um-btn-xs nsw-form-preview"
+                                @onclick='() => _toast.ShowAsync(new ToastModel{ Title="Form Preview", Content=$"{f.Number} preview coming soon.", CssClass="e-toast-info" })'>
+                            <i class="bi bi-eye" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                }
+            </div>
+
+            <div class="nsw-docs-section-label nsw-section-other">Upload Supporting Documents</div>
+            <div class="nsw-upload-zone"
+                 @onclick='() => _toast.ShowAsync(new ToastModel{ Title="Upload", Content="File upload dialog coming soon.", CssClass="e-toast-info" })'>
+                <i class="bi bi-cloud-upload nsw-upload-icon" aria-hidden="true"></i>
+                <span class="nsw-upload-text">Click or drag files here to upload</span>
+                <span class="nsw-upload-sub">PDF, Word, Excel, images — max 25 MB each</span>
+            </div>
+
+            @if (_uploadedFiles.Any())
+            {
+                <div class="nsw-uploaded-list">
+                    @foreach (var f in _uploadedFiles)
+                    {
+                        <div class="nsw-uploaded-file">
+                            <i class="bi bi-file-earmark" aria-hidden="true"></i>
+                            <span>@f</span>
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _uploadedFiles.Remove(f)">
+                                <i class="bi bi-x" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    }
+                </div>
+            }
+        </div>;
+
+    /* ════════════════════════════════════════════════════════════════
+       STEP 6 — REVIEW & SUBMIT
+    ════════════════════════════════════════════════════════════════ */
+    RenderFragment StepReview() =>
+        @<div class="nsw-step-wrap">
+            <div class="nsw-step-hdr">
+                <div class="nsw-step-num">6</div>
+                <div>
+                    <div class="nsw-step-title">Review &amp; Submit</div>
+                    <div class="nsw-step-sub">Verify all details before creating the submission.</div>
+                </div>
+            </div>
+
+            <div class="nsw-review-grid">
+
+                <!-- Account -->
+                <div class="nsw-review-card">
+                    <div class="nsw-review-card-hdr">
+                        <i class="bi bi-building" aria-hidden="true"></i> Account
+                        <button class="um-btn um-btn-ghost um-btn-xs nsw-edit-btn" @onclick="() => _step = 0">Edit</button>
+                    </div>
+                    <div class="nsw-review-row"><span class="nsw-review-label">Account</span><span class="nsw-review-val">@(_s1.AccountName.Length > 0 ? _s1.AccountName : "—")</span></div>
+                    <div class="nsw-review-row"><span class="nsw-review-label">Type</span><span class="nsw-review-val">@(_s1.AccountType.Length > 0 ? _s1.AccountType : "—")</span></div>
+                </div>
+
+                <!-- LOB -->
+                <div class="nsw-review-card">
+                    <div class="nsw-review-card-hdr">
+                        <i class="bi bi-layers" aria-hidden="true"></i> Line of Business
+                        <button class="um-btn um-btn-ghost um-btn-xs nsw-edit-btn" @onclick="() => _step = 1">Edit</button>
+                    </div>
+                    <div class="nsw-review-row"><span class="nsw-review-label">LOB</span><span class="nsw-review-val">@(_s2.Lob.Length > 0 ? _s2.Lob : "—")</span></div>
+                    @if (!string.IsNullOrEmpty(_s2.SubLine))
+                    {
+                        <div class="nsw-review-row"><span class="nsw-review-label">Sub-line</span><span class="nsw-review-val">@_s2.SubLine</span></div>
+                    }
+                </div>
+
+                <!-- Details -->
+                <div class="nsw-review-card nsw-review-wide">
+                    <div class="nsw-review-card-hdr">
+                        <i class="bi bi-clipboard2-check" aria-hidden="true"></i> Submission Details
+                        <button class="um-btn um-btn-ghost um-btn-xs nsw-edit-btn" @onclick="() => _step = 2">Edit</button>
+                    </div>
+                    <div class="nsw-review-2col">
+                        <div class="nsw-review-row"><span class="nsw-review-label">Effective</span><span class="nsw-review-val">@_s3.EffectiveDate.ToString("MM/dd/yyyy")</span></div>
+                        <div class="nsw-review-row"><span class="nsw-review-label">Expiration</span><span class="nsw-review-val">@_s3.ExpirationDate.ToString("MM/dd/yyyy")</span></div>
+                        <div class="nsw-review-row"><span class="nsw-review-label">Priority</span><span class="nsw-review-val">
+                            <span class="nsw-rev-pri nsw-pri-@_s3.Priority.ToLower()">@_s3.Priority</span>
+                            @if (_s3.IsRush) { <span class="nsw-rev-rush">Rush</span> }
+                        </span></div>
+                        <div class="nsw-review-row"><span class="nsw-review-label">State</span><span class="nsw-review-val">@_s3.RiskState</span></div>
+                        @if (_s3.TargetPremium > 0)
+                        {
+                            <div class="nsw-review-row"><span class="nsw-review-label">Target Premium</span><span class="nsw-review-val">@_s3.TargetPremium.ToString("C0")</span></div>
+                        }
+                        @if (!string.IsNullOrEmpty(_producer))
+                        {
+                            <div class="nsw-review-row"><span class="nsw-review-label">Producer</span><span class="nsw-review-val">@_producer</span></div>
+                        }
+                        @if (!string.IsNullOrEmpty(_s3.CsrName))
+                        {
+                            <div class="nsw-review-row"><span class="nsw-review-label">CSR</span><span class="nsw-review-val">@_s3.CsrName</span></div>
+                        }
+                    </div>
+                    @if (!string.IsNullOrEmpty(_s3.Description))
+                    {
+                        <div class="nsw-review-row nsw-review-full"><span class="nsw-review-label">Description</span><span class="nsw-review-val">@_s3.Description</span></div>
+                    }
+                </div>
+
+                <!-- Markets -->
+                <div class="nsw-review-card">
+                    <div class="nsw-review-card-hdr">
+                        <i class="bi bi-bank" aria-hidden="true"></i> Markets (@_selectedCarrierIds.Count)
+                        <button class="um-btn um-btn-ghost um-btn-xs nsw-edit-btn" @onclick="() => _step = 3">Edit</button>
+                    </div>
+                    @if (_selectedCarrierIds.Any())
+                    {
+                        @foreach (var id in _selectedCarrierIds)
+                        {
+                            var c = _carriers.FirstOrDefault(x => x.Id == id);
+                            if (c is not null)
+                            {
+                                <div class="nsw-review-row">
+                                    <span class="nsw-review-label">@c.Name</span>
+                                    <span class="nsw-review-val nsw-rev-ambest">@c.AMBest</span>
+                                </div>
+                            }
+                        }
+                    }
+                    else
+                    {
+                        <div class="nsw-review-none">No markets selected — you can add them after creation.</div>
+                    }
+                </div>
+
+                <!-- Documents -->
+                <div class="nsw-review-card">
+                    <div class="nsw-review-card-hdr">
+                        <i class="bi bi-paperclip" aria-hidden="true"></i> Documents
+                        <button class="um-btn um-btn-ghost um-btn-xs nsw-edit-btn" @onclick="() => _step = 4">Edit</button>
+                    </div>
+                    @if (_selectedFormIds.Any())
+                    {
+                        @foreach (var id in _selectedFormIds)
+                        {
+                            var f = _acordForms.FirstOrDefault(x => x.Id == id);
+                            if (f is not null)
+                            {
+                                <div class="nsw-review-row"><span class="nsw-review-label">@f.Number</span><span class="nsw-review-val nsw-rev-form-title">@f.Title</span></div>
+                            }
+                        }
+                    }
+                    else
+                    {
+                        <div class="nsw-review-none">No ACORD forms selected.</div>
+                    }
+                </div>
+
+            </div>
+
+            @if (!CanAdvance() || _s1.AccountId is null || string.IsNullOrEmpty(_s2.Lob))
+            {
+                <div class="nsw-review-warn">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    Please go back and complete all required fields before submitting.
+                </div>
+            }
+
+        </div>;
+}

@@ -1,41 +1,200 @@
 @page "/finance/bank-reconciliation"
+@namespace Ams.Web.Components.Pages
 @inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
 @using Ams.Application.Common.Dtos
-@using Ams.Web.Services
-@using Syncfusion.Blazor.Grids
-@using Syncfusion.Blazor.Inputs
-@using Syncfusion.Blazor.Buttons
 
-<h3>Bank Reconciliation</h3>
+<PageTitle>Bank Reconciliation</PageTitle>
 
-<div class="mb-3 d-flex gap-2">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="300px" />
-    <SfButton OnClick="LoadAsync">Search</SfButton>
+<AppPageHeader Title="Bank Reconciliation"
+               Subtitle="Reconcile bank statements with ledger records"
+               Icon="bi-bank2">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "fa-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Reconciliation
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── Search & Filter ──────────────────────────────────────────────────── -->
+<div class="fin-toolbar">
+    <div class="fin-search-box">
+        <i class="bi bi-search fin-search-icon" aria-hidden="true"></i>
+        <input class="e-input fin-search-input"
+               placeholder="Search reconciliations…"
+               @bind="_searchTerm"
+               @bind:event="oninput"
+               @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" />
+    </div>
+    <div class="fin-filter-buttons">
+        <button class="um-btn um-btn-ghost um-btn-sm @(_filterActive ? "um-btn-active" : "")"
+                @onclick="() => _filterActive = !_filterActive">
+            <i class="bi bi-funnel" aria-hidden="true"></i> Filter
+        </button>
+    </div>
 </div>
 
-<SfGrid DataSource="_items" AllowPaging="true">
-    <GridPageSettings PageSize="10" />
-    <GridColumns>
-        <GridColumn Field="@nameof(BankReconciliationDto.ReconciliationId)" HeaderText="ID" Width="220" />
-        <GridColumn Field="@nameof(BankReconciliationDto.BankAccountCode)" HeaderText="Bank Account" Width="160" />
-        <GridColumn Field="@nameof(BankReconciliationDto.StatementDate)" HeaderText="Statement Date" Width="140" />
-        <GridColumn Field="@nameof(BankReconciliationDto.StatementBalance)" HeaderText="Statement Balance" Format="C2" Width="160" />
-        <GridColumn Field="@nameof(BankReconciliationDto.BookBalance)" HeaderText="Book Balance" Format="C2" Width="140" />
-        <GridColumn Field="@nameof(BankReconciliationDto.StatusCode)" HeaderText="Status" Width="120" />
-        <GridColumn Field="@nameof(BankReconciliationDto.CreatedDateUtc)" HeaderText="Created" Width="160" />
-    </GridColumns>
-</SfGrid>
+@if (_filterActive)
+{
+    <div class="fin-filter-panel">
+        <div class="fin-filter-group">
+            <label class="fin-filter-label">Status</label>
+            <select class="e-input" @bind="_filterStatus">
+                <option value="">All</option>
+                <option value="Reconciled">Reconciled</option>
+                <option value="Pending">Pending</option>
+            </select>
+        </div>
+    </div>
+}
+
+<!-- ── KPI Cards ──────────────────────────────────────────────────────── -->
+@if (_stats is not null)
+{
+    <div class="fin-kpi-strip">
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #dbeafe; color: #1d4ed8;"><i class="bi bi-bank-fill" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.TotalReconciliations</div>
+                <div class="fin-kpi-label">Total Reconciliations</div>
+            </div>
+        </div>
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #d1fae5; color: #047857;"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.ReconciledCount</div>
+                <div class="fin-kpi-label">Reconciled</div>
+            </div>
+        </div>
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #fef3c7; color: #b45309;"><i class="bi bi-hourglass-split" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.PendingCount</div>
+                <div class="fin-kpi-label">Pending</div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- ── Content ──────────────────────────────────────────────────────── -->
+@if (_error is not null)
+{
+    <div class="fin-alert fin-alert-warning">
+        <div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></div>
+        <div class="fin-alert-body">
+            <div class="fin-alert-title">⚠️ Database Schema Issue</div>
+            <p>Finance schema initialization required. Run: <strong>sql/01_Finance_Schema.sql</strong></p>
+        </div>
+    </div>
+}
+else if (_loading)
+{
+    <div class="fin-loading">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading Bank Reconciliations…</span>
+    </div>
+}
+else if (_items?.Count == 0)
+{
+    <div class="fin-empty-state">
+        <i class="bi bi-inbox fin-empty-icon" aria-hidden="true"></i>
+        <h3>No Reconciliations Found</h3>
+        <p>No bank reconciliations have been created yet.</p>
+    </div>
+}
+else
+{
+    <div class="fin-grid-container">
+        <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="600px">
+            <GridPageSettings PageSize="12"></GridPageSettings>
+            <GridColumns>
+                <GridColumn Field="@nameof(BankReconciliationDto.BankAccountNumber)" HeaderText="Bank Account" Width="140" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(BankReconciliationDto.BankName)" HeaderText="Bank Name" Width="140"></GridColumn>
+                <GridColumn Field="@nameof(BankReconciliationDto.BankStatementDate)" HeaderText="Statement Date" Type="ColumnType.Date" Format="d" Width="130" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(BankReconciliationDto.BankBalance)" HeaderText="Bank Balance" Format="C2" Width="130" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(BankReconciliationDto.BookBalance)" HeaderText="Book Balance" Format="C2" Width="130" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(BankReconciliationDto.Discrepancy)" HeaderText="Variance" Format="C2" Width="110" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(BankReconciliationDto.StatusCode)" HeaderText="Status" Width="100" AllowSorting="true">
+                    <Template>
+                        @{
+                            var recon = context as BankReconciliationDto;
+                            var badgeClass = recon?.StatusCode switch
+                            {
+                                "Reconciled" => "fin-badge-success",
+                                "Pending" => "fin-badge-warning",
+                                _ => "fin-badge-secondary"
+                            };
+                        }
+                        <span class="fin-badge @badgeClass">@recon?.StatusCode</span>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
 
 @code {
-    private List<BankReconciliationDto>? _items;
-    private string? _searchTerm;
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private string? _searchTerm;
+    private string _filterStatus = "";
+    private bool _filterActive = false;
+    private bool _loading = false;
+    private List<BankReconciliationDto>? _items;
+    private string? _error;
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private class Stats
+    {
+        public int TotalReconciliations { get; set; }
+        public int ReconciledCount { get; set; }
+        public int PendingCount { get; set; }
+    }
+
+    private Stats? _stats;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home", "/"),
+            new("Finance", "/finance"),
+            new("Bank Reconciliation", "/finance/bank-reconciliation"));
+        await LoadAsync();
+    }
 
     private async Task LoadAsync()
     {
-        var result = await Api.SearchBankReconciliationsAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        _loading = true;
+        _error = null;
+        _items = null;
+        try
+        {
+            var result = await Api.SearchBankReconciliationsAsync(_tenantId, _searchTerm);
+            _items = result?.Items.ToList() ?? [];
+
+            if (!string.IsNullOrEmpty(_filterStatus))
+                _items = _items.Where(x => x.StatusCode == _filterStatus).ToList();
+
+            _stats = new Stats
+            {
+                TotalReconciliations = _items.Count,
+                ReconciledCount = _items.Count(x => x.StatusCode == "Reconciled"),
+                PendingCount = _items.Count(x => x.StatusCode == "Pending")
+            };
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            if (ex.Message.Contains("Invalid column name") || ex.Message.Contains("BankReconciliation"))
+            {
+                _error = "Database schema mismatch. Please ensure 00_schema_migration.sql has been applied to your database. See db/README.md for setup instructions.";
+            }
+            _items = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 }

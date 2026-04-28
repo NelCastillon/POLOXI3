@@ -1,0 +1,635 @@
+﻿@page "/workbench/producer2"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject IProducerWorkbenchService WorkbenchService
+@inject ILeadService LeadService
+
+@using Ams.Application.Abstractions.Services
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Leads
+
+<PageTitle>Producer Workbench</PageTitle>
+
+<AppPageHeader Title="Producer Workbench"
+               Subtitle="Manage leads, opportunities, and sales pipeline"
+               Icon="bi-person-badge">
+    <Actions>
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="RefreshAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "pw-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenNewLeadDrawer">
+            <i class="bi bi-plus-circle" aria-hidden="true"></i> New Lead
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pw-container">
+    @if (_loading && _workbench is null)
+    {
+        <div class="pw-spinner"><i class="bi bi-hourglass-split" aria-hidden="true"></i> Loading…</div>
+    }
+    else if (_workbench is null)
+    {
+        <div class="pw-empty">Unable to load workbench data.</div>
+    }
+    else
+    {
+        <!-- ── KPI strip ──────────────────────────────────────────────── -->
+        <div class="pw-kpi-strip">
+            <div class="pw-kpi-card pw-kpi-blue">
+                <i class="bi bi-person-plus pw-kpi-icon" aria-hidden="true"></i>
+                <div class="pw-kpi-val">@_workbench.ActiveLeads</div>
+                <div class="pw-kpi-lbl">Active Leads</div>
+            </div>
+            <div class="pw-kpi-card pw-kpi-indigo">
+                <i class="bi bi-trophy pw-kpi-icon" aria-hidden="true"></i>
+                <div class="pw-kpi-val">@_workbench.OpenOpportunities</div>
+                <div class="pw-kpi-lbl">Open Opportunities</div>
+            </div>
+            <div class="pw-kpi-card pw-kpi-emerald">
+                <i class="bi bi-graph-up-arrow pw-kpi-icon" aria-hidden="true"></i>
+                <div class="pw-kpi-val">@_workbench.PipelineValue.ToString("C0")</div>
+                <div class="pw-kpi-lbl">Pipeline Value</div>
+            </div>
+            <div class="pw-kpi-card pw-kpi-amber">
+                <i class="bi bi-percent pw-kpi-icon" aria-hidden="true"></i>
+                <div class="pw-kpi-val">@_workbench.ConversionRate%</div>
+                <div class="pw-kpi-lbl">Win Rate</div>
+            </div>
+        </div>
+
+        <!-- ── Main content grid ──────────────────────────────────────── -->
+        <div class="pw-main-grid">
+
+            <!-- LEFT: My Leads table -->
+            <div class="pw-section">
+                <div class="pw-section-hdr">
+                    <h3><i class="bi bi-person-lines-fill" aria-hidden="true"></i> My Leads</h3>
+                    <button class="pw-link-btn" @onclick="NavigateToLeads">View All →</button>
+                </div>
+                @if (_workbench.MyLeads.Count == 0)
+                {
+                    <div class="pw-empty-state">
+                        <i class="bi bi-person-plus" aria-hidden="true"></i>
+                        <p>No active leads. <button class="pw-inline-btn" @onclick="OpenNewLeadDrawer">Add your first lead →</button></p>
+                    </div>
+                }
+                else
+                {
+                    <div class="pw-table-wrap">
+                        <table class="pw-table">
+                            <thead>
+                                <tr>
+                                    <th>Lead</th>
+                                    <th>Company</th>
+                                    <th>Service</th>
+                                    <th>Score</th>
+                                    <th>Status</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var lead in _workbench.MyLeads)
+                                {
+                                    <tr class="@(lead.DaysSinceActivity > 30 ? "pw-row-stale" : "")">
+                                        <td>
+                                            <div class="pw-name-cell">
+                                                <div class="pw-avatar @AvatarColor(lead.FullName)">@Initials(lead.FullName)</div>
+                                                <div>
+                                                    <div class="pw-item-name">@lead.FullName</div>
+                                                    <div class="pw-item-sub">@lead.LeadNumber</div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td class="pw-td-sm">@(lead.AccountName ?? "—")</td>
+                                        <td class="pw-td-sm">@(lead.InterestedService ?? "—")</td>
+                                        <td>
+                                            @if (lead.Score.HasValue)
+                                            {
+                                                <div class="pw-score-bar-wrap">
+                                                    <div class="pw-score-bar" style="width:@lead.Score%"></div>
+                                                    <span class="pw-score-num">@lead.Score</span>
+                                                </div>
+                                            }
+                                            else { <span class="pw-muted">—</span> }
+                                        </td>
+                                        <td><span class="@LeadStatusBadge(lead.StatusCodeId)">@LeadStatusLabel(lead.StatusCodeId)</span></td>
+                                        <td>
+                                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenLeadDetail(lead)" title="View">
+                                                <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+
+            <!-- RIGHT: Open Opportunities -->
+            <div class="pw-section">
+                <div class="pw-section-hdr">
+                    <h3><i class="bi bi-briefcase" aria-hidden="true"></i> My Opportunities</h3>
+                    <button class="pw-link-btn" @onclick="NavigateToOpportunities">View All →</button>
+                </div>
+                @if (_workbench.MyOpportunities.Count == 0)
+                {
+                    <div class="pw-empty-state">
+                        <i class="bi bi-briefcase" aria-hidden="true"></i>
+                        <p>No open opportunities.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="pw-opp-list">
+                        @foreach (var opp in _workbench.MyOpportunities)
+                        {
+                            <div class="pw-opp-card @(opp.IsClosingSoon ? "pw-opp-urgent" : "")">
+                                <div class="pw-opp-top">
+                                    <span class="pw-opp-name">@opp.OpportunityName</span>
+                                    @if (opp.IsClosingSoon)
+                                    {
+                                        <span class="pw-badge pw-badge-warn"><i class="bi bi-clock" aria-hidden="true"></i> Closing Soon</span>
+                                    }
+                                </div>
+                                <div class="pw-opp-meta">
+                                    <span class="pw-opp-account">@(opp.AccountName ?? "—")</span>
+                                    <span class="pw-opp-stage">@(opp.StageName ?? opp.ForecastCategoryCode ?? "—")</span>
+                                </div>
+                                <div class="pw-opp-foot">
+                                    <span class="pw-opp-amount">@opp.EstimatedAmount.ToString("C0")</span>
+                                    <div class="pw-prob-wrap">
+                                        <div class="pw-prob-bar" style="width:@opp.WinProbability%"></div>
+                                        <span class="pw-prob-num">@opp.WinProbability%</span>
+                                    </div>
+                                    @if (opp.CloseDate.HasValue)
+                                    {
+                                        <span class="pw-opp-date">@opp.CloseDate.Value.ToString("MMM d")</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+        </div>
+
+        <!-- ── Tasks & Activities row ─────────────────────────────────── -->
+        <div class="pw-bottom-grid">
+
+            <!-- My Tasks -->
+            <div class="pw-section">
+                <div class="pw-section-hdr">
+                    <h3><i class="bi bi-check2-square" aria-hidden="true"></i> My Tasks</h3>
+                </div>
+                @if (_workbench.Tasks.Count == 0)
+                {
+                    <div class="pw-empty-state"><i class="bi bi-check-circle" aria-hidden="true"></i><p>All caught up! 🎉</p></div>
+                }
+                else
+                {
+                    <ul class="pw-task-list">
+                        @foreach (var t in _workbench.Tasks)
+                        {
+                            <li class="pw-task-item @(t.IsOverdue ? "pw-overdue" : "")">
+                                <i class="bi @ActivityIcon(t.ActivityTypeCode)" aria-hidden="true"></i>
+                                <div class="pw-task-info">
+                                    <span class="pw-task-subject">@t.Subject</span>
+                                    @if (!string.IsNullOrEmpty(t.RelatedName))
+                                    { <span class="pw-task-related">@t.RelatedName</span> }
+                                </div>
+                                <span class="pw-task-due @(t.IsOverdue ? "pw-due-overdue" : "pw-due-soon")">@t.DueDate.ToString("MMM d")</span>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+
+            <!-- Recent Activities -->
+            <div class="pw-section">
+                <div class="pw-section-hdr">
+                    <h3><i class="bi bi-lightning" aria-hidden="true"></i> Recent Activities</h3>
+                </div>
+                @if (_workbench.RecentActivities.Count == 0)
+                {
+                    <div class="pw-empty-state"><i class="bi bi-lightning" aria-hidden="true"></i><p>No recent activities.</p></div>
+                }
+                else
+                {
+                    <ul class="pw-act-list">
+                        @foreach (var a in _workbench.RecentActivities)
+                        {
+                            <li class="pw-act-item">
+                                <i class="bi @ActivityIcon(a.ActivityTypeCode) pw-act-icon" aria-hidden="true"></i>
+                                <div class="pw-act-info">
+                                    <span class="pw-act-subject">@a.Subject</span>
+                                    @if (!string.IsNullOrEmpty(a.RelatedName))
+                                    { <span class="pw-act-related">@a.RelatedName</span> }
+                                </div>
+                                <div class="pw-act-meta">
+                                    @if (!string.IsNullOrEmpty(a.OutcomeCode))
+                                    { <span class="pw-outcome pw-outcome-@a.OutcomeCode.ToLower()">@a.OutcomeCode</span> }
+                                    <span class="pw-act-time">@a.ActivityDate.ToString("MMM d")</span>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="pw-quick-actions">
+            <button class="um-btn um-btn-outline" @onclick="OpenNewLeadDrawer">
+                <i class="bi bi-person-plus" aria-hidden="true"></i> Add Lead
+            </button>
+            <button class="um-btn um-btn-outline" @onclick="NavigateToOpportunities">
+                <i class="bi bi-briefcase" aria-hidden="true"></i> Opportunities
+            </button>
+            <button class="um-btn um-btn-outline" @onclick="NavigateToForecast">
+                <i class="bi bi-graph-up-arrow" aria-hidden="true"></i> Forecast
+            </button>
+        </div>
+    }
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     NEW LEAD DRAWER
+     ═══════════════════════════════════════════════════════ -->
+<AppCrudDrawer @bind-Visible="_showNewLeadDrawer"
+               Title="New Lead"
+               Icon="bi-person-plus"
+               ConfirmText="Save Lead"
+               IsBusy="_saving"
+               OnConfirm="SaveLeadAsync">
+    <Content>
+        @if (_leadError is not null)
+        {
+            <div class="pw-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_leadError</div>
+        }
+
+        <div class="pw-form-section">Basic Info</div>
+
+        <div class="pw-form-row pw-form-row-2">
+            <div class="pw-form-group">
+                <label class="pw-form-label">First Name <span class="pw-required">*</span></label>
+                <input class="pw-form-input" @bind="_newLead.FirstName" placeholder="Jane" />
+            </div>
+            <div class="pw-form-group">
+                <label class="pw-form-label">Last Name <span class="pw-required">*</span></label>
+                <input class="pw-form-input" @bind="_newLead.LastName" placeholder="Smith" />
+            </div>
+        </div>
+
+        <div class="pw-form-group">
+            <label class="pw-form-label">Company / Account</label>
+            <input class="pw-form-input" @bind="_newLead.AccountName" placeholder="ACME Corp" />
+        </div>
+
+        <div class="pw-form-section">Contact</div>
+
+        <div class="pw-form-row pw-form-row-2">
+            <div class="pw-form-group">
+                <label class="pw-form-label">Email</label>
+                <input class="pw-form-input" type="email" @bind="_newLead.Email" placeholder="jane@acme.com" />
+            </div>
+            <div class="pw-form-group">
+                <label class="pw-form-label">Phone</label>
+                <input class="pw-form-input" type="tel" @bind="_newLead.Phone" placeholder="+1 312 555 0100" />
+            </div>
+        </div>
+
+        <div class="pw-form-section">Interest</div>
+
+        <div class="pw-form-group">
+            <label class="pw-form-label">Interested Service</label>
+            <select class="pw-form-select" @bind="_newLead.InterestedService">
+                <option value="">— Select —</option>
+                <option>Commercial Property &amp; Casualty</option>
+                <option>Employee Benefits</option>
+                <option>Professional Liability</option>
+                <option>Workers Compensation</option>
+                <option>Life Insurance</option>
+                <option>Cyber Liability</option>
+                <option>General Liability</option>
+                <option>Other</option>
+            </select>
+        </div>
+
+        <div class="pw-form-group">
+            <label class="pw-form-label">Lead Number</label>
+            <input class="pw-form-input pw-form-readonly" readonly value="@_newLead.LeadNumber" />
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+<!-- ═══════════════════════════════════════════════════════
+     LEAD DETAIL PANEL
+     ═══════════════════════════════════════════════════════ -->
+@if (_selectedLead is not null)
+{
+    <div class="pw-overlay" @onclick="CloseLeadDetail" role="button" tabindex="-1" aria-label="Close"></div>
+    <div class="pw-detail-panel" role="complementary" aria-label="Lead detail">
+        <div class="pw-detail-hdr">
+            <span class="@LeadStatusBadge(_selectedLead.StatusCodeId)">@LeadStatusLabel(_selectedLead.StatusCodeId)</span>
+            <button class="um-btn um-btn-ghost um-btn-sm" style="margin-left:auto" @onclick="CloseLeadDetail">
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+            </button>
+        </div>
+        <div class="pw-detail-identity">
+            <div class="pw-detail-avatar @AvatarColor(_selectedLead.FullName)">@Initials(_selectedLead.FullName)</div>
+            <div>
+                <h2 class="pw-detail-name">@_selectedLead.FullName</h2>
+                <div class="pw-detail-company">@(_selectedLead.AccountName ?? "No company")</div>
+            </div>
+        </div>
+        <div class="pw-detail-rows">
+            <div class="pw-detail-row"><span class="pw-dr-lbl">Lead #</span><span class="pw-dr-val pw-mono">@_selectedLead.LeadNumber</span></div>
+            @if (!string.IsNullOrEmpty(_selectedLead.Email))
+            { <div class="pw-detail-row"><span class="pw-dr-lbl">Email</span><span class="pw-dr-val pw-mono">@_selectedLead.Email</span></div> }
+            @if (!string.IsNullOrEmpty(_selectedLead.Phone))
+            { <div class="pw-detail-row"><span class="pw-dr-lbl">Phone</span><span class="pw-dr-val pw-mono">@_selectedLead.Phone</span></div> }
+            @if (!string.IsNullOrEmpty(_selectedLead.InterestedService))
+            { <div class="pw-detail-row"><span class="pw-dr-lbl">Service</span><span class="pw-dr-val">@_selectedLead.InterestedService</span></div> }
+            @if (!string.IsNullOrEmpty(_selectedLead.SourceCode))
+            { <div class="pw-detail-row"><span class="pw-dr-lbl">Source</span><span class="pw-dr-val">@_selectedLead.SourceCode</span></div> }
+            @if (_selectedLead.Score.HasValue)
+            { <div class="pw-detail-row"><span class="pw-dr-lbl">Score</span><span class="pw-dr-val">@_selectedLead.Score / 100</span></div> }
+            <div class="pw-detail-row"><span class="pw-dr-lbl">Created</span><span class="pw-dr-val pw-mono">@_selectedLead.CreatedDateUtc.ToString("d")</span></div>
+            @if (_selectedLead.LastActivityDate.HasValue)
+            { <div class="pw-detail-row"><span class="pw-dr-lbl">Last Activity</span><span class="pw-dr-val @(_selectedLead.DaysSinceActivity > 30 ? "pw-stale" : "pw-mono")">@_selectedLead.LastActivityDate.Value.ToString("d")</span></div> }
+        </div>
+        <div class="pw-detail-actions">
+            <button class="um-btn um-btn-outline um-btn-sm" @onclick="NavigateToLeadRecord">
+                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Full Record
+            </button>
+            <button class="um-btn um-btn-outline um-btn-sm" @onclick="NavigateToConvertLead">
+                <i class="bi bi-trophy" aria-hidden="true"></i> Convert
+            </button>
+        </div>
+    </div>
+}
+
+<style>
+/* ── Layout ──────────────────────────────────────────────── */
+.pw-container { padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+.pw-spinner, .pw-empty { padding: 40px; text-align: center; color: #9ca3af; }
+
+/* ── KPI strip ───────────────────────────────────────────── */
+.pw-kpi-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.pw-kpi-card  { background: white; border: 1px solid #e5e7eb; border-radius: 10px; padding: 18px 16px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,.07); }
+.pw-kpi-icon  { font-size: 26px; margin-bottom: 6px; display: block; }
+.pw-kpi-val   { font-size: 22px; font-weight: 700; color: #1f2937; }
+.pw-kpi-lbl   { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
+.pw-kpi-blue   .pw-kpi-icon { color: #3b82f6; }
+.pw-kpi-indigo .pw-kpi-icon { color: #6366f1; }
+.pw-kpi-emerald .pw-kpi-icon{ color: #10b981; }
+.pw-kpi-amber  .pw-kpi-icon { color: #f59e0b; }
+
+/* ── Main grid & bottom grid ─────────────────────────────── */
+.pw-main-grid   { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.pw-bottom-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+
+/* ── Section card ────────────────────────────────────────── */
+.pw-section     { background: white; border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.07); }
+.pw-section-hdr { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #f3f4f6; background: #f9fafb; }
+.pw-section-hdr h3 { margin: 0; font-size: 13px; font-weight: 600; color: #1f2937; display: flex; align-items: center; gap: 6px; }
+.pw-link-btn  { background: none; border: none; font-size: 12px; color: #3b82f6; cursor: pointer; padding: 0; }
+.pw-link-btn:hover { color: #1d4ed8; text-decoration: underline; }
+.pw-inline-btn { background: none; border: none; color: #3b82f6; cursor: pointer; font-size: 13px; padding: 0; }
+
+/* ── Empty state ─────────────────────────────────────────── */
+.pw-empty-state { padding: 24px; text-align: center; color: #9ca3af; font-size: 13px; }
+.pw-empty-state i { font-size: 24px; display: block; margin-bottom: 8px; }
+.pw-empty-state p { margin: 0; }
+
+/* ── Leads table ─────────────────────────────────────────── */
+.pw-table-wrap { overflow-x: auto; }
+.pw-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pw-table th { padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: .4px; border-bottom: 1px solid #f3f4f6; background: #fafafa; }
+.pw-table td { padding: 9px 12px; border-bottom: 1px solid #f8f9fa; color: #374151; vertical-align: middle; }
+.pw-table tr:last-child td { border-bottom: none; }
+.pw-table tr:hover td { background: #f9fafb; }
+.pw-row-stale td { background: #fffbf0; }
+.pw-td-sm { font-size: 12px; color: #6b7280; }
+.pw-muted { color: #d1d5db; }
+
+/* ── Avatar ──────────────────────────────────────────────── */
+.pw-name-cell  { display: flex; align-items: center; gap: 8px; }
+.pw-avatar     { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: white; flex-shrink: 0; }
+.pw-av-blue    { background: #3b82f6; }
+.pw-av-indigo  { background: #6366f1; }
+.pw-av-emerald { background: #10b981; }
+.pw-av-amber   { background: #f59e0b; }
+.pw-av-rose    { background: #f43f5e; }
+.pw-av-violet  { background: #8b5cf6; }
+.pw-item-name  { font-weight: 500; font-size: 13px; }
+.pw-item-sub   { font-size: 11px; color: #9ca3af; }
+
+/* ── Score bar ───────────────────────────────────────────── */
+.pw-score-bar-wrap { display: flex; align-items: center; gap: 4px; }
+.pw-score-bar      { height: 4px; background: #3b82f6; border-radius: 2px; flex-shrink: 0; }
+.pw-score-num      { font-size: 11px; color: #6b7280; }
+
+/* ── Lead status badges ──────────────────────────────────── */
+.pw-status-new        { background: #eff6ff; color: #1d4ed8; padding: 2px 7px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+.pw-status-contacted  { background: #f0fdf4; color: #15803d; padding: 2px 7px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+.pw-status-qualified  { background: #fef9c3; color: #a16207; padding: 2px 7px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+.pw-status-converted  { background: #f3e8ff; color: #6b21a8; padding: 2px 7px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+.pw-status-default    { background: #f3f4f6; color: #374151; padding: 2px 7px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+
+/* ── Opportunity cards ───────────────────────────────────── */
+.pw-opp-list    { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.pw-opp-card    { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: #fafafa; }
+.pw-opp-urgent  { border-left: 3px solid #f59e0b; background: #fffbf0; }
+.pw-opp-top     { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
+.pw-opp-name    { font-weight: 600; font-size: 13px; color: #1f2937; }
+.pw-opp-meta    { display: flex; gap: 12px; font-size: 12px; color: #6b7280; margin-bottom: 8px; }
+.pw-opp-foot    { display: flex; align-items: center; gap: 10px; }
+.pw-opp-amount  { font-weight: 700; font-size: 14px; color: #1f2937; }
+.pw-opp-stage   { font-size: 11px; background: #eff6ff; color: #1d4ed8; padding: 1px 6px; border-radius: 9px; }
+.pw-opp-date    { font-size: 11px; color: #9ca3af; margin-left: auto; }
+.pw-prob-wrap   { display: flex; align-items: center; gap: 4px; }
+.pw-prob-bar    { height: 4px; background: #10b981; border-radius: 2px; }
+.pw-prob-num    { font-size: 11px; color: #6b7280; }
+.pw-badge       { font-size: 10px; padding: 2px 6px; border-radius: 8px; font-weight: 600; display: inline-flex; align-items: center; gap: 3px; }
+.pw-badge-warn  { background: #fef3c7; color: #92400e; }
+
+/* ── Tasks ───────────────────────────────────────────────── */
+.pw-task-list  { list-style: none; margin: 0; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.pw-task-item  { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 6px; font-size: 13px; color: #374151; }
+.pw-task-item:hover { background: #f9fafb; }
+.pw-overdue    { background: #fff7f7 !important; }
+.pw-task-info  { flex: 1; display: flex; flex-direction: column; gap: 1px; overflow: hidden; }
+.pw-task-subject { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pw-task-related { font-size: 11px; color: #6b7280; }
+.pw-task-due   { font-size: 11px; padding: 2px 6px; border-radius: 4px; white-space: nowrap; flex-shrink: 0; }
+.pw-due-soon     { background: #eff6ff; color: #1d4ed8; }
+.pw-due-overdue  { background: #fee2e2; color: #b91c1c; }
+
+/* ── Activities ──────────────────────────────────────────── */
+.pw-act-list  { list-style: none; margin: 0; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.pw-act-item  { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 6px; font-size: 13px; color: #374151; }
+.pw-act-item:hover { background: #f9fafb; }
+.pw-act-icon  { color: #3b82f6; font-size: 12px; flex-shrink: 0; }
+.pw-act-info  { flex: 1; display: flex; flex-direction: column; gap: 1px; overflow: hidden; }
+.pw-act-subject { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pw-act-related { font-size: 11px; color: #6b7280; }
+.pw-act-meta  { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
+.pw-act-time  { font-size: 11px; color: #9ca3af; }
+.pw-outcome   { font-size: 10px; padding: 1px 5px; border-radius: 4px; font-weight: 600; text-transform: uppercase; }
+.pw-outcome-won      { background: #dcfce7; color: #166534; }
+.pw-outcome-positive { background: #eff6ff; color: #1d4ed8; }
+.pw-outcome-sent     { background: #f3f4f6; color: #374151; }
+.pw-outcome-completed{ background: #f0fdf4; color: #15803d; }
+
+/* ── Quick actions ───────────────────────────────────────── */
+.pw-quick-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ── Form (drawer) ───────────────────────────────────────── */
+.pw-form-section { font-size: 11px; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: .6px; padding: 12px 0 6px; border-bottom: 1px solid #f3f4f6; margin-bottom: 12px; }
+.pw-form-row     { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+.pw-form-row-2   { flex-direction: row; }
+.pw-form-group   { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.pw-form-label   { font-size: 12px; font-weight: 600; color: #374151; }
+.pw-required     { color: #ef4444; }
+.pw-form-input   { padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; outline: none; transition: border-color .15s; }
+.pw-form-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.15); }
+.pw-form-select  { padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; background: white; outline: none; }
+.pw-form-readonly { background: #f9fafb; color: #9ca3af; cursor: default; }
+.pw-form-error   { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; border-radius: 6px; padding: 10px 12px; font-size: 13px; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+
+/* ── Detail panel ────────────────────────────────────────── */
+.pw-overlay      { position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 998; }
+.pw-detail-panel { position: fixed; right: 0; top: 0; bottom: 0; width: 360px; background: white; box-shadow: -4px 0 20px rgba(0,0,0,.15); z-index: 999; display: flex; flex-direction: column; overflow-y: auto; }
+.pw-detail-hdr   { display: flex; align-items: center; gap: 8px; padding: 16px; border-bottom: 1px solid #e5e7eb; }
+.pw-detail-identity { display: flex; align-items: center; gap: 12px; padding: 20px 16px 12px; border-bottom: 1px solid #f3f4f6; }
+.pw-detail-avatar{ width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; color: white; flex-shrink: 0; }
+.pw-detail-name  { font-size: 17px; font-weight: 700; color: #1f2937; margin: 0 0 2px; }
+.pw-detail-company { font-size: 13px; color: #6b7280; }
+.pw-detail-rows  { padding: 12px 16px; flex: 1; }
+.pw-detail-row   { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f9fafb; font-size: 13px; }
+.pw-dr-lbl { color: #6b7280; font-weight: 500; }
+.pw-dr-val { color: #1f2937; }
+.pw-detail-actions { padding: 16px; border-top: 1px solid #e5e7eb; display: flex; gap: 8px; flex-wrap: wrap; }
+.pw-stale { color: #dc2626; }
+.pw-mono  { font-family: monospace; }
+
+@@keyframes pw-spin { to { transform: rotate(360deg); } }
+.pw-spin { display: inline-block; animation: pw-spin .8s linear infinite; }
+</style>
+
+@code {
+    private static readonly Guid DevTenantId = new("00000000-0000-0000-0000-000000000001");
+    private static readonly Guid DevUserId   = new("00000000-0000-0000-0000-000000000002");
+
+    private ProducerWorkbenchDto? _workbench;
+    private bool _loading = true;
+
+    // New lead drawer
+    private bool _showNewLeadDrawer;
+    private bool _saving;
+    private string? _leadError;
+    private CreateLeadRequest _newLead = new();
+
+    // Lead detail panel
+    private WorkbenchLeadDto? _selectedLead;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _workbench = await WorkbenchService.GetWorkbenchAsync(DevTenantId, DevUserId);
+        _loading = false;
+    }
+
+    private async Task RefreshAsync() => await LoadAsync();
+
+    private async Task OpenNewLeadDrawer()
+    {
+        _leadError = null;
+        var nextNumber = await WorkbenchService.GetNextLeadNumberAsync(DevTenantId);
+        _newLead = new CreateLeadRequest
+        {
+            TenantId       = DevTenantId,
+            CreatedByUserId = DevUserId,
+            LeadNumber     = nextNumber
+        };
+        _showNewLeadDrawer = true;
+    }
+
+    private async Task SaveLeadAsync()
+    {
+        _leadError = null;
+        if (string.IsNullOrWhiteSpace(_newLead.FirstName) || string.IsNullOrWhiteSpace(_newLead.LastName))
+        {
+            _leadError = "First name and last name are required.";
+            return;
+        }
+        _saving = true;
+        try
+        {
+            await LeadService.CreateAsync(_newLead);
+            _showNewLeadDrawer = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _leadError = $"Failed to save lead: {ex.Message}";
+        }
+        finally { _saving = false; }
+    }
+
+    private void OpenLeadDetail(WorkbenchLeadDto lead) => _selectedLead = lead;
+    private void CloseLeadDetail() => _selectedLead = null;
+    private void NavigateToLeadRecord()  => Nav.NavigateTo($"/crm/leads/{_selectedLead?.LeadId}");
+    private void NavigateToConvertLead() => Nav.NavigateTo($"/crm/opportunities/new?leadId={_selectedLead?.LeadId}");
+
+    private void NavigateToLeads()         => Nav.NavigateTo("/crm/leads");
+    private void NavigateToOpportunities() => Nav.NavigateTo("/crm/opportunities");
+    private void NavigateToForecast()      => Nav.NavigateTo("/crm/forecast");
+
+    private static string ActivityIcon(string typeCode) => typeCode switch
+    {
+        "Call"    => "bi-telephone",
+        "Email"   => "bi-envelope",
+        "Meeting" => "bi-camera-video",
+        "Task"    => "bi-check2-square",
+        _         => "bi-lightning"
+    };
+
+    private static string LeadStatusLabel(int code) => code switch
+    {
+        1 => "New",
+        2 => "Contacted",
+        3 => "Qualified",
+        4 => "Converted",
+        5 => "Disqualified",
+        _ => "Unknown"
+    };
+
+    private static string LeadStatusBadge(int code) => code switch
+    {
+        1 => "pw-status-new",
+        2 => "pw-status-contacted",
+        3 => "pw-status-qualified",
+        4 => "pw-status-converted",
+        _ => "pw-status-default"
+    };
+
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[0].ToString() : "?";
+    }
+
+    private static string AvatarColor(string name)
+    {
+        var colors = new[] { "pw-av-blue", "pw-av-indigo", "pw-av-emerald", "pw-av-amber", "pw-av-rose", "pw-av-violet" };
+        return colors[Math.Abs(name.GetHashCode()) % colors.Length];
+    }
+}

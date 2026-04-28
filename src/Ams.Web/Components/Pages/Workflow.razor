@@ -1,47 +1,643 @@
-@page "/workflow"
+﻿@page "/workflow"
+@namespace Ams.Web.Components.Pages
 @inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.WebUtilities
 
-<PageTitle>Workflow</PageTitle>
+<PageTitle>Workflow — AMS</PageTitle>
 
-<h1>Workflow</h1>
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
 
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+<AppPageHeader Title="Workflow Instances"
+               Subtitle="Track approval workflows across submissions, policies, claims, and billing"
+               Icon="bi-diagram-3-fill">
+    <Actions>
+        <div class="wf-view-toggle" role="group" aria-label="View mode">
+            @foreach (var v in _views)
+            {
+                <button class="wf-view-btn @(_view == v.Id ? "wf-view-btn--active" : "")"
+                        @onclick="() => _view = v.Id" title="@v.Label">
+                    <i class="bi @v.Icon" aria-hidden="true"></i>
+                    <span class="wf-view-lbl">@v.Label</span>
+                </button>
+            }
+        </div>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "wf-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showInitiate = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Initiate Workflow
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
+<div class="wf-kpi-strip">
+    <div class="wf-kpi-card">
+        <span class="wf-ki wf-ki1"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+        <div><div class="wf-kv">@_items.Count</div><div class="wf-kl">Total</div></div>
+    </div>
+    <div class="wf-kpi-card">
+        <span class="wf-ki wf-ki2"><i class="bi bi-hourglass-split" aria-hidden="true"></i></span>
+        <div><div class="wf-kv">@_items.Count(x => x.StatusCode == 1)</div><div class="wf-kl">Pending</div></div>
+    </div>
+    <div class="wf-kpi-card">
+        <span class="wf-ki wf-ki3"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="wf-kv">@_items.Count(x => x.StatusCode == 2)</div><div class="wf-kl">Approved</div></div>
+    </div>
+    <div class="wf-kpi-card">
+        <span class="wf-ki wf-ki4"><i class="bi bi-x-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="wf-kv">@_items.Count(x => x.StatusCode == 3)</div><div class="wf-kl">Rejected</div></div>
+    </div>
+    <div class="wf-kpi-card">
+        <span class="wf-ki wf-ki5"><i class="bi bi-arrow-return-left" aria-hidden="true"></i></span>
+        <div><div class="wf-kv">@_items.Count(x => x.StatusCode == 4)</div><div class="wf-kl">Returned</div></div>
+    </div>
 </div>
 
-@if (_items is null)
+<!-- ── Filter bar ────────────────────────────────────────────────────────── -->
+<div class="wf-filter-bar">
+    <div class="wf-search-wrap">
+        <i class="bi bi-search wf-si" aria-hidden="true"></i>
+        <input class="wf-search" type="search" placeholder="Search entity or ID..."
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_entityOpts" Placeholder="All Entities" ShowClearButton="true" Width="150px"
+                    Value="_filterEntity" ValueChanged="@((string v) => { _filterEntity = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="Any Status" ShowClearButton="true" Width="140px"
+                    Value="_filterStatus" ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+</div>
+
+<!-- ── LIST VIEW ─────────────────────────────────────────────────────────── -->
+@if (_view == "list")
 {
-    <p>Loading...</p>
+    @if (_loading)
+    {
+        <div class="wf-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading workflows...</span></div>
+    }
+    else if (!_filtered.Any())
+    {
+        <div class="wf-empty">
+            <i class="bi bi-inbox" aria-hidden="true"></i>
+            <span>No workflow instances found.</span>
+        </div>
+    }
+    else
+    {
+        <div class="wf-list">
+            @foreach (var inst in _filtered)
+            {
+                var isSelected = _selected?.WorkflowInstanceId == inst.WorkflowInstanceId;
+                <div class="wf-row @(isSelected ? "wf-row--active" : "")" @onclick="() => SelectInstance(inst)">
+                    <div class="wf-row-icon @StatusIconCss(inst.StatusCode)">
+                        <i class="bi @StatusIcon(inst.StatusCode)" aria-hidden="true"></i>
+                    </div>
+                    <div class="wf-row-main">
+                        <div class="wf-row-title">
+                            <span class="wf-entity-name">@inst.TargetEntityName</span>
+                            <span class="wf-entity-id">@inst.TargetEntityId.ToString()[..8]...</span>
+                        </div>
+                        <div class="wf-row-meta">
+                            <span class="wf-submitted"><i class="bi bi-calendar3" aria-hidden="true"></i> @inst.SubmittedDateUtc.ToString("MM/dd/yyyy h:mm tt")</span>
+                            <span class="@StatusBadge(inst.StatusCode)">@StatusLabel(inst.StatusCode)</span>
+                        </div>
+                    </div>
+                    <div class="wf-row-actions">
+                        @if (inst.StatusCode == 1)
+                        {
+                            <button class="um-btn um-btn-success um-btn-sm"
+                                    @onclick:stopPropagation="true"
+                                    @onclick="() => QuickApprove(inst)">
+                                <i class="bi bi-check-lg" aria-hidden="true"></i> Approve
+                            </button>
+                            <button class="um-btn um-btn-danger um-btn-sm"
+                                    @onclick:stopPropagation="true"
+                                    @onclick="() => OpenReject(inst)">
+                                <i class="bi bi-x-lg" aria-hidden="true"></i> Reject
+                            </button>
+                        }
+                        <button class="um-btn um-btn-ghost um-btn-sm"
+                                @onclick:stopPropagation="true"
+                                @onclick="() => SelectInstance(inst)"
+                                title="View history">
+                            <i class="bi bi-clock-history" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    }
 }
-else
+
+<!-- ── BOARD VIEW ────────────────────────────────────────────────────────── -->
+@if (_view == "board")
 {
-    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridPageSettings PageSize="10"></GridPageSettings>
-        <GridColumns>
+    <div class="wf-board">
+        @foreach (var col in _boardColumns)
+        {
+            var colItems = _filtered.Where(x => x.StatusCode == col.StatusCode).ToList();
+            <div class="wf-board-col">
+                <div class="wf-board-col-hdr">
+                    <span class="@StatusBadge(col.StatusCode)">@col.Label</span>
+                    <span class="wf-board-count">@colItems.Count</span>
+                </div>
+                <div class="wf-board-cards">
+                    @foreach (var inst in colItems)
+                    {
+                        <div class="wf-board-card" @onclick="() => SelectInstance(inst)">
+                            <div class="wf-bc-entity">@inst.TargetEntityName</div>
+                            <div class="wf-bc-id">@inst.TargetEntityId.ToString()[..8]...</div>
+                            <div class="wf-bc-date"><i class="bi bi-clock" aria-hidden="true"></i> @inst.SubmittedDateUtc.ToString("MM/dd/yy")</div>
+                            @if (col.StatusCode == 1)
+                            {
+                                <div class="wf-bc-actions">
+                                    <button class="um-btn um-btn-success um-btn-xs"
+                                            @onclick:stopPropagation="true"
+                                            @onclick="() => QuickApprove(inst)">
+                                        <i class="bi bi-check" aria-hidden="true"></i>
+                                    </button>
+                                    <button class="um-btn um-btn-danger um-btn-xs"
+                                            @onclick:stopPropagation="true"
+                                            @onclick="() => OpenReject(inst)">
+                                        <i class="bi bi-x" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
 
-            <GridColumn Field="@nameof(WorkflowInstanceDto.TargetEntityName)" HeaderText="Entity" Width="180"></GridColumn>
-            <GridColumn Field="@nameof(WorkflowInstanceDto.TargetEntityId)" HeaderText="Entity Id" Width="260"></GridColumn>
-            <GridColumn Field="@nameof(WorkflowInstanceDto.StatusCode)" HeaderText="Status" Width="100"></GridColumn>
-            <GridColumn Field="@nameof(WorkflowInstanceDto.SubmittedDateUtc)" HeaderText="Submitted" Type="ColumnType.DateTime" Format="g" Width="180"></GridColumn>
+<!-- ── DETAIL PANEL (approval history) ───────────────────────────────────── -->
+@if (_selected is not null)
+{
+    <div class="wf-detail-panel">
+        <div class="wf-detail-hdr">
+            <div class="wf-detail-title">
+                <i class="bi bi-clock-history" aria-hidden="true"></i>
+                Approval History — @_selected.TargetEntityName
+            </div>
+            <button class="wf-detail-close" @onclick="() => _selected = null" aria-label="Close">
+                <i class="bi bi-x-lg" aria-hidden="true"></i>
+            </button>
+        </div>
 
-        </GridColumns>
-    </SfGrid>
+        <div class="wf-detail-meta">
+            <span><i class="bi bi-hash" aria-hidden="true"></i> @_selected.TargetEntityId</span>
+            <span class="@StatusBadge(_selected.StatusCode)">@StatusLabel(_selected.StatusCode)</span>
+            <span><i class="bi bi-calendar3" aria-hidden="true"></i> Submitted @_selected.SubmittedDateUtc.ToString("MM/dd/yyyy")</span>
+        </div>
+
+        @if (_historyLoading)
+        {
+            <div class="wf-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading history...</span></div>
+        }
+        else if (_history.Any())
+        {
+            <div class="wf-timeline">
+                @foreach (var h in _history.OrderBy(x => x.ActionDateUtc))
+                {
+                    <div class="wf-tl-entry">
+                        <div class="wf-tl-dot @ActionDotCss(h.ActionCode)"></div>
+                        <div class="wf-tl-body">
+                            <div class="wf-tl-action">
+                                <i class="bi @ActionIcon(h.ActionCode)" aria-hidden="true"></i>
+                                <span class="wf-tl-action-label">@h.ActionCode</span>
+                                @if (!string.IsNullOrEmpty(h.NewStatusCode))
+                                {
+                                    <span class="wf-tl-arrow">&#8594;</span>
+                                    <span class="wf-tl-status">@h.NewStatusCode</span>
+                                }
+                                @if (h.IsDelegated)
+                                {
+                                    <span class="wf-tl-delegated">delegated</span>
+                                }
+                            </div>
+                            @if (!string.IsNullOrEmpty(h.Notes))
+                            {
+                                <div class="wf-tl-notes">"@h.Notes"</div>
+                            }
+                            <div class="wf-tl-date">@h.ActionDateUtc.ToString("MM/dd/yyyy h:mm tt")</div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="wf-empty"><i class="bi bi-journal-x" aria-hidden="true"></i> No history entries yet.</div>
+        }
+
+        @if (_selected.StatusCode == 1)
+        {
+            <div class="wf-detail-actions">
+                <div class="wf-action-notes">
+                    <label class="wf-action-label">Notes (optional)</label>
+                    <SfTextBox Multiline="true" Placeholder="Add a note for this action..." @bind-Value="_actionNotes" />
+                </div>
+                <div class="wf-action-btns">
+                    <button class="um-btn um-btn-success" @onclick="ApproveSelected" disabled="@_actioning">
+                        <i class="bi bi-check-circle" aria-hidden="true"></i> Approve
+                    </button>
+                    <button class="um-btn um-btn-ghost" @onclick="ReturnSelected" disabled="@_actioning">
+                        <i class="bi bi-arrow-return-left" aria-hidden="true"></i> Return for Rework
+                    </button>
+                    <button class="um-btn um-btn-danger" @onclick="RejectSelected" disabled="@_actioning">
+                        <i class="bi bi-x-circle" aria-hidden="true"></i> Reject
+                    </button>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+<!-- ── Initiate Workflow Modal ────────────────────────────────────────────── -->
+@if (_showInitiate)
+{
+    <div class="wf-modal-backdrop" @onclick="() => _showInitiate = false">
+        <div class="wf-modal" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="wf-modal-title">
+            <div class="wf-modal-hdr">
+                <h2 id="wf-modal-title" class="wf-modal-title">
+                    <i class="bi bi-diagram-3" aria-hidden="true"></i> Initiate Workflow
+                </h2>
+                <button class="wf-modal-close" @onclick="() => _showInitiate = false" aria-label="Close">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="wf-modal-body">
+                <div class="wf-form-row">
+                    <label class="wf-label">Entity Type *</label>
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_entityOpts" Placeholder="Select entity type"
+                                    @bind-Value="_initiateForm.EntityType">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                </div>
+                <div class="wf-form-row">
+                    <label class="wf-label">Entity ID *</label>
+                    <SfTextBox Placeholder="Paste the entity GUID..." @bind-Value="_initiateForm.EntityId" />
+                </div>
+                <div class="wf-form-row">
+                    <label class="wf-label">Workflow Definition</label>
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_definitionOpts" Placeholder="Default (auto-select)" ShowClearButton="true"
+                                    @bind-Value="_initiateForm.DefinitionId">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                </div>
+                <div class="wf-form-row">
+                    <label class="wf-label">Notes</label>
+                    <SfTextBox Multiline="true" Placeholder="Reason or context for initiating this workflow..." @bind-Value="_initiateForm.Notes" />
+                </div>
+                @if (!string.IsNullOrEmpty(_initiateError))
+                {
+                    <div class="wf-error">@_initiateError</div>
+                }
+            </div>
+            <div class="wf-modal-ftr">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showInitiate = false">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="InitiateAsync" disabled="@_initiating">
+                    <i class="bi @(_initiating ? "bi-hourglass-split" : "bi-play-circle")" aria-hidden="true"></i>
+                    @(_initiating ? "Starting..." : "Start Workflow")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- ── Reject Modal ───────────────────────────────────────────────────────── -->
+@if (_showReject)
+{
+    <div class="wf-modal-backdrop" @onclick="() => _showReject = false">
+        <div class="wf-modal wf-modal-sm" @onclick:stopPropagation="true" role="dialog" aria-modal="true">
+            <div class="wf-modal-hdr">
+                <h2 class="wf-modal-title"><i class="bi bi-x-circle" aria-hidden="true"></i> Reject Workflow</h2>
+                <button class="wf-modal-close" @onclick="() => _showReject = false"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="wf-modal-body">
+                <div class="wf-form-row">
+                    <label class="wf-label">Rejection Reason *</label>
+                    <SfTextBox Multiline="true" Placeholder="Explain why this is being rejected..." @bind-Value="_rejectReason" />
+                </div>
+            </div>
+            <div class="wf-modal-ftr">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showReject = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ConfirmReject" disabled="@_actioning">
+                    <i class="bi bi-x-circle" aria-hidden="true"></i> Confirm Reject
+                </button>
+            </div>
+        </div>
+    </div>
 }
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private string? _searchTerm;
-    private List<WorkflowInstanceDto>? _items;
+
+    private bool _loading;
+    private bool _historyLoading;
+    private bool _actioning;
+    private bool _initiating;
+    private bool _showInitiate;
+    private bool _showReject;
+    private string _view = "list";
+    private string _search = string.Empty;
+    private string _filterEntity = string.Empty;
+    private string _filterStatus = string.Empty;
+    private string _actionNotes = string.Empty;
+    private string _rejectReason = string.Empty;
+    private string? _initiateError;
+
+    private List<WorkflowInstanceDto> _items = new();
+    private List<WorkflowInstanceDto> _filtered = new();
+    private List<WorkflowApprovalHistoryDto> _history = new();
+    private WorkflowInstanceDto? _selected;
+    private WorkflowInstanceDto? _rejectTarget;
+
+    private SfToast _toast = default!;
+
+    private sealed class InitiateForm
+    {
+        public string EntityType  { get; set; } = "Submission";
+        public string EntityId    { get; set; } = string.Empty;
+        public string DefinitionId{ get; set; } = string.Empty;
+        public string Notes       { get; set; } = string.Empty;
+    }
+    private InitiateForm _initiateForm = new();
+
+    private record LV(string Value, string Label);
+    private record ViewDef(string Id, string Label, string Icon);
+    private record BoardCol(int StatusCode, string Label);
+
+    private static readonly List<ViewDef> _views =
+    [
+        new("list",  "List",  "bi-list-ul"),
+        new("board", "Board", "bi-kanban"),
+    ];
+
+    private static readonly List<LV> _entityOpts =
+    [
+        new("Submission", "Submission"),
+        new("Policy",     "Policy"),
+        new("Claim",      "Claim"),
+        new("Invoice",    "Invoice"),
+        new("Quote",      "Quote"),
+    ];
+
+    private static readonly List<LV> _statusOpts =
+    [
+        new("1", "Pending"),
+        new("2", "Approved"),
+        new("3", "Rejected"),
+        new("4", "Returned"),
+    ];
+
+    private static readonly List<LV> _definitionOpts =
+    [
+        new("def-sub-standard", "Submission — Standard Approval"),
+        new("def-sub-large",    "Submission — Large Account (>$500k)"),
+        new("def-claim",        "Claim — Catastrophe Review"),
+        new("def-invoice",      "Invoice — Finance Approval"),
+    ];
+
+    private static readonly List<BoardCol> _boardColumns =
+    [
+        new(1, "Pending"),
+        new(2, "Approved"),
+        new(3, "Rejected"),
+        new(4, "Returned"),
+    ];
 
     protected override async Task OnInitializedAsync()
     {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workflow", "/workflow"));
+        ReadQueryParams();
         await LoadAsync();
+    }
+
+    private void ReadQueryParams()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var qs  = QueryHelpers.ParseQuery(uri.Query);
+        if (qs.TryGetValue("entity", out var entity) && !string.IsNullOrEmpty(entity))
+            _initiateForm.EntityType = entity!;
+        if (qs.TryGetValue("entityId", out var entityId) && !string.IsNullOrEmpty(entityId))
+        {
+            _initiateForm.EntityId = entityId!;
+            _showInitiate = true;
+        }
     }
 
     private async Task LoadAsync()
     {
-        var result = await Api.SearchWorkflowAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? new List<WorkflowInstanceDto>();
+        _loading = true;
+        _selected = null;
+        _history.Clear();
+        try
+        {
+            var result = await Api.SearchWorkflowAsync(_tenantId, string.IsNullOrWhiteSpace(_search) ? null : _search);
+            _items = result?.Items.ToList() ?? new();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
     }
+
+    private void ApplyFilters()
+    {
+        var q = _items.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_search))
+            q = q.Where(x => x.TargetEntityName.Contains(_search, StringComparison.OrdinalIgnoreCase)
+                           || x.TargetEntityId.ToString().Contains(_search, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrEmpty(_filterEntity))
+            q = q.Where(x => x.TargetEntityName == _filterEntity);
+        if (!string.IsNullOrEmpty(_filterStatus) && int.TryParse(_filterStatus, out var sc))
+            q = q.Where(x => x.StatusCode == sc);
+        _filtered = q.OrderByDescending(x => x.SubmittedDateUtc).ToList();
+    }
+
+    private async Task SelectInstance(WorkflowInstanceDto inst)
+    {
+        _selected = inst;
+        _actionNotes = string.Empty;
+        _historyLoading = true;
+        try
+        {
+            var result = await Api.GetWorkflowHistoryAsync(_tenantId, inst.WorkflowInstanceId);
+            _history = result?.Items.ToList() ?? new();
+        }
+        finally { _historyLoading = false; }
+    }
+
+    private async Task QuickApprove(WorkflowInstanceDto inst)
+    {
+        try
+        {
+            await Api.ApproveWorkflowStepAsync(inst.WorkflowInstanceId, null);
+            await ShowSuccess("Approved", "Workflow step approved successfully.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowError(ex.Message); }
+    }
+
+    private async Task ApproveSelected()
+    {
+        if (_selected is null) return;
+        _actioning = true;
+        try
+        {
+            await Api.ApproveWorkflowStepAsync(_selected.WorkflowInstanceId, _actionNotes);
+            await ShowSuccess("Approved", "Workflow step approved.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowError(ex.Message); }
+        finally { _actioning = false; }
+    }
+
+    private async Task ReturnSelected()
+    {
+        if (_selected is null) return;
+        _actioning = true;
+        try
+        {
+            await Api.ReturnWorkflowStepAsync(_selected.WorkflowInstanceId, _actionNotes);
+            await ShowSuccess("Returned", "Workflow returned for rework.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowError(ex.Message); }
+        finally { _actioning = false; }
+    }
+
+    private void OpenReject(WorkflowInstanceDto inst)
+    {
+        _rejectTarget = inst;
+        _rejectReason = string.Empty;
+        _showReject = true;
+    }
+
+    private async Task RejectSelected()
+    {
+        if (_selected is null) return;
+        OpenReject(_selected);
+        await Task.CompletedTask;
+    }
+
+    private async Task ConfirmReject()
+    {
+        if (_rejectTarget is null || string.IsNullOrWhiteSpace(_rejectReason)) return;
+        _actioning = true;
+        try
+        {
+            await Api.RejectWorkflowStepAsync(_rejectTarget.WorkflowInstanceId, _rejectReason);
+            _showReject = false;
+            await ShowSuccess("Rejected", "Workflow step rejected.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowError(ex.Message); }
+        finally { _actioning = false; }
+    }
+
+    private async Task InitiateAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_initiateForm.EntityType) || string.IsNullOrWhiteSpace(_initiateForm.EntityId))
+        {
+            _initiateError = "Entity Type and Entity ID are required.";
+            return;
+        }
+        if (!Guid.TryParse(_initiateForm.EntityId, out var entityGuid))
+        {
+            _initiateError = "Entity ID must be a valid GUID.";
+            return;
+        }
+        _initiating = true;
+        _initiateError = null;
+        try
+        {
+            Guid? defId = Guid.TryParse(_initiateForm.DefinitionId, out var dg) ? dg : null;
+            await Api.InitiateWorkflowForSubmissionAsync(entityGuid, _tenantId, defId);
+            _showInitiate = false;
+            _initiateForm = new();
+            await ShowSuccess("Workflow Started", "A new workflow instance has been initiated.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _initiateError = $"Failed: {ex.Message}";
+        }
+        finally { _initiating = false; }
+    }
+
+    private Task ShowSuccess(string title, string msg) =>
+        _toast.ShowAsync(new Syncfusion.Blazor.Notifications.ToastModel
+        {
+            Title = title, Content = msg, CssClass = "e-toast-success"
+        });
+
+    private Task ShowError(string msg) =>
+        _toast.ShowAsync(new Syncfusion.Blazor.Notifications.ToastModel
+        {
+            Title = "Error", Content = msg, CssClass = "e-toast-danger"
+        });
+
+    private static string StatusLabel(int code) => code switch
+    {
+        1 => "Pending",
+        2 => "Approved",
+        3 => "Rejected",
+        4 => "Returned",
+        _ => "Unknown"
+    };
+
+    private static string StatusBadge(int code) => code switch
+    {
+        1 => "wf-badge wf-badge-pending",
+        2 => "wf-badge wf-badge-approved",
+        3 => "wf-badge wf-badge-rejected",
+        4 => "wf-badge wf-badge-returned",
+        _ => "wf-badge"
+    };
+
+    private static string StatusIcon(int code) => code switch
+    {
+        1 => "bi-hourglass-split",
+        2 => "bi-check-circle-fill",
+        3 => "bi-x-circle-fill",
+        4 => "bi-arrow-return-left",
+        _ => "bi-circle"
+    };
+
+    private static string StatusIconCss(int code) => code switch
+    {
+        1 => "wf-row-icon--pending",
+        2 => "wf-row-icon--approved",
+        3 => "wf-row-icon--rejected",
+        4 => "wf-row-icon--returned",
+        _ => ""
+    };
+
+    private static string ActionIcon(string code) => code switch
+    {
+        "Approve"  => "bi-check-circle",
+        "Reject"   => "bi-x-circle",
+        "Return"   => "bi-arrow-return-left",
+        "Initiate" => "bi-play-circle",
+        "Submit"   => "bi-send",
+        _          => "bi-circle"
+    };
+
+    private static string ActionDotCss(string code) => code switch
+    {
+        "Approve"  => "wf-tl-dot--approved",
+        "Reject"   => "wf-tl-dot--rejected",
+        "Return"   => "wf-tl-dot--returned",
+        _          => "wf-tl-dot--neutral"
+    };
 }

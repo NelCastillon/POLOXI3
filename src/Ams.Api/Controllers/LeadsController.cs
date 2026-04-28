@@ -35,4 +35,11 @@ public sealed class LeadsController : ControllerBase
         var result = await _service.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
         return Ok(result);
     }
+
+    [HttpGet("scoring-rules")]
+    public async Task<IActionResult> GetScoringRules([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        var rules = await _service.GetScoringRulesAsync(tenantId, cancellationToken);
+        return Ok(rules);
+    }
 }

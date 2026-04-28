@@ -8,25 +8,30 @@ namespace Ams.Infrastructure.Persistence.Repositories;
 public sealed class AccountingPeriodRepository : IAccountingPeriodRepository
 {
     private readonly ISqlConnectionFactory _connectionFactory;
-    private static readonly string _searchSql = RepositorySql.BuildPagedSearchSql(
-        "Finance.AccountingPeriod",
-        "AccountingPeriodId, TenantId, PeriodName, FiscalYear, PeriodNumber, StartDate, EndDate, StatusCode, ClosedDateUtc, ClosedByUserId, CreatedDateUtc, CreatedByUserId, IsDeleted",
-        "PeriodName LIKE '%' + @SearchTerm + '%'",
-        "FiscalYear DESC, PeriodNumber ASC");
 
     public AccountingPeriodRepository(ISqlConnectionFactory connectionFactory) => _connectionFactory = connectionFactory;
 
     public async Task<AccountingPeriodDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        const string sql = "SELECT AccountingPeriodId, TenantId, PeriodName, FiscalYear, PeriodNumber, StartDate, EndDate, StatusCode, ClosedDateUtc, ClosedByUserId, CreatedDateUtc, CreatedByUserId, IsDeleted FROM Finance.AccountingPeriod WHERE AccountingPeriodId = @Id AND IsDeleted = 0;";
+        const string sql = @"
+SELECT 
+    AccountingPeriodId, TenantId, PeriodCode, PeriodName, StartDate, EndDate, 
+    StatusCode, CreatedDateUtc 
+FROM Finance.AccountingPeriod 
+WHERE AccountingPeriodId = @Id AND IsDeleted = 0";
+        
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await cn.QuerySingleOrDefaultAsync<AccountingPeriodDto>(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }
 
     public async Task<PagedResult<AccountingPeriodDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
+        var selectColumns = "AccountingPeriodId, TenantId, PeriodCode, PeriodName, StartDate, EndDate, StatusCode, CreatedDateUtc";
+        var searchPredicate = "PeriodName LIKE '%' + @SearchTerm + '%' OR PeriodCode LIKE '%' + @SearchTerm + '%'";
+        var sql = RepositorySql.BuildPagedSearchSql("Finance.AccountingPeriod", selectColumns, searchPredicate, "StartDate DESC");
+        
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(_searchSql, new { TenantId = tenantId, SearchTerm = searchTerm, Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: cancellationToken));
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm, Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: cancellationToken));
         var items = (await multi.ReadAsync<AccountingPeriodDto>()).AsList();
         var total = await multi.ReadSingleAsync<int>();
         return new PagedResult<AccountingPeriodDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };

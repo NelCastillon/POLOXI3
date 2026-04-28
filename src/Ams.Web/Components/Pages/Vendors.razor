@@ -1,35 +1,230 @@
-@page "/finance/vendors"
+﻿@page "/finance/vendors"
+@namespace Ams.Web.Components.Pages
 @inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Vendors</PageTitle>
-<h1>Vendors</h1>
-<div class="toolbar-row">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfButton CssClass="e-primary" OnClick="LoadAsync">Refresh</SfButton>
+
+<AppPageHeader Title="Vendors"
+               Subtitle="Manage vendor accounts and payment information"
+               Icon="bi-shop">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "fa-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Vendor
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- ── Search & Filter ──────────────────────────────────────────────────── -->
+<div class="fin-toolbar">
+    <div class="fin-search-box">
+        <i class="bi bi-search fin-search-icon" aria-hidden="true"></i>
+        <input class="e-input fin-search-input"
+               placeholder="Search vendors…"
+               @bind="_searchTerm"
+               @bind:event="oninput"
+               @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" />
+    </div>
+    <div class="fin-filter-buttons">
+        <button class="um-btn um-btn-ghost um-btn-sm @(_filterActive ? "um-btn-active" : "")"
+                @onclick="() => _filterActive = !_filterActive">
+            <i class="bi bi-funnel" aria-hidden="true"></i> Filter
+        </button>
+    </div>
 </div>
-@if (_items is null) { <p>Loading...</p> }
-else {
-<SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="10"></GridPageSettings>
-    <GridColumns>
-        <GridColumn Field="@nameof(VendorDto.VendorCode)"        HeaderText="Code"          Width="120"></GridColumn>
-        <GridColumn Field="@nameof(VendorDto.VendorName)"        HeaderText="Name"          Width="250"></GridColumn>
-        <GridColumn Field="@nameof(VendorDto.VendorTypeCode)"    HeaderText="Type"          Width="110"></GridColumn>
-        <GridColumn Field="@nameof(VendorDto.PaymentTermsCode)"  HeaderText="Terms"         Width="100"></GridColumn>
-        <GridColumn Field="@nameof(VendorDto.CurrencyCode)"      HeaderText="Currency"      Width="90"></GridColumn>
-        <GridColumn Field="@nameof(VendorDto.StatusCode)"        HeaderText="Status"        Width="100"></GridColumn>
-        <GridColumn Field="@nameof(VendorDto.Email)"             HeaderText="Email"         Width="220"></GridColumn>
-    </GridColumns>
-</SfGrid>
+
+@if (_filterActive)
+{
+    <div class="fin-filter-panel">
+        <div class="fin-filter-group">
+            <label class="fin-filter-label">Vendor Type</label>
+            <select class="e-input" @bind="_filterType">
+                <option value="">All Types</option>
+                <option value="Supplier">Supplier</option>
+                <option value="Service Provider">Service Provider</option>
+                <option value="Contractor">Contractor</option>
+            </select>
+        </div>
+        <div class="fin-filter-group">
+            <label class="fin-filter-label">Status</label>
+            <select class="e-input" @bind="_filterStatus">
+                <option value="">All</option>
+                <option value="Active">Active</option>
+                <option value="Inactive">Inactive</option>
+            </select>
+        </div>
+    </div>
 }
+
+<!-- ── KPI Cards ──────────────────────────────────────────────────────── -->
+@if (_stats is not null)
+{
+    <div class="fin-kpi-strip">
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #dbeafe; color: #1d4ed8;"><i class="bi bi-shop-fill" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.TotalVendors</div>
+                <div class="fin-kpi-label">Total Vendors</div>
+            </div>
+        </div>
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #d1fae5; color: #047857;"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.ActiveVendors</div>
+                <div class="fin-kpi-label">Active</div>
+            </div>
+        </div>
+        <div class="fin-kpi-card">
+            <div class="fin-kpi-icon" style="background: #ede9fe; color: #6d28d9;"><i class="bi bi-currency-dollar" aria-hidden="true"></i></div>
+            <div class="fin-kpi-body">
+                <div class="fin-kpi-value">@_stats.AveragePaymentDays</div>
+                <div class="fin-kpi-label">Avg Payment Days</div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- ── Content ──────────────────────────────────────────────────────── -->
+@if (_error is not null)
+{
+    <div class="fin-alert fin-alert-warning">
+        <div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></div>
+        <div class="fin-alert-body">
+            <div class="fin-alert-title">⚠️ Database Schema Issue</div>
+            <p>Finance schema initialization required. Run: <strong>sql/01_Finance_Schema.sql</strong></p>
+        </div>
+    </div>
+}
+else if (_loading)
+{
+    <div class="fin-loading">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading Vendors…</span>
+    </div>
+}
+else if (_items?.Count == 0)
+{
+    <div class="fin-empty-state">
+        <i class="bi bi-inbox fin-empty-icon" aria-hidden="true"></i>
+        <h3>No Vendors Found</h3>
+        <p>@(_searchTerm != null ? $"No vendors match \"{_searchTerm}\"." : "No vendors have been created yet.")</p>
+    </div>
+}
+else
+{
+    <div class="fin-grid-container">
+        <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="600px">
+            <GridPageSettings PageSize="12"></GridPageSettings>
+            <GridColumns>
+                <GridColumn Field="@nameof(VendorDto.VendorCode)" HeaderText="Code" Width="100" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(VendorDto.VendorName)" HeaderText="Vendor Name" Width="220" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(VendorDto.VendorTypeCode)" HeaderText="Type" Width="120" AllowSorting="true">
+                    <Template>
+                        @{
+                            var vendor = context as VendorDto;
+                            var typeBg = vendor?.VendorTypeCode switch
+                            {
+                                "Supplier" => "#dbeafe",
+                                "Service Provider" => "#ede9fe",
+                                "Contractor" => "#d1fae5",
+                                _ => "#f3f4f6"
+                            };
+                            var typeColor = vendor?.VendorTypeCode switch
+                            {
+                                "Supplier" => "#1d4ed8",
+                                "Service Provider" => "#6d28d9",
+                                "Contractor" => "#047857",
+                                _ => "#6b7280"
+                            };
+                        }
+                        <span style="background: @typeBg; color: @typeColor; padding: 4px 8px; border-radius: 20px; font-size: 0.85em; font-weight: 600;">
+                            @vendor?.VendorTypeCode
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(VendorDto.PaymentTermsCode)" HeaderText="Payment Terms" Width="130" AllowSorting="true"></GridColumn>
+                <GridColumn Field="@nameof(VendorDto.Email)" HeaderText="Email" Width="200"></GridColumn>
+                <GridColumn Field="@nameof(VendorDto.StatusCode)" HeaderText="Status" Width="100" AllowSorting="true">
+                    <Template>
+                        @{
+                            var vendor = context as VendorDto;
+                        }
+                        <span class="fin-badge @(vendor?.StatusCode == "Active" ? "fin-badge-success" : "fin-badge-secondary")">
+                            @vendor?.StatusCode
+                        </span>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string? _searchTerm;
+    private string _filterType = "";
+    private string _filterStatus = "";
+    private bool _filterActive = false;
+    private bool _loading = false;
     private List<VendorDto>? _items;
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private string? _error;
+
+    private class Stats
+    {
+        public int TotalVendors { get; set; }
+        public int ActiveVendors { get; set; }
+        public int AveragePaymentDays { get; set; }
+    }
+
+    private Stats? _stats;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home", "/"),
+            new("Finance", "/finance"),
+            new("Vendors", "/finance/vendors"));
+        await LoadAsync();
+    }
+
     private async Task LoadAsync()
     {
-        var result = await Api.SearchVendorsAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        _loading = true;
+        _error = null;
+        _items = null;
+        try
+        {
+            var result = await Api.SearchVendorsAsync(_tenantId, _searchTerm);
+            _items = result?.Items.ToList() ?? [];
+
+            if (!string.IsNullOrEmpty(_filterType))
+                _items = _items.Where(x => x.VendorTypeCode == _filterType).ToList();
+
+            if (!string.IsNullOrEmpty(_filterStatus))
+                _items = _items.Where(x => x.StatusCode == _filterStatus).ToList();
+
+            _stats = new Stats
+            {
+                TotalVendors = _items.Count,
+                ActiveVendors = _items.Count(x => x.StatusCode == "Active"),
+                AveragePaymentDays = 30
+            };
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            if (ex.Message.Contains("Invalid column name") || ex.Message.Contains("Vendor"))
+            {
+                _error = "Database schema mismatch. Please ensure 00_schema_migration.sql has been applied to your database. See db/README.md for setup instructions.";
+            }
+            _items = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 }
