@@ -220,6 +220,8 @@ BEGIN
     ');
 END;
 
+GO
+
 -- ============================================================================
 -- SECTION 6: Helper Views for Reporting
 -- ============================================================================
@@ -227,6 +229,8 @@ END;
 -- Create view for opportunity pipeline analysis
 IF OBJECT_ID('CRM.vw_OpportunityPipelineAnalysis', 'V') IS NOT NULL
     DROP VIEW CRM.vw_OpportunityPipelineAnalysis;
+
+GO
 
 CREATE VIEW CRM.vw_OpportunityPipelineAnalysis AS
 SELECT 
@@ -240,20 +244,22 @@ SELECT
     o.WinProbability,
     o.Stage,
     o.ForecastCategoryCode,
-    os.Label AS StageName,
+    os.StageName AS StageName,
     fc.Label AS ForecastCategoryName,
     o.CloseDate,
     DATEDIFF(DAY, GETUTCDATE(), o.CloseDate) AS DaysToClose,
     o.OwnerUserId,
-    u.FirstName + ' ' + u.LastName AS OwnerName,
+    COALESCE(u.FirstName + ' ' + u.LastName, 'Unknown') AS OwnerName,
     o.CreatedDateUtc,
     o.ModifiedDateUtc
 FROM CRM.Opportunity o
 LEFT JOIN Client.Account a ON a.AccountId = o.AccountId
-LEFT JOIN CRM.OpportunityStage os ON os.Code = o.Stage AND os.TenantId = o.TenantId
+LEFT JOIN CRM.OpportunityStage os ON os.StageCode = o.Stage AND os.TenantId = o.TenantId
 LEFT JOIN CRM.ForecastCategory fc ON fc.Code = o.ForecastCategoryCode AND fc.TenantId = o.TenantId
-LEFT JOIN [Identity].User u ON u.UserId = o.OwnerUserId
+LEFT JOIN [Identity].[User] u ON u.UserId = o.OwnerUserId
 WHERE o.IsDeleted = 0;
+
+GO
 
 -- ============================================================================
 -- SECTION 7: Migration Version Tracking

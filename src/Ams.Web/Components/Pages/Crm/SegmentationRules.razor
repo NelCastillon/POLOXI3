@@ -1,0 +1,471 @@
+@page "/crm/segments/rules"
+@namespace Ams.Web.Components.Pages.Crm
+@inject HttpClient HttpClient
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Segmentation Rules — CRM</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Segmentation Rules"
+               Subtitle="Define and manage automatic segmentation scoring rules"
+               Icon="bi-sliders2">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "sr-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => OpenCreateRule()">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Rule
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI Strip -->
+<div class="sr-kpi-strip">
+    <div class="sr-kpi-card">
+        <span class="sr-ki sr-ki1"><i class="bi bi-sliders2" aria-hidden="true"></i></span>
+        <div><div class="sr-kv">@_rules.Count</div><div class="sr-kl">Total Rules</div></div>
+    </div>
+    <div class="sr-kpi-card">
+        <span class="sr-ki sr-ki2"><i class="bi bi-lightning" aria-hidden="true"></i></span>
+        <div><div class="sr-kv">@_rules.Count(r => r.IsActive)</div><div class="sr-kl">Active Rules</div></div>
+    </div>
+    <div class="sr-kpi-card">
+        <span class="sr-ki sr-ki3"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
+        <div><div class="sr-kv">@_rules.Sum(r => r.Accuracy).ToString("P0")</div><div class="sr-kl">Avg. Accuracy</div></div>
+    </div>
+    <div class="sr-kpi-card">
+        <span class="sr-ki sr-ki4"><i class="bi bi-building" aria-hidden="true"></i></span>
+        <div><div class="sr-kv">@_rules.Sum(r => r.AccountsMatched)</div><div class="sr-kl">Total Accounts Matched</div></div>
+    </div>
+</div>
+
+<!-- Filter & Search -->
+<div class="sr-filter-bar">
+    <div class="sr-search-wrap">
+        <i class="bi bi-search sr-si" aria-hidden="true"></i>
+        <input class="sr-search" type="search" placeholder="Search rules…"
+               value="@_search"
+               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => _search = e.Value?.ToString() ?? string.Empty)" />
+    </div>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_segmentOpts" Placeholder="All Segments" ShowClearButton="true" Width="160px"
+                    Value="_filterSegment" ValueChanged="@((string v) => _filterSegment = v)">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+    <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="All Status" ShowClearButton="true" Width="140px"
+                    Value="_filterStatus" ValueChanged="@((string v) => _filterStatus = v)">
+        <DropDownListFieldSettings Value="Value" Text="Label" />
+    </SfDropDownList>
+</div>
+
+<!-- Rules Grid -->
+@if (_loading)
+{
+    <div class="sr-loading">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading segmentation rules…</span>
+    </div>
+}
+else if (_rules.Count == 0)
+{
+    <div class="sr-empty">
+        <i class="bi bi-sliders2 sr-empty-icon" aria-hidden="true"></i>
+        <div class="sr-empty-title">No segmentation rules yet</div>
+        <div class="sr-empty-sub">Create your first rule to automatically segment accounts based on their attributes and behaviors.</div>
+        <button class="um-btn um-btn-primary" @onclick="() => OpenCreateRule()">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Create Rule
+        </button>
+    </div>
+}
+else
+{
+    <div class="app-datagrid sr-grid">
+        <SfGrid TValue="SegmentationRuleModel" DataSource="GetFilteredRules()" AllowPaging="true" AllowSorting="true"
+                EnableHover="true" RowHeight="56">
+            <GridPageSettings PageSize="15" />
+            <GridColumns>
+                <GridColumn Field="@nameof(SegmentationRuleModel.RuleName)" HeaderText="Rule Name" MinWidth="180" TextAlign="TextAlign.Left">
+                    <Template>
+                        @{ var rule = (SegmentationRuleModel)context; }
+                        <div class="sr-rule-cell">
+                            <div class="sr-rule-name">@rule.RuleName</div>
+                            <div class="sr-rule-desc">@rule.Description</div>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(SegmentationRuleModel.Segment)" HeaderText="Segment" Width="120">
+                    <Template>
+                        @{ var rule = (SegmentationRuleModel)context; }
+                        <span class="sr-segment-badge" style="background:@rule.SegmentColor;">@rule.Segment</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(SegmentationRuleModel.Criteria)" HeaderText="Criteria" MinWidth="180">
+                    <Template>
+                        @{ var rule = (SegmentationRuleModel)context; }
+                        <span class="sr-criteria">@rule.Criteria</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(SegmentationRuleModel.AccountsMatched)" HeaderText="Accounts Matched" Width="140" TextAlign="TextAlign.Right">
+                    <Template>
+                        @{ var rule = (SegmentationRuleModel)context; }
+                        <span class="sr-mono">@rule.AccountsMatched.ToString("N0")</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(SegmentationRuleModel.Accuracy)" HeaderText="Accuracy" Width="110" TextAlign="TextAlign.Right">
+                    <Template>
+                        @{ var rule = (SegmentationRuleModel)context; }
+                        <span class="@AccuracyBadge(rule.Accuracy)">@rule.Accuracy.ToString("P0")</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(SegmentationRuleModel.IsActive)" HeaderText="Status" Width="90">
+                    <Template>
+                        @{ var rule = (SegmentationRuleModel)context; }
+                        <span class="@(rule.IsActive ? "sr-status-active" : "sr-status-inactive")">
+                            <i class="bi @(rule.IsActive ? "bi-check-circle" : "bi-x-circle")" aria-hidden="true"></i>
+                            @(rule.IsActive ? "Active" : "Inactive")
+                        </span>
+                    </Template>
+                </GridColumn>
+                <GridColumn HeaderText="Actions" Width="100" TextAlign="TextAlign.Right">
+                    <Template>
+                        @{ var rule = (SegmentationRuleModel)context; }
+                        <div class="sr-actions">
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => EditRule(rule)" title="Edit">
+                                <i class="bi bi-pencil" aria-hidden="true"></i>
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DeleteRule(rule)" title="Delete">
+                                <i class="bi bi-trash" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- Edit Rule Dialog -->
+<SfDialog @bind-Visible="_showDialog" Width="600px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="sr-dlg-hdr"><i class="bi bi-sliders2" aria-hidden="true"></i> @(_editingRule is null ? "New Rule" : "Edit Rule")</span></Header>
+        <Content>
+            <div class="sr-dlg-body">
+                <div class="sr-dlg-section">Rule Details</div>
+                <div class="sr-dlg-grid">
+                    <SfTextBox Placeholder="Rule name *" @bind-Value="_formData.RuleName" />
+                    <SfTextBox Placeholder="Description" @bind-Value="_formData.Description" Multiline="true" HtmlAttributes="@(new Dictionary<string,object>{{"rows","2"}})" />
+                    <SfDropDownList TValue="string" TItem="LV" DataSource="_segmentOpts" Placeholder="Select segment *" Width="100%" @bind-Value="_formData.Segment">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                </div>
+
+                <div class="sr-dlg-section" style="margin-top:.9rem">Scoring Criteria</div>
+                <div class="sr-criteria-list">
+                    @foreach (var criterion in _formData.Criteria)
+                    {
+                        <div class="sr-criterion-row">
+                            <SfDropDownList TValue="string" TItem="LV" DataSource="_fieldOpts" Placeholder="Field" Width="140px" @bind-Value="criterion.Field">
+                                <DropDownListFieldSettings Value="Value" Text="Label" />
+                            </SfDropDownList>
+                            <SfDropDownList TValue="string" TItem="LV" DataSource="_operatorOpts" Placeholder="Operator" Width="110px" @bind-Value="criterion.Operator">
+                                <DropDownListFieldSettings Value="Value" Text="Label" />
+                            </SfDropDownList>
+                            <SfTextBox Placeholder="Value" @bind-Value="criterion.Value" />
+                            <SfNumericTextBox @bind-Value="criterion.Points" Placeholder="Points" Min="0" Max="100"></SfNumericTextBox>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => RemoveCriterion(criterion)">
+                                <i class="bi bi-trash" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    }
+                </div>
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="AddCriterion" style="margin-top:.5rem">
+                    <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Criterion
+                </button>
+
+                <div class="sr-dlg-section" style="margin-top:.9rem">Options</div>
+                <div class="sr-dlg-check-row">
+                    <label class="sr-toggle"><input type="checkbox" @bind="_formData.IsActive" /> Enable rule</label>
+                    <label class="sr-toggle"><input type="checkbox" @bind="_formData.RunOnSchedule" /> Run on schedule</label>
+                </div>
+
+                @if (!string.IsNullOrEmpty(_formError))
+                {
+                    <div class="sr-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                }
+            </div>
+        </Content>
+        <FooterTemplate>
+            <div class="sr-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseDialog">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveRuleAsync"
+                        disabled="@(string.IsNullOrEmpty(_formData.RuleName) || string.IsNullOrEmpty(_formData.Segment))">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingRule is null ? "Create Rule" : "Save")
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private record LV(string Value, string Label);
+
+    private record SegmentationCriterion
+    {
+        public string? Field { get; set; }
+        public string? Operator { get; set; }
+        public string? Value { get; set; }
+        public int Points { get; set; }
+    }
+
+    private record SegmentationRuleForm
+    {
+        public string RuleName { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Segment { get; set; } = string.Empty;
+        public List<SegmentationCriterion> Criteria { get; set; } = [];
+        public bool IsActive { get; set; } = true;
+        public bool RunOnSchedule { get; set; } = false;
+    }
+
+    private record SegmentationRuleModel
+    {
+        public Guid RuleId { get; set; }
+        public string RuleName { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Segment { get; set; } = string.Empty;
+        public string SegmentColor { get; set; } = "#3b82f6";
+        public string Criteria { get; set; } = string.Empty;
+        public int AccountsMatched { get; set; }
+        public double Accuracy { get; set; }
+        public bool IsActive { get; set; }
+        public DateTime CreatedDate { get; set; }
+    }
+
+    private SfToast? _toast;
+    private bool _loading = true;
+    private string _search = string.Empty;
+    private string? _filterSegment;
+    private string? _filterStatus;
+
+    private List<SegmentationRuleModel> _rules = [];
+    private SegmentationRuleModel? _editingRule;
+    private SegmentationRuleForm _formData = new();
+    private bool _showDialog = false;
+    private string? _formError;
+
+    private static readonly List<LV> _segmentOpts = [
+        new("tier-vip", "VIP Tier"),
+        new("tier-standard", "Standard Tier"),
+        new("tier-basic", "Basic Tier"),
+        new("industry-tech", "Technology"),
+        new("industry-retail", "Retail"),
+        new("size-enterprise", "Enterprise"),
+        new("size-mid", "Mid-Market"),
+    ];
+
+    private static readonly List<LV> _fieldOpts = [
+        new("annual_revenue", "Annual Revenue"),
+        new("employee_count", "Employee Count"),
+        new("industry", "Industry"),
+        new("location", "Location"),
+        new("years_customer", "Years as Customer"),
+        new("total_premium", "Total Premium"),
+    ];
+
+    private static readonly List<LV> _operatorOpts = [
+        new("equals", "Equals"),
+        new("not_equals", "Not Equals"),
+        new("greater_than", "Greater Than"),
+        new("less_than", "Less Than"),
+        new("contains", "Contains"),
+    ];
+
+    private static readonly List<LV> _statusOpts = [
+        new("active", "Active"),
+        new("inactive", "Inactive"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/opportunities"), new("Segments", "/crm/segments"), new("Rules", "/crm/segments/rules"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        await Task.Delay(100);
+        _rules = BuildStubRules();
+        _loading = false;
+    }
+
+    private List<SegmentationRuleModel> BuildStubRules()
+    {
+        return new()
+        {
+            new() {
+                RuleId = Guid.NewGuid(),
+                RuleName = "VIP Enterprise Clients",
+                Description = "Automatically segment enterprise clients with high annual revenue",
+                Segment = "VIP Tier",
+                SegmentColor = "#f59e0b",
+                Criteria = "Annual Revenue > $10M AND Employees > 500",
+                AccountsMatched = 247,
+                Accuracy = 0.94,
+                IsActive = true,
+                CreatedDate = DateTime.Now.AddMonths(-3)
+            },
+            new() {
+                RuleId = Guid.NewGuid(),
+                RuleName = "Mid-Market Growth Segment",
+                Description = "Identify mid-market companies with growth potential",
+                Segment = "Standard Tier",
+                SegmentColor = "#3b82f6",
+                Criteria = "Annual Revenue $1M-$10M AND Growth Rate > 20%",
+                AccountsMatched = 583,
+                Accuracy = 0.87,
+                IsActive = true,
+                CreatedDate = DateTime.Now.AddMonths(-2)
+            },
+            new() {
+                RuleId = Guid.NewGuid(),
+                RuleName = "Technology Industry Focus",
+                Description = "Segment technology companies for targeted campaigns",
+                Segment = "Industry Tech",
+                SegmentColor = "#8b5cf6",
+                Criteria = "Industry = Technology",
+                AccountsMatched = 412,
+                Accuracy = 0.98,
+                IsActive = true,
+                CreatedDate = DateTime.Now.AddMonths(-1)
+            },
+        };
+    }
+
+    private List<SegmentationRuleModel> GetFilteredRules()
+    {
+        return _rules
+            .Where(r => string.IsNullOrEmpty(_search) || r.RuleName.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            .Where(r => string.IsNullOrEmpty(_filterSegment) || r.Segment.Contains(_filterSegment))
+            .Where(r => string.IsNullOrEmpty(_filterStatus) || (_filterStatus == "active") == r.IsActive)
+            .ToList();
+    }
+
+    private void OpenCreateRule()
+    {
+        _editingRule = null;
+        _formData = new() { Criteria = [new()] };
+        _formError = null;
+        _showDialog = true;
+    }
+
+    private void EditRule(SegmentationRuleModel rule)
+    {
+        _editingRule = rule;
+        _formData = new()
+        {
+            RuleName = rule.RuleName,
+            Description = rule.Description,
+            Segment = rule.Segment,
+            IsActive = rule.IsActive,
+        };
+        _formError = null;
+        _showDialog = true;
+    }
+
+    private void AddCriterion()
+    {
+        _formData.Criteria.Add(new());
+    }
+
+    private void RemoveCriterion(SegmentationCriterion criterion)
+    {
+        _formData.Criteria.Remove(criterion);
+    }
+
+    private void CloseDialog()
+    {
+        _showDialog = false;
+        _editingRule = null;
+        _formData = new();
+        _formError = null;
+    }
+
+    private async Task SaveRuleAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_formData.RuleName))
+        {
+            _formError = "Rule name is required.";
+            return;
+        }
+
+        if (string.IsNullOrEmpty(_formData.Segment))
+        {
+            _formError = "Segment is required.";
+            return;
+        }
+
+        if (!_formData.Criteria.Any())
+        {
+            _formError = "At least one criterion is required.";
+            return;
+        }
+
+        if (_editingRule is null)
+        {
+            var newRule = new SegmentationRuleModel
+            {
+                RuleId = Guid.NewGuid(),
+                RuleName = _formData.RuleName,
+                Description = _formData.Description,
+                Segment = _formData.Segment,
+                SegmentColor = "#3b82f6",
+                Criteria = string.Join(" AND ", _formData.Criteria.Select(c => $"{c.Field} {c.Operator} {c.Value}")),
+                AccountsMatched = 0,
+                Accuracy = 0.85,
+                IsActive = _formData.IsActive,
+                CreatedDate = DateTime.Now
+            };
+            _rules.Add(newRule);
+            await ShowToast("Rule created successfully.");
+        }
+        else
+        {
+            _editingRule.RuleName = _formData.RuleName;
+            _editingRule.Description = _formData.Description;
+            _editingRule.Segment = _formData.Segment;
+            _editingRule.IsActive = _formData.IsActive;
+            await ShowToast("Rule saved successfully.");
+        }
+
+        CloseDialog();
+    }
+
+    private async Task DeleteRule(SegmentationRuleModel rule)
+    {
+        _rules.Remove(rule);
+        await ShowToast("Rule deleted.");
+    }
+
+    private string AccuracyBadge(double accuracy)
+    {
+        return accuracy switch
+        {
+            >= 0.90 => "sr-accuracy-high",
+            >= 0.75 => "sr-accuracy-med",
+            _ => "sr-accuracy-low"
+        };
+    }
+
+    private async Task ShowToast(string message)
+    {
+        if (_toast is not null)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = message, CssClass = "e-toast-success" });
+        }
+    }
+}

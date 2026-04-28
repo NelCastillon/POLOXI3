@@ -1,0 +1,507 @@
+@page "/crm/enrichment"
+@namespace Ams.Web.Components.Pages.Crm
+@inject HttpClient HttpClient
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Data Enrichment — CRM</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Data Enrichment"
+               Subtitle="Enrich account and contact records with third-party data providers"
+               Icon="bi-puzzle">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "de-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="RunEnrichmentAsync" disabled="@_enriching">
+            <i class="bi @(_enriching ? "bi-hourglass-split" : "bi-play") @(_enriching ? "de-spin" : "")" aria-hidden="true"></i>
+            @(_enriching ? "Enriching…" : "Run Enrichment")
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI Strip -->
+<div class="de-kpi-strip">
+    <div class="de-kpi-card">
+        <span class="de-ki de-ki1"><i class="bi bi-puzzle" aria-hidden="true"></i></span>
+        <div><div class="de-kv">@_jobs.Count</div><div class="de-kl">Total Enrichment Jobs</div></div>
+    </div>
+    <div class="de-kpi-card">
+        <span class="de-ki de-ki2"><i class="bi bi-check-circle" aria-hidden="true"></i></span>
+        <div><div class="de-kv">@_jobs.Count(j => j.Status == "Completed")</div><div class="de-kl">Completed Jobs</div></div>
+    </div>
+    <div class="de-kpi-card">
+        <span class="de-ki de-ki3"><i class="bi bi-building" aria-hidden="true"></i></span>
+        <div><div class="de-kv">@_jobs.Sum(j => j.RecordsEnriched).ToString("N0")</div><div class="de-kl">Total Records Enriched</div></div>
+    </div>
+    <div class="de-kpi-card">
+        <span class="de-ki de-ki4"><i class="bi bi-percent" aria-hidden="true"></i></span>
+        <div><div class="de-kv">@(_jobs.Count > 0 ? _jobs.Average(j => j.SuccessRate).ToString("P0") : "N/A")</div><div class="de-kl">Avg. Success Rate</div></div>
+    </div>
+</div>
+
+<!-- Tabs: Data Providers / Jobs -->
+<div class="de-entity-tabs">
+    <button class="de-entity-tab @(_activeTab=="providers"?"de-entity-tab--active":"")" @onclick='()=>_activeTab="providers"'>
+        <i class="bi bi-plug" aria-hidden="true"></i> Data Providers
+    </button>
+    <button class="de-entity-tab @(_activeTab=="jobs"?"de-entity-tab--active":"")" @onclick='()=>_activeTab="jobs"'>
+        <i class="bi bi-clock-history" aria-hidden="true"></i> Job History <span class="de-count-badge">@_jobs.Count</span>
+    </button>
+</div>
+
+@if (_loading)
+{
+    <div class="de-loading">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading enrichment data…</span>
+    </div>
+}
+else if (_activeTab == "providers")
+{
+    <div class="de-providers-section">
+        <div class="de-providers-grid">
+            @foreach (var provider in _providers)
+            {
+                <div class="de-provider-card @(provider.IsConnected ? "de-provider-card--active" : "")">
+                    <div class="de-provider-header">
+                        <div class="de-provider-logo">
+                            <i class="bi @provider.Icon" aria-hidden="true"></i>
+                        </div>
+                        <div class="de-provider-info">
+                            <div class="de-provider-name">@provider.Name</div>
+                            <div class="de-provider-desc">@provider.Description</div>
+                        </div>
+                    </div>
+
+                    <div class="de-provider-fields">
+                        <span class="de-field-label">Available fields:</span>
+                        <div class="de-field-tags">
+                            @foreach (var field in provider.AvailableFields.Take(4))
+                            {
+                                <span class="de-field-tag">@field</span>
+                            }
+                            @if (provider.AvailableFields.Count > 4)
+                            {
+                                <span class="de-field-tag de-field-tag--more">+@(provider.AvailableFields.Count - 4) more</span>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="de-provider-status">
+                        @if (provider.IsConnected)
+                        {
+                            <span class="de-status-connected"><i class="bi bi-check-circle" aria-hidden="true"></i> Connected</span>
+                        }
+                        else
+                        {
+                            <span class="de-status-disconnected"><i class="bi bi-circle" aria-hidden="true"></i> Not Connected</span>
+                        }
+                    </div>
+
+                    <div class="de-provider-actions">
+                        @if (provider.IsConnected)
+                        {
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfigureProvider(provider)">
+                                <i class="bi bi-gear" aria-hidden="true"></i> Configure
+                            </button>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DisconnectProvider(provider)">
+                                <i class="bi bi-x" aria-hidden="true"></i> Disconnect
+                            </button>
+                        }
+                        else
+                        {
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => ConnectProvider(provider)">
+                                <i class="bi bi-plug" aria-hidden="true"></i> Connect
+                            </button>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+}
+else
+{
+    <div class="app-datagrid de-grid">
+        <SfGrid TValue="EnrichmentJobModel" DataSource="_jobs" AllowPaging="true" AllowSorting="true"
+                EnableHover="true" RowHeight="56">
+            <GridPageSettings PageSize="15" />
+            <GridColumns>
+                <GridColumn Field="@nameof(EnrichmentJobModel.JobId)" HeaderText="Job ID" Width="100" TextAlign="TextAlign.Left">
+                    <Template>
+                        @{ var job = (EnrichmentJobModel)context; }
+                        <span class="de-mono">@job.JobId.ToString().Substring(0, 8)…</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(EnrichmentJobModel.JobName)" HeaderText="Job" MinWidth="150">
+                    <Template>
+                        @{ var job = (EnrichmentJobModel)context; }
+                        <div class="de-job-cell">
+                            <div class="de-job-name">@job.JobName</div>
+                            <div class="de-job-provider">@job.ProviderName</div>
+                        </div>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(EnrichmentJobModel.Status)" HeaderText="Status" Width="110">
+                    <Template>
+                        @{ var job = (EnrichmentJobModel)context; }
+                        <span class="@StatusBadge(job.Status)">@job.Status</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(EnrichmentJobModel.RecordsRequested)" HeaderText="Records Requested" Width="130" TextAlign="TextAlign.Right">
+                    <Template>
+                        @{ var job = (EnrichmentJobModel)context; }
+                        <span class="de-mono">@job.RecordsRequested.ToString("N0")</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(EnrichmentJobModel.RecordsEnriched)" HeaderText="Records Enriched" Width="130" TextAlign="TextAlign.Right">
+                    <Template>
+                        @{ var job = (EnrichmentJobModel)context; }
+                        <span class="de-mono">@job.RecordsEnriched.ToString("N0")</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(EnrichmentJobModel.SuccessRate)" HeaderText="Success Rate" Width="120" TextAlign="TextAlign.Right">
+                    <Template>
+                        @{ var job = (EnrichmentJobModel)context; }
+                        <span class="@SuccessRateBadge(job.SuccessRate)">@job.SuccessRate.ToString("P0")</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(EnrichmentJobModel.StartedAt)" HeaderText="Started" Width="140" TextAlign="TextAlign.Center" Type="ColumnType.DateTime" Format="short">
+                </GridColumn>
+                <GridColumn HeaderText="Actions" Width="80" TextAlign="TextAlign.Right">
+                    <Template>
+                        @{ var job = (EnrichmentJobModel)context; }
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ViewJobDetails(job)" title="View Details">
+                            <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                        </button>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<!-- Configure Provider Dialog -->
+<SfDialog @bind-Visible="_showConfigDialog" Width="500px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header><span class="de-dlg-hdr"><i class="bi bi-gear" aria-hidden="true"></i> Configure Provider</span></Header>
+        <Content>
+            @if (_selectedProvider != null)
+            {
+                <div class="de-dlg-body">
+                    <div class="de-dlg-section">@_selectedProvider.Name Settings</div>
+
+                    <div class="de-dlg-grid">
+                        <div style="grid-column:span 2">
+                            <label class="de-dlg-label">API Key</label>
+                            <SfTextBox Placeholder="Enter API key" @bind-Value="_providerConfig.ApiKey" InputType="InputType.Password" />
+                        </div>
+
+                        <div style="grid-column:span 2">
+                            <label class="de-dlg-label">Select Fields to Enrich</label>
+                            <div class="de-field-selection">
+                                @foreach (var field in _selectedProvider.AvailableFields)
+                                {
+                                    <label class="de-field-checkbox">
+                                        <input type="checkbox" @bind="_providerConfig.SelectedFields" value="@field" />
+                                        <span>@field</span>
+                                    </label>
+                                }
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="de-dlg-check-row">
+                        <label class="de-toggle">
+                            <input type="checkbox" @bind="_providerConfig.EnableAutoEnrich" />
+                            Enable automatic enrichment on new records
+                        </label>
+                    </div>
+
+                    @if (!string.IsNullOrEmpty(_configError))
+                    {
+                        <div class="de-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_configError</div>
+                    }
+                </div>
+            }
+        </Content>
+        <FooterTemplate>
+            <div class="de-dlg-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseConfigDialog">Cancel</button>
+                <button class="um-btn um-btn-primary" @onclick="SaveProviderConfigAsync">
+                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save Configuration
+                </button>
+            </div>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    private record LV(string Value, string Label);
+
+    private record DataProviderModel
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Icon { get; set; } = "bi-plug";
+        public List<string> AvailableFields { get; set; } = [];
+        public bool IsConnected { get; set; }
+    }
+
+    private record EnrichmentJobModel
+    {
+        public Guid JobId { get; set; }
+        public string JobName { get; set; } = string.Empty;
+        public string ProviderName { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public int RecordsRequested { get; set; }
+        public int RecordsEnriched { get; set; }
+        public double SuccessRate { get; set; }
+        public DateTime StartedAt { get; set; }
+        public DateTime? CompletedAt { get; set; }
+    }
+
+    private record ProviderConfigModel
+    {
+        public string ApiKey { get; set; } = string.Empty;
+        public List<string> SelectedFields { get; set; } = [];
+        public bool EnableAutoEnrich { get; set; }
+    }
+
+    private SfToast? _toast;
+    private bool _loading = true;
+    private bool _enriching = false;
+    private string _activeTab = "providers";
+
+    private List<DataProviderModel> _providers = [];
+    private List<EnrichmentJobModel> _jobs = [];
+    private DataProviderModel? _selectedProvider;
+    private ProviderConfigModel _providerConfig = new();
+    private bool _showConfigDialog = false;
+    private string? _configError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/opportunities"), new("Enrichment", "/crm/enrichment"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        await Task.Delay(100);
+        _providers = BuildStubProviders();
+        _jobs = BuildStubJobs();
+        _loading = false;
+    }
+
+    private List<DataProviderModel> BuildStubProviders()
+    {
+        return new()
+        {
+            new() {
+                Name = "ZoomInfo",
+                Description = "Real-time B2B database with company and contact intelligence",
+                Icon = "bi-globe",
+                IsConnected = true,
+                AvailableFields = new() { "Company Size", "Industry", "Revenue", "Website", "Phone", "CEO Name", "Founded Year" }
+            },
+            new() {
+                Name = "LinkedIn",
+                Description = "Professional network data for contact and company verification",
+                Icon = "bi-linkedin",
+                IsConnected = false,
+                AvailableFields = new() { "Job Title", "Company", "Experience", "Education", "LinkedIn URL", "Endorsements" }
+            },
+            new() {
+                Name = "Apollo.io",
+                Description = "Sales intelligence platform with verified contact and company data",
+                Icon = "bi-activity",
+                IsConnected = true,
+                AvailableFields = new() { "Email", "Phone", "Job Title", "Company", "Tech Stack", "Funding Stage", "Contact Intent" }
+            },
+            new() {
+                Name = "Hunter.io",
+                Description = "Email finder and verifier for B2B sales and marketing",
+                Icon = "bi-envelope",
+                IsConnected = false,
+                AvailableFields = new() { "Email Address", "Email Type", "Confidence Score", "Verification Status" }
+            },
+            new() {
+                Name = "Clearbit",
+                Description = "The API of record for B2B data enrichment",
+                Icon = "bi-database",
+                IsConnected = true,
+                AvailableFields = new() { "Company Domain", "Industry", "Employees", "Raised Funding", "Tech Stack", "Social Profiles" }
+            },
+        };
+    }
+
+    private List<EnrichmentJobModel> BuildStubJobs()
+    {
+        return new()
+        {
+            new() {
+                JobId = Guid.NewGuid(),
+                JobName = "ZoomInfo - Company Data",
+                ProviderName = "ZoomInfo",
+                Status = "Completed",
+                RecordsRequested = 1250,
+                RecordsEnriched = 1203,
+                SuccessRate = 0.96,
+                StartedAt = DateTime.Now.AddDays(-5),
+                CompletedAt = DateTime.Now.AddDays(-5).AddHours(2)
+            },
+            new() {
+                JobId = Guid.NewGuid(),
+                JobName = "Apollo - Contact Verification",
+                ProviderName = "Apollo.io",
+                Status = "Completed",
+                RecordsRequested = 892,
+                RecordsEnriched = 856,
+                SuccessRate = 0.96,
+                StartedAt = DateTime.Now.AddDays(-3),
+                CompletedAt = DateTime.Now.AddDays(-3).AddHours(1)
+            },
+            new() {
+                JobId = Guid.NewGuid(),
+                JobName = "Clearbit - Tech Stack Analysis",
+                ProviderName = "Clearbit",
+                Status = "In Progress",
+                RecordsRequested = 450,
+                RecordsEnriched = 127,
+                SuccessRate = 0.89,
+                StartedAt = DateTime.Now.AddHours(-2),
+            },
+            new() {
+                JobId = Guid.NewGuid(),
+                JobName = "ZoomInfo - Industry Classification",
+                ProviderName = "ZoomInfo",
+                Status = "Completed",
+                RecordsRequested = 3100,
+                RecordsEnriched = 3087,
+                SuccessRate = 0.996,
+                StartedAt = DateTime.Now.AddDays(-10),
+                CompletedAt = DateTime.Now.AddDays(-10).AddHours(3)
+            },
+        };
+    }
+
+    private void ConfigureProvider(DataProviderModel provider)
+    {
+        _selectedProvider = provider;
+        _providerConfig = new();
+        _configError = null;
+        _showConfigDialog = true;
+    }
+
+    private void ConnectProvider(DataProviderModel provider)
+    {
+        _selectedProvider = provider;
+        _providerConfig = new();
+        _configError = null;
+        _showConfigDialog = true;
+    }
+
+    private void DisconnectProvider(DataProviderModel provider)
+    {
+        provider.IsConnected = false;
+        ShowToastAsync("Provider disconnected.");
+    }
+
+    private void CloseConfigDialog()
+    {
+        _showConfigDialog = false;
+        _selectedProvider = null;
+        _providerConfig = new();
+        _configError = null;
+    }
+
+    private async Task SaveProviderConfigAsync()
+    {
+        if (string.IsNullOrEmpty(_providerConfig.ApiKey))
+        {
+            _configError = "API Key is required.";
+            return;
+        }
+
+        if (!_providerConfig.SelectedFields.Any())
+        {
+            _configError = "Select at least one field to enrich.";
+            return;
+        }
+
+        if (_selectedProvider != null)
+        {
+            _selectedProvider.IsConnected = true;
+        }
+
+        await ShowToastAsync("Provider configuration saved.");
+        CloseConfigDialog();
+    }
+
+    private async Task RunEnrichmentAsync()
+    {
+        _enriching = true;
+        StateHasChanged();
+        await Task.Delay(2000);
+
+        var newJob = new EnrichmentJobModel
+        {
+            JobId = Guid.NewGuid(),
+            JobName = "Manual Enrichment Run",
+            ProviderName = "Multi-Provider",
+            Status = "Completed",
+            RecordsRequested = 500,
+            RecordsEnriched = 485,
+            SuccessRate = 0.97,
+            StartedAt = DateTime.Now,
+            CompletedAt = DateTime.Now.AddSeconds(30)
+        };
+
+        _jobs.Insert(0, newJob);
+        _enriching = false;
+        await ShowToastAsync("Enrichment job completed successfully.");
+    }
+
+    private void ViewJobDetails(EnrichmentJobModel job)
+    {
+        // Navigation to job detail page
+        Nav.NavigateTo($"/crm/enrichment/{job.JobId}");
+    }
+
+    private string StatusBadge(string status)
+    {
+        return status switch
+        {
+            "Completed" => "de-status-completed",
+            "In Progress" => "de-status-progress",
+            "Failed" => "de-status-failed",
+            _ => "de-status-pending"
+        };
+    }
+
+    private string SuccessRateBadge(double rate)
+    {
+        return rate switch
+        {
+            >= 0.95 => "de-success-high",
+            >= 0.80 => "de-success-med",
+            _ => "de-success-low"
+        };
+    }
+
+    private async Task ShowToastAsync(string message)
+    {
+        if (_toast is not null)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = message, CssClass = "e-toast-success" });
+        }
+    }
+}
