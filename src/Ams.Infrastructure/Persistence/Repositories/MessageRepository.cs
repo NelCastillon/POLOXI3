@@ -20,6 +20,11 @@ public sealed class MessageRepository : IMessageRepository
 
     public async Task<IReadOnlyList<MessageThreadDto>> GetThreadsAsync(GetThreadsRequest request, CancellationToken cancellationToken = default)
     {
+        var channel = NormalizeFilter(request.Channel);
+        var status = NormalizeFilter(request.Status);
+        var assignedTo = NormalizeFilter(request.AssignedTo);
+        var searchTerm = NormalizeFilter(request.SearchTerm);
+
         var sql = $@"
 SELECT {ThreadColumns}
 FROM Comms.MessageThread t
@@ -41,7 +46,7 @@ ORDER BY m.SentAt ASC;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql,
-            new { request.TenantId, request.Channel, request.Status, request.AssignedTo, request.SearchTerm },
+            new { request.TenantId, Channel = channel, Status = status, AssignedTo = assignedTo, SearchTerm = searchTerm },
             cancellationToken: cancellationToken));
 
         var threads = (await multi.ReadAsync<MessageThreadDto>()).AsList();
@@ -78,6 +83,9 @@ ORDER BY m.SentAt ASC;";
             Messages       = lookup.GetValueOrDefault(t.ThreadId, [])
         }).ToList();
     }
+
+    private static string? NormalizeFilter(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
 
     public async Task<MessageThreadDto?> GetThreadByIdAsync(Guid threadId, CancellationToken cancellationToken = default)
     {

@@ -1,0 +1,329 @@
+@page "/communications"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Communications Workflow — AMS</PageTitle>
+
+<AppPageHeader Title="Communications Workflow"
+               Subtitle="Tenant admin command center for inbox operations, campaigns, templates, appointments, outreach, and notifications"
+               Icon="bi-chat-dots">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="ResetFilters">
+            <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/communications/inbox")'>
+            <i class="bi bi-inbox" aria-hidden="true"></i> Open Inbox
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<section class="comms-hero" aria-label="Communications workflow overview">
+    <div>
+        <span class="comms-eyebrow">Tenant administration</span>
+        <h2>Communications Workflow</h2>
+        <p>Govern customer communication across email, SMS, portal messages, campaign outreach, appointments, templates, and notification delivery.</p>
+    </div>
+    <div class="comms-hero-grid">
+        @foreach (var action in _quickActions)
+        {
+            <button class="comms-quick-action" @onclick="() => Nav.NavigateTo(action.Url)">
+                <i class="bi @action.Icon" aria-hidden="true"></i>
+                <span>@action.Label</span>
+            </button>
+        }
+    </div>
+</section>
+
+<section class="comms-kpi-grid" aria-label="Communications metrics">
+    @Kpi("Unread", _workflow.Sum(x => x.Unread).ToString(), "Inbox work requiring review", "bi-inbox", "comms-tone-blue")
+    @Kpi("Escalations", _workflow.Sum(x => x.Escalated).ToString(), "Compliance and VIP cases", "bi-arrow-up-circle", "comms-tone-red")
+    @Kpi("Scheduled", _workflow.Count(x => x.Stage == "Scheduled").ToString(), "Campaigns and appointments", "bi-calendar-check", "comms-tone-amber")
+    @Kpi("Templates", "24", "Approved reusable messages", "bi-layout-text-sidebar", "comms-tone-violet")
+</section>
+
+<section class="comms-command-bar" aria-label="Communications workflow filters">
+    <div class="comms-search-wrap">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input type="search"
+               placeholder="Search workflow, owner, channel, module..."
+               @bind="_search"
+               @bind:event="oninput" />
+    </div>
+
+    <div class="comms-pill-group" role="group" aria-label="Workflow filter">
+        @foreach (var filter in _filters)
+        {
+            <button class="comms-pill @(_filter == filter.Key ? "comms-pill--active" : "")"
+                    @onclick="() => _filter = filter.Key">
+                @filter.Label
+                <span>@FilterCount(filter.Key)</span>
+            </button>
+        }
+    </div>
+</section>
+
+<section class="comms-layout">
+    <div class="comms-flow" aria-label="Communications workflow lanes">
+        @foreach (var lane in _lanes)
+        {
+            var items = FilteredWorkflow.Where(x => x.Stage == lane.Key).ToList();
+            <article class="comms-lane">
+                <header class="comms-lane-header">
+                    <div>
+                        <span class="comms-lane-title">@lane.Label</span>
+                        <span class="comms-lane-subtitle">@lane.Description</span>
+                    </div>
+                    <span class="comms-lane-count">@items.Count</span>
+                </header>
+
+                <div class="comms-lane-list">
+                    @if (items.Count == 0)
+                    {
+                        <div class="comms-empty-mini">No visible workflow items.</div>
+                    }
+                    else
+                    {
+                        @foreach (var item in items)
+                        {
+                            <button class="comms-work-card @(item.Escalated > 0 ? "comms-work-card--risk" : "")"
+                                    @onclick="() => _selected = item">
+                                <div class="comms-work-topline">
+                                    <span class="comms-chip @ToneCss(item.Channel)">@item.Channel</span>
+                                    <span class="comms-status @StatusCss(item.Priority)">@item.Priority</span>
+                                </div>
+                                <strong>@item.Title</strong>
+                                <p>@item.Summary</p>
+                                <div class="comms-work-meta">
+                                    <span><i class="bi bi-person" aria-hidden="true"></i> @item.Owner</span>
+                                    <span><i class="bi bi-clock" aria-hidden="true"></i> @item.Sla</span>
+                                </div>
+                            </button>
+                        }
+                    }
+                </div>
+            </article>
+        }
+    </div>
+
+    <aside class="comms-admin-panel" aria-label="Tenant admin controls">
+        @if (_selected is null)
+        {
+            <div class="comms-side-empty">
+                <i class="bi bi-shield-check" aria-hidden="true"></i>
+                <h3>Tenant admin controls</h3>
+                <p>Select a workflow item to inspect routing, compliance controls, ownership, and module actions.</p>
+            </div>
+        }
+        else
+        {
+            <div class="comms-detail-header">
+                <span class="comms-chip @ToneCss(_selected.Channel)">@_selected.Channel</span>
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selected = null" aria-label="Close details">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
+            <h3>@_selected.Title</h3>
+            <p>@_selected.Summary</p>
+
+            <dl class="comms-detail-list">
+                <div><dt>Owner</dt><dd>@_selected.Owner</dd></div>
+                <div><dt>Stage</dt><dd>@_selected.Stage</dd></div>
+                <div><dt>Priority</dt><dd><span class="comms-status @StatusCss(_selected.Priority)">@_selected.Priority</span></dd></div>
+                <div><dt>Unread</dt><dd>@_selected.Unread</dd></div>
+                <div><dt>Escalated</dt><dd class="@(_selected.Escalated > 0 ? "comms-danger-text" : "")">@_selected.Escalated</dd></div>
+                <div><dt>SLA</dt><dd>@_selected.Sla</dd></div>
+            </dl>
+
+            <div class="comms-policy-card">
+                <strong>Tenant controls</strong>
+                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Opt-out and consent policy enforced</span>
+                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Brand and template governance enabled</span>
+                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Escalation routing monitored</span>
+            </div>
+
+            <div class="comms-detail-actions">
+                <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selected.Url)">
+                    <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Module
+                </button>
+                <button class="um-btn um-btn-ghost" @onclick="() => Advance(_selected)">
+                    <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Advance
+                </button>
+            </div>
+        }
+    </aside>
+</section>
+
+<section class="comms-module-grid" aria-label="Communications modules">
+    @foreach (var module in _modules)
+    {
+        <button class="comms-module-card" @onclick="() => Nav.NavigateTo(module.Url)">
+            <span class="comms-module-icon @ToneCss(module.Channel)"><i class="bi @module.Icon" aria-hidden="true"></i></span>
+            <span class="comms-module-content">
+                <strong>@module.Title</strong>
+                <small>@module.Description</small>
+            </span>
+            <i class="bi bi-chevron-right comms-module-arrow" aria-hidden="true"></i>
+        </button>
+    }
+</section>
+
+@code {
+    private string _search = string.Empty;
+    private string _filter = string.Empty;
+    private WorkflowItem? _selected;
+
+    private readonly List<WorkflowItem> _workflow = [];
+
+    private readonly Lane[] _lanes =
+    [
+        new("Intake", "Intake", "New inbound and routing"),
+        new("Draft", "Draft", "Templates and campaign preparation"),
+        new("Scheduled", "Scheduled", "Planned communication activity"),
+        new("Active", "Active", "Live outreach and conversations"),
+        new("Review", "Review", "Escalation, compliance, and delivery review")
+    ];
+
+    private readonly Filter[] _filters =
+    [
+        new("", "All"),
+        new("escalated", "Escalated"),
+        new("email", "Email"),
+        new("sms", "SMS"),
+        new("admin", "Admin Review")
+    ];
+
+    private readonly ModuleLink[] _modules =
+    [
+        new("Inbox", "Unified email, SMS, internal note, and portal message queue.", "/communications/inbox", "bi-inbox", "Email"),
+        new("Campaigns", "Batch email, SMS, renewal, CAT, and marketing campaign operations.", "/communications/campaigns", "bi-megaphone", "Campaign"),
+        new("Templates", "Govern approved message templates, compliance footers, and language.", "/communications/templates", "bi-layout-text-sidebar", "Template"),
+        new("Appointments", "Schedule client meetings and confirmation/reminder communications.", "/communications/appointments", "bi-calendar-event", "Appointment"),
+        new("Outreach Queue", "Call lists, follow-up cadence, contact attempts, and reassignment.", "/communications/outreach", "bi-telephone-outbound", "SMS"),
+        new("Notifications", "Tenant notification delivery, read status, channel, and audit state.", "/communications/notifications", "bi-bell", "Notification")
+    ];
+
+    private readonly ModuleLink[] _quickActions =
+    [
+        new("Inbox", "", "/communications/inbox", "bi-inbox", "Email"),
+        new("Campaigns", "", "/communications/campaigns", "bi-megaphone", "Campaign"),
+        new("Templates", "", "/communications/templates", "bi-layout-text-sidebar", "Template"),
+        new("Outreach", "", "/communications/outreach", "bi-telephone-outbound", "SMS")
+    ];
+
+    private IEnumerable<WorkflowItem> FilteredWorkflow => _workflow.Where(item =>
+        (string.IsNullOrWhiteSpace(_filter) || _filter switch
+        {
+            "escalated" => item.Escalated > 0,
+            "email" => item.Channel == "Email",
+            "sms" => item.Channel == "SMS",
+            "admin" => item.Stage == "Review" || item.Priority == "Urgent",
+            _ => true
+        }) &&
+        (string.IsNullOrWhiteSpace(_search) ||
+         item.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         item.Summary.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         item.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         item.Channel.Contains(_search, StringComparison.OrdinalIgnoreCase)))
+        .OrderByDescending(x => x.Priority == "Urgent")
+        .ThenByDescending(x => x.Escalated)
+        .ThenBy(x => x.Title);
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Communications", "/communications"));
+        BuildWorkflow();
+        _selected = _workflow.FirstOrDefault(x => x.Escalated > 0) ?? _workflow.FirstOrDefault();
+    }
+
+    private void BuildWorkflow()
+    {
+        _workflow.Clear();
+        _workflow.AddRange(
+        [
+            new("Inbound inbox triage", "Unassigned customer conversations across email, SMS, portal, and internal notes.", "Email", "Urgent", "Intake", "Sarah Kim", 18, 4, "1h SLA", "/communications/inbox"),
+            new("Renewal reminder campaign", "Multi-channel renewal reminder audience scheduled for next business day.", "Campaign", "High", "Scheduled", "Maria Santos", 0, 0, "Ready", "/communications/campaigns"),
+            new("Policy service template review", "Tenant admin approval required for updated policy service template language.", "Template", "Medium", "Review", "Diana Perez", 0, 1, "Admin review", "/communications/templates"),
+            new("Client appointment confirmations", "Automated confirmation and reminder messages for producer appointments.", "Appointment", "Medium", "Scheduled", "James Park", 3, 0, "24h reminder", "/communications/appointments"),
+            new("CAT event outreach queue", "Outbound call and SMS queue for affected clients after weather event.", "SMS", "High", "Active", "Kevin Obi", 7, 2, "Same day", "/communications/outreach"),
+            new("Notification delivery review", "Tenant notifications with failed or pending delivery states require admin inspection.", "Notification", "Medium", "Review", "Lisa Chen", 5, 0, "Monitor", "/communications/notifications"),
+            new("Draft payment reminder", "Billing reminder copy is drafted and waiting for template selection.", "Email", "Low", "Draft", "Sarah Kim", 0, 0, "Draft", "/communications/campaigns")
+        ]);
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _filter = string.Empty;
+    }
+
+    private void Advance(WorkflowItem item)
+    {
+        item.Stage = item.Stage switch
+        {
+            "Intake" => "Active",
+            "Draft" => "Scheduled",
+            "Scheduled" => "Active",
+            "Active" => "Review",
+            _ => "Review"
+        };
+    }
+
+    private int FilterCount(string key) => key switch
+    {
+        "escalated" => _workflow.Count(x => x.Escalated > 0),
+        "email" => _workflow.Count(x => x.Channel == "Email"),
+        "sms" => _workflow.Count(x => x.Channel == "SMS"),
+        "admin" => _workflow.Count(x => x.Stage == "Review" || x.Priority == "Urgent"),
+        _ => _workflow.Count
+    };
+
+    private static string ToneCss(string channel) => channel switch
+    {
+        "Email" => "comms-tone-blue",
+        "SMS" => "comms-tone-green",
+        "Campaign" => "comms-tone-amber",
+        "Template" => "comms-tone-violet",
+        "Appointment" => "comms-tone-cyan",
+        "Notification" => "comms-tone-red",
+        _ => "comms-tone-neutral"
+    };
+
+    private static string StatusCss(string priority) => priority switch
+    {
+        "Urgent" => "comms-status-urgent",
+        "High" => "comms-status-high",
+        "Medium" => "comms-status-medium",
+        _ => "comms-status-low"
+    };
+
+    private RenderFragment Kpi(string label, string value, string meta, string icon, string tone) => @<article class="comms-kpi-card">
+        <span class="comms-kpi-icon @tone"><i class="bi @icon" aria-hidden="true"></i></span>
+        <div>
+            <strong>@value</strong>
+            <span>@label</span>
+            <small>@meta</small>
+        </div>
+    </article>;
+
+    private sealed record Lane(string Key, string Label, string Description);
+    private sealed record Filter(string Key, string Label);
+    private sealed record ModuleLink(string Title, string Description, string Url, string Icon, string Channel)
+    {
+        public string Label => Title;
+    }
+
+    private sealed class WorkflowItem(string title, string summary, string channel, string priority, string stage, string owner, int unread, int escalated, string sla, string url)
+    {
+        public string Title { get; set; } = title;
+        public string Summary { get; set; } = summary;
+        public string Channel { get; set; } = channel;
+        public string Priority { get; set; } = priority;
+        public string Stage { get; set; } = stage;
+        public string Owner { get; set; } = owner;
+        public int Unread { get; set; } = unread;
+        public int Escalated { get; set; } = escalated;
+        public string Sla { get; set; } = sla;
+        public string Url { get; set; } = url;
+    }
+}

@@ -56,6 +56,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDocumentRepository, DocumentRepository>();
         services.AddScoped<IAssistantMessageRepository, AssistantMessageRepository>();
         services.AddScoped<IDashboardRepository, DashboardRepository>();
+        services.AddScoped<IAgencyDashboardRepository, AgencyDashboardRepository>();
 
         // ── Existing services ────────────────────────────────────────
         services.AddScoped<ILeadService, LeadService>();
@@ -82,6 +83,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionService, CommissionService>();
         services.AddScoped<IDocumentService, DocumentService>();
         services.AddScoped<IDashboardService, DashboardService>();
+        services.AddScoped<IAgencyDashboardService, AgencyDashboardService>();
 
         // ── Platform Core engines ────────────────────────────────────
         services.AddScoped<ITenantDomainRepository, TenantDomainRepository>();
@@ -118,6 +120,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITenantDeploymentAssignmentService, TenantDeploymentAssignmentService>();
 
         services.AddScoped<ITenantBrandingRepository, TenantBrandingRepository>();
+        services.AddScoped<ITenantSettingsWorkflowRepository, TenantSettingsWorkflowRepository>();
+        services.AddScoped<ISubscriptionSettingsWorkflowRepository, SubscriptionSettingsWorkflowRepository>();
         services.AddScoped<INotificationRepository, NotificationRepository>();
         services.AddScoped<IReportRepository, ReportRepository>();
         services.AddScoped<IConfigurationRepository, ConfigurationRepository>();
@@ -127,6 +131,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISecurityAuditRepository, SecurityAuditRepository>();
 
         services.AddScoped<ITenantBrandingService, TenantBrandingService>();
+        services.AddScoped<ITenantSettingsWorkflowService, TenantSettingsWorkflowService>();
+        services.AddScoped<ISubscriptionSettingsWorkflowService, SubscriptionSettingsWorkflowService>();
         services.AddScoped<INotificationService, NotificationService>();
         services.AddScoped<IReportService, ReportService>();
         services.AddScoped<IConfigurationService, ConfigurationService>();
@@ -356,6 +362,80 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISecurityEventLogService, SecurityEventLogService>();
         services.AddScoped<ISystemLogRepository, SystemLogRepository>();
         services.AddScoped<ISystemLogService, SystemLogService>();
+
+        // ── CRM Config repositories & services ──────────────────────
+        services.AddScoped<ILeadSourceRepository, LeadSourceRepository>();
+        services.AddScoped<ILeadSourceService, LeadSourceService>();
+        services.AddScoped<ILeadStatusRepository, LeadStatusRepository>();
+        services.AddScoped<ILeadStatusService, LeadStatusService>();
+        services.AddScoped<IOpportunityStageRepository, OpportunityStageRepository>();
+        services.AddScoped<IOpportunityStageService, OpportunityStageService>();
+        services.AddScoped<IPipelineSettingRepository, PipelineSettingRepository>();
+        services.AddScoped<IPipelineSettingService, PipelineSettingService>();
+        services.AddScoped<IDuplicateRuleRepository, DuplicateRuleRepository>();
+        services.AddScoped<IDuplicateRuleService, DuplicateRuleService>();
+        services.AddScoped<IAssignmentRuleRepository, AssignmentRuleRepository>();
+        services.AddScoped<IAssignmentRuleService, AssignmentRuleService>();
+        services.AddScoped<ICrmCustomFieldRepository, CrmCustomFieldRepository>();
+        services.AddScoped<ICrmCustomFieldService, CrmCustomFieldService>();
+
+        // ── Account Config repositories & services ───────────────────
+        services.AddScoped<IAccountTypeRepository, AccountTypeRepository>();
+        services.AddScoped<IAccountTypeService, AccountTypeService>();
+        services.AddScoped<IRelationshipTypeRepository, RelationshipTypeRepository>();
+        services.AddScoped<IRelationshipTypeService, RelationshipTypeService>();
+        services.AddScoped<IHouseholdSettingRepository, HouseholdSettingRepository>();
+        services.AddScoped<IHouseholdSettingService, HouseholdSettingService>();
+        services.AddScoped<ICommercialEntitySettingRepository, CommercialEntitySettingRepository>();
+        services.AddScoped<ICommercialEntitySettingService, CommercialEntitySettingService>();
+        services.AddScoped<IContactTypeRepository, ContactTypeRepository>();
+        services.AddScoped<IContactTypeService, ContactTypeService>();
+        services.AddScoped<IAccountCustomFieldRepository, AccountCustomFieldRepository>();
+        services.AddScoped<IAccountCustomFieldService, AccountCustomFieldService>();
+
+        // ── Policy Config repositories & services ────────────────────
+        services.AddScoped<ICoverageTypeRepository, CoverageTypeRepository>();
+        services.AddScoped<ICoverageTypeService, CoverageTypeService>();
+        services.AddScoped<IPolicyStatusRepository, PolicyStatusRepository>();
+        services.AddScoped<IPolicyStatusService, PolicyStatusService>();
+        services.AddScoped<IEndorsementTypeRepository, EndorsementTypeRepository>();
+        services.AddScoped<IEndorsementTypeService, EndorsementTypeService>();
+        services.AddScoped<ICancellationReasonRepository, CancellationReasonRepository>();
+        services.AddScoped<ICancellationReasonService, CancellationReasonService>();
+        services.AddScoped<ICertificateSettingRepository, CertificateSettingRepository>();
+        services.AddScoped<ICertificateSettingService, CertificateSettingService>();
+        services.AddScoped<IIdCardSettingRepository, IdCardSettingRepository>();
+        services.AddScoped<IIdCardSettingService, IdCardSettingService>();
+        services.AddScoped<IPolicyCustomFieldRepository, PolicyCustomFieldRepository>();
+        services.AddScoped<IPolicyCustomFieldService, PolicyCustomFieldService>();
+
+        // ── Carrier Config repositories & services ───────────────────
+        services.AddScoped<IMgaWholesalerRepository, MgaWholesalerRepository>();
+        services.AddScoped<IMgaWholesalerService, MgaWholesalerService>();
+        services.AddScoped<ICarrierContactRepository, CarrierContactRepository>();
+        services.AddScoped<ICarrierContactService, CarrierContactService>();
+        services.AddScoped<ICarrierAppointmentRepository, CarrierAppointmentRepository>();
+        services.AddScoped<ICarrierAppointmentService, CarrierAppointmentService>();
+        services.AddScoped<ICarrierPerformanceRepository, CarrierPerformanceRepository>();
+        services.AddScoped<ICarrierPerformanceService, CarrierPerformanceService>();
+        services.AddScoped<IMarketAccessRuleRepository, MarketAccessRuleRepository>();
+        services.AddScoped<IMarketAccessRuleService, MarketAccessRuleService>();
+        services.AddScoped<ICarrierDownloadMappingRepository, CarrierDownloadMappingRepository>();
+        services.AddScoped<ICarrierDownloadMappingService, CarrierDownloadMappingService>();
+        services.AddScoped<IWorkflowConfigRepository, WorkflowConfigRepository>();
+        services.AddScoped<IWorkflowConfigService, WorkflowConfigService>();
+        services.AddScoped<ICommunicationConfigRepository, CommunicationConfigRepository>();
+        services.AddScoped<ICommunicationConfigService, CommunicationConfigService>();
+        services.AddScoped<IDocumentConfigRepository, DocumentConfigRepository>();
+        services.AddScoped<IDocumentConfigService, DocumentConfigService>();
+        services.AddScoped<IBillingConfigRepository, BillingConfigRepository>();
+        services.AddScoped<IBillingConfigService, BillingConfigService>();
+        services.AddScoped<ICommissionConfigRepository, CommissionConfigRepository>();
+        services.AddScoped<ICommissionConfigService, CommissionConfigService>();
+        services.AddScoped<IMarketingConfigRepository, MarketingConfigRepository>();
+        services.AddScoped<IMarketingConfigService, MarketingConfigService>();
+        services.AddScoped<IPortalConfigRepository, PortalConfigRepository>();
+        services.AddScoped<IPortalConfigService, PortalConfigService>();
 
         return services;
     }

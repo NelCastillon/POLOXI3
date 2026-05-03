@@ -1,0 +1,235 @@
+@page "/tenant/crm/lead-sources"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Lead Sources — CRM Configuration</PageTitle>
+
+<AppPageHeader Title="Lead Sources"
+               Subtitle="Manage the channels through which leads are acquired"
+               Icon="bi-funnel">
+    <Actions>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Lead Source
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-funnel-fill" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Sources</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("active")' title="Filter: Active">
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "inactive" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("inactive")' title="Filter: Inactive">
+        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-dash-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => !x.IsActive)</div><div class="pc-kpi-label">Inactive</div></div>
+    </div>
+</div>
+
+<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search source name or code…" />
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<div class="um-grid-card">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div>
+    }
+    <SfGrid TValue="LeadSourceDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+        <GridEvents TValue="LeadSourceDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="50" PageSizes="@(new[] { 25, 50, 100 })" />
+        <GridColumns>
+            <GridColumn Field="SourceCode" HeaderText="Code" Width="120" />
+            <GridColumn Field="SourceName" HeaderText="Name" Width="220" />
+            <GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (LeadSourceDto)context; }
+                    <span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Actions" Width="110" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (LeadSourceDto)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Create / Edit Dialog -->
+<SfDialog @bind-Visible="_showForm" Width="520px" IsModal="true" ShowCloseIcon="false">
+    <DialogEvents Closed="ResetForm" />
+    <DialogContent>
+        <div class="um-modal-header">
+            <i class="bi bi-funnel-fill"></i>
+            <span>@(_editId.HasValue ? "Edit Lead Source" : "Add Lead Source")</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <EditForm Model="_form" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label>Source Code <span class="text-danger">*</span></label>
+                        <InputText @bind-Value="_form.SourceCode" class="um-input" placeholder="e.g. WEBSITE" />
+                        <ValidationMessage class="um-validation-message text-danger" For="() => _form.SourceCode" />
+                    </div>
+                    <div class="um-field">
+                        <label>Source Name <span class="text-danger">*</span></label>
+                        <InputText @bind-Value="_form.SourceName" class="um-input" placeholder="e.g. Website Form" />
+                        <ValidationMessage class="um-validation-message text-danger" For="() => _form.SourceName" />
+                    </div>
+                    <div class="um-field um-field--checkbox">
+                        <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                    @if (_saving) { <span class="um-spinner-sm"></span> } @(_editId.HasValue ? "Save Changes" : "Create")
+                </button>
+            </div>
+        </EditForm>
+    </DialogContent>
+</SfDialog>
+
+<!-- Delete Confirm -->
+<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-confirm-dialog">
+            <div class="um-confirm-icon um-confirm-icon--danger">
+                <i class="bi bi-trash3-fill"></i>
+            </div>
+            <div class="um-confirm-message">
+                <h6>Delete Lead Source?</h6>
+                <p>You are about to delete <strong>@_deleteTarget?.SourceName</strong>. This action cannot be undone.</p>
+            </div>
+            <div class="um-modal-footer w-100">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </DialogContent>
+</SfDialog>
+
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+
+@code {
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    List<LeadSourceDto> _items = [], _filtered = [];
+    string? _activeFilter;
+    bool _loading, _saving;
+    string _search = string.Empty;
+    string? _loadError;
+    bool _showForm, _showDelete;
+    Guid? _editId;
+    LeadSourceDto? _deleteTarget;
+    SfToast _toast = default!;
+
+    LeadSourceFormModel _form = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Config", null), new("Lead Sources", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchLeadSourcesAsync(TenantId, _search, pageSize: 200);
+            _items = result?.Items.ToList() ?? [];
+            ApplyFilter();
+        }
+        catch (Exception ex) { _loadError = $"Failed to load lead sources: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    Task OnSearchAsync() => LoadAsync();
+
+    void ApplyFilter() => _filtered = _activeFilter switch
+    {
+        "active" => _items.Where(x => x.IsActive).ToList(),
+        "inactive" => _items.Where(x => !x.IsActive).ToList(),
+        _ => [.. _items]
+    };
+
+    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
+    void OnRowSelected(RowSelectEventArgs<LeadSourceDto> args) => OpenEdit(args.Data);
+
+    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
+
+    void OpenEdit(LeadSourceDto item)
+    {
+        _editId = item.LeadSourceId;
+        _form = new() { SourceCode = item.SourceCode, SourceName = item.SourceName, IsActive = item.IsActive };
+        _showForm = true;
+    }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+                await Api.UpdateLeadSourceAsync(_editId.Value, new(_form.SourceCode, _form.SourceName, _form.IsActive));
+            else
+                await Api.CreateLeadSourceAsync(new(TenantId, _form.SourceCode, _form.SourceName));
+            _showForm = false;
+            await _toast.ShowAsync(new() { Content = "Saved successfully", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmDelete(LeadSourceDto item) { _deleteTarget = item; _showDelete = true; }
+
+    async Task ExecuteDeleteAsync()
+    {
+        _saving = true;
+        try
+        {
+            await Api.DeleteLeadSourceAsync(_deleteTarget!.LeadSourceId);
+            _showDelete = false;
+            await _toast.ShowAsync(new() { Content = "Deleted", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        finally { _saving = false; }
+    }
+
+    void ResetForm() { _form = new(); _editId = null; }
+
+    sealed class LeadSourceFormModel
+    {
+        [Required(ErrorMessage = "Source Code is required.")]
+        [StringLength(80, ErrorMessage = "Source Code cannot exceed 80 characters.")]
+        public string SourceCode { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Source Name is required.")]
+        [StringLength(200, ErrorMessage = "Source Name cannot exceed 200 characters.")]
+        public string SourceName { get; set; } = string.Empty;
+
+        public bool IsActive { get; set; } = true;
+    }
+}

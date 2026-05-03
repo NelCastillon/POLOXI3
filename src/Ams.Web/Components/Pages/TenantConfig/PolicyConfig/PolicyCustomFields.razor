@@ -1,0 +1,134 @@
+@page "/tenant/policies/custom-fields"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Features.PolicyConfig
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Policy Custom Fields — Policy Configuration</PageTitle>
+
+<AppPageHeader Title="Policy Custom Fields"
+               Subtitle="Define additional data fields for policies, coverages, endorsements, and certificates"
+               Icon="bi-input-cursor-text">
+    <Actions>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Field</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    <div class="pc-kpi-card @(_activeFilter == "" ? "pc-kpi-card--active" : "")" title="Show all policy custom fields" @onclick='() => SetFilter("")' style="cursor:pointer">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-input-cursor-text" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Fields</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")" title="Filter active fields" @onclick='() => SetFilter("active")' style="cursor:pointer">
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "required" ? "pc-kpi-card--active" : "")" title="Filter required fields" @onclick='() => SetFilter("required")' style="cursor:pointer">
+        <span class="pc-kpi-icon" style="background:#fee2e2"><i class="bi bi-asterisk text-danger" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.IsRequired)</div><div class="pc-kpi-label">Required</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "searchable" ? "pc-kpi-card--active" : "")" title="Filter searchable fields" @onclick='() => SetFilter("searchable")' style="cursor:pointer">
+        <span class="pc-kpi-icon" style="background:#dbeafe"><i class="bi bi-search text-primary" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.IsSearchable)</div><div class="pc-kpi-label">Searchable</div></div>
+    </div>
+</div>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search custom fields...">
+    <Filters>
+        <div class="um-filter-field">
+            <label>Entity Type</label>
+            <SfDropDownList TValue="string" TItem="string" @bind-Value="_filterEntity" Placeholder="All"
+                            DataSource="@_entityTypes">
+                <DropDownListEvents TValue="string" TItem="string" ValueChange="@(async _ => await LoadAsync())" />
+            </SfDropDownList>
+        </div>
+    </Filters>
+</AppFilterPanel>
+
+<div class="um-grid-card">
+    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading...</span></div> }
+    <SfGrid TValue="PolicyCustomFieldDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+        <GridEvents TValue="PolicyCustomFieldDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="25" />
+        <GridColumns>
+            <GridColumn Field="FieldCode" HeaderText="Field Code" Width="160" />
+            <GridColumn Field="FieldName" HeaderText="Field Name" Width="220" />
+            <GridColumn Field="EntityType" HeaderText="Entity Type" Width="130"><Template>@{ var r = (PolicyCustomFieldDto)context; }<span class="um-badge um-badge-info">@r.EntityType</span></Template></GridColumn>
+            <GridColumn Field="FieldType" HeaderText="Field Type" Width="120"><Template>@{ var r = (PolicyCustomFieldDto)context; }<span class="um-badge um-badge-neutral">@r.FieldType</span></Template></GridColumn>
+            <GridColumn Field="IsRequired" HeaderText="Required" Width="100" TextAlign="TextAlign.Center"><Template>@{ var r = (PolicyCustomFieldDto)context; }@if (r.IsRequired) { <i class="bi bi-check2-circle text-danger"></i> } else { <i class="bi bi-dash text-muted"></i> }</Template></GridColumn>
+            <GridColumn Field="IsSearchable" HeaderText="Searchable" Width="110" TextAlign="TextAlign.Center"><Template>@{ var r = (PolicyCustomFieldDto)context; }@if (r.IsSearchable) { <i class="bi bi-check2-circle text-success"></i> } else { <i class="bi bi-dash text-muted"></i> }</Template></GridColumn>
+            <GridColumn Field="SortOrder" HeaderText="Order" Width="80" TextAlign="TextAlign.Center" />
+            <GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center"><Template>@{ var r = (PolicyCustomFieldDto)context; }<span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span></Template></GridColumn>
+            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center"><Template>@{ var r = (PolicyCustomFieldDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(r)"><i class="bi bi-pencil"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(r)"><i class="bi bi-trash"></i></button></Template></GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<SfDialog @bind-Visible="_showForm" Width="600px" IsModal="true" ShowCloseIcon="false">
+    <DialogEvents Closed="ResetForm" />
+    <DialogContent>
+        <div class="um-modal-header"><i class="bi bi-input-cursor-text" aria-hidden="true"></i><span>@(_editId.HasValue ? "Edit Custom Field" : "Add Custom Field")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_form" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field"><label>Field Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.FieldCode" class="um-input" placeholder="e.g. ADDITIONAL_INTEREST" /><ValidationMessage For="() => _form.FieldCode" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Field Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.FieldName" class="um-input" placeholder="e.g. Additional Interest" /><ValidationMessage For="() => _form.FieldName" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Entity Type <span class="text-danger">*</span></label><SfDropDownList TValue="string" TItem="string" @bind-Value="_form.EntityType" DataSource="@_entityTypes" Placeholder="Select entity type" /><ValidationMessage For="() => _form.EntityType" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Field Type <span class="text-danger">*</span></label><SfDropDownList TValue="string" TItem="string" @bind-Value="_form.FieldType" DataSource="@_fieldTypes" Placeholder="Select field type" /><ValidationMessage For="() => _form.FieldType" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Default Value</label><InputText @bind-Value="_form.DefaultValue" class="um-input" placeholder="Optional" /><ValidationMessage For="() => _form.DefaultValue" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Sort Order</label><InputNumber @bind-Value="_form.SortOrder" class="um-input" /><ValidationMessage For="() => _form.SortOrder" class="validation-message text-danger" /></div>
+                <div class="um-field um-field--full"><label>Dropdown Options <span class="text-muted" style="font-size:.8em">(comma-separated, for Dropdown type)</span></label><InputText @bind-Value="_form.DropdownOptions" class="um-input" placeholder="e.g. Option A, Option B, Option C" /><ValidationMessage For="() => _form.DropdownOptions" class="validation-message text-danger" /></div>
+                <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsRequired" /> Required</label></div>
+                <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsSearchable" /> Searchable</label></div>
+                <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label></div>
+            </div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button></div>
+        </EditForm>
+    </DialogContent>
+</SfDialog>
+
+<SfDialog @bind-Visible="_showDelete" Width="420px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent><div class="um-confirm-dialog"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div><div class="um-confirm-title">Delete Custom Field</div><div class="um-confirm-body">Are you sure you want to delete <strong>@_deleteTarget?.FieldName</strong>? This action cannot be undone.</div><div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></DialogContent>
+</SfDialog>
+
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
+<style>.validation-message{display:flex;align-items:center;gap:.45rem;margin-top:.55rem;color:#dc3545!important;font-size:.875rem;font-weight:700}.validation-message::before{content:"!";display:inline-flex;align-items:center;justify-content:center;width:1rem;height:1rem;min-width:1rem;flex-shrink:0;border-radius:999px;color:#fff;background:linear-gradient(135deg,#ef4444,#b91c1c);font-size:.7rem;font-weight:800}.um-input.modified.invalid{border-color:#dc3545!important;box-shadow:0 0 0 .18rem rgba(220,53,69,.14)!important}</style>
+
+@code {
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    static readonly string[] _entityTypes = ["Policy", "Coverage", "Endorsement", "Certificate", "IDCard"];
+    static readonly string[] _fieldTypes  = ["Text", "Number", "Date", "Dropdown", "Checkbox"];
+    List<PolicyCustomFieldDto> _items = [];
+    List<PolicyCustomFieldDto> _filtered = [];
+    string _activeFilter = "";
+    bool _loading, _saving, _showForm, _showDelete;
+    string _search = string.Empty;
+    string _filterEntity = string.Empty;
+    string? _loadError;
+    Guid? _editId;
+    PolicyCustomFieldDto? _deleteTarget;
+    SfToast _toast = default!;
+    FieldFormModel _form = new();
+
+    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policy Config", null), new("Policy Custom Fields", null)); await LoadAsync(); }
+    async Task LoadAsync() { _loading = true; _loadError = null; try { var r = await Api.SearchPolicyCustomFieldsAsync(TenantId, _search, pageSize: 200); _items = (r?.Items?.ToList() ?? []).Where(x => string.IsNullOrEmpty(_filterEntity) || x.EntityType == _filterEntity).ToList(); ApplyFilter(); } catch (Exception ex) { _loadError = ex.Message; } finally { _loading = false; } }
+    void SetFilter(string filter) { _activeFilter = filter; ApplyFilter(); }
+    void ApplyFilter() => _filtered = _activeFilter switch { "active" => _items.Where(x => x.IsActive).ToList(), "required" => _items.Where(x => x.IsRequired).ToList(), "searchable" => _items.Where(x => x.IsSearchable).ToList(), _ => [.. _items] };
+    Task OnSearchAsync() => LoadAsync();
+    void OnRowSelected(RowSelectEventArgs<PolicyCustomFieldDto> args) => OpenEdit(args.Data);
+    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
+    void OpenEdit(PolicyCustomFieldDto item) { _editId = item.CustomFieldId; _form = new() { FieldCode = item.FieldCode, FieldName = item.FieldName, EntityType = item.EntityType, FieldType = item.FieldType, DefaultValue = item.DefaultValue, DropdownOptions = item.DropdownOptions, IsRequired = item.IsRequired, IsSearchable = item.IsSearchable, SortOrder = item.SortOrder, IsActive = item.IsActive }; _showForm = true; }
+    async Task SaveAsync() { _saving = true; try { if (_editId.HasValue) await Api.UpdatePolicyCustomFieldAsync(_editId.Value, new(_form.FieldCode, _form.FieldName, _form.EntityType, _form.FieldType, _form.DefaultValue, _form.DropdownOptions, _form.IsRequired, _form.IsSearchable, _form.IsActive, _form.SortOrder)); else await Api.CreatePolicyCustomFieldAsync(new(TenantId, _form.FieldCode, _form.FieldName, _form.EntityType, _form.FieldType, _form.DefaultValue, _form.DropdownOptions, _form.IsRequired, _form.IsSearchable, _form.SortOrder)); _showForm = false; await _toast.ShowAsync(new() { Content = "Saved successfully", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
+    void ConfirmDelete(PolicyCustomFieldDto item) { _deleteTarget = item; _showDelete = true; }
+    async Task ExecuteDeleteAsync() { _saving = true; try { await Api.DeletePolicyCustomFieldAsync(_deleteTarget!.CustomFieldId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Deleted successfully", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
+    void ResetForm() { _form = new(); _editId = null; }
+    sealed class FieldFormModel { [Required, StringLength(50)] public string FieldCode { get; set; } = string.Empty; [Required, StringLength(100)] public string FieldName { get; set; } = string.Empty; [Required, StringLength(50)] public string EntityType { get; set; } = string.Empty; [Required, StringLength(50)] public string FieldType { get; set; } = string.Empty; [StringLength(500)] public string? DefaultValue { get; set; } [StringLength(4000)] public string? DropdownOptions { get; set; } public bool IsRequired { get; set; } public bool IsSearchable { get; set; } [Range(0, 9999)] public int SortOrder { get; set; } public bool IsActive { get; set; } = true; }
+}

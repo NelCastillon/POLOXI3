@@ -1,0 +1,135 @@
+@page "/tenant/policies/certs"
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Certificate Settings — Policy Configuration</PageTitle>
+
+<AppPageHeader Title="Certificate Settings"
+               Subtitle="Configure certificate defaults, delivery rules, and display options"
+               Icon="bi-patch-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    <div class="pc-kpi-card" title="Total certificate settings">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-patch-check-fill" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_settings.Count</div><div class="pc-kpi-label">Total Settings</div></div>
+    </div>
+    <div class="pc-kpi-card" title="Boolean settings enabled">
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-toggle-on" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_settings.Count(s => IsBoolean(s) && IsTrue(s.SettingValue))</div><div class="pc-kpi-label">Enabled</div></div>
+    </div>
+    <div class="pc-kpi-card" title="Boolean settings disabled">
+        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-toggle-off" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_settings.Count(s => IsBoolean(s) && !IsTrue(s.SettingValue))</div><div class="pc-kpi-label">Disabled</div></div>
+    </div>
+</div>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<div class="um-settings-container">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <div class="row g-4">
+            @foreach (var setting in _settings)
+            {
+                <div class="col-md-6">
+                    <div class="um-settings-card">
+                        <div class="um-settings-card__header">
+                            <div>
+                                <div class="fw-semibold">@FormatKey(setting.SettingKey)</div>
+                                <div class="text-muted small">@setting.Description</div>
+                            </div>
+                        </div>
+                        <div class="um-settings-card__body">
+                            @if (IsBoolean(setting))
+                            {
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox"
+                                           checked="@IsTrue(setting.SettingValue)"
+                                           @onchange="async e => await UpdateAsync(setting, BoolStr(e.Value))" />
+                                    <label class="form-check-label">@(IsTrue(setting.SettingValue) ? "Enabled" : "Disabled")</label>
+                                </div>
+                            }
+                            else if (setting.SettingKey.Contains("Delivery", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <select class="um-input" value="@setting.SettingValue" @onchange="async e => await UpdateAsync(setting, e.Value?.ToString())">
+                                    <option value="Email">Email</option>
+                                    <option value="Portal">Portal</option>
+                                    <option value="Download">Download</option>
+                                    <option value="Print">Print</option>
+                                </select>
+                            }
+                            else
+                            {
+                                <div class="d-flex gap-2">
+                                    <input class="um-input flex-grow-1" value="@setting.SettingValue" @onchange="async e => await UpdateAsync(setting, e.Value?.ToString())" />
+                                    <span class="text-muted align-self-center small">@setting.SettingType</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
+
+@code {
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    List<CertificateSettingDto> _settings = [];
+    bool _loading;
+    string? _loadError;
+    SfToast _toast = default!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policy Config", null), new("Certificate Settings", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try { _settings = await Api.GetCertificateSettingsAsync(TenantId) ?? []; }
+        catch (Exception ex) { _loadError = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    async Task UpdateAsync(CertificateSettingDto setting, string? newValue)
+    {
+        var oldValue = setting.SettingValue;
+        try
+        {
+            setting.SettingValue = newValue;
+            await Api.UpdateCertificateSettingAsync(setting.CertificateSettingId, new(newValue));
+            await _toast.ShowAsync(new() { Content = $"{FormatKey(setting.SettingKey)} updated", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            setting.SettingValue = oldValue;
+            await _toast.ShowAsync(new() { Content = $"Update failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    static bool IsBoolean(CertificateSettingDto setting) => setting.SettingType?.Equals("Boolean", StringComparison.OrdinalIgnoreCase) == true;
+    static bool IsTrue(string? value) => value?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
+    static string BoolStr(object? val) => val?.ToString()?.Equals("true", StringComparison.OrdinalIgnoreCase) == true ? "true" : "false";
+    static string FormatKey(string key) => System.Text.RegularExpressions.Regex.Replace(key, "(?<=[a-z])(?=[A-Z])", " ");
+}

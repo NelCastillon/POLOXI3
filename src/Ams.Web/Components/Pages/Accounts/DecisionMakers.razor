@@ -1,0 +1,224 @@
+@page "/client/contacts/dm"
+@namespace Ams.Web.Components.Pages.Contacts.Details
+@using Syncfusion.Blazor
+@using Syncfusion.Blazor.Notifications
+@inject ApiClient Api
+@inject HttpClient HttpClient
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Decision Makers</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Decision Makers"
+               Subtitle="Key contacts with decision-making authority"
+               Icon="bi-star">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "dm-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <SfDropDownList TValue="string" TItem="LV" DataSource="_filterOptions" 
+                      Placeholder="All Industries" ShowClearButton="true" Width="150px"
+                      @bind-Value="_selectedFilter">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </Actions>
+</AppPageHeader>
+
+<div class="dm-container">
+    <!-- KPI Strip -->
+    <div class="dm-kpi-strip">
+        <div class="dm-kpi-card">
+            <span class="dm-ki"><i class="bi bi-star-fill" aria-hidden="true"></i></span>
+            <div><div class="dm-kv">@_filteredDecisionMakers.Count</div><div class="dm-kl">Decision Makers</div></div>
+        </div>
+        <div class="dm-kpi-card">
+            <span class="dm-ki"><i class="bi bi-building" aria-hidden="true"></i></span>
+            <div><div class="dm-kv">@_decisionMakers.Select(d => d.AccountName).Distinct().Count()</div><div class="dm-kl">Accounts</div></div>
+        </div>
+        <div class="dm-kpi-card">
+            <span class="dm-ki"><i class="bi bi-envelope" aria-hidden="true"></i></span>
+            <div><div class="dm-kv">@_decisionMakers.Count(d => !string.IsNullOrEmpty(d.Email))</div><div class="dm-kl">With Email</div></div>
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="dm-loading"><span class="um-spin" aria-hidden="true"></span><span>Loading decision makers…</span></div>
+    }
+    else if (_decisionMakers.Count == 0)
+    {
+        <div class="dm-empty">
+            <i class="bi bi-inbox" aria-hidden="true"></i>
+            <span>No decision makers recorded yet.</span>
+        </div>
+    }
+    else
+    {
+        <!-- Grid View -->
+        <div class="dm-grid">
+            @foreach (var dm in _filteredDecisionMakers)
+            {
+                <div class="dm-card">
+                    <div class="dm-card-avatar">@GetInitials(dm.FullName)</div>
+                    <div class="dm-card-content">
+                        <div class="dm-name">@dm.FullName</div>
+                        <div class="dm-title">@dm.JobTitle</div>
+                        <div class="dm-company">
+                            <i class="bi bi-building" aria-hidden="true"></i> @dm.AccountName
+                        </div>
+                        <div class="dm-contact">
+                            @if (!string.IsNullOrEmpty(dm.Email))
+                            {
+                                <a href="@($"mailto:{dm.Email}")" class="dm-link" title="Send email">
+                                    <i class="bi bi-envelope" aria-hidden="true"></i>
+                                </a>
+                            }
+                            @if (!string.IsNullOrEmpty(dm.Phone))
+                            {
+                                <a href="@($"tel:{dm.Phone}")" class="dm-link" title="Call">
+                                    <i class="bi bi-telephone" aria-hidden="true"></i>
+                                </a>
+                            }
+                            @if (!string.IsNullOrEmpty(dm.LinkedIn))
+                            {
+                                <a href="@dm.LinkedIn" target="_blank" class="dm-link" title="LinkedIn profile">
+                                    <i class="bi bi-linkedin" aria-hidden="true"></i>
+                                </a>
+                            }
+                        </div>
+                    </div>
+                    <div class="dm-card-actions">
+                        <button class="dm-action" @onclick="() => ViewProfile(dm.ContactId)" title="View profile">
+                            <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <!-- Pagination -->
+        @if (_filteredDecisionMakers.Count > 20)
+        {
+            <div class="dm-pagination">
+                <button class="um-btn um-btn-outline" @onclick="PreviousPage" disabled="@(_currentPage == 1)">
+                    <i class="bi bi-chevron-left" aria-hidden="true"></i> Previous
+                </button>
+                <span class="dm-page-info">Page @_currentPage of @_totalPages</span>
+                <button class="um-btn um-btn-outline" @onclick="NextPage" disabled="@(_currentPage >= _totalPages)">
+                    Next <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                </button>
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private SfToast _toast = null!;
+    private bool _loading = true;
+
+    private List<DecisionMakerInfo> _decisionMakers = new();
+    private List<DecisionMakerInfo> _filteredDecisionMakers = new();
+    private string _selectedFilter = "";
+    private int _currentPage = 1;
+    private int _pageSize = 20;
+
+    private List<LV> _filterOptions = new();
+
+    record LV(string Label, string Value);
+
+    class DecisionMakerInfo
+    {
+        public Guid ContactId { get; set; }
+        public Guid AccountId { get; set; }
+        public string FullName { get; set; } = string.Empty;
+        public string JobTitle { get; set; } = string.Empty;
+        public string AccountName { get; set; } = string.Empty;
+        public string? Email { get; set; }
+        public string? Phone { get; set; }
+        public string? LinkedIn { get; set; }
+        public string? Industry { get; set; }
+        public DateTime LastContact { get; set; }
+    }
+
+    private int _totalPages => (_filteredDecisionMakers.Count + _pageSize - 1) / _pageSize;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var breadcrumbs = new BreadcrumbService.BreadcrumbItem[] {
+            new("Contacts", "/client/contacts"),
+            new("Decision Makers", "/client/contacts/dm")
+        };
+        Breadcrumbs.SetCrumbs(breadcrumbs);
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(0); // TODO: replace with real API call to /api/contacts/decision-makers
+        _decisionMakers =
+        [
+            new() { ContactId = Guid.NewGuid(), AccountId = Guid.NewGuid(), FullName = "Margaret Holloway",  JobTitle = "Chief Executive Officer",     AccountName = "Sullivan Mfg. LLC",         Email = "m.holloway@sullivan.com",    Phone = "(312) 555-0101", Industry = "Manufacturing",    LastContact = DateTime.Now.AddDays(-3)  },
+            new() { ContactId = Guid.NewGuid(), AccountId = Guid.NewGuid(), FullName = "Derek Ashford",      JobTitle = "VP of Operations",            AccountName = "Ashford Industries",        Email = "d.ashford@ashford.com",      Phone = "(415) 555-0182", Industry = "Manufacturing",    LastContact = DateTime.Now.AddDays(-7)  },
+            new() { ContactId = Guid.NewGuid(), AccountId = Guid.NewGuid(), FullName = "Patricia Yuen",      JobTitle = "CFO",                         AccountName = "Pacific Rim Partners",      Email = "p.yuen@pacrm.com",           Phone = "(206) 555-0244", Industry = "Finance",          LastContact = DateTime.Now.AddDays(-1)  },
+            new() { ContactId = Guid.NewGuid(), AccountId = Guid.NewGuid(), FullName = "Carlos Medina",      JobTitle = "Director of Risk",            AccountName = "Medina & Associates",       Email = "c.medina@medinaassoc.com",   Phone = "(305) 555-0317", Industry = "Finance",          LastContact = DateTime.Now.AddDays(-14) },
+            new() { ContactId = Guid.NewGuid(), AccountId = Guid.NewGuid(), FullName = "Jennifer Stockton",  JobTitle = "President",                   AccountName = "Stockton Real Estate LLC",  Email = "j.stockton@sre.com",         Phone = "(602) 555-0468", Industry = "Real Estate",      LastContact = DateTime.Now.AddDays(-2)  },
+            new() { ContactId = Guid.NewGuid(), AccountId = Guid.NewGuid(), FullName = "Nathan Okafor",      JobTitle = "COO",                         AccountName = "Okafor Logistics Group",    Email = "n.okafor@okaforlog.com",     Phone = "(713) 555-0521", Industry = "Logistics",        LastContact = DateTime.Now.AddDays(-5)  },
+            new() { ContactId = Guid.NewGuid(), AccountId = Guid.NewGuid(), FullName = "Susan Park",         JobTitle = "Chief Procurement Officer",   AccountName = "Park Healthcare Systems",   Email = "s.park@parkhcs.com",         Phone = "(617) 555-0693", Industry = "Healthcare",       LastContact = DateTime.Now.AddDays(-9)  },
+            new() { ContactId = Guid.NewGuid(), AccountId = Guid.NewGuid(), FullName = "Thomas Whitfield",   JobTitle = "Managing Director",           AccountName = "Whitfield Capital",         Email = "t.whitfield@wfcap.com",      Phone = "(212) 555-0774", Industry = "Finance",          LastContact = DateTime.Now.AddDays(-21) },
+            new() { ContactId = Guid.NewGuid(), AccountId = Guid.NewGuid(), FullName = "Amanda Leclair",     JobTitle = "General Counsel",             AccountName = "Leclair Pharma",            Email = "a.leclair@leclairpharma.com",Phone = "(617) 555-0855", Industry = "Healthcare",       LastContact = DateTime.Now.AddDays(-4)  },
+            new() { ContactId = Guid.NewGuid(), AccountId = Guid.NewGuid(), FullName = "Robert Tanner",      JobTitle = "CEO",                         AccountName = "Tanner Construction Co.",   Email = "r.tanner@tannerconstruct.com",Phone = "(404) 555-0936", Industry = "Construction",     LastContact = DateTime.Now.AddDays(-18) },
+        ];
+
+        _filterOptions = _decisionMakers
+            .Where(d => !string.IsNullOrEmpty(d.Industry))
+            .Select(d => d.Industry!)
+            .Distinct()
+            .Select(i => new LV(i, i))
+            .OrderBy(l => l.Label)
+            .ToList();
+
+        ApplyFilter();
+        _loading = false;
+    }
+
+    private void ApplyFilter()
+    {
+        _filteredDecisionMakers = string.IsNullOrEmpty(_selectedFilter)
+            ? _decisionMakers
+            : _decisionMakers.Where(d => d.Industry == _selectedFilter).ToList();
+
+        _currentPage = 1;
+    }
+
+    private void ViewProfile(Guid contactId)
+    {
+        Nav.NavigateTo("/client/contacts/" + contactId);
+    }
+
+    private void NextPage()
+    {
+        if (_currentPage < _totalPages)
+            _currentPage++;
+    }
+
+    private void PreviousPage()
+    {
+        if (_currentPage > 1)
+            _currentPage--;
+    }
+
+    private string GetInitials(string name) =>
+        string.Concat(name.Split(' ').Select(s => s.FirstOrDefault())).ToUpper();
+
+    private List<DecisionMakerInfo> GetPagedData()
+    {
+        var skip = (_currentPage - 1) * _pageSize;
+        return _filteredDecisionMakers.Skip(skip).Take(_pageSize).ToList();
+    }
+}

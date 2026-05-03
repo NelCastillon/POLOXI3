@@ -1,0 +1,303 @@
+using Ams.Application.Abstractions.Persistence;
+using Ams.Application.Common.Dtos;
+using Ams.Application.Common.Models;
+using Ams.Application.Features.CrmConfig;
+using Dapper;
+
+namespace Ams.Infrastructure.Persistence.Repositories;
+
+public sealed class LeadSourceRepository : ILeadSourceRepository
+{
+    private readonly ISqlConnectionFactory _cf;
+    public LeadSourceRepository(ISqlConnectionFactory cf) => _cf = cf;
+
+    private const string Cols = "LeadSourceId, TenantId, SourceCode, SourceName, IsActive, CreatedDateUtc";
+
+    public async Task<LeadSourceDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        return await cn.QuerySingleOrDefaultAsync<LeadSourceDto>(new CommandDefinition(
+            $"SELECT {Cols} FROM CRM.LeadSource WHERE LeadSourceId = @Id;",
+            new { Id = id }, cancellationToken: ct));
+    }
+
+    public async Task<PagedResult<LeadSourceDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
+    {
+        var sql = RepositorySql.BuildPagedSearchSql("CRM.LeadSource", Cols,
+            "SourceName LIKE '%' + @SearchTerm + '%' OR SourceCode LIKE '%' + @SearchTerm + '%'", "SourceName ASC", hasSoftDelete: false);
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql,
+            new { TenantId = tenantId, SearchTerm = searchTerm ?? "", Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize },
+            cancellationToken: ct));
+        var items = (await multi.ReadAsync<LeadSourceDto>()).AsList();
+        var total = await multi.ReadSingleAsync<int>();
+        return new PagedResult<LeadSourceDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateLeadSourceRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"INSERT INTO CRM.LeadSource (LeadSourceId,TenantId,SourceCode,SourceName,IsActive,CreatedDateUtc)
+VALUES (@Id,@TenantId,@SourceCode,@SourceName,1,GETUTCDATE());";
+        var id = Guid.NewGuid();
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.TenantId, r.SourceCode, r.SourceName }, cancellationToken: ct));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateLeadSourceRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"UPDATE CRM.LeadSource SET SourceCode=@SourceCode,SourceName=@SourceName,IsActive=@IsActive WHERE LeadSourceId=@Id;";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.SourceCode, r.SourceName, r.IsActive }, cancellationToken: ct));
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition("DELETE FROM CRM.LeadSource WHERE LeadSourceId=@Id;", new { Id = id }, cancellationToken: ct));
+    }
+}
+
+public sealed class LeadStatusRepository : ILeadStatusRepository
+{
+    private readonly ISqlConnectionFactory _cf;
+    public LeadStatusRepository(ISqlConnectionFactory cf) => _cf = cf;
+    private const string Cols = "LeadStatusId, TenantId, StatusCode, StatusName, StatusType, Description, ColorHex, IsDefault, IsActive, SortOrder, CreatedDateUtc";
+
+    public async Task<LeadStatusDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        return await cn.QuerySingleOrDefaultAsync<LeadStatusDto>(new CommandDefinition($"SELECT {Cols} FROM CRM.LeadStatus WHERE LeadStatusId=@Id AND IsDeleted=0;", new { Id = id }, cancellationToken: ct));
+    }
+
+    public async Task<PagedResult<LeadStatusDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
+    {
+        var sql = RepositorySql.BuildPagedSearchSql("CRM.LeadStatus", Cols, "StatusName LIKE '%'+@SearchTerm+'%' OR StatusCode LIKE '%'+@SearchTerm+'%'", "SortOrder ASC");
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm ?? "", Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: ct));
+        var items = (await multi.ReadAsync<LeadStatusDto>()).AsList();
+        var total = await multi.ReadSingleAsync<int>();
+        return new PagedResult<LeadStatusDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateLeadStatusRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"INSERT INTO CRM.LeadStatus (LeadStatusId,TenantId,StatusCode,StatusName,StatusType,Description,ColorHex,IsDefault,SortOrder,IsActive,IsDeleted,CreatedDateUtc) VALUES (@Id,@TenantId,@StatusCode,@StatusName,@StatusType,@Description,@ColorHex,@IsDefault,@SortOrder,1,0,GETUTCDATE());";
+        var id = Guid.NewGuid();
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.TenantId, r.StatusCode, r.StatusName, r.StatusType, r.Description, r.ColorHex, r.IsDefault, r.SortOrder }, cancellationToken: ct));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateLeadStatusRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"UPDATE CRM.LeadStatus SET StatusCode=@StatusCode,StatusName=@StatusName,StatusType=@StatusType,Description=@Description,ColorHex=@ColorHex,IsDefault=@IsDefault,IsActive=@IsActive,SortOrder=@SortOrder,ModifiedDateUtc=GETUTCDATE() WHERE LeadStatusId=@Id AND IsDeleted=0;";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.StatusCode, r.StatusName, r.StatusType, r.Description, r.ColorHex, r.IsDefault, r.IsActive, r.SortOrder }, cancellationToken: ct));
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition("UPDATE CRM.LeadStatus SET IsDeleted=1 WHERE LeadStatusId=@Id;", new { Id = id }, cancellationToken: ct));
+    }
+}
+
+public sealed class OpportunityStageRepository : IOpportunityStageRepository
+{
+    private readonly ISqlConnectionFactory _cf;
+    public OpportunityStageRepository(ISqlConnectionFactory cf) => _cf = cf;
+    private const string Cols = "OpportunityStageId, TenantId, StageCode, StageName, SortOrder, ProbabilityPercent, IsClosedStage, IsWonStage, IsActive";
+
+    public async Task<OpportunityStageDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        return await cn.QuerySingleOrDefaultAsync<OpportunityStageDto>(new CommandDefinition($"SELECT {Cols} FROM CRM.OpportunityStage WHERE OpportunityStageId=@Id;", new { Id = id }, cancellationToken: ct));
+    }
+
+    public async Task<PagedResult<OpportunityStageDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
+    {
+        var sql = RepositorySql.BuildPagedSearchSql("CRM.OpportunityStage", Cols, "StageName LIKE '%'+@SearchTerm+'%' OR StageCode LIKE '%'+@SearchTerm+'%'", "SortOrder ASC", hasSoftDelete: false);
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm ?? "", Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: ct));
+        var items = (await multi.ReadAsync<OpportunityStageDto>()).AsList();
+        var total = await multi.ReadSingleAsync<int>();
+        return new PagedResult<OpportunityStageDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateOpportunityStageRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"INSERT INTO CRM.OpportunityStage (OpportunityStageId,TenantId,StageCode,StageName,SortOrder,ProbabilityPercent,IsClosedStage,IsWonStage,IsActive) VALUES (@Id,@TenantId,@StageCode,@StageName,@SortOrder,@ProbabilityPercent,@IsClosedStage,@IsWonStage,1);";
+        var id = Guid.NewGuid();
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.TenantId, r.StageCode, r.StageName, r.SortOrder, r.ProbabilityPercent, r.IsClosedStage, r.IsWonStage }, cancellationToken: ct));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateOpportunityStageRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"UPDATE CRM.OpportunityStage SET StageCode=@StageCode,StageName=@StageName,SortOrder=@SortOrder,ProbabilityPercent=@ProbabilityPercent,IsClosedStage=@IsClosedStage,IsWonStage=@IsWonStage,IsActive=@IsActive WHERE OpportunityStageId=@Id;";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.StageCode, r.StageName, r.SortOrder, r.ProbabilityPercent, r.IsClosedStage, r.IsWonStage, r.IsActive }, cancellationToken: ct));
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition("DELETE FROM CRM.OpportunityStage WHERE OpportunityStageId=@Id;", new { Id = id }, cancellationToken: ct));
+    }
+}
+
+public sealed class PipelineSettingRepository : IPipelineSettingRepository
+{
+    private readonly ISqlConnectionFactory _cf;
+    public PipelineSettingRepository(ISqlConnectionFactory cf) => _cf = cf;
+
+    public async Task<List<PipelineSettingDto>> GetAllAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        var items = await cn.QueryAsync<PipelineSettingDto>(new CommandDefinition("SELECT PipelineSettingId,TenantId,SettingKey,SettingValue,SettingType,Category,Description,CreatedDateUtc FROM CRM.PipelineSetting WHERE TenantId=@TenantId AND IsDeleted=0 ORDER BY Category,SettingKey;", new { TenantId = tenantId }, cancellationToken: ct));
+        return items.AsList();
+    }
+
+    public async Task UpdateAsync(Guid id, UpdatePipelineSettingRequest r, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition("UPDATE CRM.PipelineSetting SET SettingValue=@SettingValue,ModifiedDateUtc=GETUTCDATE() WHERE PipelineSettingId=@Id;", new { Id = id, r.SettingValue }, cancellationToken: ct));
+    }
+}
+
+public sealed class DuplicateRuleRepository : IDuplicateRuleRepository
+{
+    private readonly ISqlConnectionFactory _cf;
+    public DuplicateRuleRepository(ISqlConnectionFactory cf) => _cf = cf;
+    private const string Cols = "DuplicateRuleId, TenantId, RuleName, EntityType, MatchFields, MatchThreshold, ActionOnMatch, Description, IsActive, CreatedDateUtc";
+
+    public async Task<DuplicateRuleDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        return await cn.QuerySingleOrDefaultAsync<DuplicateRuleDto>(new CommandDefinition($"SELECT {Cols} FROM CRM.DuplicateRule WHERE DuplicateRuleId=@Id AND IsDeleted=0;", new { Id = id }, cancellationToken: ct));
+    }
+
+    public async Task<PagedResult<DuplicateRuleDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
+    {
+        var sql = RepositorySql.BuildPagedSearchSql("CRM.DuplicateRule", Cols, "RuleName LIKE '%'+@SearchTerm+'%' OR EntityType LIKE '%'+@SearchTerm+'%'", "EntityType ASC, RuleName ASC");
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm ?? "", Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: ct));
+        var items = (await multi.ReadAsync<DuplicateRuleDto>()).AsList();
+        var total = await multi.ReadSingleAsync<int>();
+        return new PagedResult<DuplicateRuleDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateDuplicateRuleRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"INSERT INTO CRM.DuplicateRule (DuplicateRuleId,TenantId,RuleName,EntityType,MatchFields,MatchThreshold,ActionOnMatch,Description,IsActive,IsDeleted,CreatedDateUtc) VALUES (@Id,@TenantId,@RuleName,@EntityType,@MatchFields,@MatchThreshold,@ActionOnMatch,@Description,1,0,GETUTCDATE());";
+        var id = Guid.NewGuid();
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.TenantId, r.RuleName, r.EntityType, r.MatchFields, r.MatchThreshold, r.ActionOnMatch, r.Description }, cancellationToken: ct));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateDuplicateRuleRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"UPDATE CRM.DuplicateRule SET RuleName=@RuleName,EntityType=@EntityType,MatchFields=@MatchFields,MatchThreshold=@MatchThreshold,ActionOnMatch=@ActionOnMatch,Description=@Description,IsActive=@IsActive,ModifiedDateUtc=GETUTCDATE() WHERE DuplicateRuleId=@Id AND IsDeleted=0;";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.RuleName, r.EntityType, r.MatchFields, r.MatchThreshold, r.ActionOnMatch, r.Description, r.IsActive }, cancellationToken: ct));
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition("UPDATE CRM.DuplicateRule SET IsDeleted=1 WHERE DuplicateRuleId=@Id;", new { Id = id }, cancellationToken: ct));
+    }
+}
+
+public sealed class AssignmentRuleRepository : IAssignmentRuleRepository
+{
+    private readonly ISqlConnectionFactory _cf;
+    public AssignmentRuleRepository(ISqlConnectionFactory cf) => _cf = cf;
+    private const string Cols = "AssignmentRuleId, TenantId, RuleName, EntityType, AssignmentMethod, Criteria, AssignToUserId, AssignToTeam, Priority, Description, IsActive, CreatedDateUtc";
+
+    public async Task<AssignmentRuleDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        return await cn.QuerySingleOrDefaultAsync<AssignmentRuleDto>(new CommandDefinition($"SELECT {Cols} FROM CRM.AssignmentRule WHERE AssignmentRuleId=@Id AND IsDeleted=0;", new { Id = id }, cancellationToken: ct));
+    }
+
+    public async Task<PagedResult<AssignmentRuleDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
+    {
+        var sql = RepositorySql.BuildPagedSearchSql("CRM.AssignmentRule", Cols, "RuleName LIKE '%'+@SearchTerm+'%' OR EntityType LIKE '%'+@SearchTerm+'%'", "Priority ASC, RuleName ASC");
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm ?? "", Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: ct));
+        var items = (await multi.ReadAsync<AssignmentRuleDto>()).AsList();
+        var total = await multi.ReadSingleAsync<int>();
+        return new PagedResult<AssignmentRuleDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateAssignmentRuleRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"INSERT INTO CRM.AssignmentRule (AssignmentRuleId,TenantId,RuleName,EntityType,AssignmentMethod,Criteria,AssignToUserId,AssignToTeam,Priority,Description,IsActive,IsDeleted,CreatedDateUtc) VALUES (@Id,@TenantId,@RuleName,@EntityType,@AssignmentMethod,@Criteria,@AssignToUserId,@AssignToTeam,@Priority,@Description,1,0,GETUTCDATE());";
+        var id = Guid.NewGuid();
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.TenantId, r.RuleName, r.EntityType, r.AssignmentMethod, r.Criteria, r.AssignToUserId, r.AssignToTeam, r.Priority, r.Description }, cancellationToken: ct));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateAssignmentRuleRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"UPDATE CRM.AssignmentRule SET RuleName=@RuleName,EntityType=@EntityType,AssignmentMethod=@AssignmentMethod,Criteria=@Criteria,AssignToUserId=@AssignToUserId,AssignToTeam=@AssignToTeam,Priority=@Priority,Description=@Description,IsActive=@IsActive,ModifiedDateUtc=GETUTCDATE() WHERE AssignmentRuleId=@Id AND IsDeleted=0;";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.RuleName, r.EntityType, r.AssignmentMethod, r.Criteria, r.AssignToUserId, r.AssignToTeam, r.Priority, r.Description, r.IsActive }, cancellationToken: ct));
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition("UPDATE CRM.AssignmentRule SET IsDeleted=1 WHERE AssignmentRuleId=@Id;", new { Id = id }, cancellationToken: ct));
+    }
+}
+
+public sealed class CrmCustomFieldRepository : ICrmCustomFieldRepository
+{
+    private readonly ISqlConnectionFactory _cf;
+    public CrmCustomFieldRepository(ISqlConnectionFactory cf) => _cf = cf;
+    private const string Cols = "CustomFieldId, TenantId, FieldCode, FieldName, EntityType, FieldType, DefaultValue, DropdownOptions, IsRequired, IsSearchable, IsActive, SortOrder, CreatedDateUtc";
+
+    public async Task<CrmCustomFieldDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        return await cn.QuerySingleOrDefaultAsync<CrmCustomFieldDto>(new CommandDefinition($"SELECT {Cols} FROM CRM.CrmCustomField WHERE CustomFieldId=@Id AND IsDeleted=0;", new { Id = id }, cancellationToken: ct));
+    }
+
+    public async Task<PagedResult<CrmCustomFieldDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
+    {
+        var sql = RepositorySql.BuildPagedSearchSql("CRM.CrmCustomField", Cols, "FieldName LIKE '%'+@SearchTerm+'%' OR FieldCode LIKE '%'+@SearchTerm+'%'", "EntityType ASC, SortOrder ASC");
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm ?? "", Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: ct));
+        var items = (await multi.ReadAsync<CrmCustomFieldDto>()).AsList();
+        var total = await multi.ReadSingleAsync<int>();
+        return new PagedResult<CrmCustomFieldDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateCrmCustomFieldRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"INSERT INTO CRM.CrmCustomField (CustomFieldId,TenantId,FieldCode,FieldName,EntityType,FieldType,DefaultValue,DropdownOptions,IsRequired,IsSearchable,SortOrder,IsActive,IsDeleted,CreatedDateUtc) VALUES (@Id,@TenantId,@FieldCode,@FieldName,@EntityType,@FieldType,@DefaultValue,@DropdownOptions,@IsRequired,@IsSearchable,@SortOrder,1,0,GETUTCDATE());";
+        var id = Guid.NewGuid();
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.TenantId, r.FieldCode, r.FieldName, r.EntityType, r.FieldType, r.DefaultValue, r.DropdownOptions, r.IsRequired, r.IsSearchable, r.SortOrder }, cancellationToken: ct));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateCrmCustomFieldRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"UPDATE CRM.CrmCustomField SET FieldCode=@FieldCode,FieldName=@FieldName,EntityType=@EntityType,FieldType=@FieldType,DefaultValue=@DefaultValue,DropdownOptions=@DropdownOptions,IsRequired=@IsRequired,IsSearchable=@IsSearchable,IsActive=@IsActive,SortOrder=@SortOrder,ModifiedDateUtc=GETUTCDATE() WHERE CustomFieldId=@Id AND IsDeleted=0;";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.FieldCode, r.FieldName, r.EntityType, r.FieldType, r.DefaultValue, r.DropdownOptions, r.IsRequired, r.IsSearchable, r.IsActive, r.SortOrder }, cancellationToken: ct));
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition("UPDATE CRM.CrmCustomField SET IsDeleted=1 WHERE CustomFieldId=@Id;", new { Id = id }, cancellationToken: ct));
+    }
+}

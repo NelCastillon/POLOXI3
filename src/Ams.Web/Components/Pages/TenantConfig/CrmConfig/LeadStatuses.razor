@@ -1,0 +1,260 @@
+@page "/tenant/crm/lead-statuses"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Lead Statuses — CRM Configuration</PageTitle>
+
+<AppPageHeader Title="Lead Statuses"
+               Subtitle="Define the lifecycle stages for lead progression"
+               Icon="bi-tags">
+    <Actions>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Status
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-tags-fill" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "Open" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Open")' title="Filter: Open">
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.StatusType == "Open")</div><div class="pc-kpi-label">Open Types</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "Won" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Won")' title="Filter: Won">
+        <span class="pc-kpi-icon pc-kpi-icon--total" style="background:#dcfce7"><i class="bi bi-trophy-fill text-success" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.StatusType == "Won")</div><div class="pc-kpi-label">Won</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "Lost" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Lost")' title="Filter: Lost">
+        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-x-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.StatusType == "Lost")</div><div class="pc-kpi-label">Lost</div></div>
+    </div>
+</div>
+
+<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search status name or code…" />
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<div class="um-grid-card">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div>
+    }
+    <SfGrid TValue="LeadStatusDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+        <GridEvents TValue="LeadStatusDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="50" />
+        <GridColumns>
+            <GridColumn Field="StatusCode" HeaderText="Code" Width="130" />
+            <GridColumn HeaderText="Status" Width="180">
+                <Template>
+                    @{ var r = (LeadStatusDto)context; }
+                    <span class="um-badge" style="background:@(r.ColorHex ?? "#6b7280")22;color:@(r.ColorHex ?? "#6b7280");border:1px solid @(r.ColorHex ?? "#6b7280")44">@r.StatusName</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="StatusType" HeaderText="Type" Width="110" />
+            <GridColumn Field="IsDefault" HeaderText="Default" Width="90" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (LeadStatusDto)context; }
+                    @if (r.IsDefault) { <i class="bi bi-check2-circle text-success"></i> }
+                </Template>
+            </GridColumn>
+            <GridColumn Field="SortOrder" HeaderText="Order" Width="80" TextAlign="TextAlign.Center" />
+            <GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (LeadStatusDto)context; }
+                    <span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (LeadStatusDto)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<SfDialog @bind-Visible="_showForm" Width="540px" IsModal="true" ShowCloseIcon="false">
+    <DialogEvents Closed="ResetForm" />
+    <DialogContent>
+        <div class="um-modal-header">
+            <i class="bi bi-tags-fill"></i>
+            <span>@(_editId.HasValue ? "Edit Lead Status" : "Add Lead Status")</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <EditForm Model="_form" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label>Status Code <span class="text-danger">*</span></label>
+                        <InputText @bind-Value="_form.StatusCode" class="um-input" placeholder="e.g. NEW" />
+                        <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Status Name <span class="text-danger">*</span></label>
+                        <InputText @bind-Value="_form.StatusName" class="um-input" placeholder="e.g. New" />
+                        <ValidationMessage For="() => _form.StatusName" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Type</label>
+                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.StatusType"
+                            DataSource="@(new[]{"Open","Won","Lost","Inactive"})" Placeholder="Select type" />
+                        <ValidationMessage For="() => _form.StatusType" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Color (hex)</label>
+                        <InputText @bind-Value="_form.ColorHex" class="um-input" placeholder="#3b82f6" />
+                    </div>
+                    <div class="um-field">
+                        <label>Sort Order</label>
+                        <InputNumber @bind-Value="_form.SortOrder" class="um-input" />
+                    </div>
+                    <div class="um-field um-field--checkbox">
+                        <label><InputCheckbox @bind-Value="_form.IsDefault" /> Default Status</label>
+                    </div>
+                    <div class="um-field um-field--checkbox">
+                        <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button>
+            </div>
+        </EditForm>
+    </DialogContent>
+</SfDialog>
+
+<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-confirm-dialog">
+            <div class="um-confirm-icon um-confirm-icon--danger">
+                <i class="bi bi-trash3-fill"></i>
+            </div>
+            <div class="um-confirm-message">
+                <h6>Delete Lead Status?</h6>
+                <p>You are about to delete <strong>@_deleteTarget?.StatusName</strong>. This action cannot be undone.</p>
+            </div>
+            <div class="um-modal-footer" style="width:100%">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </DialogContent>
+</SfDialog>
+
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+
+@code {
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    List<LeadStatusDto> _items = [], _filtered = [];
+    string? _activeFilter;
+    bool _loading, _saving;
+    string _search = string.Empty;
+    string? _loadError;
+    bool _showForm, _showDelete;
+    Guid? _editId;
+    LeadStatusDto? _deleteTarget;
+    SfToast _toast = default!;
+    LeadStatusFormModel _form = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Config", null), new("Lead Statuses", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try { var r = await Api.SearchLeadStatusesAsync(TenantId, _search, pageSize: 200); _items = r?.Items.ToList() ?? []; ApplyFilter(); }
+        catch (Exception ex) { _loadError = $"Failed to load lead statuses: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    Task OnSearchAsync() => LoadAsync();
+
+    void ApplyFilter() => _filtered = _activeFilter is not null
+        ? _items.Where(x => x.StatusType == _activeFilter).ToList()
+        : [.. _items];
+
+    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
+    void OnRowSelected(RowSelectEventArgs<LeadStatusDto> args) => OpenEdit(args.Data);
+
+    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
+
+    void OpenEdit(LeadStatusDto item)
+    {
+        _editId = item.LeadStatusId;
+        _form = new() { StatusCode = item.StatusCode, StatusName = item.StatusName, StatusType = item.StatusType, ColorHex = item.ColorHex, IsDefault = item.IsDefault, SortOrder = item.SortOrder, IsActive = item.IsActive };
+        _showForm = true;
+    }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+                await Api.UpdateLeadStatusAsync(_editId.Value, new(_form.StatusCode, _form.StatusName, _form.StatusType, null, _form.ColorHex, _form.IsDefault, _form.IsActive, _form.SortOrder));
+            else
+                await Api.CreateLeadStatusAsync(new(TenantId, _form.StatusCode, _form.StatusName, _form.StatusType, null, _form.ColorHex, _form.IsDefault, _form.SortOrder));
+            _showForm = false;
+            await _toast.ShowAsync(new() { Content = "Saved", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmDelete(LeadStatusDto item) { _deleteTarget = item; _showDelete = true; }
+
+    async Task ExecuteDeleteAsync()
+    {
+        _saving = true;
+        try { await Api.DeleteLeadStatusAsync(_deleteTarget!.LeadStatusId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Deleted", CssClass = "e-toast-success" }); await LoadAsync(); }
+        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        finally { _saving = false; }
+    }
+
+    void ResetForm() { _form = new(); _editId = null; }
+
+    sealed class LeadStatusFormModel
+    {
+        [Required(ErrorMessage = "Status Code is required.")]
+        [StringLength(80, ErrorMessage = "Status Code cannot exceed 80 characters.")]
+        public string StatusCode { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Status Name is required.")]
+        [StringLength(200, ErrorMessage = "Status Name cannot exceed 200 characters.")]
+        public string StatusName { get; set; } = string.Empty;
+
+        [StringLength(50, ErrorMessage = "Type cannot exceed 50 characters.")]
+        public string? StatusType { get; set; }
+
+        [StringLength(20, ErrorMessage = "Color hex cannot exceed 20 characters.")]
+        public string? ColorHex { get; set; }
+
+        public bool IsDefault { get; set; }
+
+        [Range(0, int.MaxValue, ErrorMessage = "Sort Order must be 0 or greater.")]
+        public int SortOrder { get; set; }
+
+        public bool IsActive { get; set; } = true;
+    }
+}

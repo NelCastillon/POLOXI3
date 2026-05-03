@@ -1,0 +1,256 @@
+@page "/tenant/crm/assignment"
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Assignment Rules — CRM Configuration</PageTitle>
+
+<AppPageHeader Title="Assignment Rules"
+               Subtitle="Automate lead and opportunity assignment to producers and teams"
+               Icon="bi-person-check">
+    <Actions>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Rule
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-person-check" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Rules</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "RoundRobin" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("RoundRobin")' title="Filter: Round Robin">
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.AssignmentMethod == "RoundRobin")</div><div class="pc-kpi-label">Round Robin</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "Territory" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Territory")' title="Filter: Territory">
+        <span class="pc-kpi-icon" style="background:#fef9c3"><i class="bi bi-map text-warning" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.AssignmentMethod == "Territory")</div><div class="pc-kpi-label">Territory</div></div>
+    </div>
+</div>
+
+<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search rule name…" />
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<div class="um-grid-card">
+    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div> }
+    <SfGrid TValue="AssignmentRuleDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+        <GridEvents TValue="AssignmentRuleDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="25" />
+        <GridColumns>
+            <GridColumn Field="RuleName" HeaderText="Rule Name" Width="230" />
+            <GridColumn Field="EntityType" HeaderText="Entity" Width="120" />
+            <GridColumn Field="AssignmentMethod" HeaderText="Method" Width="140">
+                <Template>
+                    @{ var r = (AssignmentRuleDto)context; }
+                    <span class="um-badge um-badge-info">@r.AssignmentMethod</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="Priority" HeaderText="Priority" Width="90" TextAlign="TextAlign.Center" />
+            <GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (AssignmentRuleDto)context; }
+                    <span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Off")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (AssignmentRuleDto)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false">
+    <DialogEvents Closed="ResetForm" />
+    <DialogContent>
+        <div class="um-modal-header">
+            <i class="bi bi-person-check"></i>
+            <span>@(_editId.HasValue ? "Edit Assignment Rule" : "Add Assignment Rule")</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <EditForm Model="_form" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label>Rule Name <span class="text-danger">*</span></label>
+                        <InputText @bind-Value="_form.RuleName" class="um-input" />
+                        <ValidationMessage For="() => _form.RuleName" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Entity Type <span class="text-danger">*</span></label>
+                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.EntityType"
+                            DataSource="@(new[]{"Lead","Opportunity"})" Placeholder="Select entity" />
+                        <ValidationMessage For="() => _form.EntityType" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Assignment Method</label>
+                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.AssignmentMethod"
+                            DataSource="@(new[]{"RoundRobin","Territory","LoadBased","Manual"})" Placeholder="Select method" />
+                        <ValidationMessage For="() => _form.AssignmentMethod" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Priority</label>
+                        <InputNumber @bind-Value="_form.Priority" class="um-input" />
+                        <ValidationMessage For="() => _form.Priority" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Assign to Team</label>
+                        <InputText @bind-Value="_form.AssignToTeam" class="um-input" placeholder="Optional team name" />
+                    </div>
+                    <div class="um-field">
+                        <label>Criteria</label>
+                        <InputTextArea @bind-Value="_form.Criteria" class="um-input" rows="2" placeholder="Optional filter expression" />
+                    </div>
+                    <div class="um-field">
+                        <label>Description</label>
+                        <InputTextArea @bind-Value="_form.Description" class="um-input" rows="2" />
+                    </div>
+                    <div class="um-field um-field--checkbox">
+                        <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button>
+            </div>
+        </EditForm>
+    </DialogContent>
+</SfDialog>
+
+<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-confirm-dialog">
+            <div class="um-confirm-icon um-confirm-icon--danger">
+                <i class="bi bi-trash3-fill"></i>
+            </div>
+            <div class="um-confirm-message">
+                <h6>Delete Assignment Rule?</h6>
+                <p>You are about to delete <strong>@_deleteTarget?.RuleName</strong>. This action cannot be undone.</p>
+            </div>
+            <div class="um-modal-footer" style="width:100%">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </DialogContent>
+</SfDialog>
+
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+
+@code {
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    List<AssignmentRuleDto> _items = [], _filtered = [];
+    string? _activeFilter;
+    bool _loading, _saving;
+    string _search = string.Empty;
+    string? _loadError;
+    bool _showForm, _showDelete;
+    Guid? _editId;
+    AssignmentRuleDto? _deleteTarget;
+    SfToast _toast = default!;
+    AssignmentRuleFormModel _form = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Config", null), new("Assignment Rules", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try { var r = await Api.SearchAssignmentRulesAsync(TenantId, _search, pageSize: 200); _items = r?.Items.ToList() ?? []; ApplyFilter(); }
+        catch (Exception ex) { _loadError = $"Failed to load assignment rules: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    Task OnSearchAsync() => LoadAsync();
+    void ApplyFilter() => _filtered = _activeFilter is not null
+        ? _items.Where(x => x.AssignmentMethod == _activeFilter).ToList()
+        : [.. _items];
+
+    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
+    void OnRowSelected(RowSelectEventArgs<AssignmentRuleDto> args) => OpenEdit(args.Data);
+
+    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
+
+    void OpenEdit(AssignmentRuleDto item)
+    {
+        _editId = item.AssignmentRuleId;
+        _form = new() { RuleName = item.RuleName, EntityType = item.EntityType, AssignmentMethod = item.AssignmentMethod, Priority = item.Priority, AssignToTeam = item.AssignToTeam, Criteria = item.Criteria, Description = item.Description, IsActive = item.IsActive };
+        _showForm = true;
+    }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+                await Api.UpdateAssignmentRuleAsync(_editId.Value, new(_form.RuleName, _form.EntityType, _form.AssignmentMethod, _form.Criteria, null, _form.AssignToTeam, _form.Priority, _form.Description, _form.IsActive));
+            else
+                await Api.CreateAssignmentRuleAsync(new(TenantId, _form.RuleName, _form.EntityType, _form.AssignmentMethod, _form.Criteria, null, _form.AssignToTeam, _form.Priority, _form.Description));
+            _showForm = false;
+            await _toast.ShowAsync(new() { Content = "Saved", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmDelete(AssignmentRuleDto item) { _deleteTarget = item; _showDelete = true; }
+
+    async Task ExecuteDeleteAsync()
+    {
+        _saving = true;
+        try { await Api.DeleteAssignmentRuleAsync(_deleteTarget!.AssignmentRuleId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Deleted", CssClass = "e-toast-success" }); await LoadAsync(); }
+        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        finally { _saving = false; }
+    }
+
+    void ResetForm() { _form = new(); _editId = null; }
+
+    sealed class AssignmentRuleFormModel
+    {
+        [Required(ErrorMessage = "Rule Name is required.")]
+        [StringLength(200, ErrorMessage = "Rule Name cannot exceed 200 characters.")]
+        public string RuleName { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Entity Type is required.")]
+        [StringLength(80, ErrorMessage = "Entity Type cannot exceed 80 characters.")]
+        public string EntityType { get; set; } = string.Empty;
+
+        [StringLength(80, ErrorMessage = "Assignment Method cannot exceed 80 characters.")]
+        public string? AssignmentMethod { get; set; }
+
+        [Range(0, int.MaxValue, ErrorMessage = "Priority must be 0 or greater.")]
+        public int Priority { get; set; }
+
+        [StringLength(200, ErrorMessage = "Team name cannot exceed 200 characters.")]
+        public string? AssignToTeam { get; set; }
+
+        [StringLength(1000, ErrorMessage = "Criteria cannot exceed 1000 characters.")]
+        public string? Criteria { get; set; }
+
+        [StringLength(500, ErrorMessage = "Description cannot exceed 500 characters.")]
+        public string? Description { get; set; }
+
+        public bool IsActive { get; set; } = true;
+    }
+}

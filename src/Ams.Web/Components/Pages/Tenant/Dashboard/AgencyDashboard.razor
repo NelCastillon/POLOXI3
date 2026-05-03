@@ -1,0 +1,190 @@
+@page "/tenant/dashboard"
+@namespace Ams.Web.Components.Pages.Tenant.Dashboard
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Executive Overview — Agency Dashboard</PageTitle>
+
+<AppPageHeader Title="Executive Overview"
+               Subtitle="Agency-wide performance snapshot — premium, accounts, renewals, claims and alerts"
+               Icon="bi-speedometer2">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="ad-loading-banner" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading overview…</span>
+    </div>
+}
+else if (_data is null)
+{
+    <div class="ad-empty">
+        <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+        <span>Could not load dashboard data.</span>
+    </div>
+}
+else
+{
+    <div class="ad-agency-bar">
+        <i class="bi bi-building" aria-hidden="true"></i>
+        <strong>@_data.AgencyName</strong>
+        @if (!string.IsNullOrEmpty(_data.AgencyCode))
+        {
+            <span class="ad-code">@_data.AgencyCode</span>
+        }
+    </div>
+
+    <!-- ── KPI Strip ──────────────────────────────────────────────── -->
+    <div class="ad-kpi-strip">
+        <div class="ad-kpi-card ad-kpi--premium">
+            <div class="ad-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.WrittenPremiumYtd.ToString("C0")</div>
+                <div class="ad-kpi-lbl">Written Premium YTD</div>
+                <div class="ad-kpi-sub">MTD @_data.WrittenPremiumMtd.ToString("C0")</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--policies">
+            <div class="ad-kpi-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.ActivePolicies.ToString("N0")</div>
+                <div class="ad-kpi-lbl">Active Policies</div>
+                <div class="ad-kpi-sub">@_data.ActiveAccounts.ToString("N0") accounts</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--retention">
+            <div class="ad-kpi-icon"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.RetentionRate.ToString("F1")%</div>
+                <div class="ad-kpi-lbl">Retention Rate</div>
+                <div class="ad-kpi-sub">@_data.PendingRenewals renewals pending</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--leads">
+            <div class="ad-kpi-icon"><i class="bi bi-person-plus" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.OpenLeads</div>
+                <div class="ad-kpi-lbl">Open Leads</div>
+                <div class="ad-kpi-sub">@_data.OpenOpportunities opportunities</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--claims">
+            <div class="ad-kpi-icon"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.OpenClaims</div>
+                <div class="ad-kpi-lbl">Open Claims</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--ar">
+            <div class="ad-kpi-icon"><i class="bi bi-receipt" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.OutstandingAr.ToString("C0")</div>
+                <div class="ad-kpi-lbl">Outstanding AR</div>
+                <div class="ad-kpi-sub @(_data.OpenAlerts > 0 ? "ad-warn" : "")">@_data.OpenAlerts alert@(_data.OpenAlerts != 1 ? "s" : "")</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Goal Progress ──────────────────────────────────────────── -->
+    <div class="ad-goal-bar-wrap">
+        <div class="ad-goal-bar-hd">
+            <span><i class="bi bi-bullseye" aria-hidden="true"></i> Premium Goal Progress</span>
+            <span class="ad-goal-pct">@GoalPct(_data).ToString("F1")%</span>
+        </div>
+        <div class="ad-progress-track">
+            <div class="ad-progress-fill @(GoalPct(_data) >= 100 ? "ad-progress--achieved" : GoalPct(_data) >= 75 ? "ad-progress--on-track" : "ad-progress--behind")"
+                 style="width:@(GoalPct(_data).ToString("F1"))%"></div>
+        </div>
+        <div class="ad-goal-labels">
+            <span>@_data.WrittenPremiumYtd.ToString("C0") of @_data.WrittenPremiumGoal.ToString("C0") goal</span>
+        </div>
+    </div>
+
+    <!-- ── Premium Trend + Quick Links ────────────────────────────── -->
+    <div class="ad-two-col">
+        <!-- Trend chart -->
+        <div class="ad-card">
+            <div class="ad-card-hd"><i class="bi bi-bar-chart-line" aria-hidden="true"></i> 6-Month Premium Trend</div>
+            <div class="ad-trend-rows">
+                @foreach (var t in _data.PremiumTrend)
+                {
+                    var barPct = _maxTrend > 0 ? (double)(t.Amount / _maxTrend * 100) : 0;
+                    <div class="ad-trend-row">
+                        <span class="ad-trend-lbl">@t.Label</span>
+                        <div class="ad-trend-bar-track">
+                            <div class="ad-trend-bar-fill" style="width:@barPct.ToString("F1")%"></div>
+                        </div>
+                        <span class="ad-trend-amt">@t.Amount.ToString("C0")</span>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Quick nav cards -->
+        <div class="ad-quick-grid">
+            <a class="ad-quick-card" href="/tenant/dashboard/kpis">
+                <i class="bi bi-bar-chart-line" aria-hidden="true"></i>
+                <span>Agency KPIs</span>
+            </a>
+            <a class="ad-quick-card" href="/tenant/dashboard/branch-performance">
+                <i class="bi bi-diagram-3" aria-hidden="true"></i>
+                <span>Branch Performance</span>
+            </a>
+            <a class="ad-quick-card" href="/tenant/dashboard/producer-performance">
+                <i class="bi bi-person-badge" aria-hidden="true"></i>
+                <span>Producer Performance</span>
+            </a>
+            <a class="ad-quick-card" href="/tenant/dashboard/renewal-pipeline">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+                <span>Renewal Pipeline</span>
+            </a>
+            <a class="ad-quick-card" href="/tenant/dashboard/claims-summary">
+                <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+                <span>Claims Summary</span>
+            </a>
+            <a class="ad-quick-card" href="/tenant/dashboard/billing-summary">
+                <i class="bi bi-receipt" aria-hidden="true"></i>
+                <span>Billing Summary</span>
+            </a>
+            <a class="ad-quick-card ad-quick-card--alerts @(_data.OpenAlerts > 0 ? "ad-quick-card--warn" : "")" href="/tenant/dashboard/alerts">
+                <i class="bi bi-bell" aria-hidden="true"></i>
+                <span>Alerts @(_data.OpenAlerts > 0 ? $"({_data.OpenAlerts})" : "")</span>
+            </a>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private AgencyExecutiveOverviewDto? _data;
+    private bool _loading;
+    private decimal _maxTrend;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Agency Dashboard", "/tenant/dashboard"), new("Executive Overview"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _data = await Api.GetAgencyOverviewAsync(_tenantId);
+            _maxTrend = _data?.PremiumTrend.Count > 0 ? _data.PremiumTrend.Max(t => t.Amount) : 1;
+        }
+        finally { _loading = false; }
+    }
+
+    private static double GoalPct(AgencyExecutiveOverviewDto d) =>
+        d.WrittenPremiumGoal > 0
+            ? Math.Min(100, (double)(d.WrittenPremiumYtd / d.WrittenPremiumGoal * 100))
+            : 0;
+}

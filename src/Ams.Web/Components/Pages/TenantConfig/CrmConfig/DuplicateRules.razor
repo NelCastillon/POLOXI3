@@ -1,0 +1,254 @@
+@page "/tenant/crm/dup-rules"
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Duplicate Rules — CRM Configuration</PageTitle>
+
+<AppPageHeader Title="Duplicate Detection Rules"
+               Subtitle="Define rules to identify and handle duplicate records"
+               Icon="bi-copy">
+    <Actions>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Rule
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-copy" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Rules</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("active")' title="Filter: Active">
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "block" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("block")' title="Filter: Block Rules">
+        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-x-octagon" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.ActionOnMatch == "Block")</div><div class="pc-kpi-label">Block Rules</div></div>
+    </div>
+</div>
+
+<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search rule name…" />
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<div class="um-grid-card">
+    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div> }
+    <SfGrid TValue="DuplicateRuleDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+        <GridEvents TValue="DuplicateRuleDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="25" />
+        <GridColumns>
+            <GridColumn Field="RuleName" HeaderText="Rule Name" Width="220" />
+            <GridColumn Field="EntityType" HeaderText="Entity" Width="110" />
+            <GridColumn Field="MatchFields" HeaderText="Match Fields" Width="200" />
+            <GridColumn Field="MatchThreshold" HeaderText="Threshold %" Width="120" TextAlign="TextAlign.Center" />
+            <GridColumn Field="ActionOnMatch" HeaderText="Action" Width="110">
+                <Template>
+                    @{ var r = (DuplicateRuleDto)context; }
+                    <span class="um-badge @(r.ActionOnMatch == "Block" ? "um-badge-danger" : r.ActionOnMatch == "Merge" ? "um-badge-info" : "um-badge-warning")">@r.ActionOnMatch</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="IsActive" HeaderText="Status" Width="100" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (DuplicateRuleDto)context; }
+                    <span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Off")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (DuplicateRuleDto)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true"><i class="bi bi-pencil"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false">
+    <DialogEvents Closed="ResetForm" />
+    <DialogContent>
+        <div class="um-modal-header">
+            <i class="bi bi-copy"></i>
+            <span>@(_editId.HasValue ? "Edit Duplicate Rule" : "Add Duplicate Rule")</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <EditForm Model="_form" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label>Rule Name <span class="text-danger">*</span></label>
+                        <InputText @bind-Value="_form.RuleName" class="um-input" />
+                        <ValidationMessage For="() => _form.RuleName" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Entity Type <span class="text-danger">*</span></label>
+                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.EntityType"
+                            DataSource="@(new[]{"Lead","Account","Contact","Opportunity"})" Placeholder="Select entity" />
+                        <ValidationMessage For="() => _form.EntityType" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Match Fields</label>
+                        <InputText @bind-Value="_form.MatchFields" class="um-input" placeholder="e.g. Email or FirstName,LastName,Phone" />
+                        <ValidationMessage For="() => _form.MatchFields" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Match Threshold %</label>
+                        <InputNumber @bind-Value="_form.MatchThreshold" class="um-input" min="0" max="100" />
+                        <ValidationMessage For="() => _form.MatchThreshold" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Action on Match</label>
+                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.ActionOnMatch"
+                            DataSource="@(new[]{"Flag","Block","Merge"})" Placeholder="Select action" />
+                        <ValidationMessage For="() => _form.ActionOnMatch" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Description</label>
+                        <InputTextArea @bind-Value="_form.Description" class="um-input" rows="2" />
+                    </div>
+                    <div class="um-field um-field--checkbox">
+                        <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button>
+            </div>
+        </EditForm>
+    </DialogContent>
+</SfDialog>
+
+<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-confirm-dialog">
+            <div class="um-confirm-icon um-confirm-icon--danger">
+                <i class="bi bi-trash3-fill"></i>
+            </div>
+            <div class="um-confirm-message">
+                <h6>Delete Duplicate Rule?</h6>
+                <p>You are about to delete <strong>@_deleteTarget?.RuleName</strong>. This action cannot be undone.</p>
+            </div>
+            <div class="um-modal-footer" style="width:100%">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </DialogContent>
+</SfDialog>
+
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+
+@code {
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    List<DuplicateRuleDto> _items = [], _filtered = [];
+    string? _activeFilter;
+    bool _loading, _saving;
+    string _search = string.Empty;
+    string? _loadError;
+    bool _showForm, _showDelete;
+    Guid? _editId;
+    DuplicateRuleDto? _deleteTarget;
+    SfToast _toast = default!;
+    DupRuleFormModel _form = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Config", null), new("Duplicate Rules", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try { var r = await Api.SearchDuplicateRulesAsync(TenantId, _search, pageSize: 200); _items = r?.Items.ToList() ?? []; ApplyFilter(); }
+        catch (Exception ex) { _loadError = $"Failed to load duplicate rules: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    Task OnSearchAsync() => LoadAsync();
+    void ApplyFilter() => _filtered = _activeFilter switch
+    {
+        "active" => _items.Where(x => x.IsActive).ToList(),
+        "block"  => _items.Where(x => x.ActionOnMatch == "Block").ToList(),
+        _        => [.. _items]
+    };
+
+    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
+    void OnRowSelected(RowSelectEventArgs<DuplicateRuleDto> args) => OpenEdit(args.Data);
+
+    void OpenCreate() { _editId = null; _form = new(); _showForm = true; }
+
+    void OpenEdit(DuplicateRuleDto item)
+    {
+        _editId = item.DuplicateRuleId;
+        _form = new() { RuleName = item.RuleName, EntityType = item.EntityType, MatchFields = item.MatchFields, MatchThreshold = item.MatchThreshold, ActionOnMatch = item.ActionOnMatch, Description = item.Description, IsActive = item.IsActive };
+        _showForm = true;
+    }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+                await Api.UpdateDuplicateRuleAsync(_editId.Value, new(_form.RuleName, _form.EntityType, _form.MatchFields, _form.MatchThreshold, _form.ActionOnMatch, _form.Description, _form.IsActive));
+            else
+                await Api.CreateDuplicateRuleAsync(new(TenantId, _form.RuleName, _form.EntityType, _form.MatchFields, _form.MatchThreshold, _form.ActionOnMatch, _form.Description));
+            _showForm = false;
+            await _toast.ShowAsync(new() { Content = "Saved", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        finally { _saving = false; }
+    }
+
+    void ConfirmDelete(DuplicateRuleDto item) { _deleteTarget = item; _showDelete = true; }
+
+    async Task ExecuteDeleteAsync()
+    {
+        _saving = true;
+        try { await Api.DeleteDuplicateRuleAsync(_deleteTarget!.DuplicateRuleId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Deleted", CssClass = "e-toast-success" }); await LoadAsync(); }
+        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+        finally { _saving = false; }
+    }
+
+    void ResetForm() { _form = new(); _editId = null; }
+
+    sealed class DupRuleFormModel
+    {
+        [Required(ErrorMessage = "Rule Name is required.")]
+        [StringLength(200, ErrorMessage = "Rule Name cannot exceed 200 characters.")]
+        public string RuleName { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Entity Type is required.")]
+        [StringLength(80, ErrorMessage = "Entity Type cannot exceed 80 characters.")]
+        public string EntityType { get; set; } = string.Empty;
+
+        [StringLength(500, ErrorMessage = "Match Fields cannot exceed 500 characters.")]
+        public string? MatchFields { get; set; }
+
+        [Range(0, 100, ErrorMessage = "Threshold must be between 0 and 100.")]
+        public int MatchThreshold { get; set; } = 80;
+
+        [StringLength(80, ErrorMessage = "Action cannot exceed 80 characters.")]
+        public string? ActionOnMatch { get; set; }
+
+        [StringLength(500, ErrorMessage = "Description cannot exceed 500 characters.")]
+        public string? Description { get; set; }
+
+        public bool IsActive { get; set; } = true;
+    }
+}

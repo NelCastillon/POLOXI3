@@ -1,0 +1,233 @@
+@page "/tenant/agency/departments"
+@namespace Ams.Web.Components.Pages.AgencyAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Departments — Agency Setup</PageTitle>
+
+<AppPageHeader Title="Departments"
+               Subtitle="Manage organisational departments"
+               Icon="bi-building">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Department
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="dep-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0">
+        <span class="dep-kpi-icon dep-kpi-icon--total"><i class="bi bi-building" aria-hidden="true"></i></span>
+        <div>
+            <div class="dep-kpi-value">@_totalCount</div>
+            <div class="dep-kpi-label">Total Departments</div>
+        </div>
+        @if (_kpiActive == 1) { <span class="dep-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
+        <span class="dep-kpi-icon dep-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="dep-kpi-value">@_activeCount</div>
+            <div class="dep-kpi-label">Active</div>
+        </div>
+        @if (_kpiActive == 2) { <span class="dep-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search department…">
+    <Filters>
+        <label class="dep-toggle-label">
+            <input type="checkbox" @bind="_filterActiveOnly" @bind:after="ApplyFilters" />
+            Active only
+        </label>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="DepartmentEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(DepartmentEntry.DepartmentName)" HeaderText="Department Name" Width="220">
+                <Template>
+                    @{ var e = (DepartmentEntry)context; }
+                    <div class="dep-name-cell">
+                        <span class="dep-icon" aria-hidden="true"><i class="bi bi-building"></i></span>
+                        <div>
+                            <div class="dep-dept-name">@e.DepartmentName</div>
+                            <div class="dep-dept-code">@e.DepartmentCode</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(DepartmentEntry.Manager)" HeaderText="Manager" Width="180" />
+            <GridColumn Field="@nameof(DepartmentEntry.TeamCount)" HeaderText="Teams" Width="100" />
+            <GridColumn Field="@nameof(DepartmentEntry.IsActive)" HeaderText="Status" Width="110">
+                <Template>
+                    @{ var e = (DepartmentEntry)context; }
+                    <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")"
+                                    Label="@(e.IsActive ? "Active" : "Inactive")" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (DepartmentEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.DepartmentId == Guid.Empty ? "New Department" : "Edit Department")"
+               OnConfirm="SaveAsync"
+               OnClose="CloseDrawer">
+    <Content>
+        <div class="dep-form">
+            <label class="dep-form-label">Department Name *</label>
+            <input class="um-input" @bind="_editModel.DepartmentName" placeholder="Department name" />
+
+            <label class="dep-form-label">Department Code</label>
+            <input class="um-input dep-mono" @bind="_editModel.DepartmentCode" placeholder="Short code" />
+
+            <label class="dep-form-label">Manager</label>
+            <input class="um-input" @bind="_editModel.Manager" placeholder="Full name" />
+
+            <label class="dep-form-label">Active</label>
+            <SfSwitch @bind-Checked="_editModel.IsActive" />
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<DepartmentEntry> _allEntries = [];
+    private List<DepartmentEntry> _entries    = [];
+
+    private bool _loading    = false;
+    private bool _showDrawer = false;
+
+    private string _search          = string.Empty;
+    private bool   _filterActiveOnly = false;
+    private int    _kpiActive       = 0;
+
+    private int _totalCount  = 0;
+    private int _activeCount = 0;
+
+    private string KpiClass1 => "dep-kpi-card" + (_kpiActive == 1 ? " dep-kpi-card--active" : "");
+    private string KpiClass2 => "dep-kpi-card" + (_kpiActive == 2 ? " dep-kpi-card--active" : "");
+
+    private DepartmentEntry _editModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",         "/"),
+            new("Agency Setup", "/tenant/agency/profile"),
+            new("Departments",  "/tenant/agency/departments"));
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace with Api.GetDepartmentsAsync(_tenantId)
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (!_filterActiveOnly || e.IsActive) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.DepartmentName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.DepartmentCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        if (_kpiActive == 2) _entries = _entries.Where(e => e.IsActive).ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive       = _kpiActive == n ? 0 : n;
+        _filterActiveOnly = _kpiActive == 2;
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _totalCount  = _allEntries.Count;
+        _activeCount = _allEntries.Count(e => e.IsActive);
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(DepartmentEntry e) { _editModel = new DepartmentEntry { DepartmentId = e.DepartmentId, DepartmentCode = e.DepartmentCode, DepartmentName = e.DepartmentName, Manager = e.Manager, TeamCount = e.TeamCount, IsActive = e.IsActive }; _showDrawer = true; }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveAsync()
+    {
+        // TODO: Api.SaveDepartmentAsync
+        await Task.Delay(0);
+        _showDrawer = false;
+        await LoadAsync();
+        await ShowToastAsync("Department saved.", "e-toast-success");
+    }
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private sealed class DepartmentEntry
+    {
+        public Guid   DepartmentId   { get; set; } = Guid.NewGuid();
+        public string DepartmentCode { get; set; } = string.Empty;
+        public string DepartmentName { get; set; } = string.Empty;
+        public string Manager        { get; set; } = string.Empty;
+        public int    TeamCount      { get; set; }
+        public bool   IsActive       { get; set; } = true;
+    }
+}

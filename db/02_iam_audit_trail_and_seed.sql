@@ -75,25 +75,42 @@ DECLARE @AdminUserId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000002';
 DECLARE @ManagerUserId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000003';
 DECLARE @UserUserId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000004';
 
+-- ============================================================
+-- SEED PermissionAction lookup table FIRST (required by FK)
+-- ============================================================
+IF NOT EXISTS (SELECT 1 FROM IAM.PermissionAction WHERE ActionName = 'Read')
+BEGIN
+    SET IDENTITY_INSERT IAM.PermissionAction ON;
+    INSERT INTO IAM.PermissionAction (PermissionActionId, ActionName, Description) VALUES
+        (1, 'Read',    'View/read access'),
+        (2, 'Write',   'Create and update access'),
+        (3, 'Delete',  'Delete access'),
+        (4, 'Execute', 'Execute/run access'),
+        (5, 'Manage',  'Full management access'),
+        (6, 'Export',  'Export/download access'),
+        (7, 'Approve', 'Approval action access');
+    SET IDENTITY_INSERT IAM.PermissionAction OFF;
+END
+
 -- Seed Permissions (if not exists)
 IF NOT EXISTS (SELECT 1 FROM IAM.Permission WHERE PermissionCode = 'USER_MANAGE')
 BEGIN
-    INSERT INTO IAM.Permission (PermissionId, PermissionCode, PermissionName, ModuleCode, Description, PermissionActionId) VALUES
-        (NEWID(), 'USER_MANAGE', 'Manage Users', 'IAM', 'Create, update, delete users', 1),
-        (NEWID(), 'USER_VIEW', 'View Users', 'IAM', 'View user information', 2),
-        (NEWID(), 'ROLE_MANAGE', 'Manage Roles', 'IAM', 'Create, update, delete roles', 1),
-        (NEWID(), 'ROLE_VIEW', 'View Roles', 'IAM', 'View role information', 2),
-        (NEWID(), 'PERMISSION_MANAGE', 'Manage Permissions', 'IAM', 'Manage permissions', 1),
-        (NEWID(), 'AUDIT_VIEW', 'View Audit Trails', 'IAM', 'View audit trails and logs', 2),
-        (NEWID(), 'AUDIT_EXPORT', 'Export Audit Logs', 'IAM', 'Export audit logs', 3),
-        (NEWID(), 'MFA_MANAGE', 'Manage MFA', 'IAM', 'Manage multi-factor authentication', 1),
-        (NEWID(), 'LOCK_MANAGE', 'Manage Locks', 'IAM', 'Lock/unlock user accounts', 5),
-        (NEWID(), 'SECURITY_POLICY_MANAGE', 'Manage Security Policies', 'IAM', 'Manage security policies', 1),
-        (NEWID(), 'ACCESS_REQUEST_APPROVE', 'Approve Access Requests', 'IAM', 'Approve access requests', 4),
-        (NEWID(), 'TENANT_MANAGE', 'Manage Tenants', 'Platform', 'Manage tenants', 1),
-        (NEWID(), 'REPORT_VIEW', 'View Reports', 'Reports', 'View reports', 2),
-        (NEWID(), 'REPORT_EXPORT', 'Export Reports', 'Reports', 'Export reports', 3),
-        (NEWID(), 'SETTINGS_MANAGE', 'Manage Settings', 'Platform', 'Manage system settings', 6);
+    INSERT INTO IAM.Permission (PermissionId, PermissionCode, PermissionActionId, ModuleCode, Description) VALUES
+        (NEWID(), 'USER_MANAGE',             5, 'IAM',      'Create, update, delete users'),
+        (NEWID(), 'USER_VIEW',               1, 'IAM',      'View user information'),
+        (NEWID(), 'ROLE_MANAGE',             5, 'IAM',      'Create, update, delete roles'),
+        (NEWID(), 'ROLE_VIEW',               1, 'IAM',      'View role information'),
+        (NEWID(), 'PERMISSION_MANAGE',       5, 'IAM',      'Manage permissions'),
+        (NEWID(), 'AUDIT_VIEW',              1, 'IAM',      'View audit trails and logs'),
+        (NEWID(), 'AUDIT_EXPORT',            6, 'IAM',      'Export audit logs'),
+        (NEWID(), 'MFA_MANAGE',              5, 'IAM',      'Manage multi-factor authentication'),
+        (NEWID(), 'LOCK_MANAGE',             5, 'IAM',      'Lock/unlock user accounts'),
+        (NEWID(), 'SECURITY_POLICY_MANAGE',  5, 'IAM',      'Manage security policies'),
+        (NEWID(), 'ACCESS_REQUEST_APPROVE',  7, 'IAM',      'Approve access requests'),
+        (NEWID(), 'TENANT_MANAGE',           5, 'Platform', 'Manage tenants'),
+        (NEWID(), 'REPORT_VIEW',             1, 'Reports',  'View reports'),
+        (NEWID(), 'REPORT_EXPORT',           6, 'Reports',  'Export reports'),
+        (NEWID(), 'SETTINGS_MANAGE',         5, 'Platform', 'Manage system settings');
 END
 
 -- ============================================================

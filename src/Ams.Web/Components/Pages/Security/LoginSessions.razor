@@ -1,0 +1,300 @@
+@page "/tenant/security/sessions"
+@namespace Ams.Web.Components.Pages.SecurityAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Login Sessions — Users &amp; Security</PageTitle>
+
+<AppPageHeader Title="Login Sessions"
+               Subtitle="Monitor active and recent user login sessions across the agency"
+               Icon="bi-display">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-danger" @onclick="RevokeAllAsync">
+            <i class="bi bi-shield-x" aria-hidden="true"></i> Revoke All
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="ss-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0">
+        <span class="ss-kpi-icon ss-kpi-icon--active"><i class="bi bi-display" aria-hidden="true"></i></span>
+        <div><div class="ss-kpi-value">@_activeCount</div><div class="ss-kpi-label">Active Sessions</div></div>
+        @if (_kpiActive == 1) { <span class="ss-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="ss-kpi-card">
+        <span class="ss-kpi-icon ss-kpi-icon--users"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+        <div><div class="ss-kpi-value">@_uniqueUsers</div><div class="ss-kpi-label">Unique Users</div></div>
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0">
+        <span class="ss-kpi-icon ss-kpi-icon--suspicious"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></span>
+        <div><div class="ss-kpi-value">@_suspiciousCount</div><div class="ss-kpi-label">Suspicious</div></div>
+        @if (_kpiActive == 3) { <span class="ss-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="ss-kpi-card">
+        <span class="ss-kpi-icon ss-kpi-icon--mobile"><i class="bi bi-phone" aria-hidden="true"></i></span>
+        <div><div class="ss-kpi-value">@_mobileCount</div><div class="ss-kpi-label">Mobile Sessions</div></div>
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search user or IP…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_statusOptions"
+                        Placeholder="All Status"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterStatus"
+                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_deviceOptions"
+                        Placeholder="All Devices"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterDevice"
+                        ValueChanged="@((string v) => { _filterDevice = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="SessionEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(SessionEntry.UserFullName)" HeaderText="User" Width="200">
+                <Template>
+                    @{ var e = (SessionEntry)context; }
+                    <div class="ss-user-cell">
+                        <span class="ss-avatar" style="@AvatarStyle(e)" aria-hidden="true">@Initials(e.UserFullName)</span>
+                        <div>
+                            <div class="ss-user-name">@e.UserFullName</div>
+                            <div class="ss-user-email">@e.UserEmail</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SessionEntry.IpAddress)" HeaderText="IP Address" Width="140">
+                <Template>
+                    @{ var e = (SessionEntry)context; }
+                    <span class="ss-mono">@e.IpAddress</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SessionEntry.DeviceType)" HeaderText="Device" Width="110">
+                <Template>
+                    @{ var e = (SessionEntry)context; }
+                    <span class="@DeviceBadgeClass(e.DeviceType)">
+                        <i class="@DeviceIcon(e.DeviceType)" aria-hidden="true"></i> @e.DeviceType
+                    </span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SessionEntry.Location)" HeaderText="Location" Width="150" />
+            <GridColumn Field="@nameof(SessionEntry.LoginDate)" HeaderText="Login Time" Width="160">
+                <Template>
+                    @{ var e = (SessionEntry)context; }
+                    <span>@e.LoginDate.ToString("g")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(SessionEntry.StatusCode)" HeaderText="Status" Width="120">
+                <Template>
+                    @{ var e = (SessionEntry)context; }
+                    <AppStatusBadge Status="@e.StatusCode" Label="@e.StatusCode" />
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (SessionEntry)context; }
+                    @if (e.StatusCode == "Active")
+                    {
+                        <button class="um-btn um-btn-ghost um-btn-sm ss-revoke-btn" @onclick="() => RevokeSessionAsync(e)" title="Revoke">
+                            <i class="bi bi-x-circle" aria-hidden="true"></i> Revoke
+                        </button>
+                    }
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<SessionEntry> _allEntries = [];
+    private List<SessionEntry> _entries    = [];
+
+    private bool _loading = false;
+
+    private string _search        = string.Empty;
+    private string _filterStatus  = string.Empty;
+    private string _filterDevice  = string.Empty;
+    private int    _kpiActive     = 0;
+
+    private int _activeCount     = 0;
+    private int _uniqueUsers     = 0;
+    private int _suspiciousCount = 0;
+    private int _mobileCount     = 0;
+
+    private string KpiClass1 => "ss-kpi-card" + (_kpiActive == 1 ? " ss-kpi-card--active" : "");
+    private string KpiClass3 => "ss-kpi-card" + (_kpiActive == 3 ? " ss-kpi-card--active" : "");
+
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Active",     "Active"),
+        new("Expired",    "Expired"),
+        new("Revoked",    "Revoked"),
+        new("Suspicious", "Suspicious"),
+    ];
+
+    private static readonly List<LabelValue> _deviceOptions =
+    [
+        new("Desktop", "Desktop"),
+        new("Mobile",  "Mobile"),
+        new("Tablet",  "Tablet"),
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",             "/"),
+            new("Users & Security", "/tenant/security/users"),
+            new("Login Sessions",   "/tenant/security/sessions"));
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace with Api.GetSessionsAsync(_tenantId)
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterStatus) || e.StatusCode == _filterStatus) &&
+            (string.IsNullOrEmpty(_filterDevice) || e.DeviceType == _filterDevice) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.UserFullName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.IpAddress.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        if (_kpiActive == 1) _entries = _entries.Where(e => e.StatusCode == "Active").ToList();
+        if (_kpiActive == 3) _entries = _entries.Where(e => e.StatusCode == "Suspicious").ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive    = _kpiActive == n ? 0 : n;
+        _filterStatus = string.Empty;
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        _activeCount     = _allEntries.Count(e => e.StatusCode == "Active");
+        _uniqueUsers     = _allEntries.Select(e => e.UserEmail).Distinct().Count();
+        _suspiciousCount = _allEntries.Count(e => e.StatusCode == "Suspicious");
+        _mobileCount     = _allEntries.Count(e => e.DeviceType == "Mobile");
+    }
+
+    private async Task RevokeSessionAsync(SessionEntry e)
+    {
+        // TODO: Api.RevokeSessionAsync(e.SessionId)
+        await Task.Delay(0);
+        await LoadAsync();
+        await ShowToastAsync("Session revoked.", "e-toast-warning");
+    }
+
+    private async Task RevokeAllAsync()
+    {
+        // TODO: Api.RevokeAllSessionsAsync(_tenantId)
+        await Task.Delay(0);
+        await LoadAsync();
+        await ShowToastAsync("All active sessions revoked.", "e-toast-warning");
+    }
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string Initials(string fullName)
+    {
+        var parts = fullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : fullName.Length >= 1 ? fullName[..1] : "?";
+    }
+
+    private static string AvatarStyle(SessionEntry e)
+    {
+        var hue = Math.Abs(e.UserEmail.GetHashCode()) % 360;
+        return $"background:hsl({hue},50%,42%);color:#fff;";
+    }
+
+    private static string DeviceBadgeClass(string device) => device switch
+    {
+        "Mobile"  => "ss-device-badge ss-device-badge--mobile",
+        "Tablet"  => "ss-device-badge ss-device-badge--tablet",
+        _         => "ss-device-badge ss-device-badge--desktop",
+    };
+
+    private static string DeviceIcon(string device) => device switch
+    {
+        "Mobile" => "bi bi-phone",
+        "Tablet" => "bi bi-tablet",
+        _        => "bi bi-display",
+    };
+
+    private sealed record LabelValue(string Value, string Label);
+
+    private sealed class SessionEntry
+    {
+        public Guid     SessionId    { get; set; } = Guid.Empty;
+        public string   UserFullName { get; set; } = string.Empty;
+        public string   UserEmail    { get; set; } = string.Empty;
+        public string   IpAddress    { get; set; } = string.Empty;
+        public string   DeviceType   { get; set; } = "Desktop";
+        public string   Location     { get; set; } = string.Empty;
+        public DateTime LoginDate    { get; set; } = DateTime.UtcNow;
+        public string   StatusCode   { get; set; } = "Active";
+    }
+}

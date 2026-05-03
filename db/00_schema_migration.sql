@@ -553,7 +553,7 @@ CREATE TABLE OPS.EngagementTask (
 );
 
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('OPS.IssueTracker'))
-CREATE TABLE OPS.Iissue et (
+CREATE TABLE OPS.IssueTracker (
     IssueId           UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
     TenantId          UNIQUEIDENTIFIER NOT NULL,
     EngagementId      UNIQUEIDENTIFIER NULL,

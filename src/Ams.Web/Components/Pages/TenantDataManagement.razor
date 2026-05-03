@@ -1,0 +1,336 @@
+@page "/tenant/data/import"
+@page "/tenant/data/export"
+@page "/tenant/data/quality"
+@page "/tenant/data/dupes"
+@page "/tenant/data/merge"
+@page "/tenant/data/archive"
+@page "/tenant/data/retention"
+@page "/tenant/data/repair"
+@namespace Ams.Web.Components.Pages
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Data Management — AMS</PageTitle>
+
+<AppPageHeader Title="Data Management"
+               Subtitle="Tenant admin command center for import, export, data quality, duplicates, merges, archive, retention, and repair requests"
+               Icon="bi-database">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="ResetFilters">
+            <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset
+        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/tenant/data/import")'>
+            <i class="bi bi-database-up" aria-hidden="true"></i> Import Data
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<section class="data-hero" aria-label="Data management overview">
+    <div>
+        <span class="data-eyebrow">Tenant administration</span>
+        <h2>Data Management Workflow</h2>
+        <p>Control the full tenant data lifecycle: secure import and export, quality scoring, duplicate resolution, record merges, archive policy, retention governance, and repair request triage.</p>
+    </div>
+    <div class="data-hero-grid">
+        @foreach (var action in _quickActions)
+        {
+            <button class="data-quick-action" @onclick="() => Nav.NavigateTo(action.Url)">
+                <i class="bi @action.Icon" aria-hidden="true"></i>
+                <span>@action.Label</span>
+            </button>
+        }
+    </div>
+</section>
+
+<section class="data-kpi-grid" aria-label="Data management metrics">
+    @Kpi("Import Jobs", "12", "3 pending validation", "bi-database-up", "data-tone-blue")
+    @Kpi("Quality Score", "94.2%", "Across core entities", "bi-patch-check", "data-tone-green")
+    @Kpi("Duplicates", "247", "Records to review", "bi-merge", "data-tone-amber")
+    @Kpi("Repair SLA", "6 Open", "Tenant data requests", "bi-wrench", "data-tone-red")
+</section>
+
+<section class="data-command-bar" aria-label="Data management filters">
+    <div class="data-search-wrap">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input type="search"
+               placeholder="Search data workflow, owner, control, module..."
+               @bind="_search"
+               @bind:event="oninput" />
+    </div>
+    <div class="data-pill-group" role="group" aria-label="Data workflow filter">
+        @foreach (var filter in _filters)
+        {
+            <button class="data-pill @(_filter == filter.Key ? "data-pill--active" : "")"
+                    @onclick="() => _filter = filter.Key">
+                @filter.Label
+                <span>@FilterCount(filter.Key)</span>
+            </button>
+        }
+    </div>
+</section>
+
+<section class="data-layout">
+    <div class="data-flow" aria-label="Data management workflow lanes">
+        @foreach (var lane in _lanes)
+        {
+            var laneItems = FilteredWorkflow.Where(x => x.Stage == lane.Key).ToList();
+            <article class="data-lane">
+                <header class="data-lane-header">
+                    <div>
+                        <span class="data-lane-title">@lane.Label</span>
+                        <span class="data-lane-subtitle">@lane.Description</span>
+                    </div>
+                    <span class="data-lane-count">@laneItems.Count</span>
+                </header>
+
+                <div class="data-lane-list">
+                    @if (laneItems.Count == 0)
+                    {
+                        <div class="data-empty-mini">No visible workflow items.</div>
+                    }
+                    else
+                    {
+                        @foreach (var item in laneItems)
+                        {
+                            <button class="data-work-card @(item.Risk == "High" ? "data-work-card--risk" : "")"
+                                    @onclick="() => _selected = item">
+                                <div class="data-work-topline">
+                                    <span class="data-chip @ToneCss(item.Domain)">@item.Domain</span>
+                                    <span class="data-status @RiskCss(item.Risk)">@item.Risk</span>
+                                </div>
+                                <strong>@item.Title</strong>
+                                <p>@item.Summary</p>
+                                <div class="data-work-meta">
+                                    <span><i class="bi bi-person" aria-hidden="true"></i> @item.Owner</span>
+                                    <span><i class="bi bi-clock" aria-hidden="true"></i> @item.Sla</span>
+                                </div>
+                            </button>
+                        }
+                    }
+                </div>
+            </article>
+        }
+    </div>
+
+    <aside class="data-admin-panel" aria-label="Tenant data administration controls">
+        @if (_selected is null)
+        {
+            <div class="data-side-empty">
+                <i class="bi bi-database-check" aria-hidden="true"></i>
+                <h3>Data governance</h3>
+                <p>Select a workflow item to inspect ownership, risk, SLA, governance control, and module action.</p>
+            </div>
+        }
+        else
+        {
+            <div class="data-detail-header">
+                <span class="data-chip @ToneCss(_selected.Domain)">@_selected.Domain</span>
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selected = null" aria-label="Close details">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
+            <h3>@_selected.Title</h3>
+            <p>@_selected.Summary</p>
+
+            <dl class="data-detail-list">
+                <div><dt>Owner</dt><dd>@_selected.Owner</dd></div>
+                <div><dt>Stage</dt><dd>@_selected.Stage</dd></div>
+                <div><dt>Risk</dt><dd><span class="data-status @RiskCss(_selected.Risk)">@_selected.Risk</span></dd></div>
+                <div><dt>SLA</dt><dd>@_selected.Sla</dd></div>
+                <div><dt>Control</dt><dd>@_selected.Control</dd></div>
+            </dl>
+
+            <div class="data-policy-card">
+                <strong>Tenant data controls</strong>
+                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Import/export approval and audit trail enforced</span>
+                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Duplicate merge, repair, and retention policies monitored</span>
+                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Archive, retention, and data quality evidence maintained</span>
+            </div>
+
+            <div class="data-detail-actions">
+                <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selected.Url)">
+                    <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Module
+                </button>
+                <button class="um-btn um-btn-ghost" @onclick="() => Advance(_selected)">
+                    <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Advance
+                </button>
+            </div>
+        }
+    </aside>
+</section>
+
+<section class="data-module-grid" aria-label="Data management modules">
+    @foreach (var module in _modules)
+    {
+        <button class="data-module-card" @onclick="() => Nav.NavigateTo(module.Url)">
+            <span class="data-module-icon @ToneCss(module.Domain)"><i class="bi @module.Icon" aria-hidden="true"></i></span>
+            <span class="data-module-content">
+                <strong>@module.Title</strong>
+                <small>@module.Description</small>
+            </span>
+            <i class="bi bi-chevron-right data-module-arrow" aria-hidden="true"></i>
+        </button>
+    }
+</section>
+
+@code {
+    private string _search = string.Empty;
+    private string _filter = string.Empty;
+    private DataWorkflowItem? _selected;
+    private readonly List<DataWorkflowItem> _workflow = [];
+
+    private readonly Lane[] _lanes =
+    [
+        new("Ingest", "Ingest", "Import, validate, stage"),
+        new("Validate", "Validate", "Quality and duplicate review"),
+        new("Resolve", "Resolve", "Merge and repair"),
+        new("Govern", "Govern", "Archive and retention"),
+        new("Deliver", "Deliver", "Export and evidence")
+    ];
+
+    private readonly Filter[] _filters =
+    [
+        new("", "All"),
+        new("risk", "High Risk"),
+        new("quality", "Quality"),
+        new("dupes", "Duplicates"),
+        new("govern", "Governance")
+    ];
+
+    private readonly DataModule[] _modules =
+    [
+        new("Import Data", "Upload and stage tenant files, templates, mappings, and validation results.", "/tenant/data/import", "bi-database-up", "Import"),
+        new("Export Data", "Create controlled exports with scope, masking, approval, and audit evidence.", "/tenant/data/export", "bi-database-down", "Export"),
+        new("Data Quality", "Monitor quality scores, required fields, normalization, and broken references.", "/tenant/data/quality", "bi-patch-check", "Quality"),
+        new("Duplicate Management", "Review duplicate candidates, confidence scoring, and survivorship rules.", "/tenant/data/dupes", "bi-merge", "Duplicates"),
+        new("Merge Records", "Resolve duplicate accounts, contacts, policies, and related child records.", "/tenant/data/merge", "bi-intersect", "Merge"),
+        new("Archive Settings", "Manage archival windows, frozen records, legal holds, and purge eligibility.", "/tenant/data/archive", "bi-archive", "Governance"),
+        new("Retention Settings", "Configure retention schedules, data classes, and compliance evidence.", "/tenant/data/retention", "bi-clock-history", "Governance"),
+        new("Data Repair Requests", "Triage tenant repair requests, assign owners, and track remediation SLA.", "/tenant/data/repair", "bi-wrench", "Repair")
+    ];
+
+    private readonly DataModule[] _quickActions =
+    [
+        new("Import", "", "/tenant/data/import", "bi-database-up", "Import"),
+        new("Quality", "", "/tenant/data/quality", "bi-patch-check", "Quality"),
+        new("Duplicates", "", "/tenant/data/dupes", "bi-merge", "Duplicates"),
+        new("Repair", "", "/tenant/data/repair", "bi-wrench", "Repair")
+    ];
+
+    private IEnumerable<DataWorkflowItem> FilteredWorkflow => _workflow.Where(item =>
+        (string.IsNullOrWhiteSpace(_filter) || _filter switch
+        {
+            "risk" => item.Risk == "High",
+            "quality" => item.Domain == "Quality",
+            "dupes" => item.Domain is "Duplicates" or "Merge",
+            "govern" => item.Domain == "Governance",
+            _ => true
+        }) &&
+        (string.IsNullOrWhiteSpace(_search) ||
+         item.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         item.Summary.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         item.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         item.Domain.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         item.Control.Contains(_search, StringComparison.OrdinalIgnoreCase)))
+        .OrderByDescending(x => x.Risk == "High")
+        .ThenBy(x => x.Stage)
+        .ThenBy(x => x.Title);
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Data Management", "/tenant/data/quality"));
+        BuildWorkflow();
+        _selected = _workflow.FirstOrDefault(x => x.Risk == "High") ?? _workflow.FirstOrDefault();
+    }
+
+    private void BuildWorkflow()
+    {
+        _workflow.Clear();
+        _workflow.AddRange(
+        [
+            new("Carrier download import", "Carrier policy and commission data is staged for field mapping validation.", "Import", "Medium", "Ingest", "Maria Santos", "Today", "Import mapping approval", "/tenant/data/import"),
+            new("Bulk contact export request", "Producer requested segmented contact export requiring tenant admin approval.", "Export", "High", "Deliver", "Diana Perez", "Same day", "Export approval and masking", "/tenant/data/export"),
+            new("Required field quality drop", "Account records missing NAICS, branch, and primary contact fields exceeded threshold.", "Quality", "High", "Validate", "Sarah Kim", "24h", "Data completeness score", "/tenant/data/quality"),
+            new("Duplicate account candidates", "247 account and contact duplicate candidates require confidence review.", "Duplicates", "High", "Validate", "James Park", "This week", "Duplicate survivorship", "/tenant/data/dupes"),
+            new("Commercial account merge", "Two related commercial entities are ready for controlled merge and relationship reconciliation.", "Merge", "Medium", "Resolve", "Lisa Chen", "2 days", "Merge approval", "/tenant/data/merge"),
+            new("Policy repair request", "Policy effective date and linked invoice references require back-office correction.", "Repair", "High", "Resolve", "Kevin Obi", "Same day", "Repair audit trail", "/tenant/data/repair"),
+            new("Archive eligibility review", "Closed service records older than retention threshold are pending archive review.", "Governance", "Medium", "Govern", "Robert Yamamoto", "Monthly", "Archive policy", "/tenant/data/archive"),
+            new("Retention schedule update", "Tenant retention schedule needs update for document, audit, and communications records.", "Governance", "Medium", "Govern", "Diana Perez", "Quarterly", "Retention compliance", "/tenant/data/retention")
+        ]);
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _filter = string.Empty;
+    }
+
+    private void Advance(DataWorkflowItem item)
+    {
+        item.Stage = item.Stage switch
+        {
+            "Ingest" => "Validate",
+            "Validate" => "Resolve",
+            "Resolve" => "Govern",
+            "Govern" => "Deliver",
+            _ => "Deliver"
+        };
+    }
+
+    private int FilterCount(string key) => key switch
+    {
+        "risk" => _workflow.Count(x => x.Risk == "High"),
+        "quality" => _workflow.Count(x => x.Domain == "Quality"),
+        "dupes" => _workflow.Count(x => x.Domain is "Duplicates" or "Merge"),
+        "govern" => _workflow.Count(x => x.Domain == "Governance"),
+        _ => _workflow.Count
+    };
+
+    private static string ToneCss(string domain) => domain switch
+    {
+        "Import" => "data-tone-blue",
+        "Export" => "data-tone-cyan",
+        "Quality" => "data-tone-green",
+        "Duplicates" => "data-tone-amber",
+        "Merge" => "data-tone-violet",
+        "Governance" => "data-tone-neutral",
+        "Repair" => "data-tone-red",
+        _ => "data-tone-neutral"
+    };
+
+    private static string RiskCss(string risk) => risk switch
+    {
+        "High" => "data-status-high",
+        "Medium" => "data-status-medium",
+        _ => "data-status-low"
+    };
+
+    private RenderFragment Kpi(string label, string value, string meta, string icon, string tone) => @<article class="data-kpi-card">
+        <span class="data-kpi-icon @tone"><i class="bi @icon" aria-hidden="true"></i></span>
+        <div>
+            <strong>@value</strong>
+            <span>@label</span>
+            <small>@meta</small>
+        </div>
+    </article>;
+
+    private sealed record Lane(string Key, string Label, string Description);
+    private sealed record Filter(string Key, string Label);
+    private sealed record DataModule(string Title, string Description, string Url, string Icon, string Domain)
+    {
+        public string Label => Title;
+    }
+
+    private sealed class DataWorkflowItem(string title, string summary, string domain, string risk, string stage, string owner, string sla, string control, string url)
+    {
+        public string Title { get; set; } = title;
+        public string Summary { get; set; } = summary;
+        public string Domain { get; set; } = domain;
+        public string Risk { get; set; } = risk;
+        public string Stage { get; set; } = stage;
+        public string Owner { get; set; } = owner;
+        public string Sla { get; set; } = sla;
+        public string Control { get; set; } = control;
+        public string Url { get; set; } = url;
+    }
+}

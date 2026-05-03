@@ -1,0 +1,147 @@
+@page "/tenant/dashboard/renewal-pipeline"
+@namespace Ams.Web.Components.Pages.Tenant.Dashboard
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Renewal Pipeline — Agency Dashboard</PageTitle>
+
+<AppPageHeader Title="Renewal Pipeline"
+               Subtitle="Upcoming renewals by due date — track at-risk policies and outstanding premium"
+               Icon="bi-arrow-clockwise">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <a class="um-btn um-btn-ghost" href="/renewals/pipeline">
+            <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Full Pipeline
+        </a>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="ad-loading-banner" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading renewal pipeline…</span>
+    </div>
+}
+else if (_data is null)
+{
+    <div class="ad-empty"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i><span>No renewal data available.</span></div>
+}
+else
+{
+    <!-- ── KPI strip ─────────────────────────────────────────── -->
+    <div class="ad-kpi-strip">
+        <div class="ad-kpi-card ad-kpi--claims">
+            <div class="ad-kpi-icon"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.Overdue</div>
+                <div class="ad-kpi-lbl">Overdue</div>
+                <div class="ad-kpi-sub">@_data.PremiumOverdue.ToString("C0") at risk</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--retention">
+            <div class="ad-kpi-icon"><i class="bi bi-calendar-event" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.DueIn30Days</div>
+                <div class="ad-kpi-lbl">Due in 30 Days</div>
+                <div class="ad-kpi-sub">@_data.PremiumDueIn30Days.ToString("C0") premium</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--premium">
+            <div class="ad-kpi-icon"><i class="bi bi-calendar2-range" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.DueIn60Days</div>
+                <div class="ad-kpi-lbl">Due in 31–60 Days</div>
+                <div class="ad-kpi-sub">@_data.PremiumDueIn60Days.ToString("C0") premium</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--policies">
+            <div class="ad-kpi-icon"><i class="bi bi-calendar-check" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.DueIn90Days</div>
+                <div class="ad-kpi-lbl">Due in 61–90 Days</div>
+                <div class="ad-kpi-sub">@_data.PremiumDueIn90Days.ToString("C0") premium</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Row detail ─────────────────────────────────────────── -->
+    <div class="ad-card">
+        <div class="ad-card-hd"><i class="bi bi-list-ul" aria-hidden="true"></i> Renewal Detail (@_data.Rows.Count)</div>
+        @if (_data.Rows.Count == 0)
+        {
+            <div class="ad-empty" style="padding:1.5rem"><span>No upcoming renewals found.</span></div>
+        }
+        else
+        {
+            <div class="ad-table-wrap">
+                <table class="ad-table">
+                    <thead>
+                        <tr>
+                            <th>Policy Number</th>
+                            <th>Account</th>
+                            <th>Producer</th>
+                            <th>Branch</th>
+                            <th>Renewal Date</th>
+                            <th class="ad-num">Current Premium</th>
+                            <th>Status</th>
+                            <th class="ad-num">Days</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in _data.Rows.OrderBy(r => r.DaysUntilRenewal))
+                        {
+                            <tr>
+                                <td style="font-weight:600;font-family:monospace;font-size:.82rem">@r.PolicyNumber</td>
+                                <td>@r.AccountName</td>
+                                <td style="font-size:.8rem;color:#6b7280">@(r.ProducerName ?? "—")</td>
+                                <td style="font-size:.8rem;color:#6b7280">@(r.BranchName ?? "—")</td>
+                                <td style="font-size:.82rem">@r.RenewalDate.ToString("MMM d, yyyy")</td>
+                                <td class="ad-num" style="font-weight:600">@r.CurrentPremium.ToString("C0")</td>
+                                <td>
+                                    <span class="ad-badge @StatusBadgeClass(r.StatusCode)">@r.StatusCode</span>
+                                </td>
+                                <td class="ad-num">
+                                    <span class="ad-days-chip @DaysChipClass(r.DaysUntilRenewal)">@r.DaysUntilRenewal</span>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private RenewalPipelineDto? _data;
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Agency Dashboard", "/tenant/dashboard"), new("Renewal Pipeline"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try { _data = await Api.GetRenewalPipelineAsync(_tenantId); }
+        finally { _loading = false; }
+    }
+
+    private static string StatusBadgeClass(string status) => status.ToLower() switch
+    {
+        "renewed"   => "ad-badge--closed",
+        "pending"   => "ad-badge--pending",
+        "overdue"   => "ad-badge--overdue",
+        "at-risk"   => "ad-badge--warn",
+        _           => "ad-badge--info"
+    };
+
+    private static string DaysChipClass(int days) =>
+        days < 0 ? "ad-days--red" : days <= 30 ? "ad-days--warn" : "ad-days--ok";
+}

@@ -1,0 +1,183 @@
+@page "/crm/leads/all"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Lead Directory</PageTitle>
+
+<AppPageHeader Title="Lead Directory"
+               Subtitle="Complete searchable directory of all leads across every stage and owner"
+               Icon="bi-people-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ldir-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <a href="/crm/leads/new" class="um-btn um-btn-primary">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Lead
+        </a>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="ldir-kpi-strip">
+    <div class="ldir-kpi-card">
+        <div class="ldir-kpi-icon ldir-i1"><i class="bi bi-people-fill"></i></div>
+        <div><div class="ldir-kpi-val">@_rows.Count</div><div class="ldir-kpi-lbl">Total Leads</div></div>
+    </div>
+    <div class="ldir-kpi-card">
+        <div class="ldir-kpi-icon ldir-i2"><i class="bi bi-star-fill"></i></div>
+        <div><div class="ldir-kpi-val">@_rows.Count(r => r.Score >= 80)</div><div class="ldir-kpi-lbl">Hot Leads</div></div>
+    </div>
+    <div class="ldir-kpi-card">
+        <div class="ldir-kpi-icon ldir-i3"><i class="bi bi-check2-circle"></i></div>
+        <div><div class="ldir-kpi-val">@_rows.Count(r => r.Stage == "Qualified")</div><div class="ldir-kpi-lbl">Qualified</div></div>
+    </div>
+    <div class="ldir-kpi-card">
+        <div class="ldir-kpi-icon ldir-i4"><i class="bi bi-arrow-repeat"></i></div>
+        <div><div class="ldir-kpi-val">@_rows.Count(r => r.Stage == "Converted")</div><div class="ldir-kpi-lbl">Converted</div></div>
+    </div>
+    <div class="ldir-kpi-card">
+        <div class="ldir-kpi-icon ldir-i5"><i class="bi bi-person-x-fill"></i></div>
+        <div><div class="ldir-kpi-val">@_rows.Count(r => r.Stage == "Dead")</div><div class="ldir-kpi-lbl">Dead</div></div>
+    </div>
+</div>
+
+<!-- Filter bar -->
+<div class="ldir-filter-bar">
+    <div class="ldir-search-wrap">
+        <i class="bi bi-search ldir-search-icon"></i>
+        <input class="ldir-search-input" placeholder="Search leads…" @bind="_search" @bind:event="oninput" />
+    </div>
+    <select class="um-select" @bind="_filterStage">
+        <option value="">All Stages</option>
+        @foreach (var s in _stages) { <option value="@s">@s</option> }
+    </select>
+    <select class="um-select" @bind="_filterSource">
+        <option value="">All Sources</option>
+        @foreach (var s in _sources) { <option value="@s">@s</option> }
+    </select>
+    <select class="um-select" @bind="_filterOwner">
+        <option value="">All Owners</option>
+        @foreach (var o in _owners) { <option value="@o">@o</option> }
+    </select>
+</div>
+
+@if (_loading)
+{
+    <div class="ldir-loading">
+        <i class="bi bi-arrow-clockwise ldir-spin" style="font-size:1.4rem;"></i>
+        <span>Loading leads…</span>
+    </div>
+}
+else
+{
+    <div class="ldir-grid-card">
+        <table class="um-table">
+            <thead>
+                <tr>
+                    <th>Lead</th>
+                    <th>Company</th>
+                    <th>Source</th>
+                    <th>Stage</th>
+                    <th>Score</th>
+                    <th>Owner</th>
+                    <th>LOB</th>
+                    <th>Est. Premium</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in Filtered)
+                {
+                    <tr>
+                        <td>
+                            <div class="ldir-name-cell">
+                                <div class="ldir-avatar ldir-av@((Math.Abs(r.FullName.GetHashCode()) % 6) + 1)">
+                                    @r.FullName[..1]
+                                </div>
+                                <div>
+                                    <div class="ldir-item-name">@r.FullName</div>
+                                    <div class="ldir-item-sub">@r.Email</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td>@r.Company</td>
+                        <td><span class="ldir-source-badge">@r.Source</span></td>
+                        <td><span class="ldir-stage ldir-stage--@r.Stage.ToLower()">@r.Stage</span></td>
+                        <td>
+                            <span class="ldir-score @(r.Score >= 80 ? "ldir-score--hot" : r.Score >= 50 ? "ldir-score--warm" : "ldir-score--cold")">
+                                @r.Score
+                            </span>
+                        </td>
+                        <td>@r.Owner</td>
+                        <td>@r.Lob</td>
+                        <td>@(r.EstPremium.HasValue ? r.EstPremium.Value.ToString("C0") : "—")</td>
+                        <td>
+                            <div class="ldir-row-actions">
+                                <button class="um-btn um-btn-ghost um-btn-xs" title="View"><i class="bi bi-eye"></i></button>
+                                <button class="um-btn um-btn-ghost um-btn-xs" title="Edit"><i class="bi bi-pencil"></i></button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+                @if (!Filtered.Any())
+                {
+                    <tr><td colspan="9" class="ldir-empty">No leads match your filters.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    bool _loading = true;
+    string _search = "", _filterStage = "", _filterSource = "", _filterOwner = "";
+    List<LeadRow> _rows = [];
+
+    static readonly string[] _stages  = ["New","Contacted","Qualified","Proposal","Negotiation","Converted","Dead"];
+    static readonly string[] _sources = ["Web","Referral","Cold Call","Trade Show","Social","Email Campaign"];
+
+    IEnumerable<string> _owners => _rows.Select(r => r.Owner).Where(o => !string.IsNullOrEmpty(o)).Distinct().Order();
+
+    IEnumerable<LeadRow> Filtered => _rows.Where(r =>
+        (string.IsNullOrEmpty(_search)      || r.FullName.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.Company.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.Email.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_filterStage)  || r.Stage == _filterStage) &&
+        (string.IsNullOrEmpty(_filterSource) || r.Source == _filterSource) &&
+        (string.IsNullOrEmpty(_filterOwner)  || r.Owner == _filterOwner));
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("CRM", "/crm"), new("Leads", "/crm/leads"), new("Directory"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(0);
+        _rows = BuildStub();
+        _loading = false;
+    }
+
+    static List<LeadRow> BuildStub() =>
+    [
+        new("Emma","Hartwell","Pinnacle Industries","emma.hartwell@pinnacle.com","Referral","Qualified",91,"Sarah Mitchell","Commercial",52000),
+        new("James","Okafor","BlueSky Tech","j.okafor@bluesky.io","Web","New",74,"Derek Lawson","Technology",18000),
+        new("Maria","Delgado","Coastal Partners","m.delgado@coastal.com","Trade Show","Contacted",63,"Sarah Mitchell","Personal",null),
+        new("Tyler","Brooks","Apex Manufacturing","t.brooks@apexmfg.com","Cold Call","Qualified",88,"Marcus Reid","Commercial",95000),
+        new("Priya","Nair","NextGen Solutions","p.nair@nextgen.com","Social","Proposal",80,"Derek Lawson","Technology",34000),
+        new("Kevin","Larson","Summit Retail","k.larson@summit.com","Web","Contacted",55,"Marcus Reid","Commercial",12000),
+        new("Olivia","Chang","Pacific Ventures","o.chang@pacific.com","Referral","Converted",95,"Sarah Mitchell","Specialty",120000),
+        new("Ryan","Fletcher","Ironbridge Corp","r.fletcher@ironbridge.com","Email Campaign","Dead",30,"Derek Lawson","Commercial",null),
+        new("Natalie","Owens","Brightline Agency","n.owens@brightline.com","Web","New",62,"Marcus Reid","Personal",9000),
+        new("Carlos","Ruiz","Meridian Holdings","c.ruiz@meridian.com","Cold Call","Negotiation",77,"Sarah Mitchell","Commercial",68000),
+        new("Fiona","MacLeod","Harborview Group","f.macleod@harborview.com","Referral","Qualified",85,"Derek Lawson","Specialty",41000),
+        new("Aaron","Kim","Vertex Systems","a.kim@vertex.com","Trade Show","New",49,"Marcus Reid","Technology",null),
+    ];
+
+    record LeadRow(string First, string Last, string Company, string Email, string Source, string Stage, int Score, string Owner, string Lob, decimal? EstPremium)
+    {
+        public string FullName => $"{First} {Last}";
+    }
+}

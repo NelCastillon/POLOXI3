@@ -24,6 +24,155 @@
     </Actions>
 </AppPageHeader>
 
+<!-- ── TENANT ADMIN DOCUMENTS WORKFLOW ────────────────────────────── -->
+<section class="docs-hero" aria-label="Documents workflow overview">
+    <div>
+        <span class="docs-eyebrow">Tenant administration</span>
+        <h2>Documents Workflow</h2>
+        <p>Govern document intake, classification, ACORD forms, e-signature, OCR exception resolution, packet assembly, retention, and audit controls.</p>
+    </div>
+    <div class="docs-hero-grid">
+        @foreach (var action in _docQuickActions)
+        {
+            <button class="docs-quick-action" @onclick="() => Nav.NavigateTo(action.Url)">
+                <i class="bi @action.Icon" aria-hidden="true"></i>
+                <span>@action.Label</span>
+            </button>
+        }
+    </div>
+</section>
+
+<section class="docs-kpi-grid" aria-label="Documents workflow metrics">
+    @DocWorkflowKpi("Repository", (_items?.Count ?? 0).ToString(), "Indexed tenant documents", "bi-folder2-open", "docs-tone-blue")
+    @DocWorkflowKpi("E-Sign", _kpiEsign.ToString(), "Pending signatures", "bi-pen", "docs-tone-amber")
+    @DocWorkflowKpi("OCR Review", _kpiExceptions.ToString(), "Exceptions to classify", "bi-exclamation-triangle", "docs-tone-red")
+    @DocWorkflowKpi("Audit Ready", _docWorkflow.Count(x => x.Stage == "Audit").ToString(), "Retention and access evidence", "bi-shield-check", "docs-tone-green")
+</section>
+
+<section class="docs-command-bar" aria-label="Documents workflow filters">
+    <div class="docs-search-wrap">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input type="search"
+               placeholder="Search workflow, owner, document type, control..."
+               @bind="_workflowSearch"
+               @bind:event="oninput" />
+    </div>
+    <div class="docs-pill-group" role="group" aria-label="Documents workflow filter">
+        @foreach (var filter in _docFilters)
+        {
+            <button class="docs-pill @(_workflowFilter == filter.Key ? "docs-pill--active" : "")"
+                    @onclick="() => _workflowFilter = filter.Key">
+                @filter.Label
+                <span>@DocFilterCount(filter.Key)</span>
+            </button>
+        }
+    </div>
+</section>
+
+<section class="docs-layout">
+    <div class="docs-flow" aria-label="Documents workflow lanes">
+        @foreach (var lane in _docLanes)
+        {
+            var laneItems = FilteredDocWorkflow.Where(x => x.Stage == lane.Key).ToList();
+            <article class="docs-lane">
+                <header class="docs-lane-header">
+                    <div>
+                        <span class="docs-lane-title">@lane.Label</span>
+                        <span class="docs-lane-subtitle">@lane.Description</span>
+                    </div>
+                    <span class="docs-lane-count">@laneItems.Count</span>
+                </header>
+
+                <div class="docs-lane-list">
+                    @if (laneItems.Count == 0)
+                    {
+                        <div class="docs-empty-mini">No visible workflow items.</div>
+                    }
+                    else
+                    {
+                        @foreach (var item in laneItems)
+                        {
+                            <button class="docs-work-card @(item.Risk == "High" ? "docs-work-card--risk" : "")"
+                                    @onclick="() => _selectedWorkflow = item">
+                                <div class="docs-work-topline">
+                                    <span class="docs-chip @DocToneCss(item.Type)">@item.Type</span>
+                                    <span class="docs-status @DocRiskCss(item.Risk)">@item.Risk</span>
+                                </div>
+                                <strong>@item.Title</strong>
+                                <p>@item.Summary</p>
+                                <div class="docs-work-meta">
+                                    <span><i class="bi bi-person" aria-hidden="true"></i> @item.Owner</span>
+                                    <span><i class="bi bi-clock" aria-hidden="true"></i> @item.Sla</span>
+                                </div>
+                            </button>
+                        }
+                    }
+                </div>
+            </article>
+        }
+    </div>
+
+    <aside class="docs-admin-panel" aria-label="Tenant document administration controls">
+        @if (_selectedWorkflow is null)
+        {
+            <div class="docs-side-empty">
+                <i class="bi bi-folder-check" aria-hidden="true"></i>
+                <h3>Document governance</h3>
+                <p>Select a workflow item to review ownership, SLA, retention, audit controls, and downstream module actions.</p>
+            </div>
+        }
+        else
+        {
+            <div class="docs-detail-header">
+                <span class="docs-chip @DocToneCss(_selectedWorkflow.Type)">@_selectedWorkflow.Type</span>
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selectedWorkflow = null" aria-label="Close details">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
+            <h3>@_selectedWorkflow.Title</h3>
+            <p>@_selectedWorkflow.Summary</p>
+
+            <dl class="docs-detail-list">
+                <div><dt>Owner</dt><dd>@_selectedWorkflow.Owner</dd></div>
+                <div><dt>Stage</dt><dd>@_selectedWorkflow.Stage</dd></div>
+                <div><dt>Risk</dt><dd><span class="docs-status @DocRiskCss(_selectedWorkflow.Risk)">@_selectedWorkflow.Risk</span></dd></div>
+                <div><dt>SLA</dt><dd>@_selectedWorkflow.Sla</dd></div>
+                <div><dt>Control</dt><dd>@_selectedWorkflow.Control</dd></div>
+            </dl>
+
+            <div class="docs-policy-card">
+                <strong>Tenant controls</strong>
+                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Metadata, category, and retention policy enforced</span>
+                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Share links, e-sign, and access activity audited</span>
+                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> OCR exceptions routed for manual classification</span>
+            </div>
+
+            <div class="docs-detail-actions">
+                <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selectedWorkflow.Url)">
+                    <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Module
+                </button>
+                <button class="um-btn um-btn-ghost" @onclick="() => AdvanceWorkflow(_selectedWorkflow)">
+                    <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Advance
+                </button>
+            </div>
+        }
+    </aside>
+</section>
+
+<section class="docs-module-grid" aria-label="Documents modules">
+    @foreach (var module in _docModules)
+    {
+        <button class="docs-module-card" @onclick="() => Nav.NavigateTo(module.Url)">
+            <span class="docs-module-icon @DocToneCss(module.Type)"><i class="bi @module.Icon" aria-hidden="true"></i></span>
+            <span class="docs-module-content">
+                <strong>@module.Title</strong>
+                <small>@module.Description</small>
+            </span>
+            <i class="bi bi-chevron-right docs-module-arrow" aria-hidden="true"></i>
+        </button>
+    }
+</section>
+
 <!-- ── KPI STRIP ──────────────────────────────────────────────────── -->
 <div class="dh-kpi-strip">
     @DhKpi("bi-folder2",           "Total Documents",      (_items?.Count ?? 0).ToString(),                                             "dh-ki-blue")
@@ -406,6 +555,8 @@ else
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string? _searchTerm;
     private string? _categoryFilter;
+    private string _workflowSearch = string.Empty;
+    private string _workflowFilter = string.Empty;
     private List<DocumentDto>? _items;
     private string _viewMode = "grid";
 
@@ -417,6 +568,7 @@ else
 
     // Detail panel
     private DocumentDto? _selected;
+    private DocumentWorkflowItem? _selectedWorkflow;
     private bool _showDetail;
     private List<DocumentVersionDto>? _versions;
     private List<DocumentShareLinkDto>? _shareLinks;
@@ -445,6 +597,63 @@ else
     private bool _showRename;
     private RenameDocumentRequest _renameRequest = new();
 
+    private readonly List<DocumentWorkflowItem> _docWorkflow = [];
+
+    private readonly WorkflowLane[] _docLanes =
+    [
+        new("Intake", "Intake", "Uploads and client submissions"),
+        new("Classify", "Classify", "AI/OCR metadata assignment"),
+        new("Prepare", "Prepare", "Forms, packets, and versions"),
+        new("Sign", "Sign", "E-signature and acknowledgements"),
+        new("Audit", "Audit", "Retention, access, and compliance")
+    ];
+
+    private readonly WorkflowFilter[] _docFilters =
+    [
+        new("", "All"),
+        new("risk", "High Risk"),
+        new("ocr", "OCR"),
+        new("esign", "E-Sign"),
+        new("audit", "Audit")
+    ];
+
+    private readonly DocumentModule[] _docModules =
+    [
+        new("Documents Hub", "Search, upload, version, share, archive, and manage document metadata.", "/documents", "bi-folder2", "Repository"),
+        new("ACORD Forms Center", "Browse, pre-fill, complete, and route standard ACORD forms.", "/documents/forms", "bi-file-earmark-medical", "ACORD"),
+        new("E-Signature Queue", "Send signature requests, monitor completion, void requests, and escalate.", "/documents/esign", "bi-pen", "E-Sign"),
+        new("OCR Exceptions", "Resolve failed OCR, apply AI suggestions, and correct indexing.", "/documents/exceptions", "bi-exclamation-triangle", "OCR"),
+        new("Packet Builder", "Assemble renewal, claims, onboarding, and service document packets.", "/documents/packets", "bi-collection", "Packet"),
+        new("Audit Log", "Review access history, changes, retention evidence, and compliance events.", "/audit", "bi-shield-check", "Audit")
+    ];
+
+    private DocumentModule[] _docQuickActions =>
+    [
+        new("ACORD", "", "/documents/forms", "bi-file-earmark-medical", "ACORD"),
+        new("E-Sign", "", "/documents/esign", "bi-pen", "E-Sign"),
+        new("OCR", "", "/documents/exceptions", "bi-exclamation-triangle", "OCR"),
+        new("Packets", "", "/documents/packets", "bi-collection", "Packet")
+    ];
+
+    private IEnumerable<DocumentWorkflowItem> FilteredDocWorkflow => _docWorkflow.Where(item =>
+        (string.IsNullOrWhiteSpace(_workflowFilter) || _workflowFilter switch
+        {
+            "risk" => item.Risk == "High",
+            "ocr" => item.Type == "OCR",
+            "esign" => item.Type == "E-Sign",
+            "audit" => item.Stage == "Audit" || item.Type == "Audit",
+            _ => true
+        }) &&
+        (string.IsNullOrWhiteSpace(_workflowSearch) ||
+         item.Title.Contains(_workflowSearch, StringComparison.OrdinalIgnoreCase) ||
+         item.Summary.Contains(_workflowSearch, StringComparison.OrdinalIgnoreCase) ||
+         item.Owner.Contains(_workflowSearch, StringComparison.OrdinalIgnoreCase) ||
+         item.Type.Contains(_workflowSearch, StringComparison.OrdinalIgnoreCase) ||
+         item.Control.Contains(_workflowSearch, StringComparison.OrdinalIgnoreCase)))
+        .OrderByDescending(item => item.Risk == "High")
+        .ThenBy(item => item.Stage)
+        .ThenBy(item => item.Title);
+
     // Category options
     private readonly List<CategoryOption> _categories = new()
     {
@@ -465,7 +674,24 @@ else
     protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Documents",""));
+        BuildDocumentWorkflow();
+        _selectedWorkflow = _docWorkflow.FirstOrDefault(x => x.Risk == "High") ?? _docWorkflow.FirstOrDefault();
         await LoadAsync();
+    }
+
+    private void BuildDocumentWorkflow()
+    {
+        _docWorkflow.Clear();
+        _docWorkflow.AddRange(
+        [
+            new("New client document intake", "Client upload queue awaiting metadata validation and entity linkage.", "Repository", "Medium", "Intake", "Sarah Kim", "4h SLA", "Metadata policy", "/documents"),
+            new("OCR exception classification", "Scanned policy package has low confidence OCR and requires manual classification.", "OCR", "High", "Classify", "James Park", "Same day", "OCR confidence threshold", "/documents/exceptions"),
+            new("ACORD 25 pre-fill review", "Certificate form is AI pre-filled and waiting for producer validation.", "ACORD", "Medium", "Prepare", "Maria Santos", "24h", "Form accuracy control", "/documents/forms"),
+            new("Renewal packet assembly", "Commercial renewal packet requires dec page, proposal, invoice, and disclosures.", "Packet", "Medium", "Prepare", "Lisa Chen", "2 days", "Packet completeness", "/documents/packets"),
+            new("Signature request escalation", "Policy acknowledgement has not been signed before due date.", "E-Sign", "High", "Sign", "Kevin Obi", "Overdue", "Signer audit trail", "/documents/esign"),
+            new("Share link access review", "External share links with access counts require tenant admin review.", "Audit", "Low", "Audit", "Diana Perez", "Weekly", "Access and retention audit", "/audit"),
+            new("Retention evidence review", "Archived documents must be validated against agency retention settings.", "Audit", "Medium", "Audit", "Robert Yamamoto", "Monthly", "Retention schedule", "/audit")
+        ]);
     }
 
     private async Task LoadAsync()
@@ -613,6 +839,54 @@ else
         </div>
     };
 
+    RenderFragment DocWorkflowKpi(string label, string value, string meta, string icon, string tone) => @<article class="docs-kpi-card">
+        <span class="docs-kpi-icon @tone"><i class="bi @icon" aria-hidden="true"></i></span>
+        <div>
+            <strong>@value</strong>
+            <span>@label</span>
+            <small>@meta</small>
+        </div>
+    </article>;
+
+    private int DocFilterCount(string key) => key switch
+    {
+        "risk" => _docWorkflow.Count(x => x.Risk == "High"),
+        "ocr" => _docWorkflow.Count(x => x.Type == "OCR"),
+        "esign" => _docWorkflow.Count(x => x.Type == "E-Sign"),
+        "audit" => _docWorkflow.Count(x => x.Stage == "Audit" || x.Type == "Audit"),
+        _ => _docWorkflow.Count
+    };
+
+    private void AdvanceWorkflow(DocumentWorkflowItem item)
+    {
+        item.Stage = item.Stage switch
+        {
+            "Intake" => "Classify",
+            "Classify" => "Prepare",
+            "Prepare" => "Sign",
+            "Sign" => "Audit",
+            _ => "Audit"
+        };
+    }
+
+    static string DocToneCss(string type) => type switch
+    {
+        "Repository" => "docs-tone-blue",
+        "ACORD" => "docs-tone-violet",
+        "E-Sign" => "docs-tone-amber",
+        "OCR" => "docs-tone-red",
+        "Packet" => "docs-tone-cyan",
+        "Audit" => "docs-tone-green",
+        _ => "docs-tone-neutral"
+    };
+
+    static string DocRiskCss(string risk) => risk switch
+    {
+        "High" => "docs-status-high",
+        "Medium" => "docs-status-medium",
+        _ => "docs-status-low"
+    };
+
     private static string FormatSize(long? bytes)
     {
         if (bytes is null) return "—";
@@ -626,4 +900,23 @@ else
     }
 
     private sealed record CategoryOption(string Code, string Label);
+    private sealed record WorkflowLane(string Key, string Label, string Description);
+    private sealed record WorkflowFilter(string Key, string Label);
+    private sealed record DocumentModule(string Title, string Description, string Url, string Icon, string Type)
+    {
+        public string Label => Title;
+    }
+
+    private sealed class DocumentWorkflowItem(string title, string summary, string type, string risk, string stage, string owner, string sla, string control, string url)
+    {
+        public string Title { get; set; } = title;
+        public string Summary { get; set; } = summary;
+        public string Type { get; set; } = type;
+        public string Risk { get; set; } = risk;
+        public string Stage { get; set; } = stage;
+        public string Owner { get; set; } = owner;
+        public string Sla { get; set; } = sla;
+        public string Control { get; set; } = control;
+        public string Url { get; set; } = url;
+    }
 }

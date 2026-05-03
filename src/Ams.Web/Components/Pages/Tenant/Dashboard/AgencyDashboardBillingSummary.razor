@@ -1,0 +1,170 @@
+@page "/tenant/dashboard/billing-summary"
+@namespace Ams.Web.Components.Pages.Tenant.Dashboard
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Billing Summary — Agency Dashboard</PageTitle>
+
+<AppPageHeader Title="Billing Summary"
+               Subtitle="Outstanding AR, collections, AR aging buckets and commission payouts"
+               Icon="bi-receipt">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <a class="um-btn um-btn-ghost" href="/billing/ar-aging">
+            <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> AR Aging
+        </a>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="ad-loading-banner" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading billing data…</span>
+    </div>
+}
+else if (_data is null)
+{
+    <div class="ad-empty"><i class="bi bi-receipt" aria-hidden="true"></i><span>No billing data available.</span></div>
+}
+else
+{
+    <!-- ── KPI strip ───────────────────────────────────────────── -->
+    <div class="ad-kpi-strip">
+        <div class="ad-kpi-card ad-kpi--ar">
+            <div class="ad-kpi-icon"><i class="bi bi-receipt" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.OutstandingArTotal.ToString("C0")</div>
+                <div class="ad-kpi-lbl">Outstanding AR</div>
+                <div class="ad-kpi-sub">@_data.TotalOpenInvoices open invoices</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--policies">
+            <div class="ad-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.CollectedMtd.ToString("C0")</div>
+                <div class="ad-kpi-lbl">Collected MTD</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card @(_data.OverdueBalance > 0 ? "ad-kpi--claims" : "ad-kpi--retention")">
+            <div class="ad-kpi-icon"><i class="bi bi-hourglass" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.OverdueBalance.ToString("C0")</div>
+                <div class="ad-kpi-lbl">Overdue Balance</div>
+                <div class="ad-kpi-sub">@_data.OverdueInvoiceCount overdue invoices</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--premium">
+            <div class="ad-kpi-icon"><i class="bi bi-percent" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.PendingCommissions.ToString("C0")</div>
+                <div class="ad-kpi-lbl">Pending Commissions</div>
+                <div class="ad-kpi-sub">@_data.PaidCommissionsMtd.ToString("C0") paid MTD</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── AR Aging + Commission breakdown ─────────────────────── -->
+    <div class="ad-two-col">
+        <div class="ad-card">
+            <div class="ad-card-hd"><i class="bi bi-hourglass-split" aria-hidden="true"></i> AR Aging Buckets</div>
+            @if (_data.ArAging.Count == 0)
+            {
+                <div class="ad-empty" style="padding:1rem"><span>No AR aging data.</span></div>
+            }
+            else
+            {
+                <div class="ad-aging-grid">
+                    @foreach (var bucket in _data.ArAging)
+                    {
+                        <div class="ad-aging-card @(bucket.BucketLabel.Contains("90") || bucket.BucketLabel.Contains("61") ? "ad-aging-card--overdue" : "")">
+                            <div class="ad-aging-lbl">@bucket.BucketLabel</div>
+                            <div class="ad-aging-amt">@bucket.Amount.ToString("C0")</div>
+                            <div class="ad-aging-cnt">@bucket.InvoiceCount inv.</div>
+                        </div>
+                    }
+                </div>
+                <!-- bar chart of aging -->
+                <div class="ad-section-lbl" style="margin-top:1.1rem">Distribution</div>
+                <div class="ad-trend-rows">
+                    @foreach (var bucket in _data.ArAging)
+                    {
+                        var pct2 = MaxBucket(_data) > 0 ? (double)(bucket.Amount / MaxBucket(_data) * 100) : 0;
+                        <div class="ad-trend-row">
+                            <span class="ad-trend-lbl">@bucket.BucketLabel</span>
+                            <div class="ad-trend-bar-track">
+                                <div class="ad-trend-bar-fill"
+                                         style="width:@pct2.ToString("F1")%;background:@(bucket.BucketLabel.Contains("90") ? "#ef4444" : bucket.BucketLabel.Contains("61") ? "#f97316" : "#3b82f6")"></div>
+                            </div>
+                            <span class="ad-trend-amt">@bucket.Amount.ToString("C0")</span>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="ad-card">
+            <div class="ad-card-hd"><i class="bi bi-percent" aria-hidden="true"></i> Commission Summary</div>
+            <div class="ad-kpi-rows">
+                <div class="ad-kpi-row">
+                    <div><div class="ad-kpi-row-lbl">Pending Commissions</div></div>
+                    <div class="ad-kpi-row-val">@_data.PendingCommissions.ToString("C0")</div>
+                </div>
+                <div class="ad-kpi-row">
+                    <div><div class="ad-kpi-row-lbl">Paid MTD</div></div>
+                    <div class="ad-kpi-row-val">@_data.PaidCommissionsMtd.ToString("C0")</div>
+                </div>
+            </div>
+
+            <div class="ad-card-hd" style="margin-top:1.25rem"><i class="bi bi-graph-up" aria-hidden="true"></i> AR Overview</div>
+            <div class="ad-kpi-rows">
+                <div class="ad-kpi-row">
+                    <div>
+                        <div class="ad-kpi-row-lbl">Total Open Invoices</div>
+                    </div>
+                    <div class="ad-kpi-row-val">@_data.TotalOpenInvoices</div>
+                </div>
+                <div class="ad-kpi-row">
+                    <div>
+                        <div class="ad-kpi-row-lbl">Overdue Invoices</div>
+                    </div>
+                    <div class="ad-kpi-row-val @(_data.OverdueInvoiceCount > 0 ? "ad-warn" : "")">@_data.OverdueInvoiceCount</div>
+                </div>
+                <div class="ad-kpi-row">
+                    <div>
+                        <div class="ad-kpi-row-lbl">Overdue %</div>
+                    </div>
+                    <div class="ad-kpi-row-val">
+                        @(_data.TotalOpenInvoices > 0
+                            ? ((double)_data.OverdueInvoiceCount / _data.TotalOpenInvoices * 100).ToString("F1") + "%"
+                            : "—")
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private BillingSummaryDto? _data;
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Agency Dashboard", "/tenant/dashboard"), new("Billing Summary"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try { _data = await Api.GetBillingSummaryAsync(_tenantId); }
+        finally { _loading = false; }
+    }
+
+    private static decimal MaxBucket(BillingSummaryDto d) =>
+        d.ArAging.Count > 0 ? d.ArAging.Max(b => b.Amount) : 1m;
+}

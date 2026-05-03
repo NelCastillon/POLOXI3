@@ -1,0 +1,253 @@
+@namespace Ams.Web.Components.Shared
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.TenantSettings
+@inject ApiClient Api
+
+<section class="tset-workflow-manager" aria-label="@Label">
+    <div class="tset-workflow-toolbar">
+        <div>
+            <strong>@Label</strong>
+            <span>@_workflow.Count active workflow item@(_workflow.Count == 1 ? string.Empty : "s")</span>
+        </div>
+        <div class="tset-detail-actions">
+            <button class="um-btn um-btn-ghost" @onclick="LoadWorkflowAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Workflow Item</button>
+        </div>
+    </div>
+
+    <div class="tset-table-wrap">
+        @if (_loading)
+        {
+            <div class="tset-empty-mini">Loading workflow…</div>
+        }
+        else if (_workflow.Count == 0)
+        {
+            <div class="tset-empty-mini">No workflow records found. Add the first workflow item.</div>
+        }
+        else
+        {
+            <table class="tset-table">
+                <thead><tr><th>Workflow</th><th>Category</th><th>Stage</th><th>Status</th><th>Risk</th><th>Owner</th><th>Due</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var item in _workflow)
+                    {
+                        <tr>
+                            <td><strong>@item.Title</strong><small>@item.Description</small></td>
+                            <td>@item.Category</td>
+                            <td>@item.Stage</td>
+                            <td><span class="tset-status @StatusCss(item.Status)">@item.Status</span></td>
+                            <td><span class="tset-status @RiskCss(item.RiskCode)">@item.RiskCode</span></td>
+                            <td>@item.OwnerName</td>
+                            <td>@(item.DueDateUtc?.ToLocalTime().ToString("MMM d") ?? "—")</td>
+                            <td>
+                                <div class="tset-row-actions">
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => AdvanceAsync(item)">Advance</button>
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DeleteAsync(item.WorkflowItemId)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+</section>
+
+<SfDialog @bind-Visible="_showDialog" Width="620px" IsModal="true" ShowCloseIcon="true">
+    <DialogTemplates>
+        <Header>@(_editingId.HasValue ? "Edit Workflow Item" : "New Workflow Item")</Header>
+        <Content>
+            @if (!string.IsNullOrWhiteSpace(_formError))
+            {
+                <div class="tset-form-error">@_formError</div>
+            }
+            <div class="tset-form-grid">
+                <label>Title</label><input class="tset-input" @bind="_form.Title" />
+                <label>Description</label><textarea class="tset-input" rows="3" @bind="_form.Description"></textarea>
+                <label>Category</label><input class="tset-input" @bind="_form.Category" />
+                <label>Stage</label><input class="tset-input" @bind="_form.Stage" />
+                <label>Status</label>
+                <select class="tset-input" @bind="_form.Status"><option>Open</option><option>In Review</option><option>Complete</option><option>Blocked</option></select>
+                <label>Priority</label>
+                <select class="tset-input" @bind="_form.Priority"><option>Low</option><option>Medium</option><option>High</option></select>
+                <label>Risk</label>
+                <select class="tset-input" @bind="_form.RiskCode"><option>Low</option><option>Medium</option><option>High</option></select>
+                <label>Owner</label><input class="tset-input" @bind="_form.OwnerName" />
+                <label>Due date</label><InputDate class="tset-input" @bind-Value="_dueDate" />
+                <label>Control code</label><input class="tset-input" @bind="_form.ControlCode" />
+                <label>Sort order</label><input class="tset-input" type="number" @bind="_form.SortOrder" />
+            </div>
+        </Content>
+        <FooterTemplate>
+            <button class="um-btn um-btn-ghost" @onclick="() => _showDialog = false">Cancel</button>
+            <button class="um-btn um-btn-primary" @onclick="SaveAsync"><i class="bi bi-check2" aria-hidden="true"></i> Save</button>
+        </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+@code {
+    [Parameter] public Guid TenantId { get; set; } = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    [Parameter, EditorRequired] public string PageCode { get; set; } = string.Empty;
+    [Parameter] public string Label { get; set; } = "Workflow items";
+    [Parameter] public string DefaultStage { get; set; } = "Open";
+    [Parameter] public string DefaultCategory { get; set; } = "General";
+
+    private IReadOnlyList<SubscriptionSettingsWorkflowItemDto> _workflow = [];
+    private WorkflowFormModel _form = new();
+    private Guid? _editingId;
+    private DateTime? _dueDate;
+    private string? _formError;
+    private bool _loading;
+    private bool _showDialog;
+
+    protected override async Task OnParametersSetAsync() => await LoadWorkflowAsync();
+
+    private async Task LoadWorkflowAsync()
+    {
+        if (string.IsNullOrWhiteSpace(PageCode)) return;
+        _loading = true;
+        try { _workflow = await Api.GetSubscriptionSettingsWorkflowAsync(TenantId, PageCode) ?? []; }
+        finally { _loading = false; }
+    }
+
+    private void OpenCreate()
+    {
+        _editingId = null;
+        _formError = null;
+        _dueDate = null;
+        _form = new WorkflowFormModel { Category = DefaultCategory, Stage = DefaultStage, Status = "Open", Priority = "Medium", RiskCode = "Medium", SortOrder = (_workflow.Count + 1) * 10 };
+        _showDialog = true;
+    }
+
+    private void OpenEdit(SubscriptionSettingsWorkflowItemDto item)
+    {
+        _editingId = item.WorkflowItemId;
+        _formError = null;
+        _dueDate = item.DueDateUtc?.ToLocalTime().Date;
+        _form = new WorkflowFormModel
+        {
+            Title = item.Title,
+            Description = item.Description,
+            Category = item.Category,
+            Stage = item.Stage,
+            Status = item.Status,
+            Priority = item.Priority,
+            OwnerName = item.OwnerName,
+            RiskCode = item.RiskCode,
+            ControlCode = item.ControlCode,
+            SortOrder = item.SortOrder
+        };
+        _showDialog = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _formError = ValidateForm();
+        if (_formError is not null) return;
+        NormalizeForm();
+
+        DateTime? dueDateUtc = _dueDate.HasValue ? DateTime.SpecifyKind(_dueDate.Value.Date, DateTimeKind.Local).ToUniversalTime() : null;
+
+        try
+        {
+            if (_editingId.HasValue)
+            {
+                await Api.UpdateSubscriptionSettingsWorkflowAsync(_editingId.Value, new UpdateSubscriptionSettingsWorkflowItemRequest
+                {
+                    Title = _form.Title,
+                    Description = _form.Description,
+                    Category = _form.Category,
+                    Stage = _form.Stage,
+                    Status = _form.Status,
+                    Priority = _form.Priority,
+                    OwnerName = _form.OwnerName,
+                    DueDateUtc = dueDateUtc,
+                    RiskCode = _form.RiskCode,
+                    ControlCode = _form.ControlCode,
+                    SortOrder = _form.SortOrder
+                });
+            }
+            else
+            {
+                await Api.CreateSubscriptionSettingsWorkflowAsync(new CreateSubscriptionSettingsWorkflowItemRequest
+                {
+                    TenantId = TenantId,
+                    PageCode = PageCode,
+                    Title = _form.Title,
+                    Description = _form.Description,
+                    Category = _form.Category,
+                    Stage = _form.Stage,
+                    Status = _form.Status,
+                    Priority = _form.Priority,
+                    OwnerName = _form.OwnerName,
+                    DueDateUtc = dueDateUtc,
+                    RiskCode = _form.RiskCode,
+                    ControlCode = _form.ControlCode,
+                    SortOrder = _form.SortOrder
+                });
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            _formError = $"Unable to save workflow item. {ex.Message}";
+            return;
+        }
+
+        _showDialog = false;
+        await LoadWorkflowAsync();
+    }
+
+    private string? ValidateForm()
+    {
+        if (string.IsNullOrWhiteSpace(PageCode)) return "Page code is missing.";
+        if (TenantId == Guid.Empty) return "Tenant is missing.";
+        if (string.IsNullOrWhiteSpace(_form.Title)) return "Title is required.";
+        if (string.IsNullOrWhiteSpace(_form.Description)) return "Description is required.";
+        if (string.IsNullOrWhiteSpace(_form.OwnerName)) return "Owner is required.";
+        return null;
+    }
+
+    private void NormalizeForm()
+    {
+        _form.Title = _form.Title.Trim();
+        _form.Description = _form.Description.Trim();
+        _form.Category = string.IsNullOrWhiteSpace(_form.Category) ? DefaultCategory : _form.Category.Trim();
+        _form.Stage = string.IsNullOrWhiteSpace(_form.Stage) ? DefaultStage : _form.Stage.Trim();
+        _form.Status = string.IsNullOrWhiteSpace(_form.Status) ? "Open" : _form.Status.Trim();
+        _form.Priority = string.IsNullOrWhiteSpace(_form.Priority) ? "Medium" : _form.Priority.Trim();
+        _form.OwnerName = _form.OwnerName.Trim();
+        _form.RiskCode = string.IsNullOrWhiteSpace(_form.RiskCode) ? _form.Priority : _form.RiskCode.Trim();
+        _form.ControlCode = string.IsNullOrWhiteSpace(_form.ControlCode) ? $"{PageCode.ToUpperInvariant()}_WORKFLOW" : _form.ControlCode.Trim();
+    }
+
+    private async Task AdvanceAsync(SubscriptionSettingsWorkflowItemDto item)
+    {
+        var nextStatus = item.Status.Equals("Complete", StringComparison.OrdinalIgnoreCase) ? "Open" : "Complete";
+        await Api.AdvanceSubscriptionSettingsWorkflowAsync(item.WorkflowItemId, new() { Status = nextStatus });
+        await LoadWorkflowAsync();
+    }
+
+    private async Task DeleteAsync(Guid workflowItemId)
+    {
+        await Api.DeleteSubscriptionSettingsWorkflowAsync(workflowItemId);
+        await LoadWorkflowAsync();
+    }
+
+    private static string RiskCss(string risk) => risk == "High" ? "tset-status-high" : risk == "Medium" ? "tset-status-medium" : "tset-status-low";
+    private static string StatusCss(string status) => status == "Complete" ? "tset-status-low" : status == "In Review" ? "tset-status-medium" : "tset-status-high";
+
+    private sealed class WorkflowFormModel
+    {
+        public string Title { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public string Stage { get; set; } = string.Empty;
+        public string Status { get; set; } = "Open";
+        public string Priority { get; set; } = "Medium";
+        public string OwnerName { get; set; } = string.Empty;
+        public string RiskCode { get; set; } = "Medium";
+        public string ControlCode { get; set; } = string.Empty;
+        public int SortOrder { get; set; }
+    }
+}

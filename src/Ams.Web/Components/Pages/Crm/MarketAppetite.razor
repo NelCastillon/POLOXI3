@@ -1,0 +1,181 @@
+@page "/crm/appetite"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Market Appetite</PageTitle>
+
+<AppPageHeader Title="Market Appetite"
+               Subtitle="Carrier appetite levels by line of business — guide submissions to preferred markets"
+               Icon="bi-graph-up-arrow">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ma-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="NewAppetite">
+            <i class="bi bi-plus-lg"></i> Add Carrier
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Appetite Legend -->
+<div class="ma-legend">
+    <span class="ma-badge ma-preferred">Preferred</span>
+    <span class="ma-badge ma-acceptable">Acceptable</span>
+    <span class="ma-badge ma-avoid">Avoid</span>
+    <span class="ma-badge ma-declined">Declined</span>
+    <span class="ma-legend-label">Appetite levels guide submission priority</span>
+</div>
+
+<!-- LOB heat map summary -->
+<div class="ma-lob-strip">
+    @foreach (var lob in _lobGroups)
+    {
+        <div class="ma-lob-card">
+            <div class="ma-lob-name">@lob.Lob</div>
+            <div class="ma-lob-bars">
+                @foreach (var (level, count) in lob.Counts)
+                {
+                    if (count > 0)
+                    {
+                        <div class="ma-lob-bar ma-bar-@level.ToLower()" style="flex:@count" title="@level: @count"></div>
+                    }
+                }
+            </div>
+            <div class="ma-lob-carriers">@lob.Total carriers</div>
+        </div>
+    }
+</div>
+
+<!-- Filter -->
+<div class="ma-filter-bar">
+    <div class="ma-search-wrap">
+        <i class="bi bi-search ma-search-icon"></i>
+        <input class="ma-search-input" placeholder="Search carriers…" @bind="_search" @bind:event="oninput" />
+    </div>
+    <select class="um-select" @bind="_filterLob">
+        <option value="">All Lines of Business</option>
+        @foreach (var l in _lobs) { <option value="@l">@l</option> }
+    </select>
+    <select class="um-select" @bind="_filterLevel">
+        <option value="">All Levels</option>
+        <option value="Preferred">Preferred</option>
+        <option value="Acceptable">Acceptable</option>
+        <option value="Avoid">Avoid</option>
+        <option value="Declined">Declined</option>
+    </select>
+</div>
+
+@if (_loading)
+{
+    <div class="ma-loading">
+        <i class="bi bi-arrow-clockwise ma-spin" style="font-size:1.4rem;"></i>
+        <span>Loading market appetite…</span>
+    </div>
+}
+else
+{
+    <div class="ma-grid-card">
+        <table class="um-table">
+            <thead>
+                <tr>
+                    <th>Carrier</th>
+                    <th>Line of Business</th>
+                    <th>Appetite</th>
+                    <th>Min Premium</th>
+                    <th>Max Premium</th>
+                    <th>Notes</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in Filtered)
+                {
+                    <tr>
+                        <td><span class="ma-carrier-name">@r.CarrierName</span></td>
+                        <td><span class="ma-lob-badge">@r.Lob</span></td>
+                        <td><span class="ma-badge ma-@r.Level.ToLower()">@r.Level</span></td>
+                        <td>@(r.MinPremium.HasValue ? r.MinPremium.Value.ToString("C0") : "—")</td>
+                        <td>@(r.MaxPremium.HasValue ? r.MaxPremium.Value.ToString("C0") : "Unlimited")</td>
+                        <td class="ma-notes">@(string.IsNullOrEmpty(r.Notes) ? "—" : r.Notes)</td>
+                        <td>
+                            <span class="ma-status @(r.IsActive ? "ma-status--active" : "ma-status--inactive")">
+                                @(r.IsActive ? "Active" : "Inactive")
+                            </span>
+                        </td>
+                        <td>
+                            <div class="ma-row-actions">
+                                <button class="um-btn um-btn-ghost um-btn-xs" title="Edit"><i class="bi bi-pencil"></i></button>
+                                <button class="um-btn um-btn-ghost um-btn-xs" title="Delete"><i class="bi bi-trash"></i></button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+                @if (!Filtered.Any())
+                {
+                    <tr><td colspan="8" class="ma-empty">No appetite records match your filters.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    bool _loading = true;
+    string _search = "", _filterLob = "", _filterLevel = "";
+    List<AppetiteRow> _rows = [];
+
+    IEnumerable<string> _lobs => _rows.Select(r => r.Lob).Distinct().Order();
+
+    IEnumerable<AppetiteRow> Filtered => _rows.Where(r =>
+        (string.IsNullOrEmpty(_search)      || r.CarrierName.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_filterLob)   || r.Lob == _filterLob) &&
+        (string.IsNullOrEmpty(_filterLevel) || r.Level == _filterLevel));
+
+    record LobGroup(string Lob, List<(string Level, int Count)> Counts, int Total);
+
+    IEnumerable<LobGroup> _lobGroups => _rows
+        .GroupBy(r => r.Lob)
+        .Select(g => new LobGroup(g.Key,
+            [("Preferred", g.Count(r => r.Level == "Preferred")),
+             ("Acceptable", g.Count(r => r.Level == "Acceptable")),
+             ("Avoid",      g.Count(r => r.Level == "Avoid")),
+             ("Declined",   g.Count(r => r.Level == "Declined"))],
+            g.Count()))
+        .OrderBy(g => g.Lob);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("CRM", "/crm"), new("Market Appetite"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(0);
+        _rows = BuildStub();
+        _loading = false;
+    }
+
+    void NewAppetite() { }
+
+    static List<AppetiteRow> BuildStub() =>
+    [
+        new("Travelers",          "Commercial Property", "Preferred",  5000,   500000, "Strong mid-market appetite",          true),
+        new("Chubb",             "Commercial Liability","Preferred",  10000,  null,   "Preferred for professional services", true),
+        new("Hartford",          "Workers Comp",        "Acceptable", 2500,   250000, null,                                  true),
+        new("Nationwide",        "Personal Auto",       "Preferred",  500,    null,   "Strong personal lines partner",       true),
+        new("Liberty Mutual",    "Homeowners",          "Acceptable", 750,    null,   null,                                  true),
+        new("Lloyd's of London", "Specialty",           "Acceptable", 25000,  null,   "E&S for hard-to-place",              true),
+        new("Progressive",       "Commercial Auto",     "Preferred",  1500,   100000, "Fleet and contractor specialty",      true),
+        new("Markel",           "Professional Liab",   "Preferred",  2500,   null,   "Tech E&O and D&O specialist",        true),
+        new("Travelers",         "Workers Comp",        "Avoid",      null,   null,   "Capacity issues in current market",  true),
+        new("Employers",         "Workers Comp",        "Preferred",  1000,   50000,  "Small business specialist",           true),
+        new("AIG",              "Specialty",           "Declined",   null,   null,   "Moratorium on new submissions",       true),
+        new("Cincinnati Fin.",   "Commercial Property", "Acceptable", 3000,   250000, null,                                  true),
+    ];
+
+    record AppetiteRow(string CarrierName, string Lob, string Level, decimal? MinPremium, decimal? MaxPremium, string? Notes, bool IsActive);
+}

@@ -18,6 +18,7 @@ builder.Services.AddSyncfusionBlazor();
 builder.Services.AddScoped<ShellStateService>();
 builder.Services.AddScoped<BreadcrumbService>();
 builder.Services.AddScoped<NotificationService>();
+builder.Services.AddScoped<NavigationContextService>();
 
 builder.Services.AddHttpClient<ApiClient>(client =>
 {

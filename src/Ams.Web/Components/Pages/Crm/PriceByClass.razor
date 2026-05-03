@@ -1,0 +1,156 @@
+@page "/crm/pricing/classes"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Price Classes</PageTitle>
+
+<AppPageHeader Title="Price by Class"
+               Subtitle="Manage rate tiers, premium bands and base rates by line of business"
+               Icon="bi-tags-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh">
+            <i class="bi bi-arrow-clockwise @(_loading ? "pbc-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="NewClass">
+            <i class="bi bi-plus-lg"></i> Add Class
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="pbc-kpi-strip">
+    <div class="pbc-kpi-card">
+        <div class="pbc-kpi-icon pbc-i1"><i class="bi bi-tags-fill"></i></div>
+        <div><div class="pbc-kpi-val">@_rows.Count</div><div class="pbc-kpi-lbl">Price Classes</div></div>
+    </div>
+    <div class="pbc-kpi-card">
+        <div class="pbc-kpi-icon pbc-i2"><i class="bi bi-check-circle-fill"></i></div>
+        <div><div class="pbc-kpi-val">@_rows.Count(r => r.IsActive)</div><div class="pbc-kpi-lbl">Active</div></div>
+    </div>
+    <div class="pbc-kpi-card">
+        <div class="pbc-kpi-icon pbc-i3"><i class="bi bi-building"></i></div>
+        <div><div class="pbc-kpi-val">@_rows.Select(r => r.Lob).Distinct().Count()</div><div class="pbc-kpi-lbl">Lines of Business</div></div>
+    </div>
+    <div class="pbc-kpi-card">
+        <div class="pbc-kpi-icon pbc-i4"><i class="bi bi-graph-up-arrow"></i></div>
+        <div><div class="pbc-kpi-val">@(_rows.Any() ? _rows.Average(r => r.BaseRate * 100).ToString("F2") : "—")%</div><div class="pbc-kpi-lbl">Avg Base Rate</div></div>
+    </div>
+</div>
+
+<!-- Filter -->
+<div class="pbc-filter-bar">
+    <div class="pbc-search-wrap">
+        <i class="bi bi-search pbc-search-icon"></i>
+        <input class="pbc-search-input" placeholder="Search classes…" @bind="_search" @bind:event="oninput" />
+    </div>
+    <select class="um-select" @bind="_filterLob">
+        <option value="">All LOBs</option>
+        @foreach (var l in _lobs) { <option value="@l">@l</option> }
+    </select>
+    <select class="um-select" @bind="_filterActive">
+        <option value="">All Status</option>
+        <option value="true">Active</option>
+        <option value="false">Inactive</option>
+    </select>
+</div>
+
+@if (_loading)
+{
+    <div class="pbc-loading">
+        <i class="bi bi-arrow-clockwise pbc-spin" style="font-size:1.4rem;"></i>
+        <span>Loading price classes…</span>
+    </div>
+}
+else
+{
+    <div class="pbc-grid-card">
+        <table class="um-table">
+            <thead>
+                <tr>
+                    <th>Class Name</th>
+                    <th>Line of Business</th>
+                    <th>Base Rate</th>
+                    <th>Min Premium</th>
+                    <th>Max Premium</th>
+                    <th>Status</th>
+                    <th>Description</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in Filtered)
+                {
+                    <tr>
+                        <td><span class="pbc-class-name">@r.ClassName</span></td>
+                        <td><span class="pbc-lob-badge">@r.Lob</span></td>
+                        <td class="pbc-mono">@(r.BaseRate > 0 ? (r.BaseRate * 100).ToString("F3") + "%" : "—")</td>
+                        <td>@(r.MinPremium.HasValue ? r.MinPremium.Value.ToString("C0") : "—")</td>
+                        <td>@(r.MaxPremium.HasValue ? r.MaxPremium.Value.ToString("C0") : "Unlimited")</td>
+                        <td>
+                            <span class="pbc-status @(r.IsActive ? "pbc-status--active" : "pbc-status--inactive")">
+                                @(r.IsActive ? "Active" : "Inactive")
+                            </span>
+                        </td>
+                        <td class="pbc-desc">@r.Description</td>
+                        <td>
+                            <div class="pbc-row-actions">
+                                <button class="um-btn um-btn-ghost um-btn-xs" title="Edit"><i class="bi bi-pencil"></i></button>
+                                <button class="um-btn um-btn-ghost um-btn-xs" title="@(r.IsActive ? "Deactivate" : "Activate")">
+                                    <i class="bi @(r.IsActive ? "bi-pause-circle" : "bi-play-circle")"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+                @if (!Filtered.Any())
+                {
+                    <tr><td colspan="8" class="pbc-empty">No price classes match your filters.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    bool _loading = true;
+    string _search = "", _filterLob = "", _filterActive = "";
+    List<PriceClassRow> _rows = [];
+
+    IEnumerable<string> _lobs => _rows.Select(r => r.Lob).Where(l => !string.IsNullOrEmpty(l)).Distinct().Order();
+
+    IEnumerable<PriceClassRow> Filtered => _rows.Where(r =>
+        (string.IsNullOrEmpty(_search)      || r.ClassName.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.Lob.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrEmpty(_filterLob)   || r.Lob == _filterLob) &&
+        (string.IsNullOrEmpty(_filterActive) || r.IsActive.ToString().ToLower() == _filterActive));
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("CRM", "/crm"), new("Pricing", "/crm/pricing-rules"), new("Price Classes"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(0);
+        _rows = BuildStub();
+        _loading = false;
+    }
+
+    void NewClass() { }
+
+    static List<PriceClassRow> BuildStub() =>
+    [
+        new("Preferred",     "Commercial", "Best-in-class commercial risk",   0.0085m, 2500,   null,   true),
+        new("Standard",      "Commercial", "Standard commercial risk",        0.0120m, 1500,   null,   true),
+        new("Non-Standard",  "Commercial", "Higher-risk commercial accounts", 0.0195m, 1000,   null,   true),
+        new("Preferred Home","Personal",   "Preferred personal homeowners",   0.0065m, 750,    null,   true),
+        new("Standard Home", "Personal",   "Standard homeowners coverage",    0.0095m, 500,    null,   true),
+        new("Surplus Lines", "Specialty",  "Excess & surplus specialty risks",0.0350m, 5000,   null,   true),
+        new("Artisan",       "Commercial", "Contractors and artisan risks",   0.0155m, 1200,   75000m, true),
+        new("Legacy Tier A", "Commercial", "Deprecated preferred tier",       0.0100m, 2000,   null,   false),
+    ];
+
+    record PriceClassRow(string ClassName, string Lob, string Description, decimal BaseRate, decimal? MinPremium, decimal? MaxPremium, bool IsActive);
+}

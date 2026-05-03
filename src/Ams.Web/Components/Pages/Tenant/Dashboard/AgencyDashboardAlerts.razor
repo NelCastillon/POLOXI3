@@ -1,0 +1,170 @@
+@page "/tenant/dashboard/alerts"
+@namespace Ams.Web.Components.Pages.Tenant.Dashboard
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Alerts — Agency Dashboard</PageTitle>
+
+<AppPageHeader Title="Alerts"
+               Subtitle="Active agency alerts by severity — system, operational and compliance notifications"
+               Icon="bi-bell">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="ad-loading-banner" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading alerts…</span>
+    </div>
+}
+else
+{
+    <!-- ── Severity summary strip ─────────────────────────────── -->
+    <div class="ad-kpi-strip">
+        <div class="ad-kpi-card ad-kpi--claims">
+            <div class="ad-kpi-icon"><i class="bi bi-exclamation-octagon-fill" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_critical</div>
+                <div class="ad-kpi-lbl">Critical</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--leads">
+            <div class="ad-kpi-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_high</div>
+                <div class="ad-kpi-lbl">High</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--policies">
+            <div class="ad-kpi-icon"><i class="bi bi-info-circle-fill" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_medium</div>
+                <div class="ad-kpi-lbl">Medium</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--ar">
+            <div class="ad-kpi-icon"><i class="bi bi-bell-fill" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_total</div>
+                <div class="ad-kpi-lbl">Total Open</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Filter tabs ────────────────────────────────────────── -->
+    <div class="ad-tab-bar">
+        @foreach (var sev in _severities)
+        {
+            <button class="ad-tab @(_filter == sev ? "ad-tab--active" : "")"
+                    @onclick="() => { _filter = sev; }">
+                @sev
+            </button>
+        }
+    </div>
+
+    <!-- ── Alert list ─────────────────────────────────────────── -->
+    <div class="ad-card">
+        @{
+            var visible = _alerts.Where(a =>
+                _filter == "All" || a.SeverityCode.Equals(_filter, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+        @if (visible.Count == 0)
+        {
+            <div class="ad-empty" style="padding:2rem">
+                <i class="bi bi-check-circle" style="font-size:2rem;color:#10b981" aria-hidden="true"></i>
+                <span>No @(_filter == "All" ? "" : _filter.ToLower() + " ")alerts — all clear.</span>
+            </div>
+        }
+        else
+        {
+            <div class="ad-alert-list">
+                @foreach (var a in visible.OrderBy(x => SeverityOrder(x.SeverityCode)).ThenByDescending(x => x.TriggeredDateUtc))
+                {
+                    <div class="ad-alert-row ad-alert-row--@a.SeverityCode.ToLower()">
+                        <div class="ad-alert-left">
+                            <span class="ad-dot ad-dot--@a.SeverityCode.ToLower()" aria-hidden="true"></span>
+                            <div>
+                                <div class="ad-alert-name">@a.AlertName</div>
+                                @if (!string.IsNullOrEmpty(a.Message))
+                                {
+                                    <div class="ad-alert-msg">@a.Message</div>
+                                }
+                                <div class="ad-alert-meta">
+                                    <span>@a.ServiceName</span>
+                                    @if (!string.IsNullOrEmpty(a.AlertTypeCode))
+                                    {
+                                        <span class="ad-badge ad-badge--info">@a.AlertTypeCode</span>
+                                    }
+                                    <span>@a.TriggeredDateUtc.ToLocalTime().ToString("MMM d, h:mm tt")</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="ad-alert-right">
+                            <span class="ad-badge @SeverityBadgeClass(a.SeverityCode)">@a.SeverityCode</span>
+                            <span class="ad-badge @StatusBadgeClass(a.StatusCode)">@a.StatusCode</span>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private List<AlertDto> _alerts = [];
+    private bool _loading;
+    private string _filter = "All";
+    private static readonly string[] _severities = ["All", "Critical", "High", "Medium", "Low"];
+    private int _critical, _high, _medium, _total;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Agency Dashboard", "/tenant/dashboard"), new("Alerts"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.SearchAlertsAsync(tenantId: _tenantId, openOnly: true, pageSize: 100);
+            _alerts   = result?.Items.ToList() ?? [];
+            _critical = _alerts.Count(a => a.SeverityCode.Equals("Critical", StringComparison.OrdinalIgnoreCase));
+            _high     = _alerts.Count(a => a.SeverityCode.Equals("High",     StringComparison.OrdinalIgnoreCase));
+            _medium   = _alerts.Count(a => a.SeverityCode.Equals("Medium",   StringComparison.OrdinalIgnoreCase));
+            _total    = _alerts.Count;
+        }
+        finally { _loading = false; }
+    }
+
+    private static int SeverityOrder(string s) => s.ToLower() switch
+    {
+        "critical" => 0,
+        "high"     => 1,
+        "medium"   => 2,
+        _          => 3
+    };
+
+    private static string SeverityBadgeClass(string s) => s.ToLower() switch
+    {
+        "critical" => "ad-badge--overdue",
+        "high"     => "ad-badge--warn",
+        "medium"   => "ad-badge--pending",
+        _          => "ad-badge--info"
+    };
+
+    private static string StatusBadgeClass(string s) => s.ToLower() switch
+    {
+        "open"          => "ad-badge--open",
+        "acknowledged"  => "ad-badge--pending",
+        "resolved"      => "ad-badge--closed",
+        _               => "ad-badge--info"
+    };
+}

@@ -1,0 +1,186 @@
+@page "/crm/leads/duplicates"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Lead Duplicates</PageTitle>
+
+<AppPageHeader Title="Lead Duplicates"
+               Subtitle="Review and resolve duplicate leads — merge, keep, or dismiss"
+               Icon="bi-subtract">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ldup-spin" : "")" aria-hidden="true"></i>
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- Summary strip -->
+<div class="ldup-summary-strip">
+    <div class="ldup-summary-card ldup-s1">
+        <div class="ldup-summary-val">@_groups.Count</div>
+        <div class="ldup-summary-lbl">Duplicate Groups</div>
+    </div>
+    <div class="ldup-summary-card ldup-s2">
+        <div class="ldup-summary-val">@_groups.Sum(g => g.Leads.Count)</div>
+        <div class="ldup-summary-lbl">Duplicate Leads</div>
+    </div>
+    <div class="ldup-summary-card ldup-s3">
+        <div class="ldup-summary-val">@_groups.Count(g => g.Confidence >= 90)</div>
+        <div class="ldup-summary-lbl">High Confidence</div>
+    </div>
+    <div class="ldup-summary-card ldup-s4">
+        <div class="ldup-summary-val">@_resolved</div>
+        <div class="ldup-summary-lbl">Resolved Today</div>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="ldup-loading">
+        <i class="bi bi-arrow-clockwise ldup-spin" style="font-size:1.4rem;"></i>
+        <span>Scanning for duplicates…</span>
+    </div>
+}
+else if (!_groups.Any())
+{
+    <div class="ldup-empty-state">
+        <i class="bi bi-check-circle-fill ldup-empty-icon"></i>
+        <div class="ldup-empty-title">No Duplicates Found</div>
+        <div class="ldup-empty-sub">All leads appear to be unique. Run a manual scan to re-check.</div>
+        <button class="um-btn um-btn-primary" @onclick="LoadAsync">Re-scan Leads</button>
+    </div>
+}
+else
+{
+    <div class="ldup-groups">
+        @foreach (var grp in _groups)
+        {
+            <div class="ldup-group-card">
+                <div class="ldup-group-header">
+                    <div class="ldup-group-meta">
+                        <span class="ldup-conf-badge ldup-conf--@ConfClass(grp.Confidence)">
+                            @grp.Confidence% match
+                        </span>
+                        <span class="ldup-match-reason">
+                            <i class="bi bi-lightning-charge-fill"></i> @grp.MatchReason
+                        </span>
+                    </div>
+                    <div class="ldup-group-actions">
+                        <button class="um-btn um-btn-sm um-btn-primary" @onclick="() => MergeAsync(grp)">
+                            <i class="bi bi-union"></i> Merge
+                        </button>
+                        <button class="um-btn um-btn-sm um-btn-ghost" @onclick="() => DismissAsync(grp)">
+                            <i class="bi bi-x-lg"></i> Dismiss
+                        </button>
+                    </div>
+                </div>
+                <div class="ldup-lead-grid">
+                    @foreach (var lead in grp.Leads)
+                    {
+                        <div class="ldup-lead-card @(lead.IsPrimary ? "ldup-lead-card--primary" : "")">
+                            @if (lead.IsPrimary)
+                            {
+                                <div class="ldup-primary-badge">Primary</div>
+                            }
+                            <div class="ldup-lead-name">@lead.FullName</div>
+                            <div class="ldup-lead-detail"><i class="bi bi-envelope"></i> @lead.Email</div>
+                            <div class="ldup-lead-detail"><i class="bi bi-telephone"></i> @lead.Phone</div>
+                            <div class="ldup-lead-detail"><i class="bi bi-building"></i> @lead.Company</div>
+                            <div class="ldup-lead-detail"><i class="bi bi-calendar3"></i> Created @lead.CreatedDate</div>
+                            <div class="ldup-lead-stage-row">
+                                <span class="ldup-stage ldup-stage--@lead.Stage.ToLower()">@lead.Stage</span>
+                                <span class="ldup-score">Score: @lead.Score</span>
+                            </div>
+                            @if (!lead.IsPrimary)
+                            {
+                                <button class="um-btn um-btn-sm um-btn-ghost ldup-set-primary-btn" @onclick="() => SetPrimary(grp, lead)">
+                                    Set as Primary
+                                </button>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    bool _loading = true;
+    int _resolved;
+    List<DupGroup> _groups = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("CRM", "/crm"), new("Leads", "/crm/leads"), new("Duplicates"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(0);
+        _groups = BuildStub();
+        _loading = false;
+    }
+
+    async Task MergeAsync(DupGroup grp)
+    {
+        await Task.Delay(0);
+        _groups.Remove(grp);
+        _resolved++;
+    }
+
+    async Task DismissAsync(DupGroup grp)
+    {
+        await Task.Delay(0);
+        _groups.Remove(grp);
+    }
+
+    void SetPrimary(DupGroup grp, DupLead lead)
+    {
+        foreach (var l in grp.Leads) l.IsPrimary = false;
+        lead.IsPrimary = true;
+    }
+
+    static string ConfClass(int c) => c >= 90 ? "high" : c >= 70 ? "med" : "low";
+
+    static List<DupGroup> BuildStub() =>
+    [
+        new("Email address", 97,
+        [
+            new("James","Okafor","j.okafor@bluesky.io","(555) 201-0001","BlueSky Tech","New",74,"Jan 12, 2025", true),
+            new("Jim","Okafor","j.okafor@bluesky.io","(555) 201-0001","Blue Sky Technology","Contacted",68,"Jan 15, 2025", false),
+        ]),
+        new("Name + phone", 84,
+        [
+            new("Maria","Delgado","m.delgado@coastal.com","(555) 202-0002","Coastal Partners","Contacted",63,"Dec 9, 2024", true),
+            new("Maria","Delgado","maria.delgado@gmail.com","(555) 202-0002","Coastal Partners LLC","New",40,"Jan 3, 2025", false),
+        ]),
+        new("Company + email domain", 71,
+        [
+            new("Tyler","Brooks","t.brooks@apexmfg.com","(555) 203-0003","Apex Manufacturing","Qualified",88,"Nov 20, 2024", true),
+            new("T.","Brooks","tyler.b@apexmfg.com","(555) 203-9999","Apex Mfg","New",22,"Jan 18, 2025", false),
+        ]),
+    ];
+
+    class DupGroup(string matchReason, int confidence, List<DupLead> leads)
+    {
+        public string MatchReason { get; } = matchReason;
+        public int Confidence { get; } = confidence;
+        public List<DupLead> Leads { get; } = leads;
+    }
+
+    class DupLead(string first, string last, string email, string phone, string company, string stage, int score, string createdDate, bool isPrimary)
+    {
+        public string FullName    { get; } = $"{first} {last}";
+        public string Email       { get; } = email;
+        public string Phone       { get; } = phone;
+        public string Company     { get; } = company;
+        public string Stage       { get; } = stage;
+        public int    Score       { get; } = score;
+        public string CreatedDate { get; } = createdDate;
+        public bool   IsPrimary   { get; set; } = isPrimary;
+    }
+}

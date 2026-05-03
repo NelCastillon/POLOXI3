@@ -1,0 +1,110 @@
+@page "/tenant/crm/pipeline"
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Pipeline Settings — CRM Configuration</PageTitle>
+
+<AppPageHeader Title="Pipeline Settings"
+               Subtitle="Configure global CRM pipeline behavior and defaults"
+               Icon="bi-sliders" />
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<div class="um-settings-container">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <div class="row g-4">
+            @foreach (var setting in _settings)
+            {
+                <div class="col-md-6">
+                    <div class="um-settings-card">
+                        <div class="um-settings-card__header">
+                            <div>
+                                <div class="fw-semibold">@FormatKey(setting.SettingKey)</div>
+                                <div class="text-muted small">@setting.Description</div>
+                            </div>
+                        </div>
+                        <div class="um-settings-card__body">
+                            @if (setting.SettingType == "Boolean")
+                            {
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox"
+                                           checked="@(setting.SettingValue == "true")"
+                                           @onchange="async e => await UpdateSettingAsync(setting, BoolStr(e.Value))" />
+                                    <label class="form-check-label">@(setting.SettingValue == "true" ? "Enabled" : "Disabled")</label>
+                                </div>
+                            }
+                            else if (setting.SettingType == "String" && setting.SettingKey == "ForecastPeriod")
+                            {
+                                <select class="um-input" value="@setting.SettingValue"
+                                    @onchange="async e => await UpdateSettingAsync(setting, e.Value?.ToString())">
+                                    <option value="Weekly">Weekly</option>
+                                    <option value="Monthly">Monthly</option>
+                                    <option value="Quarterly">Quarterly</option>
+                                </select>
+                            }
+                            else
+                            {
+                                <div class="d-flex gap-2">
+                                    <input class="um-input flex-grow-1" value="@setting.SettingValue"
+                                           @onchange="async e => await UpdateSettingAsync(setting, e.Value?.ToString())" />
+                                    <span class="text-muted align-self-center small">@setting.SettingType</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+
+@code {
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    List<PipelineSettingDto> _settings = [];
+    bool _loading;
+    string? _loadError;
+    SfToast _toast = default!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM Config", null), new("Pipeline Settings", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try { _settings = (await Api.GetPipelineSettingsAsync(TenantId) ?? []).ToList(); }
+        catch (Exception ex) { _loadError = $"Failed to load pipeline settings: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    async Task UpdateSettingAsync(PipelineSettingDto setting, string? newValue)
+    {
+        try
+        {
+            setting.SettingValue = newValue;
+            await Api.UpdatePipelineSettingAsync(setting.PipelineSettingId, new(newValue ?? string.Empty));
+            await _toast.ShowAsync(new() { Content = $"{FormatKey(setting.SettingKey)} updated", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Update failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+    }
+
+    static string FormatKey(string key) =>
+        System.Text.RegularExpressions.Regex.Replace(key, "(?<=[a-z])(?=[A-Z])", " ");
+
+    static string BoolStr(object? value) => value?.ToString()?.ToLowerInvariant() == "true" ? "true" : "false";
+}

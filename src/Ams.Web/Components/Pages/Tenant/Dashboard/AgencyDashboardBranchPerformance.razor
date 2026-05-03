@@ -1,0 +1,140 @@
+@page "/tenant/dashboard/branch-performance"
+@namespace Ams.Web.Components.Pages.Tenant.Dashboard
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Branch Performance — Agency Dashboard</PageTitle>
+
+<AppPageHeader Title="Branch Performance"
+               Subtitle="Compare premium, policies, leads and AR across all branches"
+               Icon="bi-diagram-3">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="ad-loading-banner" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading branch data…</span>
+    </div>
+}
+else if (_rows is null || _rows.Count == 0)
+{
+    <div class="ad-empty"><i class="bi bi-diagram-3" aria-hidden="true"></i><span>No branch data available.</span></div>
+}
+else
+{
+    <!-- ── Summary strip ──────────────────────────────────────── -->
+    <div class="ad-kpi-strip">
+        <div class="ad-kpi-card ad-kpi--branches">
+            <div class="ad-kpi-icon"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_rows.Count</div>
+                <div class="ad-kpi-lbl">Branches</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--premium">
+            <div class="ad-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_rows.Sum(r => r.WrittenPremiumYtd).ToString("C0")</div>
+                <div class="ad-kpi-lbl">Total Written YTD</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--policies">
+            <div class="ad-kpi-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_rows.Sum(r => r.ActivePolicies).ToString("N0")</div>
+                <div class="ad-kpi-lbl">Total Policies</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--ar">
+            <div class="ad-kpi-icon"><i class="bi bi-receipt" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_rows.Sum(r => r.OutstandingAr).ToString("C0")</div>
+                <div class="ad-kpi-lbl">Total AR</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Branch table ───────────────────────────────────────── -->
+    <div class="ad-card">
+        <div class="ad-table-wrap">
+            <table class="ad-table">
+                <thead>
+                    <tr>
+                        <th>Branch</th>
+                        <th>Location</th>
+                        <th class="ad-num">Premium MTD</th>
+                        <th class="ad-num">Premium YTD</th>
+                        <th class="ad-num">Policies</th>
+                        <th class="ad-num">Producers</th>
+                        <th class="ad-num">Retention</th>
+                        <th class="ad-num">Open Leads</th>
+                        <th class="ad-num">Open Claims</th>
+                        <th class="ad-num">AR</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var b in _rows.OrderByDescending(r => r.WrittenPremiumYtd))
+                    {
+                        <tr>
+                            <td>
+                                <div style="font-weight:600">@b.BranchName</div>
+                                @if (!string.IsNullOrEmpty(b.BranchCode))
+                                {
+                                    <div style="font-size:.72rem;color:#9ca3af">@b.BranchCode</div>
+                                }
+                            </td>
+                            <td style="font-size:.8rem;color:#6b7280">
+                                @if (!string.IsNullOrEmpty(b.City) || !string.IsNullOrEmpty(b.StateProvince))
+                                { @($"{b.City}{(b.City != null && b.StateProvince != null ? ", " : "")}{b.StateProvince}") }
+                                else { <span>—</span> }
+                            </td>
+                            <td class="ad-num">@b.WrittenPremiumMtd.ToString("C0")</td>
+                            <td class="ad-num" style="font-weight:600">@b.WrittenPremiumYtd.ToString("C0")</td>
+                            <td class="ad-num">@b.ActivePolicies</td>
+                            <td class="ad-num">@b.ActiveProducers</td>
+                            <td class="ad-num">
+                                <span class="ad-badge @(b.RetentionRate >= 85 ? "ad-badge--closed" : b.RetentionRate >= 70 ? "ad-badge--pending" : "ad-badge--overdue")">
+                                    @b.RetentionRate.ToString("F1")%
+                                </span>
+                            </td>
+                            <td class="ad-num">@b.OpenLeads</td>
+                            <td class="ad-num">
+                                @if (b.OpenClaims > 0)
+                                {
+                                    <span class="ad-badge ad-badge--warn">@b.OpenClaims</span>
+                                }
+                                else { <span>0</span> }
+                            </td>
+                            <td class="ad-num">@b.OutstandingAr.ToString("C0")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private List<BranchPerformanceDto>? _rows;
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Agency Dashboard", "/tenant/dashboard"), new("Branch Performance"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try { _rows = await Api.GetBranchPerformanceAsync(_tenantId); }
+        finally { _loading = false; }
+    }
+}

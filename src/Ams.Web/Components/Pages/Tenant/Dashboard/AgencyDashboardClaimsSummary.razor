@@ -1,0 +1,164 @@
+@page "/tenant/dashboard/claims-summary"
+@namespace Ams.Web.Components.Pages.Tenant.Dashboard
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Claims Summary — Agency Dashboard</PageTitle>
+
+<AppPageHeader Title="Claims Summary"
+               Subtitle="Open claims, reserves, payouts, litigation and frequency by line of business"
+               Icon="bi-exclamation-circle">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")" aria-hidden="true"></i> Refresh
+        </button>
+        <a class="um-btn um-btn-ghost" href="/claims">
+            <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Claims Register
+        </a>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="ad-loading-banner" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading claims data…</span>
+    </div>
+}
+else if (_data is null)
+{
+    <div class="ad-empty"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><span>No claims data available.</span></div>
+}
+else
+{
+    <!-- ── KPI strip ───────────────────────────────────────────── -->
+    <div class="ad-kpi-strip">
+        <div class="ad-kpi-card ad-kpi--claims">
+            <div class="ad-kpi-icon"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.TotalOpenClaims</div>
+                <div class="ad-kpi-lbl">Open Claims</div>
+                <div class="ad-kpi-sub">+@_data.NewClaimsMtd new MTD</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--premium">
+            <div class="ad-kpi-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.TotalReservedAmount.ToString("C0")</div>
+                <div class="ad-kpi-lbl">Total Reserves</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card ad-kpi--ar">
+            <div class="ad-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.TotalPaidMtd.ToString("C0")</div>
+                <div class="ad-kpi-lbl">Paid MTD</div>
+                <div class="ad-kpi-sub">@_data.ClosedClaimsMtd closed MTD</div>
+            </div>
+        </div>
+        <div class="ad-kpi-card @(_data.LitigatedClaims > 0 ? "ad-kpi--claims" : "ad-kpi--policies")">
+            <div class="ad-kpi-icon"><i class="bi bi-briefcase" aria-hidden="true"></i></div>
+            <div class="ad-kpi-body">
+                <div class="ad-kpi-val">@_data.LitigatedClaims</div>
+                <div class="ad-kpi-lbl">Litigated Claims</div>
+                <div class="ad-kpi-sub">Avg close @_data.AvgDaysToClose.ToString("F0") days</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── By status + By LOB ─────────────────────────────────── -->
+    <div class="ad-two-col">
+        <div class="ad-card">
+            <div class="ad-card-hd"><i class="bi bi-tags" aria-hidden="true"></i> Claims by Status</div>
+            @if (_data.ByStatus.Count == 0)
+            {
+                <div class="ad-empty" style="padding:1rem"><span>No data.</span></div>
+            }
+            else
+            {
+                <div class="ad-table-wrap">
+                    <table class="ad-table">
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th class="ad-num">Count</th>
+                                <th class="ad-num">Reserves</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var s in _data.ByStatus.OrderByDescending(x => x.Count))
+                            {
+                                <tr>
+                                    <td>
+                                        <span class="ad-badge @StatusBadgeClass(s.StatusCode)">@s.StatusCode</span>
+                                    </td>
+                                    <td class="ad-num" style="font-weight:600">@s.Count</td>
+                                    <td class="ad-num">@s.Reserved.ToString("C0")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <div class="ad-card">
+            <div class="ad-card-hd"><i class="bi bi-pie-chart" aria-hidden="true"></i> Claims by Line of Business</div>
+            @if (_data.ByLob.Count == 0)
+            {
+                <div class="ad-empty" style="padding:1rem"><span>No data.</span></div>
+            }
+            else
+            {
+                <div class="ad-table-wrap">
+                    <table class="ad-table">
+                        <thead>
+                            <tr>
+                                <th>Line of Business</th>
+                                <th class="ad-num">Count</th>
+                                <th class="ad-num">Reserves</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var l in _data.ByLob.OrderByDescending(x => x.Reserved))
+                            {
+                                <tr>
+                                    <td style="font-weight:500">@l.LobName</td>
+                                    <td class="ad-num">@l.Count</td>
+                                    <td class="ad-num" style="font-weight:600">@l.Reserved.ToString("C0")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private ClaimsSummaryDto? _data;
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Agency Dashboard", "/tenant/dashboard"), new("Claims Summary"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try { _data = await Api.GetClaimsSummaryAsync(_tenantId); }
+        finally { _loading = false; }
+    }
+
+    private static string StatusBadgeClass(string status) => status.ToLower() switch
+    {
+        "open"    => "ad-badge--open",
+        "closed"  => "ad-badge--closed",
+        "pending" => "ad-badge--pending",
+        _         => "ad-badge--info"
+    };
+}

@@ -1,0 +1,177 @@
+@page "/crm/carrier-mapping"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Carrier Mapping</PageTitle>
+
+<AppPageHeader Title="Carrier Mapping"
+               Subtitle="Map internal carrier codes to external download formats and integration identifiers"
+               Icon="bi-diagram-3-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh">
+            <i class="bi bi-arrow-clockwise @(_loading ? "cm-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="NewMapping">
+            <i class="bi bi-plus-lg"></i> Add Mapping
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="cm-kpi-strip">
+    <div class="cm-kpi-card">
+        <div class="cm-kpi-icon cm-i1"><i class="bi bi-diagram-3-fill"></i></div>
+        <div><div class="cm-kpi-val">@_rows.Count</div><div class="cm-kpi-lbl">Total Mappings</div></div>
+    </div>
+    <div class="cm-kpi-card">
+        <div class="cm-kpi-icon cm-i2"><i class="bi bi-check-circle-fill"></i></div>
+        <div><div class="cm-kpi-val">@_rows.Count(r => r.IsActive)</div><div class="cm-kpi-lbl">Active</div></div>
+    </div>
+    <div class="cm-kpi-card">
+        <div class="cm-kpi-icon cm-i3"><i class="bi bi-cloud-download-fill"></i></div>
+        <div><div class="cm-kpi-val">@_rows.Where(r => r.Format == "IVANS").Count()</div><div class="cm-kpi-lbl">IVANS</div></div>
+    </div>
+    <div class="cm-kpi-card">
+        <div class="cm-kpi-icon cm-i4"><i class="bi bi-file-earmark-code-fill"></i></div>
+        <div><div class="cm-kpi-val">@_rows.Where(r => r.Format == "AL3").Count()</div><div class="cm-kpi-lbl">AL3</div></div>
+    </div>
+</div>
+
+<!-- Filter bar -->
+<div class="cm-filter-bar">
+    <div class="cm-search-wrap">
+        <i class="bi bi-search cm-search-icon"></i>
+        <input class="cm-search-input" placeholder="Search carriers or codes…" @bind="_search" @bind:event="oninput" />
+    </div>
+    <select class="um-select" @bind="_filterFormat">
+        <option value="">All Formats</option>
+        <option value="IVANS">IVANS</option>
+        <option value="AL3">AL3</option>
+        <option value="Custom">Custom</option>
+    </select>
+    <select class="um-select" @bind="_filterLob">
+        <option value="">All LOBs</option>
+        @foreach (var l in _lobs) { <option value="@l">@l</option> }
+    </select>
+    <select class="um-select" @bind="_filterActive">
+        <option value="">All Status</option>
+        <option value="true">Active</option>
+        <option value="false">Inactive</option>
+    </select>
+</div>
+
+@if (_loading)
+{
+    <div class="cm-loading">
+        <i class="bi bi-arrow-clockwise cm-spin" style="font-size:1.4rem;"></i>
+        <span>Loading carrier mappings…</span>
+    </div>
+}
+else
+{
+    <div class="cm-grid-card">
+        <table class="um-table">
+            <thead>
+                <tr>
+                    <th>Carrier Name</th>
+                    <th>Internal Code</th>
+                    <th>External Code</th>
+                    <th>Line of Business</th>
+                    <th>Download Format</th>
+                    <th>Status</th>
+                    <th>Notes</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in Filtered)
+                {
+                    <tr>
+                        <td><span class="cm-carrier-name">@r.CarrierName</span></td>
+                        <td><span class="cm-code cm-code--int">@(r.InternalCode ?? "—")</span></td>
+                        <td><span class="cm-code cm-code--ext">@(r.ExternalCode ?? "—")</span></td>
+                        <td><span class="cm-lob-badge">@(r.Lob ?? "All")</span></td>
+                        <td>
+                            @if (!string.IsNullOrEmpty(r.Format))
+                            {
+                                <span class="cm-format cm-format--@r.Format.ToLower()">@r.Format</span>
+                            }
+                            else
+                            {
+                                <span>—</span>
+                            }
+                        </td>
+                        <td>
+                            <span class="cm-status @(r.IsActive ? "cm-status--active" : "cm-status--inactive")">
+                                @(r.IsActive ? "Active" : "Inactive")
+                            </span>
+                        </td>
+                        <td class="cm-notes">@(r.Notes ?? "—")</td>
+                        <td>
+                            <div class="cm-row-actions">
+                                <button class="um-btn um-btn-ghost um-btn-xs" title="Edit"><i class="bi bi-pencil"></i></button>
+                                <button class="um-btn um-btn-ghost um-btn-xs" title="Test Connection"><i class="bi bi-plug"></i></button>
+                                <button class="um-btn um-btn-ghost um-btn-xs" title="Delete"><i class="bi bi-trash"></i></button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+                @if (!Filtered.Any())
+                {
+                    <tr><td colspan="8" class="cm-empty">No carrier mappings match your filters.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    bool _loading = true;
+    string _search = "", _filterFormat = "", _filterLob = "", _filterActive = "";
+    List<CarrierMappingRow> _rows = [];
+
+    IEnumerable<string> _lobs => _rows.Select(r => r.Lob).Where(l => !string.IsNullOrEmpty(l)).Distinct().Order()!;
+
+    IEnumerable<CarrierMappingRow> Filtered => _rows.Where(r =>
+        (string.IsNullOrEmpty(_search)      || r.CarrierName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+                                               (r.InternalCode?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                                               (r.ExternalCode?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)) &&
+        (string.IsNullOrEmpty(_filterFormat) || r.Format == _filterFormat) &&
+        (string.IsNullOrEmpty(_filterLob)   || r.Lob == _filterLob) &&
+        (string.IsNullOrEmpty(_filterActive) || r.IsActive.ToString().ToLower() == _filterActive));
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("CRM", "/crm"), new("Carrier Mapping"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(0);
+        _rows = BuildStub();
+        _loading = false;
+    }
+
+    void NewMapping() { }
+
+    static List<CarrierMappingRow> BuildStub() =>
+    [
+        new("Travelers",          "TRV", "TRV001", "Commercial",  "IVANS",  null,                         true),
+        new("Chubb",             "CHB", "CHB002", "Commercial",  "IVANS",  null,                         true),
+        new("Hartford",          "HTF", "HTF003", "Workers Comp","AL3",    "Legacy AL3 format v2.1",     true),
+        new("Nationwide",        "NWD", "NWD004", "Personal",    "IVANS",  null,                         true),
+        new("Liberty Mutual",    "LBM", "LBM005", "Personal",    "AL3",    null,                         true),
+        new("Progressive",       "PRG", "PRG006", "Commercial",  "IVANS",  "Fleet & contractor book",    true),
+        new("Markel",           "MKL", "MKL007", "Specialty",   "Custom", "REST API integration",       true),
+        new("Lloyd's",          "LYD", "LYD008", "Specialty",   "Custom", "Manual submission only",     true),
+        new("Employers",         "EMP", "EMP009", "Workers Comp","IVANS",  null,                         true),
+        new("Cincinnati Fin.",   "CIN", "CIN010", "Commercial",  "AL3",    null,                         true),
+        new("AIG",              "AIG", "AIG011", "Specialty",   "Custom", "Moratorium — disabled",       false),
+        new("Zurich",           "ZUR", "ZUR012", "Commercial",  "IVANS",  null,                         true),
+    ];
+
+    record CarrierMappingRow(string CarrierName, string? InternalCode, string? ExternalCode, string? Lob, string? Format, string? Notes, bool IsActive);
+}

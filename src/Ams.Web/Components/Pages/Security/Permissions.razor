@@ -1,0 +1,343 @@
+@page "/tenant/security/perms"
+@namespace Ams.Web.Components.Pages.SecurityAdmin
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Permissions — Users &amp; Security</PageTitle>
+
+<AppPageHeader Title="Permissions"
+               Subtitle="Define and manage granular permission grants and overrides for users"
+               Icon="bi-key">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Grant Permission
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<!-- KPI strip -->
+<div class="sp-kpi-strip">
+    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0">
+        <span class="sp-kpi-icon sp-kpi-icon--total"><i class="bi bi-key" aria-hidden="true"></i></span>
+        <div><div class="sp-kpi-value">@_totalCount</div><div class="sp-kpi-label">Total Grants</div></div>
+        @if (_kpiActive == 1) { <span class="sp-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
+        <span class="sp-kpi-icon sp-kpi-icon--granted"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="sp-kpi-value">@_grantedCount</div><div class="sp-kpi-label">Granted</div></div>
+        @if (_kpiActive == 2) { <span class="sp-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="@KpiClass3" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0">
+        <span class="sp-kpi-icon sp-kpi-icon--denied"><i class="bi bi-x-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="sp-kpi-value">@_deniedCount</div><div class="sp-kpi-label">Denied</div></div>
+        @if (_kpiActive == 3) { <span class="sp-kpi-active-dot" aria-hidden="true"></span> }
+    </div>
+    <div class="sp-kpi-card">
+        <span class="sp-kpi-icon sp-kpi-icon--expiring"><i class="bi bi-clock" aria-hidden="true"></i></span>
+        <div><div class="sp-kpi-value">@_expiringCount</div><div class="sp-kpi-label">Expiring (30d)</div></div>
+    </div>
+</div>
+
+<!-- Filter toolbar -->
+<AppFilterPanel @bind-SearchValue="_search"
+                OnSearch="OnSearchAsync"
+                SearchPlaceholder="Search user or permission…">
+    <Filters>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_typeOptions"
+                        Placeholder="All Types"
+                        ShowClearButton="true"
+                        Width="160px"
+                        Value="_filterType"
+                        ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+        <SfDropDownList TValue="string" TItem="LabelValue"
+                        DataSource="_statusOptions"
+                        Placeholder="All Status"
+                        ShowClearButton="true"
+                        Width="140px"
+                        Value="_filterStatus"
+                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
+            <DropDownListFieldSettings Value="Value" Text="Label" />
+        </SfDropDownList>
+    </Filters>
+</AppFilterPanel>
+
+<!-- Grid -->
+<div class="um-grid-card app-datagrid">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay" aria-live="polite">
+            <div class="um-spinner" aria-hidden="true"></div>
+            <span>Loading…</span>
+        </div>
+    }
+    <SfGrid TValue="PermEntry"
+            DataSource="_entries"
+            AllowPaging="true"
+            AllowSorting="true"
+            EnableHover="true"
+            RowHeight="52">
+        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn Field="@nameof(PermEntry.UserFullName)" HeaderText="User" Width="200">
+                <Template>
+                    @{ var e = (PermEntry)context; }
+                    <div class="sp-user-cell">
+                        <span class="sp-avatar" style="@AvatarStyle(e)" aria-hidden="true">@Initials(e.UserFullName)</span>
+                        <div>
+                            <div class="sp-user-name">@e.UserFullName</div>
+                            <div class="sp-user-email">@e.UserEmail</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PermEntry.PermissionCode)" HeaderText="Permission" Width="200">
+                <Template>
+                    @{ var e = (PermEntry)context; }
+                    <span class="sp-perm-code">@e.PermissionCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PermEntry.PermissionType)" HeaderText="Type" Width="110">
+                <Template>
+                    @{ var e = (PermEntry)context; }
+                    <span class="@TypeBadgeClass(e.PermissionType)">@e.PermissionType</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PermEntry.IsGranted)" HeaderText="Status" Width="110">
+                <Template>
+                    @{ var e = (PermEntry)context; }
+                    <AppStatusBadge Status="@(e.IsGranted ? "Active" : "Denied")"
+                                    Label="@(e.IsGranted ? "Granted" : "Denied")" />
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PermEntry.ExpiresDate)" HeaderText="Expires" Width="130">
+                <Template>
+                    @{ var e = (PermEntry)context; }
+                    <span class="@ExpiryClass(e)">@(e.ExpiresDate.HasValue ? e.ExpiresDate.Value.ToString("d") : "Never")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(PermEntry.GrantedByName)" HeaderText="Granted By" Width="160" />
+            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var e = (PermEntry)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                        <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<!-- Add/Edit Drawer -->
+<AppCrudDrawer @bind-Visible="_showDrawer"
+               Title="@(_editModel.PermissionId == Guid.Empty ? "Grant Permission" : "Edit Permission")"
+               OnConfirm="SaveAsync"
+               OnClose="CloseDrawer">
+    <Content>
+        <div class="sp-form">
+            <label class="sp-form-label">User *</label>
+            <input class="um-input" @bind="_editModel.UserFullName" placeholder="Search user…" />
+
+            <label class="sp-form-label">Permission Code *</label>
+            <input class="um-input sp-mono" @bind="_editModel.PermissionCode" placeholder="e.g. Policy.Write" />
+
+            <label class="sp-form-label">Type</label>
+            <SfDropDownList TValue="string" TItem="LabelValue"
+                            DataSource="_typeOptions"
+                            @bind-Value="_editModel.PermissionType"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="sp-form-label">Action</label>
+            <SfDropDownList TValue="bool" TItem="LabelValue<bool>"
+                            DataSource="_actionOptions"
+                            @bind-Value="_editModel.IsGranted"
+                            Width="100%">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+
+            <label class="sp-form-label">Expires</label>
+            <input class="um-input" type="date" @bind="_editModel.ExpiresDate" />
+        </div>
+    </Content>
+</AppCrudDrawer>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+
+    private List<PermEntry> _allEntries = [];
+    private List<PermEntry> _entries    = [];
+
+    private bool _loading    = false;
+    private bool _showDrawer = false;
+
+    private string _search       = string.Empty;
+    private string _filterType   = string.Empty;
+    private string _filterStatus = string.Empty;
+    private int    _kpiActive    = 0;
+
+    private int _totalCount   = 0;
+    private int _grantedCount = 0;
+    private int _deniedCount  = 0;
+    private int _expiringCount = 0;
+
+    private string KpiClass1 => "sp-kpi-card" + (_kpiActive == 1 ? " sp-kpi-card--active" : "");
+    private string KpiClass2 => "sp-kpi-card" + (_kpiActive == 2 ? " sp-kpi-card--active" : "");
+    private string KpiClass3 => "sp-kpi-card" + (_kpiActive == 3 ? " sp-kpi-card--active" : "");
+
+    private static readonly List<LabelValue> _typeOptions =
+    [
+        new("Feature",  "Feature"),
+        new("Resource", "Resource"),
+        new("Action",   "Action"),
+    ];
+
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Granted", "Granted"),
+        new("Denied",  "Denied"),
+    ];
+
+    private static readonly List<LabelValue<bool>> _actionOptions =
+    [
+        new(true,  "Grant"),
+        new(false, "Deny"),
+    ];
+
+    private PermEntry _editModel = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new("Home",              "/"),
+            new("Users & Security",  "/tenant/security/users"),
+            new("Permissions",       "/tenant/security/perms"));
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            // TODO: replace with Api.GetPermissionsAsync(_tenantId)
+            await Task.Delay(0);
+            _allEntries = [];
+            ComputeKpi();
+            ApplyFilters();
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task OnSearchAsync(string _) => await LoadAsync();
+
+    private void ApplyFilters()
+    {
+        _entries = _allEntries.Where(e =>
+            (string.IsNullOrEmpty(_filterType)   || e.PermissionType == _filterType) &&
+            (string.IsNullOrEmpty(_filterStatus) ||
+             (_filterStatus == "Granted" && e.IsGranted) ||
+             (_filterStatus == "Denied"  && !e.IsGranted)) &&
+            (string.IsNullOrEmpty(_search) ||
+             e.UserFullName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+             e.PermissionCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        if (_kpiActive == 2) _entries = _entries.Where(e => e.IsGranted).ToList();
+        if (_kpiActive == 3) _entries = _entries.Where(e => !e.IsGranted).ToList();
+
+        StateHasChanged();
+    }
+
+    private void SetKpiFilter(int n)
+    {
+        _kpiActive    = _kpiActive == n ? 0 : n;
+        _filterStatus = string.Empty;
+        ApplyFilters();
+    }
+
+    private void ComputeKpi()
+    {
+        var cutoff = DateTime.Today.AddDays(30);
+        _totalCount    = _allEntries.Count;
+        _grantedCount  = _allEntries.Count(e => e.IsGranted);
+        _deniedCount   = _allEntries.Count(e => !e.IsGranted);
+        _expiringCount = _allEntries.Count(e => e.ExpiresDate.HasValue && e.ExpiresDate.Value <= cutoff && e.ExpiresDate.Value >= DateTime.Today);
+    }
+
+    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenEditDrawer(PermEntry e) { _editModel = new PermEntry { PermissionId = e.PermissionId, UserFullName = e.UserFullName, UserEmail = e.UserEmail, PermissionCode = e.PermissionCode, PermissionType = e.PermissionType, IsGranted = e.IsGranted, ExpiresDate = e.ExpiresDate, GrantedByName = e.GrantedByName }; _showDrawer = true; }
+    private void CloseDrawer() => _showDrawer = false;
+
+    private async Task SaveAsync()
+    {
+        // TODO: Api.SavePermissionAsync
+        await Task.Delay(0);
+        _showDrawer = false;
+        await LoadAsync();
+        await ShowToastAsync("Permission saved.", "e-toast-success");
+    }
+
+    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+    }
+
+    private static string Initials(string fullName)
+    {
+        var parts = fullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : fullName.Length >= 1 ? fullName[..1] : "?";
+    }
+
+    private static string AvatarStyle(PermEntry e)
+    {
+        var hue = Math.Abs(e.UserEmail.GetHashCode()) % 360;
+        return $"background:hsl({hue},50%,42%);color:#fff;";
+    }
+
+    private static string TypeBadgeClass(string type) => type switch
+    {
+        "Feature"  => "sp-type-badge sp-type-badge--feature",
+        "Resource" => "sp-type-badge sp-type-badge--resource",
+        "Action"   => "sp-type-badge sp-type-badge--action",
+        _          => "sp-type-badge",
+    };
+
+    private static string ExpiryClass(PermEntry e)
+    {
+        if (!e.ExpiresDate.HasValue) return "";
+        if (e.ExpiresDate.Value < DateTime.Today)           return "sp-expiry sp-expiry--expired";
+        if (e.ExpiresDate.Value < DateTime.Today.AddDays(30)) return "sp-expiry sp-expiry--expiring";
+        return "sp-expiry";
+    }
+
+    private sealed record LabelValue(string Value, string Label);
+    private sealed record LabelValue<T>(T Value, string Label);
+
+    private sealed class PermEntry
+    {
+        public Guid      PermissionId    { get; set; } = Guid.Empty;
+        public string    UserFullName    { get; set; } = string.Empty;
+        public string    UserEmail       { get; set; } = string.Empty;
+        public string    PermissionCode  { get; set; } = string.Empty;
+        public string    PermissionType  { get; set; } = "Feature";
+        public bool      IsGranted       { get; set; } = true;
+        public DateTime? ExpiresDate     { get; set; }
+        public string    GrantedByName   { get; set; } = string.Empty;
+    }
+}

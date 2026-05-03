@@ -1,0 +1,346 @@
+@page "/accounts/{AccountId:guid}/hierarchy"
+@namespace Ams.Web.Components.Pages.Accounts.Details
+@using Syncfusion.Blazor
+@using Syncfusion.Blazor.Diagram
+@using Syncfusion.Blazor.Notifications
+@inject ApiClient Api
+@inject HttpClient HttpClient
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationContextService NavContext
+
+<PageTitle>@((_data?.AccountName ?? NavContext.CurrentAccountName) is { } n ? $"{n} — Hierarchy" : "Account Hierarchy")</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Account Hierarchy"
+               Subtitle="@AccountSubtitle("Parent and child account relationships")"
+               Icon="bi-diagram-3">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo($"/accounts/{AccountId}")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Account 360
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ah-spin" : "")" aria-hidden="true"></i>
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showAddChild = true">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Link Child Account
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="ah-loading"><span class="um-spin" aria-hidden="true"></span><span>Loading hierarchy…</span></div>
+}
+else if (_data is null)
+{
+    <div class="ah-not-found">
+        <i class="bi bi-diagram-3 ah-nf-icon" aria-hidden="true"></i>
+        <h2>Hierarchy not found</h2>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/accounts")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Accounts
+        </button>
+    </div>
+}
+else
+{
+    <div class="ah-container">
+        @* Parent breadcrumb strip *@
+        @if (_data.ParentAccounts.Count > 0)
+        {
+            <div class="ah-breadcrumb">
+                <div class="ah-parents">
+                    <span class="ah-parents-label">Parent:</span>
+                    @foreach (var parent in _data.ParentAccounts)
+                    {
+                        <button class="ah-parent-chip" @onclick="() => Navigate(parent.AccountId)">
+                            <i class="bi bi-building" aria-hidden="true"></i>
+                            @parent.AccountName
+                        </button>
+                    }
+                </div>
+            </div>
+        }
+
+        @* Current account card *@
+        <div class="ah-section">
+            <h2 class="ah-section-title">Current Account</h2>
+            <div class="ah-current-card">
+                <div class="ah-current-avatar">@Initials(_data.AccountName)</div>
+                <div class="ah-current-info">
+                    <div class="ah-current-name">@_data.AccountName</div>
+                    <div class="ah-current-meta">
+                        <span class="ah-badge ah-badge-type">@_data.AccountType</span>
+                        <span class="ah-badge ah-badge-status @(_data.Status == "Active" ? "" : "is-inactive")">@_data.Status</span>
+                        @if (!string.IsNullOrEmpty(_data.AccountNumber))
+                        {
+                            <span class="ah-badge"># @_data.AccountNumber</span>
+                        }
+                    </div>
+                </div>
+                <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo($"/accounts/{AccountId}")'>
+                    <i class="bi bi-person-vcard" aria-hidden="true"></i> View 360
+                </button>
+            </div>
+        </div>
+
+        @* Child Accounts *@
+        <div class="ah-section">
+            <div class="ah-section-header">
+                <h2 class="ah-section-title">Child Accounts</h2>
+                <span class="ah-count">@_data.ChildAccounts.Count</span>
+            </div>
+
+            @if (_data.ChildAccounts.Count == 0)
+            {
+                <div class="ah-empty">
+                    <i class="bi bi-diagram-3" aria-hidden="true"></i>
+                    <span>No child accounts linked. <button class="um-link" @onclick="() => _showAddChild = true">Add one now.</button></span>
+                </div>
+            }
+            else
+            {
+                <div class="ah-grid">
+                    @foreach (var child in _data.ChildAccounts)
+                    {
+                        <div class="ah-card" @onclick="() => Navigate(child.AccountId)">
+                            <div class="ah-card-top">
+                                <div class="ah-child-avatar">@Initials(child.AccountName)</div>
+                                <div class="ah-child-name">@child.AccountName</div>
+                                <button class="ah-unlink" @onclick:stopPropagation="true"
+                                        @onclick="() => UnlinkChild(child.AccountId)" title="Unlink child">
+                                    <i class="bi bi-x-circle" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                            <div class="ah-card-rows">
+                                <div class="ah-row">
+                                    <span class="ah-row-lbl">Type</span>
+                                    <span class="ah-badge ah-badge-type">@child.AccountType</span>
+                                </div>
+                                <div class="ah-row">
+                                    <span class="ah-row-lbl">Status</span>
+                                    <span class="ah-badge ah-badge-status @(child.Status == "Active" ? "" : "is-inactive")">@child.Status</span>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        @* Tree view *@
+        <div class="ah-section">
+            <h2 class="ah-section-title">Full Hierarchy</h2>
+            <div class="ah-tree">
+                @RenderHierarchy(_data)
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Child Modal -->
+    @if (_showAddChild)
+    {
+        <div class="ah-modal-overlay" @onclick="() => _showAddChild = false">
+            <div class="ah-modal" @onclick:stopPropagation="true">
+                <div class="ah-modal-header">
+                    <h2>Link Child Account</h2>
+                    <button class="ah-close" @onclick="() => _showAddChild = false">
+                        <i class="bi bi-x" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="ah-modal-body">
+                    <div class="ah-search-wrap">
+                        <label class="ah-search-label">Search accounts to link:</label>
+                        <input type="text" class="ah-search" placeholder="Type account name…"
+                               @bind="_childSearch" @oninput="SearchChildren" />
+                    </div>
+                    @if (_childOptions.Count > 0)
+                    {
+                        <div class="ah-options">
+                            @foreach (var option in _childOptions.Take(10))
+                            {
+                                <div class="ah-option" @onclick="() => LinkChild(option)">
+                                    <div class="ah-option-name">@option.AccountName</div>
+                                    <div class="ah-option-meta">@option.AccountNumber · @option.AccountType</div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+                <div class="ah-modal-footer">
+                    <button class="um-btn um-btn-ghost" @onclick="() => _showAddChild = false">Cancel</button>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter]
+    public Guid AccountId { get; set; }
+
+    private SfToast _toast = null!;
+    private bool _loading = true;
+    private bool _showAddChild = false;
+
+    private AccountHierarchyData? _data;
+    private string _childSearch = string.Empty;
+    private List<AccountOption> _childOptions = [];
+
+    class AccountHierarchyData
+    {
+        public Guid AccountId { get; set; }
+        public string AccountName { get; set; } = string.Empty;
+        public string AccountNumber { get; set; } = string.Empty;
+        public string AccountType { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public DateTime CreatedDate { get; set; }
+        public List<AccountHierarchyNode> ParentAccounts { get; set; } = [];
+        public List<AccountHierarchyNode> ChildAccounts { get; set; } = [];
+    }
+
+    class AccountHierarchyNode
+    {
+        public Guid AccountId { get; set; }
+        public string AccountName { get; set; } = string.Empty;
+        public string AccountNumber { get; set; } = string.Empty;
+        public string AccountType { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+    }
+
+    class AccountOption
+    {
+        public Guid AccountId { get; set; }
+        public string AccountName { get; set; } = string.Empty;
+        public string AccountNumber { get; set; } = string.Empty;
+        public string AccountType { get; set; } = string.Empty;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var breadcrumbs = new BreadcrumbService.BreadcrumbItem[] {
+            new("Accounts", "/accounts"),
+            new("Account Details", "/accounts/" + AccountId),
+            new("Hierarchy", "/accounts/" + AccountId + "/hierarchy")
+        };
+        Breadcrumbs.SetCrumbs(breadcrumbs);
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(0); // TODO: replace with real API call
+        _data = BuildStub();
+        NavContext.SetAccount(AccountId, _data.AccountName);
+        _loading = false;
+    }
+
+    private AccountHierarchyData BuildStub() => new()
+    {
+        AccountId    = AccountId,
+        AccountName  = "Sullivan Mfg. LLC",
+        AccountNumber = "ACC-00142",
+        AccountType  = "Commercial",
+        Status       = "Active",
+        CreatedDate  = DateTime.Now.AddYears(-8),
+        ParentAccounts =
+        [
+            new() { AccountId = Guid.NewGuid(), AccountName = "Sullivan Group Holdings", AccountNumber = "ACC-00100", AccountType = "Commercial", Status = "Active" },
+        ],
+        ChildAccounts =
+        [
+            new() { AccountId = Guid.NewGuid(), AccountName = "Sullivan Realty LLC",    AccountNumber = "ACC-00143", AccountType = "Commercial", Status = "Active" },
+            new() { AccountId = Guid.NewGuid(), AccountName = "Sullivan Holdings Inc.",  AccountNumber = "ACC-00144", AccountType = "Commercial", Status = "Active" },
+            new() { AccountId = Guid.NewGuid(), AccountName = "Sullivan Tech Partners",  AccountNumber = "ACC-00145", AccountType = "Commercial", Status = "Inactive" },
+        ]
+    };
+
+    private void Navigate(Guid accountId)
+    {
+        Nav.NavigateTo("/accounts/" + accountId);
+    }
+
+    private async Task UnlinkChild(Guid childAccountId)
+    {
+        if (!await ConfirmAsync("Unlink this child account?"))
+            return;
+
+        // TODO: call DELETE /api/accounts/{AccountId}/children/{childAccountId}
+        _data?.ChildAccounts.RemoveAll(c => c.AccountId == childAccountId);
+        await _toast.ShowAsync(new ToastModel { Title = "Success", Content = "Child account unlinked", CssClass = "e-toast-success" });
+    }
+
+    private void SearchChildren(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _childSearch = e.Value?.ToString() ?? string.Empty;
+        // In a real implementation, this would call an API
+        _childOptions = new();
+    }
+
+    private async Task LinkChild(AccountOption option)
+    {
+        // TODO: call POST /api/accounts/{AccountId}/children
+        _data?.ChildAccounts.Add(new AccountHierarchyNode
+        {
+            AccountId   = option.AccountId,
+            AccountName = option.AccountName,
+            AccountNumber = option.AccountNumber,
+            AccountType = option.AccountType,
+            Status      = "Active"
+        });
+        _showAddChild = false;
+        _childSearch  = string.Empty;
+        await _toast.ShowAsync(new ToastModel { Title = "Success", Content = "Child account linked", CssClass = "e-toast-success" });
+    }
+
+    private RenderFragment RenderHierarchy(AccountHierarchyData data) => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "ah-node");
+        builder.AddContent(2, data.AccountName);
+        builder.CloseElement();
+
+        if (data.ChildAccounts.Count > 0)
+        {
+            builder.OpenElement(3, "div");
+            builder.AddAttribute(4, "class", "ah-children");
+            foreach (var child in data.ChildAccounts)
+            {
+                builder.OpenElement(5, "div");
+                builder.AddAttribute(6, "class", "ah-node");
+                builder.AddContent(7, child.AccountName);
+                builder.CloseElement();
+            }
+            builder.CloseElement();
+        }
+    };
+
+    private Task<bool> ConfirmAsync(string message)
+    {
+        return Task.FromResult(true); // In real app, use a modal
+    }
+
+    private string StatusClass(string status) => status switch
+    {
+        "Active" => "ah-status-active",
+        "Inactive" => "ah-status-inactive",
+        "Suspended" => "ah-status-suspended",
+        _ => "ah-status-unknown"
+    };
+
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2
+            ? $"{parts[0][0]}{parts[^1][0]}".ToUpper()
+            : name.Length > 0 ? name[..Math.Min(2, name.Length)].ToUpper() : "?";
+    }
+
+    private string AccountSubtitle(string prefix) =>
+        NavContext.CurrentAccountName is { Length: > 0 } n ? $"{prefix} for {n}" : prefix;
+}

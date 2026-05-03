@@ -1,0 +1,133 @@
+@page "/tenant/accounts/commercial"
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Commercial Entity Settings — Account Configuration</PageTitle>
+
+<AppPageHeader Title="Commercial Entity Settings"
+               Subtitle="Configure commercial account entity defaults and classification behavior"
+               Icon="bi-briefcase">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    <div class="pc-kpi-card" title="Total commercial entity settings">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-briefcase-fill" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_settings.Count</div><div class="pc-kpi-label">Total Settings</div></div>
+    </div>
+    <div class="pc-kpi-card" title="Settings enabled (Boolean true)">
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-toggle-on" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_settings.Count(s => s.SettingType == "Boolean" && s.SettingValue == "true")</div><div class="pc-kpi-label">Enabled</div></div>
+    </div>
+    <div class="pc-kpi-card" title="Settings disabled (Boolean false)">
+        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-toggle-off" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_settings.Count(s => s.SettingType == "Boolean" && s.SettingValue != "true")</div><div class="pc-kpi-label">Disabled</div></div>
+    </div>
+</div>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<div class="um-settings-container">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div>
+    }
+    else
+    {
+        <div class="row g-4">
+            @foreach (var setting in _settings)
+            {
+                <div class="col-md-6">
+                    <div class="um-settings-card">
+                        <div class="um-settings-card__header">
+                            <div>
+                                <div class="fw-semibold">@FormatKey(setting.SettingKey)</div>
+                                <div class="text-muted small">@setting.Description</div>
+                            </div>
+                        </div>
+                        <div class="um-settings-card__body">
+                            @if (setting.SettingType == "Boolean")
+                            {
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox"
+                                           checked="@(setting.SettingValue == "true")"
+                                           @onchange="async e => await UpdateAsync(setting, BoolStr(e.Value))" />
+                                    <label class="form-check-label">@(setting.SettingValue == "true" ? "Enabled" : "Disabled")</label>
+                                </div>
+                            }
+                            else if (setting.SettingKey == "DefaultEntityType")
+                            {
+                                <select class="um-input" value="@setting.SettingValue"
+                                    @onchange="async e => await UpdateAsync(setting, e.Value?.ToString())">
+                                    <option value="Business">Business</option>
+                                    <option value="Corporation">Corporation</option>
+                                    <option value="LLC">LLC</option>
+                                    <option value="Partnership">Partnership</option>
+                                    <option value="Non-Profit">Non-Profit</option>
+                                </select>
+                            }
+                            else
+                            {
+                                <div class="d-flex gap-2">
+                                    <input class="um-input flex-grow-1" value="@setting.SettingValue"
+                                        @onchange="async e => await UpdateAsync(setting, e.Value?.ToString())" />
+                                    <span class="text-muted align-self-center small">@setting.SettingType</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
+
+@code {
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    List<CommercialEntitySettingDto> _settings = [];
+    bool _loading;
+    string? _loadError;
+    SfToast _toast = default!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Account Config", null), new("Commercial Entity Settings", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try { _settings = await Api.GetCommercialEntitySettingsAsync(TenantId) ?? []; }
+        catch (Exception ex) { _loadError = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    async Task UpdateAsync(CommercialEntitySettingDto setting, string? newValue)
+    {
+        try
+        {
+            setting.SettingValue = newValue;
+            await Api.UpdateCommercialEntitySettingAsync(setting.CommercialEntitySettingId, new(newValue));
+            await _toast.ShowAsync(new() { Content = $"{FormatKey(setting.SettingKey)} updated", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Update failed: {ex.Message}", CssClass = "e-toast-danger" }); }
+    }
+
+    static string FormatKey(string key) =>
+        System.Text.RegularExpressions.Regex.Replace(key, "(?<=[a-z])(?=[A-Z])", " ");
+
+    static string BoolStr(object? val) => val?.ToString()?.ToLower() == "true" ? "true" : "false";
+}

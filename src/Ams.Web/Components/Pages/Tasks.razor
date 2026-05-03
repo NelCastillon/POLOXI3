@@ -1,0 +1,329 @@
+@page "/tasks"
+@namespace Ams.Web.Components.Pages
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Task Board — AMS</PageTitle>
+
+<AppPageHeader Title="Task Board"
+               Subtitle="Enterprise command center for agency tasks, agreements, engagements, milestones, service issues, requests, activities, and workflow execution"
+               Icon="bi-kanban">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="ResetFilters">
+            <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="() => _showCompleted = !_showCompleted">
+            <i class="bi @(_showCompleted ? "bi-eye-slash" : "bi-eye")" aria-hidden="true"></i>
+            @(_showCompleted ? "Hide Completed" : "Show Completed")
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<section class="ops-hero" aria-label="Tasks and workflows overview">
+    <div class="ops-hero-main">
+        <span class="ops-eyebrow">Operational execution</span>
+        <h2>Tasks & Workflows</h2>
+        <p>Coordinate work across account service, agreements, engagements, issue resolution, service requests, amendments, and approval workflows.</p>
+    </div>
+    <div class="ops-hero-actions">
+        @foreach (var shortcut in _shortcuts)
+        {
+            <button class="ops-shortcut" @onclick="() => Nav.NavigateTo(shortcut.Url)">
+                <i class="bi @shortcut.Icon" aria-hidden="true"></i>
+                <span>@shortcut.Label</span>
+            </button>
+        }
+    </div>
+</section>
+
+<section class="ops-kpi-grid" aria-label="Task board metrics">
+    @Metric("Open Tasks", OpenTasks.ToString(), "12 due this week", "bi-list-check", "ops-tone-blue")
+    @Metric("Overdue", OverdueTasks.ToString(), "Needs same-day review", "bi-alarm-fill", "ops-tone-red")
+    @Metric("In Workflow", _workItems.Count(x => x.Stage is "Review" or "Approval").ToString(), "Active approval lanes", "bi-diagram-3", "ops-tone-violet")
+    @Metric("Completed", _workItems.Count(x => x.Done).ToString(), "Closed this cycle", "bi-check-circle", "ops-tone-green")
+</section>
+
+<section class="ops-command-bar" aria-label="Task board filters">
+    <div class="ops-search-wrap">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input type="search"
+               placeholder="Search tasks, accounts, owners, categories..."
+               @bind="_search"
+               @bind:event="oninput" />
+    </div>
+
+    <div class="ops-pill-group" role="group" aria-label="Status filter">
+        @foreach (var filter in _filters)
+        {
+            <button class="ops-pill @(_filter == filter.Key ? "ops-pill--active" : "")"
+                    @onclick="() => _filter = filter.Key">
+                @filter.Label
+                <span>@FilterCount(filter.Key)</span>
+            </button>
+        }
+    </div>
+</section>
+
+<section class="ops-layout">
+    <div class="ops-board" aria-label="Task kanban board">
+        @foreach (var lane in _lanes)
+        {
+            var laneItems = FilteredItems.Where(x => x.Stage == lane.Key).ToList();
+            <article class="ops-lane">
+                <header class="ops-lane-header">
+                    <div>
+                        <span class="ops-lane-title">@lane.Label</span>
+                        <span class="ops-lane-subtitle">@lane.Description</span>
+                    </div>
+                    <span class="ops-lane-count">@laneItems.Count</span>
+                </header>
+
+                <div class="ops-lane-list">
+                    @if (laneItems.Count == 0)
+                    {
+                        <div class="ops-empty-mini">No visible work items.</div>
+                    }
+                    else
+                    {
+                        @foreach (var item in laneItems)
+                        {
+                            <button class="ops-work-card @(item.IsOverdue ? "ops-work-card--risk" : "")"
+                                    @onclick="() => SelectItem(item)">
+                                <div class="ops-work-topline">
+                                    <span class="ops-work-type @ToneCss(item.Type)">@item.Type</span>
+                                    <span class="ops-priority @PriorityCss(item.Priority)">@item.Priority</span>
+                                </div>
+                                <strong>@item.Title</strong>
+                                <p>@item.Account</p>
+                                <div class="ops-work-meta">
+                                    <span><i class="bi bi-person" aria-hidden="true"></i> @item.Owner</span>
+                                    <span class="@(item.IsOverdue ? "ops-danger-text" : "")"><i class="bi bi-calendar3" aria-hidden="true"></i> @item.DueDate.ToString("MMM d")</span>
+                                </div>
+                            </button>
+                        }
+                    }
+                </div>
+            </article>
+        }
+    </div>
+
+    <aside class="ops-side-panel" aria-label="Selected work item details">
+        @if (_selected is null)
+        {
+            <div class="ops-side-empty">
+                <i class="bi bi-kanban" aria-hidden="true"></i>
+                <h3>Select a work item</h3>
+                <p>Open a task card to review ownership, due date, SLA impact, related module, and workflow routing.</p>
+            </div>
+        }
+        else
+        {
+            <div class="ops-detail-header">
+                <span class="ops-work-type @ToneCss(_selected.Type)">@_selected.Type</span>
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selected = null" aria-label="Close details">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
+            <h3>@_selected.Title</h3>
+            <p>@_selected.Description</p>
+
+            <dl class="ops-detail-list">
+                <div><dt>Account</dt><dd>@_selected.Account</dd></div>
+                <div><dt>Owner</dt><dd>@_selected.Owner</dd></div>
+                <div><dt>Stage</dt><dd>@_selected.Stage</dd></div>
+                <div><dt>Priority</dt><dd><span class="ops-priority @PriorityCss(_selected.Priority)">@_selected.Priority</span></dd></div>
+                <div><dt>Due</dt><dd class="@(_selected.IsOverdue ? "ops-danger-text" : "")">@_selected.DueDate.ToString("MMM d, yyyy")</dd></div>
+            </dl>
+
+            <div class="ops-detail-actions">
+                <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selected.ModuleUrl)">
+                    <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Module
+                </button>
+                <button class="um-btn um-btn-ghost" @onclick="() => ToggleDone(_selected)">
+                    <i class="bi @(_selected.Done ? "bi-arrow-counterclockwise" : "bi-check2-circle")" aria-hidden="true"></i>
+                    @(_selected.Done ? "Reopen" : "Complete")
+                </button>
+            </div>
+        }
+    </aside>
+</section>
+
+<section class="ops-module-grid" aria-label="Tasks and workflows modules">
+    @foreach (var module in _modules)
+    {
+        <button class="ops-module-card" @onclick="() => Nav.NavigateTo(module.Url)">
+            <span class="ops-module-icon"><i class="bi @module.Icon" aria-hidden="true"></i></span>
+            <span class="ops-module-content">
+                <strong>@module.Title</strong>
+                <small>@module.Description</small>
+            </span>
+            <i class="bi bi-chevron-right ops-module-arrow" aria-hidden="true"></i>
+        </button>
+    }
+</section>
+
+@code {
+    private string _search = string.Empty;
+    private string _filter = string.Empty;
+    private bool _showCompleted;
+    private WorkItem? _selected;
+
+    private readonly List<WorkItem> _workItems = [];
+
+    private int OpenTasks => _workItems.Count(x => !x.Done);
+    private int OverdueTasks => _workItems.Count(x => x.IsOverdue);
+
+    private IEnumerable<WorkItem> FilteredItems => _workItems.Where(item =>
+        (_showCompleted || !item.Done) &&
+        (string.IsNullOrWhiteSpace(_filter) || _filter switch
+        {
+            "overdue" => item.IsOverdue,
+            "high" => item.Priority == "High",
+            "workflow" => item.Stage is "Review" or "Approval",
+            "completed" => item.Done,
+            _ => true
+        }) &&
+        (string.IsNullOrWhiteSpace(_search) ||
+         item.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         item.Account.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         item.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         item.Type.Contains(_search, StringComparison.OrdinalIgnoreCase)))
+        .OrderBy(item => item.Done)
+        .ThenByDescending(item => item.Priority == "High")
+        .ThenBy(item => item.DueDate);
+
+    private readonly Lane[] _lanes =
+    [
+        new("Intake", "Intake", "New work and triage"),
+        new("In Progress", "In Progress", "Active execution"),
+        new("Review", "Review", "Quality and service checks"),
+        new("Approval", "Approval", "Workflow decisions"),
+        new("Done", "Done", "Completed work")
+    ];
+
+    private readonly Filter[] _filters =
+    [
+        new("", "All"),
+        new("overdue", "Overdue"),
+        new("high", "High Priority"),
+        new("workflow", "In Workflow"),
+        new("completed", "Completed")
+    ];
+
+    private readonly ModuleLink[] _modules =
+    [
+        new("Agreements", "Manage agreement lifecycle, status, and customer commitments.", "/agreements", "bi-file-earmark-check"),
+        new("Engagements", "Track active customer engagements, timelines, and delivery status.", "/engagements", "bi-briefcase"),
+        new("Milestones", "Monitor operational milestones, due dates, and completion state.", "/ops/milestones", "bi-flag"),
+        new("Amendments", "Review agreement amendments and effective changes.", "/ops/amendments", "bi-pencil-square"),
+        new("Issue Tracker", "Resolve service issues by severity, owner, and SLA risk.", "/ops/issues", "bi-bug"),
+        new("Service Requests", "Route and resolve client service requests.", "/ops/service-requests", "bi-tools"),
+        new("Activity History", "Audit operational activity, notes, and timeline events.", "/ops/activities", "bi-clock-history"),
+        new("Workflow Canvas", "Approve, reject, return, and track workflow instances.", "/workflow", "bi-diagram-3")
+    ];
+
+    private readonly ModuleLink[] _shortcuts =
+    [
+        new("Agreements", "", "/agreements", "bi-file-earmark-check"),
+        new("Requests", "", "/ops/service-requests", "bi-tools"),
+        new("Issues", "", "/ops/issues", "bi-bug"),
+        new("Workflow", "", "/workflow", "bi-diagram-3")
+    ];
+
+    protected override void OnInitialized()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"));
+        BuildWorkItems();
+        _selected = _workItems.FirstOrDefault(x => x.IsOverdue) ?? _workItems.FirstOrDefault();
+    }
+
+    private void BuildWorkItems()
+    {
+        _workItems.Clear();
+        _workItems.AddRange(
+        [
+            new("Review renewal service request", "Metro Freight Co.", "Service Request", "High", "Intake", "Maria Santos", DateTime.Today.AddDays(-1), "/ops/service-requests", "Client renewal request is waiting for service team triage.", false),
+            new("Prepare agreement packet", "Apex Medical Group", "Agreement", "High", "In Progress", "James Park", DateTime.Today, "/agreements", "Finalize agreement packet and validate required coverage exhibits.", false),
+            new("Resolve endorsement issue", "Pioneer Automotive", "Issue", "High", "Review", "Lisa Chen", DateTime.Today.AddDays(1), "/ops/issues", "Endorsement issue requires final service review before closure.", false),
+            new("Approve workflow exception", "Sullivan Mfg. LLC", "Workflow", "Medium", "Approval", "Kevin Obi", DateTime.Today.AddDays(2), "/workflow", "Workflow exception is pending manager approval.", false),
+            new("Confirm milestone evidence", "Dallas Roofing LLC", "Milestone", "Medium", "Review", "Sarah Kim", DateTime.Today.AddDays(3), "/ops/milestones", "Validate milestone evidence and update completion notes.", false),
+            new("Draft amendment summary", "Bridgewater Hotels", "Amendment", "Low", "In Progress", "Maria Santos", DateTime.Today.AddDays(5), "/ops/amendments", "Prepare amendment summary for client acknowledgement.", false),
+            new("Log post-bind activity", "Greenleaf Nurseries", "Activity", "Low", "Done", "James Park", DateTime.Today.AddDays(-2), "/ops/activities", "Activity logged and associated records updated.", true),
+            new("Engagement check-in", "Coastal Seafood Dist.", "Engagement", "Medium", "Intake", "Lisa Chen", DateTime.Today.AddDays(7), "/engagements", "Schedule engagement check-in and confirm open deliverables.", false)
+        ]);
+    }
+
+    private void SelectItem(WorkItem item) => _selected = item;
+
+    private void ToggleDone(WorkItem item)
+    {
+        item.Done = !item.Done;
+        item.Stage = item.Done ? "Done" : "In Progress";
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _filter = string.Empty;
+        _showCompleted = false;
+    }
+
+    private int FilterCount(string key) => key switch
+    {
+        "overdue" => _workItems.Count(x => x.IsOverdue),
+        "high" => _workItems.Count(x => x.Priority == "High" && !x.Done),
+        "workflow" => _workItems.Count(x => x.Stage is "Review" or "Approval" && !x.Done),
+        "completed" => _workItems.Count(x => x.Done),
+        _ => _workItems.Count
+    };
+
+    private static string ToneCss(string type) => type switch
+    {
+        "Agreement" => "ops-tone-blue",
+        "Engagement" => "ops-tone-violet",
+        "Milestone" => "ops-tone-cyan",
+        "Amendment" => "ops-tone-amber",
+        "Issue" => "ops-tone-red",
+        "Service Request" => "ops-tone-green",
+        "Workflow" => "ops-tone-violet",
+        _ => "ops-tone-neutral"
+    };
+
+    private static string PriorityCss(string priority) => priority switch
+    {
+        "High" => "ops-priority-high",
+        "Medium" => "ops-priority-medium",
+        _ => "ops-priority-low"
+    };
+
+    private RenderFragment Metric(string label, string value, string meta, string icon, string tone) => @<article class="ops-kpi-card">
+        <span class="ops-kpi-icon @tone"><i class="bi @icon" aria-hidden="true"></i></span>
+        <div>
+            <strong>@value</strong>
+            <span>@label</span>
+            <small>@meta</small>
+        </div>
+    </article>;
+
+    private sealed record Lane(string Key, string Label, string Description);
+    private sealed record Filter(string Key, string Label);
+    private sealed record ModuleLink(string Title, string Description, string Url, string Icon)
+    {
+        public string Label => Title;
+    }
+
+    private sealed class WorkItem(string title, string account, string type, string priority, string stage, string owner, DateTime dueDate, string moduleUrl, string description, bool done)
+    {
+        public string Title { get; set; } = title;
+        public string Account { get; set; } = account;
+        public string Type { get; set; } = type;
+        public string Priority { get; set; } = priority;
+        public string Stage { get; set; } = stage;
+        public string Owner { get; set; } = owner;
+        public DateTime DueDate { get; set; } = dueDate;
+        public string ModuleUrl { get; set; } = moduleUrl;
+        public string Description { get; set; } = description;
+        public bool Done { get; set; } = done;
+        public bool IsOverdue => !Done && DueDate.Date < DateTime.Today;
+    }
+}
