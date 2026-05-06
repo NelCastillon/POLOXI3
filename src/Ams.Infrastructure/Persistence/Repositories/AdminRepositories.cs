@@ -1,5 +1,6 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
+using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
 
@@ -17,24 +18,362 @@ public class BusinessRuleRepository : IBusinessRuleRepository
 
 public class DepartmentTeamRepository : IDepartmentTeamRepository
 {
-    private static readonly List<DepartmentTeamDto> _data = new();
-    public Task<IReadOnlyList<DepartmentTeamDto>> GetAllAsync(Guid tenantId, CancellationToken ct = default) => Task.FromResult((IReadOnlyList<DepartmentTeamDto>)_data);
-    public Task<DepartmentTeamDto?> GetByIdAsync(Guid id, CancellationToken ct = default) => Task.FromResult(_data.FirstOrDefault(t => t.TeamId == id));
-    public async Task<Guid> CreateAsync(DepartmentTeamDto team, Guid userId, CancellationToken ct = default) { var id = Guid.NewGuid(); _data.Add(team with { TeamId = id }); return id; }
-    public Task UpdateAsync(DepartmentTeamDto team, Guid userId, CancellationToken ct = default) { var i = _data.FindIndex(t => t.TeamId == team.TeamId); if (i >= 0) _data[i] = team; return Task.CompletedTask; }
-    public Task DeleteAsync(Guid id, CancellationToken ct = default) { _data.RemoveAll(t => t.TeamId == id); return Task.CompletedTask; }
+    private readonly ISqlConnectionFactory _connectionFactory;
+    public DepartmentTeamRepository(ISqlConnectionFactory connectionFactory) => _connectionFactory = connectionFactory;
+
+    public async Task<IReadOnlyList<DepartmentTeamDto>> GetAllAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT MIN(UserId) AS TeamId,
+       TenantId,
+       COALESCE(NULLIF(JobTitle, ''), COALESCE(NULLIF(Department, ''), 'General') + ' Team') AS TeamName,
+       UPPER(REPLACE(COALESCE(NULLIF(JobTitle, ''), COALESCE(NULLIF(Department, ''), 'General') + ' Team'), ' ', '-')) AS TeamCode,
+       NULL AS Description,
+       NULL AS DepartmentId,
+       COALESCE(NULLIF(Department, ''), 'Unassigned') AS DepartmentName,
+       MAX(CASE WHEN JobTitle LIKE '%Manager%' THEN FullName END) AS ManagerName,
+       COUNT(1) AS MemberCount,
+       CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 'Active' ELSE 'Inactive' END AS Status,
+       CAST(CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS bit) AS IsActive,
+       MIN(CreatedDateUtc) AS CreatedDateUtc
+FROM IAM.[User]
+WHERE TenantId = @TenantId AND IsDeleted = 0
+GROUP BY TenantId, COALESCE(NULLIF(Department, ''), 'Unassigned'), COALESCE(NULLIF(JobTitle, ''), COALESCE(NULLIF(Department, ''), 'General') + ' Team')
+ORDER BY DepartmentName, TeamName";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var results = await cn.QueryAsync<DepartmentTeamDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+        return results.ToList();
+    }
+
+    public async Task<DepartmentTeamDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT TeamId, TenantId, TeamName, Description, DepartmentId, MemberCount, 
+       TeamCode,
+       ManagerName,
+       (SELECT DepartmentName FROM Agency.Department d WHERE d.DepartmentId = t.DepartmentId) AS DepartmentName,
+       CASE WHEN IsActive = 1 THEN 'Active' ELSE 'Inactive' END AS Status, IsActive, CreatedDateUtc
+FROM Agency.Team t
+WHERE TeamId = @TeamId AND IsDeleted = 0";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        return await cn.QuerySingleOrDefaultAsync<DepartmentTeamDto>(new CommandDefinition(sql, new { TeamId = id }, cancellationToken: ct));
+    }
+
+    public async Task<Guid> CreateAsync(DepartmentTeamDto team, Guid userId, CancellationToken ct = default)
+    {
+        var id = Guid.NewGuid();
+        const string sql = @"
+INSERT INTO Agency.Team (TeamId, TenantId, TeamName, TeamCode, Description, DepartmentId, ManagerName, MemberCount, IsActive, CreatedDateUtc, CreatedByUserId)
+VALUES (@TeamId, @TenantId, @TeamName, @TeamCode, @Description, @DepartmentId, @ManagerName, @MemberCount, @IsActive, GETUTCDATE(), @UserId)";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            TeamId = id,
+            team.TenantId,
+            team.TeamName,
+            team.TeamCode,
+            team.Description,
+            team.DepartmentId,
+            team.ManagerName,
+            MemberCount = team.MemberCount,
+            team.IsActive,
+            UserId = userId
+        }, cancellationToken: ct));
+        return id;
+    }
+
+    public async Task UpdateAsync(DepartmentTeamDto team, Guid userId, CancellationToken ct = default)
+    {
+        const string sql = @"
+UPDATE Agency.Team
+SET TeamName = @TeamName, TeamCode = @TeamCode, Description = @Description, DepartmentId = @DepartmentId, 
+    ManagerName = @ManagerName, MemberCount = @MemberCount, IsActive = @IsActive, ModifiedDateUtc = GETUTCDATE()
+WHERE TeamId = @TeamId AND IsDeleted = 0";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            team.TeamId,
+            team.TeamName,
+            team.TeamCode,
+            team.Description,
+            team.DepartmentId,
+            team.ManagerName,
+            team.MemberCount,
+            team.IsActive,
+            UserId = userId
+        }, cancellationToken: ct));
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        const string sql = @"
+UPDATE Agency.Team
+SET IsDeleted = 1, ModifiedDateUtc = GETUTCDATE()
+WHERE TeamId = @TeamId";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TeamId = id }, cancellationToken: ct));
+    }
+}
+
+public class DepartmentRepository : IDepartmentRepository
+{
+    private readonly ISqlConnectionFactory _connectionFactory;
+    public DepartmentRepository(ISqlConnectionFactory connectionFactory) => _connectionFactory = connectionFactory;
+
+    public async Task<IReadOnlyList<DepartmentDto>> GetAllAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT MIN(UserId) AS DepartmentId,
+       TenantId,
+       COALESCE(NULLIF(Department, ''), 'Unassigned') AS DepartmentName,
+       UPPER(REPLACE(COALESCE(NULLIF(Department, ''), 'Unassigned'), ' ', '-')) AS DepartmentCode,
+       NULL AS Description,
+       MAX(CASE WHEN JobTitle LIKE '%Manager%' THEN FullName END) AS ManagerName,
+       COUNT(DISTINCT COALESCE(NULLIF(JobTitle, ''), 'General')) AS TeamCount,
+       CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 'Active' ELSE 'Inactive' END AS Status,
+       CAST(CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS bit) AS IsActive,
+       MIN(CreatedDateUtc) AS CreatedDateUtc
+FROM IAM.[User]
+WHERE TenantId = @TenantId AND IsDeleted = 0
+GROUP BY TenantId, COALESCE(NULLIF(Department, ''), 'Unassigned')
+ORDER BY DepartmentName";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var results = await cn.QueryAsync<DepartmentDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+        return results.ToList();
+    }
+
+    public async Task<DepartmentDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT d.DepartmentId, d.TenantId, d.DepartmentName, d.DepartmentCode, d.Description, d.ManagerName,
+       (SELECT COUNT(1) FROM Agency.Team t WHERE t.DepartmentId = d.DepartmentId AND t.IsDeleted = 0) AS TeamCount,
+       CASE WHEN d.IsActive = 1 THEN 'Active' ELSE 'Inactive' END AS Status,
+       d.IsActive, d.CreatedDateUtc
+FROM Agency.Department d
+WHERE d.DepartmentId = @DepartmentId AND d.IsDeleted = 0";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        return await cn.QuerySingleOrDefaultAsync<DepartmentDto>(new CommandDefinition(sql, new { DepartmentId = id }, cancellationToken: ct));
+    }
+
+    public async Task<Guid> CreateAsync(DepartmentDto department, Guid userId, CancellationToken ct = default)
+    {
+        var id = Guid.NewGuid();
+        const string sql = @"
+DECLARE @BranchId UNIQUEIDENTIFIER = (SELECT TOP 1 BranchId FROM Agency.Branch WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc);
+
+INSERT INTO Agency.Department (DepartmentId, TenantId, BranchId, DepartmentName, DepartmentCode, Description, ManagerName, IsActive, CreatedDateUtc, CreatedByUserId)
+VALUES (@DepartmentId, @TenantId, @BranchId, @DepartmentName, @DepartmentCode, @Description, @ManagerName, @IsActive, GETUTCDATE(), @UserId)";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            DepartmentId = id,
+            department.TenantId,
+            department.DepartmentName,
+            department.DepartmentCode,
+            department.Description,
+            department.ManagerName,
+            department.IsActive,
+            UserId = userId
+        }, cancellationToken: ct));
+        return id;
+    }
+
+    public async Task UpdateAsync(DepartmentDto department, Guid userId, CancellationToken ct = default)
+    {
+        const string sql = @"
+UPDATE Agency.Department
+SET DepartmentName = @DepartmentName, DepartmentCode = @DepartmentCode, Description = @Description,
+    ManagerName = @ManagerName, IsActive = @IsActive, ModifiedDateUtc = GETUTCDATE()
+WHERE DepartmentId = @DepartmentId AND IsDeleted = 0";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            department.DepartmentId,
+            department.DepartmentName,
+            department.DepartmentCode,
+            department.Description,
+            department.ManagerName,
+            department.IsActive
+        }, cancellationToken: ct));
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        const string sql = @"
+UPDATE Agency.Department
+SET IsDeleted = 1, ModifiedDateUtc = GETUTCDATE()
+WHERE DepartmentId = @DepartmentId";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { DepartmentId = id }, cancellationToken: ct));
+    }
 }
 
 public class ProducerStaffRepository : IProducerStaffRepository
 {
-    private static readonly List<ProducerStaffDto> _data = new();
-    public Task<IReadOnlyList<ProducerStaffDto>> GetAllAsync(Guid tenantId, CancellationToken ct = default) => Task.FromResult((IReadOnlyList<ProducerStaffDto>)_data);
-    public Task<IReadOnlyList<ProducerStaffDto>> GetByRoleAsync(Guid tenantId, string role, CancellationToken ct = default) => Task.FromResult((IReadOnlyList<ProducerStaffDto>)_data.Where(s => s.Role == role).ToList());
-    public Task<ProducerStaffDto?> GetByIdAsync(Guid id, CancellationToken ct = default) => Task.FromResult(_data.FirstOrDefault(s => s.StaffId == id));
-    public async Task<Guid> CreateAsync(ProducerStaffDto staff, Guid userId, CancellationToken ct = default) { var id = Guid.NewGuid(); _data.Add(staff with { StaffId = id }); return id; }
-    public Task UpdateAsync(ProducerStaffDto staff, Guid userId, CancellationToken ct = default) { var i = _data.FindIndex(s => s.StaffId == staff.StaffId); if (i >= 0) _data[i] = staff; return Task.CompletedTask; }
-    public Task DeleteAsync(Guid id, CancellationToken ct = default) { _data.RemoveAll(s => s.StaffId == id); return Task.CompletedTask; }
-    public Task<IReadOnlyList<ProducerStaffDto>> GetExpiringLicensesAsync(Guid tenantId, int days, CancellationToken ct = default) { var cut = DateTime.UtcNow.AddDays(days); return Task.FromResult((IReadOnlyList<ProducerStaffDto>)_data.Where(s => s.LicenseExpiryDate.HasValue && s.LicenseExpiryDate <= cut).ToList()); }
+    private readonly ISqlConnectionFactory _connectionFactory;
+    public ProducerStaffRepository(ISqlConnectionFactory connectionFactory) => _connectionFactory = connectionFactory;
+
+    public async Task<IReadOnlyList<ProducerStaffDto>> GetAllAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT UserId AS StaffId,
+       TenantId,
+       LEFT(FullName, CASE WHEN CHARINDEX(' ', FullName + ' ') = 0 THEN LEN(FullName) ELSE CHARINDEX(' ', FullName + ' ') - 1 END) AS FirstName,
+       LTRIM(SUBSTRING(FullName, CHARINDEX(' ', FullName + ' '), LEN(FullName))) AS LastName,
+       Email,
+       PhoneNumber AS Phone,
+       CASE
+           WHEN JobTitle LIKE '%Producer%' THEN 'Producer'
+           WHEN JobTitle LIKE '%CSR%' OR JobTitle LIKE '%Customer Service%' THEN 'CSR'
+           WHEN JobTitle LIKE '%Manager%' THEN 'Manager'
+           ELSE COALESCE(NULLIF(UserTypeCode, ''), 'Staff')
+       END AS Role,
+       Department,
+       JobTitle AS TeamName,
+       NULL AS NpnLicense,
+       NULL AS LicenseStates,
+       NULL AS LicenseExpiryDate,
+       StatusCode AS Status,
+       CAST(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END AS bit) AS IsActive,
+       CreatedDateUtc
+FROM IAM.[User]
+WHERE TenantId = @TenantId AND IsDeleted = 0
+ORDER BY FullName";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var results = await cn.QueryAsync<ProducerStaffDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+        return results.ToList();
+    }
+
+    public async Task<IReadOnlyList<ProducerStaffDto>> GetByRoleAsync(Guid tenantId, string role, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT UserId AS StaffId,
+       TenantId,
+       LEFT(FullName, CASE WHEN CHARINDEX(' ', FullName + ' ') = 0 THEN LEN(FullName) ELSE CHARINDEX(' ', FullName + ' ') - 1 END) AS FirstName,
+       LTRIM(SUBSTRING(FullName, CHARINDEX(' ', FullName + ' '), LEN(FullName))) AS LastName,
+       Email,
+       PhoneNumber AS Phone,
+       CASE
+           WHEN JobTitle LIKE '%Producer%' THEN 'Producer'
+           WHEN JobTitle LIKE '%CSR%' OR JobTitle LIKE '%Customer Service%' THEN 'CSR'
+           WHEN JobTitle LIKE '%Manager%' THEN 'Manager'
+           ELSE COALESCE(NULLIF(UserTypeCode, ''), 'Staff')
+       END AS Role,
+       Department,
+       JobTitle AS TeamName,
+       NULL AS NpnLicense,
+       NULL AS LicenseStates,
+       NULL AS LicenseExpiryDate,
+       StatusCode AS Status,
+       CAST(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END AS bit) AS IsActive,
+       CreatedDateUtc
+FROM IAM.[User]
+WHERE TenantId = @TenantId AND IsDeleted = 0
+  AND CASE
+          WHEN JobTitle LIKE '%Producer%' THEN 'Producer'
+          WHEN JobTitle LIKE '%CSR%' OR JobTitle LIKE '%Customer Service%' THEN 'CSR'
+          WHEN JobTitle LIKE '%Manager%' THEN 'Manager'
+          ELSE COALESCE(NULLIF(UserTypeCode, ''), 'Staff')
+      END = @Role
+ORDER BY FullName";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var results = await cn.QueryAsync<ProducerStaffDto>(new CommandDefinition(sql, new { TenantId = tenantId, Role = role }, cancellationToken: ct));
+        return results.ToList();
+    }
+
+    public async Task<ProducerStaffDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT StaffId, TenantId, FirstName, LastName, Email, Phone, Role, 
+       Department, Team AS TeamName, LicenseNumber AS NpnLicense, LicenseStates, LicenseExpiryDate, 
+       CASE WHEN IsActive = 1 THEN 'Active' ELSE 'Inactive' END AS Status, IsActive, CreatedDateUtc
+FROM Agency.Staff
+WHERE StaffId = @StaffId AND IsDeleted = 0";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        return await cn.QuerySingleOrDefaultAsync<ProducerStaffDto>(new CommandDefinition(sql, new { StaffId = id }, cancellationToken: ct));
+    }
+
+    public async Task<Guid> CreateAsync(ProducerStaffDto staff, Guid userId, CancellationToken ct = default)
+    {
+        var id = Guid.NewGuid();
+        const string sql = @"
+INSERT INTO Agency.Staff (StaffId, TenantId, FirstName, LastName, Email, Phone, Role, Department, Team,
+                          LicenseNumber, LicenseStates, LicenseExpiryDate, IsActive, CreatedDateUtc, CreatedByUserId)
+VALUES (@StaffId, @TenantId, @FirstName, @LastName, @Email, @Phone, @Role, 
+        @Department, @TeamName, @NpnLicense, @LicenseStates, @LicenseExpiryDate, @IsActive, GETUTCDATE(), @UserId)";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            StaffId = id,
+            staff.TenantId,
+            staff.FirstName,
+            staff.LastName,
+            staff.Email,
+            staff.Phone,
+            staff.Role,
+            staff.Department,
+            staff.TeamName,
+            staff.NpnLicense,
+            staff.LicenseStates,
+            staff.LicenseExpiryDate,
+            staff.IsActive,
+            UserId = userId
+        }, cancellationToken: ct));
+        return id;
+    }
+
+    public async Task UpdateAsync(ProducerStaffDto staff, Guid userId, CancellationToken ct = default)
+    {
+        const string sql = @"
+UPDATE Agency.Staff
+SET FirstName = @FirstName, LastName = @LastName, Email = @Email, Phone = @Phone, 
+    Role = @Role, Department = @Department, Team = @TeamName, LicenseNumber = @NpnLicense, LicenseStates = @LicenseStates, LicenseExpiryDate = @LicenseExpiryDate, 
+    IsActive = @IsActive, ModifiedDateUtc = GETUTCDATE(), ModifiedByUserId = @UserId
+WHERE StaffId = @StaffId AND IsDeleted = 0";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            staff.StaffId,
+            staff.FirstName,
+            staff.LastName,
+            staff.Email,
+            staff.Phone,
+            staff.Role,
+            staff.Department,
+            staff.TeamName,
+            staff.NpnLicense,
+            staff.LicenseStates,
+            staff.LicenseExpiryDate,
+            staff.IsActive,
+            UserId = userId
+        }, cancellationToken: ct));
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        const string sql = @"
+UPDATE Agency.Staff
+SET IsDeleted = 1, ModifiedDateUtc = GETUTCDATE()
+WHERE StaffId = @StaffId";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { StaffId = id }, cancellationToken: ct));
+    }
+
+    public async Task<IReadOnlyList<ProducerStaffDto>> GetExpiringLicensesAsync(Guid tenantId, int days, CancellationToken ct = default)
+    {
+        const string sql = @"
+SELECT StaffId, TenantId, FirstName, LastName, Email, Phone, Role, 
+       Department, Team AS TeamName, LicenseNumber AS NpnLicense, LicenseStates, LicenseExpiryDate, 
+       CASE WHEN IsActive = 1 THEN 'Active' ELSE 'Inactive' END AS Status, IsActive, CreatedDateUtc
+FROM Agency.Staff
+WHERE TenantId = @TenantId AND IsDeleted = 0 
+  AND LicenseExpiryDate IS NOT NULL 
+  AND LicenseExpiryDate <= DATEADD(DAY, @Days, GETUTCDATE())
+ORDER BY LicenseExpiryDate, LastName, FirstName";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var results = await cn.QueryAsync<ProducerStaffDto>(new CommandDefinition(sql, new { TenantId = tenantId, Days = days }, cancellationToken: ct));
+        return results.ToList();
+    }
 }
 
 public class SystemSettingsRepository : ISystemSettingsRepository

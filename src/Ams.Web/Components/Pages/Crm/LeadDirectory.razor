@@ -63,6 +63,11 @@
     </select>
 </div>
 
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+}
+
 @if (_loading)
 {
     <div class="ldir-loading">
@@ -115,8 +120,8 @@ else
                         <td>@(r.EstPremium.HasValue ? r.EstPremium.Value.ToString("C0") : "—")</td>
                         <td>
                             <div class="ldir-row-actions">
-                                <button class="um-btn um-btn-ghost um-btn-xs" title="View"><i class="bi bi-eye"></i></button>
-                                <button class="um-btn um-btn-ghost um-btn-xs" title="Edit"><i class="bi bi-pencil"></i></button>
+                                <button class="um-btn um-btn-ghost um-btn-xs" title="View" @onclick='() => Nav.NavigateTo($"/crm/leads/{r.LeadId}")'><i class="bi bi-eye"></i></button>
+                                <button class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick='() => Nav.NavigateTo($"/crm/leads/{r.LeadId}")'><i class="bi bi-pencil"></i></button>
                             </div>
                         </td>
                     </tr>
@@ -132,11 +137,12 @@ else
 
 @code {
     bool _loading = true;
+    string? _loadError;
     string _search = "", _filterStage = "", _filterSource = "", _filterOwner = "";
     List<LeadRow> _rows = [];
 
-    static readonly string[] _stages  = ["New","Contacted","Qualified","Proposal","Negotiation","Converted","Dead"];
-    static readonly string[] _sources = ["Web","Referral","Cold Call","Trade Show","Social","Email Campaign"];
+    string[] _stages  = [];
+    string[] _sources = [];
 
     IEnumerable<string> _owners => _rows.Select(r => r.Owner).Where(o => !string.IsNullOrEmpty(o)).Distinct().Order();
 
@@ -155,28 +161,59 @@ else
     async Task LoadAsync()
     {
         _loading = true;
-        await Task.Delay(0);
-        _rows = BuildStub();
-        _loading = false;
+        _loadError = null;
+        try
+        {
+            var leadsTask = Api.SearchLeadsAsync(_tenantId);
+            var usersTask = Api.SearchUsersAsync(_tenantId);
+            await Task.WhenAll(leadsTask, usersTask);
+
+            var ownerLookup = usersTask.Result?.Items?.ToDictionary(u => u.UserId, u => string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName)
+                ?? [];
+
+            _rows = leadsTask.Result?.Items?.Select(l => MapLead(l, ownerLookup)).ToList() ?? [];
+            _stages = _rows.Select(r => r.Stage).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().Order().ToArray();
+            _sources = _rows.Select(r => r.Source).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().Order().ToArray();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Load failed: {ex.Message}";
+            _rows = [];
+            _stages = [];
+            _sources = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    static List<LeadRow> BuildStub() =>
-    [
-        new("Emma","Hartwell","Pinnacle Industries","emma.hartwell@pinnacle.com","Referral","Qualified",91,"Sarah Mitchell","Commercial",52000),
-        new("James","Okafor","BlueSky Tech","j.okafor@bluesky.io","Web","New",74,"Derek Lawson","Technology",18000),
-        new("Maria","Delgado","Coastal Partners","m.delgado@coastal.com","Trade Show","Contacted",63,"Sarah Mitchell","Personal",null),
-        new("Tyler","Brooks","Apex Manufacturing","t.brooks@apexmfg.com","Cold Call","Qualified",88,"Marcus Reid","Commercial",95000),
-        new("Priya","Nair","NextGen Solutions","p.nair@nextgen.com","Social","Proposal",80,"Derek Lawson","Technology",34000),
-        new("Kevin","Larson","Summit Retail","k.larson@summit.com","Web","Contacted",55,"Marcus Reid","Commercial",12000),
-        new("Olivia","Chang","Pacific Ventures","o.chang@pacific.com","Referral","Converted",95,"Sarah Mitchell","Specialty",120000),
-        new("Ryan","Fletcher","Ironbridge Corp","r.fletcher@ironbridge.com","Email Campaign","Dead",30,"Derek Lawson","Commercial",null),
-        new("Natalie","Owens","Brightline Agency","n.owens@brightline.com","Web","New",62,"Marcus Reid","Personal",9000),
-        new("Carlos","Ruiz","Meridian Holdings","c.ruiz@meridian.com","Cold Call","Negotiation",77,"Sarah Mitchell","Commercial",68000),
-        new("Fiona","MacLeod","Harborview Group","f.macleod@harborview.com","Referral","Qualified",85,"Derek Lawson","Specialty",41000),
-        new("Aaron","Kim","Vertex Systems","a.kim@vertex.com","Trade Show","New",49,"Marcus Reid","Technology",null),
-    ];
+    private static LeadRow MapLead(LeadDto lead, IReadOnlyDictionary<Guid, string> ownerLookup)
+    {
+        var owner = lead.AssignedToUserId.HasValue && ownerLookup.TryGetValue(lead.AssignedToUserId.Value, out var name) ? name : "Unassigned";
+        return new(
+            lead.LeadId,
+            lead.FirstName,
+            lead.LastName,
+            lead.AccountName ?? string.Empty,
+            lead.Email ?? string.Empty,
+            string.IsNullOrWhiteSpace(lead.SourceCode) ? "Direct" : lead.SourceCode,
+            NormalizeStage(lead.NurturingStageCode, lead.StatusCode),
+            Math.Clamp(lead.Score ?? 0, 0, 100),
+            owner,
+            lead.InterestedService ?? "—",
+            null);
+    }
 
-    record LeadRow(string First, string Last, string Company, string Email, string Source, string Stage, int Score, string Owner, string Lob, decimal? EstPremium)
+    private static string NormalizeStage(string? stage, int statusCode)
+    {
+        if (!string.IsNullOrWhiteSpace(stage)) return stage.Trim() == "Won" ? "Converted" : stage.Trim() == "Closed" ? "Lost" : stage.Trim();
+        return statusCode switch { 2 => "Contacted", 3 => "Qualified", 4 => "Converted", 5 => "Lost", _ => "New" };
+    }
+
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    record LeadRow(Guid LeadId, string First, string Last, string Company, string Email, string Source, string Stage, int Score, string Owner, string Lob, decimal? EstPremium)
     {
         public string FullName => $"{First} {Last}";
     }

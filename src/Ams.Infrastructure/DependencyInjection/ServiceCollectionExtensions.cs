@@ -57,6 +57,16 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAssistantMessageRepository, AssistantMessageRepository>();
         services.AddScoped<IDashboardRepository, DashboardRepository>();
         services.AddScoped<IAgencyDashboardRepository, AgencyDashboardRepository>();
+        services.AddScoped<IBusinessRuleRepository, BusinessRuleRepository>();
+        services.AddScoped<IDepartmentRepository, DepartmentRepository>();
+        services.AddScoped<IDepartmentTeamRepository, DepartmentTeamRepository>();
+        services.AddScoped<IProducerStaffRepository, ProducerStaffRepository>();
+        services.AddScoped<ISystemSettingsRepository, SystemSettingsRepository>();
+        services.AddScoped<INotificationPolicyRepository, NotificationPolicyRepository>();
+        services.AddScoped<IQueueRoutingRepository, QueueRoutingRepository>();
+        services.AddScoped<IDataQualityRepository, DataQualityRepository>();
+        services.AddScoped<IDataCenterRepository, DataCenterRepository>();
+        services.AddScoped<ISlaPolicyRepository, SlaPolicyRepository>();
 
         // ── Existing services ────────────────────────────────────────
         services.AddScoped<ILeadService, LeadService>();
@@ -84,6 +94,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDocumentService, DocumentService>();
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IAgencyDashboardService, AgencyDashboardService>();
+        services.AddScoped<AdminPagesService>();
 
         // ── Platform Core engines ────────────────────────────────────
         services.AddScoped<ITenantDomainRepository, TenantDomainRepository>();
@@ -208,6 +219,7 @@ public static class ServiceCollectionExtensions
 
         // ── Operations extended engines ──────────────────────────────
         services.AddScoped<IEngagementMilestoneRepository, EngagementMilestoneRepository>();
+        services.AddScoped<ITaskItemRepository, TaskItemRepository>();
         services.AddScoped<IServiceIssueRepository, ServiceIssueRepository>();
         services.AddScoped<IAgreementAmendmentRepository, AgreementAmendmentRepository>();
         services.AddScoped<IAgreementRenewalRepository, AgreementRenewalRepository>();
@@ -215,6 +227,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOperationalActivityRepository, OperationalActivityRepository>();
 
         services.AddScoped<IEngagementMilestoneService, EngagementMilestoneService>();
+        services.AddScoped<ITaskItemService, TaskItemService>();
         services.AddScoped<IServiceIssueService, ServiceIssueService>();
         services.AddScoped<IAgreementAmendmentService, AgreementAmendmentService>();
         services.AddScoped<IAgreementRenewalService, AgreementRenewalService>();
@@ -436,6 +449,16 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IMarketingConfigService, MarketingConfigService>();
         services.AddScoped<IPortalConfigRepository, PortalConfigRepository>();
         services.AddScoped<IPortalConfigService, PortalConfigService>();
+        services.AddScoped<IIntegrationConfigRepository, IntegrationConfigRepository>();
+        services.AddScoped<IIntegrationConfigService, IntegrationConfigService>();
+        services.AddScoped<IAiConfigRepository, AiConfigRepository>();
+        services.AddScoped<IAiConfigService, AiConfigService>();
+        services.AddScoped<IDataConfigRepository, DataConfigRepository>();
+        services.AddScoped<IDataConfigService, DataConfigService>();
+        services.AddScoped<ISubscriptionConfigRepository, SubscriptionConfigRepository>();
+        services.AddScoped<ISubscriptionConfigService, SubscriptionConfigService>();
+        services.AddScoped<ITenantConfigRepository, TenantConfigRepository>();
+        services.AddScoped<ITenantConfigService, TenantConfigService>();
 
         return services;
     }

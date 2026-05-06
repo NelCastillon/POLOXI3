@@ -1,0 +1,212 @@
+@page "/portal/my-account"
+@namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Portal My Account — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="My Account"
+               Subtitle="Tenant administrator view of client portal account status, usage, and administrative ownership"
+               Icon="bi-person-circle">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/portal/users")'><i class="bi bi-people" aria-hidden="true"></i> Portal Users</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save Account</button>
+    </Actions>
+</AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+@if (_loading)
+{
+    <div class="pma-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading account…</span></div>
+}
+else
+{
+    <div class="pma-shell">
+        <section class="pma-hero">
+            <div class="pma-identity">
+                <div class="pma-avatar">@Initials(_account.AgencyName)</div>
+                <div>
+                    <div class="pma-eyebrow">Tenant Admin Console</div>
+                    <h2>@_account.AgencyName</h2>
+                    <div class="pma-subtitle">
+                        <span><i class="bi bi-globe2" aria-hidden="true"></i> @_account.PortalDomain</span>
+                        <span><i class="bi bi-person-badge" aria-hidden="true"></i> @_account.AdminRole</span>
+                        <span><i class="bi bi-clock-history" aria-hidden="true"></i> Last login @FormatRelative(_account.LastAdminLoginUtc)</span>
+                    </div>
+                </div>
+            </div>
+            <div class="pma-status-stack">
+                <span class="pma-status pma-status--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i> @_account.PlanStatus</span>
+                <span class="pma-renewal">Renews @_account.RenewalDateUtc.ToString("MMM d, yyyy")</span>
+            </div>
+        </section>
+
+        <section class="pma-kpi-strip">
+            @Kpi("bi-people", "Portal Users", _account.PortalUsers.ToString("N0"), $"{_account.ActivePortalUsers:N0} active", "pma-ki-blue", "/portal/users")
+            @Kpi("bi-inbox", "Open Requests", _account.OpenRequests.ToString("N0"), $"{_account.UrgentRequests:N0} urgent", "pma-ki-amber", "/portal/requests")
+            @Kpi("bi-folder2-open", "Shared Docs", _account.SharedDocuments.ToString("N0"), $"{_account.StorageUsedGb:N0} GB used", "pma-ki-green", "/portal/documents")
+            @Kpi("bi-phone", "Mobile Installs", _account.MobileInstalls.ToString("N0"), "native app users", "pma-ki-purple", "/portal/mobile-installs")
+            @Kpi("bi-chat-dots", "Chat Sessions", _account.ChatSessions30d.ToString("N0"), "last 30 days", "pma-ki-blue", "/portal/chat-sessions")
+            @Kpi("bi-activity", "API Calls", _account.ApiCalls30d.ToString("N0"), "last 30 days", "pma-ki-gray", "/portal/api-usage")
+        </section>
+
+        <section class="pma-grid">
+            <div class="pma-panel pma-panel--span2">
+                <div class="pma-panel-hdr"><i class="bi bi-building" aria-hidden="true"></i> Account Ownership</div>
+                <div class="pma-form-grid">
+                    <div class="pma-field pma-field--full"><label>Agency Name</label><SfTextBox @bind-Value="_account.AgencyName" /></div>
+                    <div class="pma-field"><label>Admin Name</label><SfTextBox @bind-Value="_account.AdminName" /></div>
+                    <div class="pma-field"><label>Admin Email</label><SfTextBox @bind-Value="_account.AdminEmail" /></div>
+                    <div class="pma-field"><label>Admin Phone</label><SfTextBox @bind-Value="_account.AdminPhone" /></div>
+                    <div class="pma-field"><label>Admin Role</label><SfTextBox @bind-Value="_account.AdminRole" /></div>
+                    <div class="pma-field"><label>Time Zone</label><SfTextBox @bind-Value="_account.TimeZone" /></div>
+                    <div class="pma-field"><label>Locale</label><SfTextBox @bind-Value="_account.Locale" /></div>
+                    <div class="pma-field pma-field--full"><label>Tenant ID</label><SfTextBox Value="@_tenantId.ToString()" Readonly="true" /></div>
+                </div>
+            </div>
+
+            <div class="pma-panel">
+                <div class="pma-panel-hdr"><i class="bi bi-credit-card" aria-hidden="true"></i> Subscription</div>
+                <div class="pma-plan-card">
+                    <div class="pma-plan-name">@_account.PlanName</div>
+                    <span class="pma-status pma-status--active">@_account.PlanStatus</span>
+                    <div class="pma-meter-label"><span>Storage</span><span>@_account.StorageUsedGb GB / @_account.StorageLimitGb GB</span></div>
+                    <div class="pma-meter"><span style="width:@StoragePercent%"></span></div>
+                    <div class="pma-plan-meta">Next renewal @_account.RenewalDateUtc.ToString("MMM d, yyyy")</div>
+                </div>
+            </div>
+
+            <div class="pma-panel">
+                <div class="pma-panel-hdr"><i class="bi bi-shield-lock" aria-hidden="true"></i> Security & Access</div>
+                <div class="pma-toggle-list">
+                    <label><SfCheckBox @bind-Checked="_account.MfaEnabled" /> <span>MFA required for tenant admins</span></label>
+                    <label><SfCheckBox @bind-Checked="_account.SsoEnabled" /> <span>SSO enabled for portal login</span></label>
+                    <label><SfCheckBox @bind-Checked="_account.BrandingPublished" /> <span>Branding published</span></label>
+                    <label><SfCheckBox @bind-Checked="_account.MobileAppPublished" /> <span>Mobile app published</span></label>
+                    <label><SfCheckBox @bind-Checked="_account.ChatEnabled" /> <span>Chat assistant enabled</span></label>
+                </div>
+            </div>
+
+            <div class="pma-panel">
+                <div class="pma-panel-hdr"><i class="bi bi-headset" aria-hidden="true"></i> Support Channels</div>
+                <div class="pma-form-grid pma-form-grid--one">
+                    <div class="pma-field"><label>Support Email</label><SfTextBox @bind-Value="_account.SupportEmail" /></div>
+                    <div class="pma-field"><label>Support Phone</label><SfTextBox @bind-Value="_account.SupportPhone" /></div>
+                    <div class="pma-field"><label>Portal Domain</label><SfTextBox @bind-Value="_account.PortalDomain" /></div>
+                </div>
+            </div>
+
+            <div class="pma-panel pma-panel--span2">
+                <div class="pma-panel-hdr"><i class="bi bi-heart-pulse" aria-hidden="true"></i> Portal Health</div>
+                <div class="pma-health-list">
+                    @foreach (var h in _account.HealthChecks)
+                    {
+                        <div class="pma-health-row pma-health--@StatusCss(h.Status)">
+                            <i class="bi @h.Icon" aria-hidden="true"></i>
+                            <div><strong>@h.Name</strong><span>@h.Detail</span></div>
+                            <em>@h.Status</em>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div class="pma-panel">
+                <div class="pma-panel-hdr"><i class="bi bi-clock-history" aria-hidden="true"></i> Recent Activity</div>
+                <div class="pma-activity-list">
+                    @foreach (var a in _account.RecentActivity.OrderByDescending(x => x.OccurredAtUtc).Take(6))
+                    {
+                        <div class="pma-activity-row pma-activity--@StatusCss(a.Severity)">
+                            <i class="bi @a.Icon" aria-hidden="true"></i>
+                            <div><strong>@a.Title</strong><span>@a.Detail</span><small>@FormatRelative(a.OccurredAtUtc)</small></div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+    private bool _loading;
+    private bool _saving;
+    private string? _loadError;
+    private PortalMyAccountDto _account = new();
+
+    private int StoragePercent => _account.StorageLimitGb <= 0 ? 0 : Math.Clamp((int)Math.Round(_account.StorageUsedGb * 100m / _account.StorageLimitGb), 0, 100);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("My Account", ""));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _account = await Api.GetPortalMyAccountAsync(_tenantId) ?? new PortalMyAccountDto { TenantId = _tenantId };
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load portal account: {ex.Message}";
+            if (_toast is not null)
+                await _toast.ShowAsync(new ToastModel { Content = $"Unable to load portal account: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            await Api.UpdatePortalMyAccountAsync(_tenantId, _account);
+            if (_toast is not null)
+                await _toast.ShowAsync(new ToastModel { Content = "Tenant admin portal account saved.", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            if (_toast is not null)
+                await _toast.ShowAsync(new ToastModel { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally { _saving = false; }
+    }
+
+    private static string Initials(string value)
+    {
+        var parts = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : value.Length > 0 ? value[..1] : "A";
+    }
+
+    private static string StatusCss(string value) => value.ToLowerInvariant().Replace(" ", "-");
+
+    private static string FormatRelative(DateTime utc)
+    {
+        if (utc == default) return "never";
+        var diff = DateTime.UtcNow - utc.ToUniversalTime();
+        if (diff.TotalMinutes < 60) return $"{Math.Max(1, (int)diff.TotalMinutes)}m ago";
+        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
+        return $"{(int)diff.TotalDays}d ago";
+    }
+
+    private RenderFragment Kpi(string icon, string label, string value, string sub, string color, string href) => @<button type="button" class="pma-kpi-card @color" title="Open @label" @onclick="() => Nav.NavigateTo(href)">
+        <i class="bi @icon pma-kpi-icon" aria-hidden="true"></i>
+        <div><div class="pma-kpi-value">@value</div><div class="pma-kpi-label">@label</div><span>@sub</span></div>
+    </button>;
+}

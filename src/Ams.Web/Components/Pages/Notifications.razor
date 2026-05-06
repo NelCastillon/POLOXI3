@@ -1,35 +1,144 @@
 ﻿@page "/platform/notifications"
 @page "/communications/notifications"
 @inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Notifications</PageTitle>
-<AppPageHeader Title="Notifications" Icon="bi-bell" />
-<div class="toolbar">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+<PageTitle>Notifications — AMS Enterprise</PageTitle>
+
+<AppPageHeader Title="Notifications"
+               Subtitle="Monitor delivery alerts, system notifications, and communication events"
+               Icon="bi-bell">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    <div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick="() => SetFilter(null)" title="Show all notifications">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-bell" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "Unread" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Unread")' title="Filter unread">
+        <span class="pc-kpi-icon pc-kpi-icon--warning"><i class="bi bi-envelope-exclamation" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => !x.IsRead)</div><div class="pc-kpi-label">Unread</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "Sent" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Sent")' title="Filter sent">
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-send-check" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Sent")</div><div class="pc-kpi-label">Sent</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "Failed" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Failed")' title="Filter failed">
+        <span class="pc-kpi-icon pc-kpi-icon--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Failed")</div><div class="pc-kpi-label">Failed</div></div>
+    </div>
 </div>
-@if (_items is null) { <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div> }
-else {
-<SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="10"></GridPageSettings>
+
+<div class="toolbar d-flex gap-2 align-items-center mb-3">
+    <SfTextBox Placeholder="Search subject, body, status..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
+    <button class="um-btn um-btn-primary" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<div class="um-grid-card position-relative">
+@if (_loading) { <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div> }
+<SfGrid TValue="NotificationDto" DataSource="_filtered" AllowPaging="true" AllowSorting="true" Height="520px" EnableHover="true" RowHeight="52">
+    <GridEvents TValue="NotificationDto" RowSelected="OnRowSelected" />
+    <GridPageSettings PageSize="25" PageSizes="@(new[] { 10, 25, 50 })"></GridPageSettings>
     <GridColumns>
-        <GridColumn Field="@nameof(NotificationDto.ChannelCode)"   HeaderText="Channel"    Width="100"></GridColumn>
-        <GridColumn Field="@nameof(NotificationDto.Subject)"       HeaderText="Subject"    Width="250"></GridColumn>
-        <GridColumn Field="@nameof(NotificationDto.StatusCode)"    HeaderText="Status"     Width="100"></GridColumn>
-        <GridColumn Field="@nameof(NotificationDto.IsRead)"        HeaderText="Read"       Width="80"  DisplayAsCheckBox="true"></GridColumn>
-        <GridColumn Field="@nameof(NotificationDto.SentDateUtc)"   HeaderText="Sent"       Type="ColumnType.DateTime" Format="d" Width="130"></GridColumn>
-        <GridColumn Field="@nameof(NotificationDto.CreatedDateUtc)" HeaderText="Created"   Type="ColumnType.DateTime" Format="d" Width="130"></GridColumn>
+        <GridColumn Field="@nameof(NotificationDto.ChannelCode)" HeaderText="Channel" Width="110">
+            <Template>@{ var n = (NotificationDto)context; }<span class="badge bg-light text-dark"><i class="bi @ChannelIcon(n.ChannelCode) me-1"></i>@n.ChannelCode</span></Template>
+        </GridColumn>
+        <GridColumn Field="@nameof(NotificationDto.Subject)" HeaderText="Notification" Width="320">
+            <Template>
+                @{ var n = (NotificationDto)context; }
+                <div class="fw-semibold">@(string.IsNullOrWhiteSpace(n.Subject) ? "(No subject)" : n.Subject)</div>
+                <div class="text-muted small">@n.Body</div>
+            </Template>
+        </GridColumn>
+        <GridColumn Field="@nameof(NotificationDto.StatusCode)" HeaderText="Status" Width="110">
+            <Template>@{ var n = (NotificationDto)context; }<span class="badge @StatusClass(n.StatusCode)">@n.StatusCode</span></Template>
+        </GridColumn>
+        <GridColumn Field="@nameof(NotificationDto.IsRead)" HeaderText="Read" Width="80" DisplayAsCheckBox="true"></GridColumn>
+        <GridColumn Field="@nameof(NotificationDto.EntityName)" HeaderText="Entity" Width="130"></GridColumn>
+        <GridColumn Field="@nameof(NotificationDto.SentDateUtc)" HeaderText="Sent" Type="ColumnType.DateTime" Format="g" Width="150"></GridColumn>
+        <GridColumn Field="@nameof(NotificationDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="150"></GridColumn>
     </GridColumns>
 </SfGrid>
-}
+</div>
+
+<style>
+@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
+</style>
+
 @code {
     private readonly Guid _tenantId = new("00000000-0000-0000-0000-000000000001");
     private string? _searchTerm;
-    private List<NotificationDto>? _items;
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private string? _loadError;
+    private string? _activeFilter;
+    private bool _loading;
+    private List<NotificationDto> _items = [];
+    private List<NotificationDto> _filtered = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Communications", "/communications/inbox"), new("Notifications", null));
+        await LoadAsync();
+    }
+
     private async Task LoadAsync()
     {
-        var result = await Api.SearchNotificationsAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchNotificationsAsync(_tenantId, _searchTerm);
+            _items = result?.Items.ToList() ?? [];
+            ApplyFilter();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load notifications: {ex.Message}";
+            _items = [];
+            _filtered = [];
+        }
+        finally { _loading = false; }
     }
+
+    private void SetFilter(string? filter)
+    {
+        _activeFilter = filter;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter() => _filtered = _activeFilter switch
+    {
+        "Unread" => _items.Where(x => !x.IsRead).ToList(),
+        "Sent" => _items.Where(x => x.StatusCode == "Sent").ToList(),
+        "Failed" => _items.Where(x => x.StatusCode == "Failed").ToList(),
+        _ => [.. _items]
+    };
+
+    private void OnRowSelected(RowSelectEventArgs<NotificationDto> args) { }
+
+    private static string ChannelIcon(string channel) => channel switch
+    {
+        "Email" => "bi-envelope",
+        "SMS" => "bi-phone",
+        "InApp" => "bi-bell",
+        _ => "bi-chat-dots"
+    };
+
+    private static string StatusClass(string status) => status switch
+    {
+        "Sent" or "Delivered" => "bg-success",
+        "Failed" => "bg-danger",
+        _ => "bg-secondary"
+    };
 }

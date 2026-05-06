@@ -3,6 +3,7 @@
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject ConfirmationDialogService Confirmations
 
 <PageTitle>New Submission — AMS</PageTitle>
 
@@ -111,6 +112,15 @@
 </SfDialog>
 
 @code {
+    [SupplyParameterFromQuery(Name = "opportunityId")]
+    public Guid? OpportunityId { get; set; }
+
+    [SupplyParameterFromQuery(Name = "accountId")]
+    public Guid? AccountId { get; set; }
+
+    [SupplyParameterFromQuery(Name = "accountName")]
+    public string? AccountName { get; set; }
+
     /* ── refs ─────────────────────────────────────────────────────── */
     SfStepper _stepper = default!;
     SfToast   _toast   = default!;
@@ -134,7 +144,7 @@
 
     bool CanAdvance() => _step switch
     {
-        0 => _s1.AccountId is not null,
+        0 => _s1.AccountId is not null && _s1.OpportunityId is not null,
         1 => !string.IsNullOrEmpty(_s2.Lob),
         2 => _s3.EffectiveDate != default && _s3.ExpirationDate != default && !string.IsNullOrEmpty(_s3.Priority),
         3 => true,   // markets optional at this stage
@@ -183,6 +193,7 @@
             var request = new Ams.Application.Features.Submissions.CreateSubmissionRequest(
                 TenantId:         Guid.Parse("00000000-0000-0000-0000-000000000001"),
                 AccountId:        _s1.AccountId!.Value,
+                OpportunityId:    _s1.OpportunityId!.Value,
                 LineOfBusiness:   _s2.Lob,
                 Priority:         _s3.Priority,
                 EffectiveDate:    _s3.EffectiveDate,
@@ -222,6 +233,8 @@
         public Guid?  AccountId   { get; set; }
         public string AccountName { get; set; } = "";
         public string AccountType { get; set; } = "";
+        public Guid?  OpportunityId { get; set; }
+        public string OpportunityName { get; set; } = "";
         public string SearchText  { get; set; } = "";
     }
     Step1Model _s1 = new();
@@ -255,6 +268,28 @@
 
     List<string> _treeValues = new();
 
+    sealed record OpportunityOption(Guid OpportunityId, Guid AccountId, string OpportunityName, string AccountName, decimal EstimatedAmount);
+
+    readonly List<OpportunityOption> _opportunityOptions =
+    [
+        new(new("10000000-0000-0000-0000-000000000001"), new("20000000-0000-0000-0000-000000000001"), "Sullivan Manufacturing — BOP + GL Renewal", "Sullivan Mfg. LLC", 42000m),
+        new(new("10000000-0000-0000-0000-000000000002"), new("20000000-0000-0000-0000-000000000002"), "Bridgewater Hotels — Property Package", "Bridgewater Hotels", 87500m),
+        new(new("10000000-0000-0000-0000-000000000003"), new("20000000-0000-0000-0000-000000000003"), "Metro Freight — Auto Renewal", "Metro Freight Co.", 63000m),
+    ];
+
+    protected override void OnParametersSet()
+    {
+        if (OpportunityId.HasValue && _s1.OpportunityId is null)
+        {
+            var opportunity = _opportunityOptions.FirstOrDefault(x => x.OpportunityId == OpportunityId.Value);
+            _s1.OpportunityId = OpportunityId.Value;
+            _s1.OpportunityName = opportunity?.OpportunityName ?? "Selected opportunity";
+            _s1.AccountId = AccountId ?? opportunity?.AccountId ?? Guid.NewGuid();
+            _s1.AccountName = AccountName ?? opportunity?.AccountName ?? "Selected account";
+            _s1.AccountType = "Commercial";
+        }
+    }
+
     void OnTreeChanged(List<string> vals)
     {
         _treeValues = vals;
@@ -280,27 +315,45 @@
         _s1.AccountName = n.Name;
         _s1.AccountType = n.Type;
         _treeValues     = new List<string>{ n.Id };
+        _s1.OpportunityId = null;
+        _s1.OpportunityName = string.Empty;
     }
+
+    void SelectOpportunity(OpportunityOption opportunity)
+    {
+        _s1.OpportunityId = opportunity.OpportunityId;
+        _s1.OpportunityName = opportunity.OpportunityName;
+        _s1.AccountId = opportunity.AccountId;
+        _s1.AccountName = opportunity.AccountName;
+        _s1.AccountType = "Commercial";
+    }
+
+    IEnumerable<OpportunityOption> SearchedOpportunities =>
+        string.IsNullOrWhiteSpace(_s1.SearchText)
+            ? _opportunityOptions
+            : _opportunityOptions.Where(o =>
+                o.OpportunityName.Contains(_s1.SearchText, StringComparison.OrdinalIgnoreCase) ||
+                o.AccountName.Contains(_s1.SearchText, StringComparison.OrdinalIgnoreCase));
 
     RenderFragment StepAccount() =>
         @<div class="nsw-step-wrap">
             <div class="nsw-step-hdr">
                 <div class="nsw-step-num">1</div>
                 <div>
-                    <div class="nsw-step-title">Select Account</div>
-                    <div class="nsw-step-sub">Choose the account this submission is for. You can search by name or browse the account tree.</div>
+                    <div class="nsw-step-title">Select Opportunity</div>
+                    <div class="nsw-step-sub">Choose the opportunity this underwriting submission belongs to. The account is inherited from the opportunity.</div>
                 </div>
             </div>
 
-            @if (_s1.AccountId is not null)
+            @if (_s1.OpportunityId is not null)
             {
                 <div class="nsw-selected-banner">
-                    <div class="nsw-selected-icon"><i class="bi bi-building-check" aria-hidden="true"></i></div>
+                    <div class="nsw-selected-icon"><i class="bi bi-trophy" aria-hidden="true"></i></div>
                     <div class="nsw-selected-info">
-                        <div class="nsw-selected-name">@_s1.AccountName</div>
-                        <div class="nsw-selected-type">@_s1.AccountType Account</div>
+                        <div class="nsw-selected-name">@_s1.OpportunityName</div>
+                        <div class="nsw-selected-type">@_s1.AccountName</div>
                     </div>
-                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => { _s1.AccountId=null; _s1.AccountName=string.Empty; _treeValues=new(); }">
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => { _s1.OpportunityId=null; _s1.OpportunityName=string.Empty; _s1.AccountId=null; _s1.AccountName=string.Empty; _treeValues=new(); }">
                         <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
                     </button>
                 </div>
@@ -315,29 +368,26 @@
                            @bind="_s1.SearchText" @bind:event="oninput" />
                 </div>
                 <button class="um-btn um-btn-ghost um-btn-sm nsw-new-acct-btn"
-                        @onclick='() => _toast.ShowAsync(new ToastModel{ Title="Coming Soon", Content="New account creation opens in a separate workflow.", CssClass="e-toast-info" })'>
-                    <i class="bi bi-building-add" aria-hidden="true"></i> New Account
+                        @onclick='() => Nav.NavigateTo("/crm/opportunities/new")'>
+                    <i class="bi bi-trophy" aria-hidden="true"></i> New Opportunity
                 </button>
             </div>
 
-            <!-- Account cards -->
+            <!-- Opportunity cards -->
             <div class="nsw-acct-grid">
-                @foreach (var n in SearchedAccounts)
+                @foreach (var o in SearchedOpportunities)
                 {
-                    var sel = _s1.AccountId is not null && _s1.AccountName == n.Name;
+                    var sel = _s1.OpportunityId == o.OpportunityId;
                     <button class="nsw-acct-card @(sel ? "nsw-acct-card--sel" : "")"
-                            @onclick="() => SelectAccount(n)">
-                        <div class="nsw-acct-card-icon nsw-acct-@n.Type.ToLower()">
-                            <i class="bi @(n.Type=="Personal" ? "bi-person" : "bi-building")" aria-hidden="true"></i>
+                            @onclick="() => SelectOpportunity(o)">
+                        <div class="nsw-acct-card-icon nsw-acct-commercial">
+                            <i class="bi bi-trophy" aria-hidden="true"></i>
                         </div>
                         <div class="nsw-acct-card-body">
-                            <div class="nsw-acct-name">@n.Name</div>
+                            <div class="nsw-acct-name">@o.OpportunityName</div>
                             <div class="nsw-acct-meta">
-                                <span class="nsw-acct-badge">@n.Type</span>
-                                @if (!string.IsNullOrEmpty(n.Industry))
-                                {
-                                    <span class="nsw-acct-ind">@n.Industry</span>
-                                }
+                                <span class="nsw-acct-badge">@o.AccountName</span>
+                                <span class="nsw-acct-ind">@o.EstimatedAmount.ToString("C0")</span>
                             </div>
                         </div>
                         @if (sel)
@@ -346,9 +396,9 @@
                         }
                     </button>
                 }
-                @if (!SearchedAccounts.Any())
+                @if (!SearchedOpportunities.Any())
                 {
-                    <div class="nsw-empty"><i class="bi bi-search" aria-hidden="true"></i> No accounts match "@_s1.SearchText".</div>
+                    <div class="nsw-empty"><i class="bi bi-search" aria-hidden="true"></i> No opportunities match "@_s1.SearchText".</div>
                 }
             </div>
         </div>;
@@ -673,6 +723,12 @@
     HashSet<string> _selectedFormIds = new();
     List<string>    _uploadedFiles   = new();
 
+    async Task RemoveUploadedFileAsync(string fileName)
+    {
+        if (!await Confirmations.ConfirmAsync("Remove uploaded file", $"Remove {fileName} from this submission?", "Remove")) return;
+        _uploadedFiles.Remove(fileName);
+    }
+
     void ToggleForm(string id) { if (!_selectedFormIds.Add(id)) _selectedFormIds.Remove(id); }
 
     RenderFragment StepDocuments() =>
@@ -724,7 +780,7 @@
                         <div class="nsw-uploaded-file">
                             <i class="bi bi-file-earmark" aria-hidden="true"></i>
                             <span>@f</span>
-                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _uploadedFiles.Remove(f)">
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => RemoveUploadedFileAsync(f)">
                                 <i class="bi bi-x" aria-hidden="true"></i>
                             </button>
                         </div>
@@ -748,14 +804,14 @@
 
             <div class="nsw-review-grid">
 
-                <!-- Account -->
+                <!-- Opportunity -->
                 <div class="nsw-review-card">
                     <div class="nsw-review-card-hdr">
-                        <i class="bi bi-building" aria-hidden="true"></i> Account
+                        <i class="bi bi-trophy" aria-hidden="true"></i> Opportunity
                         <button class="um-btn um-btn-ghost um-btn-xs nsw-edit-btn" @onclick="() => _step = 0">Edit</button>
                     </div>
+                    <div class="nsw-review-row"><span class="nsw-review-label">Opportunity</span><span class="nsw-review-val">@(_s1.OpportunityName.Length > 0 ? _s1.OpportunityName : "—")</span></div>
                     <div class="nsw-review-row"><span class="nsw-review-label">Account</span><span class="nsw-review-val">@(_s1.AccountName.Length > 0 ? _s1.AccountName : "—")</span></div>
-                    <div class="nsw-review-row"><span class="nsw-review-label">Type</span><span class="nsw-review-val">@(_s1.AccountType.Length > 0 ? _s1.AccountType : "—")</span></div>
                 </div>
 
                 <!-- LOB -->

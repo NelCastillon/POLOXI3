@@ -1,0 +1,385 @@
+@page "/policies/documents"
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@using Ams.Application.Features.Documents
+
+<PageTitle>Policy Documents — AMS Enterprise</PageTitle>
+
+<AppPageHeader Title="Policy Documents"
+               Subtitle="View and manage insurance policy documents and attachments"
+               Icon="bi-folder2">
+    <Actions>
+        <button class="um-btn um-btn-primary" @onclick="OpenUpload">
+            <i class="bi bi-upload" aria-hidden="true"></i> Upload Document
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all documents">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-folder2-open" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Documents</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "Policy" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Policy")' title="Filter: Policy Forms">
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => IsPolicyCategory(x, "Policy"))</div><div class="pc-kpi-label">Policy Forms</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "Endorsement" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Endorsement")' title="Filter: Endorsements">
+        <span class="pc-kpi-icon pc-kpi-icon--warning"><i class="bi bi-pen" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => IsPolicyCategory(x, "Endorsement"))</div><div class="pc-kpi-label">Endorsements</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "Certificate" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Certificate")' title="Filter: Certificates">
+        <span class="pc-kpi-icon pc-kpi-icon--info"><i class="bi bi-file-earmark-check" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => IsPolicyCategory(x, "Certificate"))</div><div class="pc-kpi-label">Certificates</div></div>
+    </div>
+</div>
+
+<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search by policy number, document name…" />
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<div class="um-grid-card">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div>
+    }
+    <SfGrid TValue="DocumentDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+        <GridEvents TValue="DocumentDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="50" PageSizes="@(new[] { 25, 50, 100 })" />
+        <GridColumns>
+            <GridColumn Field="FileName" HeaderText="File Name" Width="280" />
+            <GridColumn Field="CategoryCode" HeaderText="Category" Width="130" />
+            <GridColumn Field="FileSizeBytes" HeaderText="Size" Width="100" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var r = (DocumentDto)context; }
+                    <span>@FormatFileSize(r.FileSizeBytes ?? 0)</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="CreatedDateUtc" HeaderText="Uploaded" Width="140" Format="d" Type="ColumnType.Date" />
+            <GridColumn Field="UploadedByName" HeaderText="Uploaded By" Width="160" />
+            <GridColumn HeaderText="Actions" Width="140" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (DocumentDto)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DownloadDocument(r)" @onclick:stopPropagation="true" title="Download"><i class="bi bi-download"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ViewDocument(r)" @onclick:stopPropagation="true" title="View"><i class="bi bi-eye"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<SfDialog @bind-Visible="_showUpload" Width="640px" IsModal="true" ShowCloseIcon="false">
+    <DialogEvents Closed="ResetUpload" />
+    <DialogContent>
+        <div class="um-modal-header">
+            <i class="bi bi-upload"></i>
+            <span>Upload Policy Document</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showUpload = false"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <EditForm Model="_form" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label>File Name <span class="text-danger">*</span></label>
+                        <InputText @bind-Value="_form.FileName" class="um-input" placeholder="e.g. Policy Declaration.pdf" />
+                        <ValidationMessage For="() => _form.FileName" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Document Type <span class="text-danger">*</span></label>
+                        <InputText @bind-Value="_form.DocumentTypeCode" class="um-input" placeholder="e.g. Declaration" />
+                        <ValidationMessage For="() => _form.DocumentTypeCode" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Category <span class="text-danger">*</span></label>
+                        <InputSelect @bind-Value="_form.CategoryCode" class="um-input">
+                            <option value="Policy">Policy</option>
+                            <option value="Endorsement">Endorsement</option>
+                            <option value="Certificate">Certificate</option>
+                            <option value="Binder">Binder</option>
+                            <option value="Declaration">Declaration</option>
+                        </InputSelect>
+                        <ValidationMessage For="() => _form.CategoryCode" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Storage Path <span class="text-danger">*</span></label>
+                        <InputText @bind-Value="_form.StoragePath" class="um-input" placeholder="/policy-documents/file.pdf" />
+                        <ValidationMessage For="() => _form.StoragePath" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Content Type</label>
+                        <InputText @bind-Value="_form.ContentType" class="um-input" placeholder="application/pdf" />
+                        <ValidationMessage For="() => _form.ContentType" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>File Size (bytes)</label>
+                        <InputNumber @bind-Value="_form.FileSizeBytes" class="um-input" />
+                        <ValidationMessage For="() => _form.FileSizeBytes" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Uploaded By</label>
+                        <InputText @bind-Value="_form.UploadedByName" class="um-input" />
+                        <ValidationMessage For="() => _form.UploadedByName" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Tags</label>
+                        <InputText @bind-Value="_form.Tags" class="um-input" placeholder="policy, renewal, certificate" />
+                        <ValidationMessage For="() => _form.Tags" class="text-danger" />
+                    </div>
+                    <div class="um-field um-field--full">
+                        <label>Description</label>
+                        <InputTextArea @bind-Value="_form.Description" class="um-input" rows="3" />
+                        <ValidationMessage For="() => _form.Description" class="text-danger" />
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showUpload = false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                    @if (_saving) { <span class="um-spinner-sm"></span> } Create Document
+                </button>
+            </div>
+        </EditForm>
+    </DialogContent>
+</SfDialog>
+
+<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-confirm-dialog">
+            <div class="um-confirm-icon um-confirm-icon--danger">
+                <i class="bi bi-trash3-fill"></i>
+            </div>
+            <div class="um-confirm-message">
+                <h6>Delete Document?</h6>
+                <p>You are about to delete <strong>@_deleteTarget?.FileName</strong>. This action cannot be undone.</p>
+            </div>
+            <div class="um-modal-footer w-100">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </DialogContent>
+</SfDialog>
+
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+
+<style>
+@@keyframes um-shake {
+    0%,100%{transform:translateX(0)}
+    25%{transform:translateX(-4px)}
+    75%{transform:translateX(4px)}
+}
+</style>
+
+@code {
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+    List<DocumentDto> _items = [], _filtered = [];
+    string? _activeFilter;
+    bool _loading, _saving;
+    string _search = string.Empty;
+    string? _loadError;
+    bool _showDelete, _showUpload;
+    DocumentDto? _deleteTarget;
+    SfToast _toast = default!;
+    PolicyDocumentFormModel _form = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", null), new("Policy Documents", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchDocumentsAsync(
+                tenantId: TenantId,
+                searchTerm: _search
+            );
+            
+            _items = result?.Items
+                .Where(IsPolicyDocument)
+                .ToList() ?? [];
+            
+            ApplyFilter();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load policy documents: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    Task OnSearchAsync() => LoadAsync();
+
+    void ApplyFilter() => _filtered = _activeFilter switch
+    {
+        "Policy" => _items.Where(x => IsPolicyCategory(x, "Policy")).ToList(),
+        "Endorsement" => _items.Where(x => IsPolicyCategory(x, "Endorsement")).ToList(),
+        "Certificate" => _items.Where(x => IsPolicyCategory(x, "Certificate")).ToList(),
+        _ => [.. _items]
+    };
+
+    void SetFilter(string? key)
+    {
+        _activeFilter = key;
+        ApplyFilter();
+    }
+
+    void OnRowSelected(RowSelectEventArgs<DocumentDto> args) => ViewDocument(args.Data);
+
+    void OpenUpload()
+    {
+        _form = new();
+        _showUpload = true;
+    }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            await Api.CreateDocumentAsync(new CreateDocumentRequest
+            {
+                TenantId = TenantId,
+                DocumentTypeCode = _form.DocumentTypeCode,
+                CategoryCode = _form.CategoryCode,
+                FileName = _form.FileName,
+                StoragePath = _form.StoragePath,
+                ContentType = _form.ContentType,
+                FileSizeBytes = _form.FileSizeBytes,
+                EntityName = "Policy",
+                Description = _form.Description,
+                Tags = _form.Tags,
+                UploadedByName = _form.UploadedByName
+            });
+            _showUpload = false;
+            await _toast.ShowAsync(new() { Content = "Document created successfully", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    void ViewDocument(DocumentDto doc)
+    {
+        Nav.NavigateTo($"/documents/{doc.DocumentId}");
+    }
+
+    void DownloadDocument(DocumentDto doc)
+    {
+        Nav.NavigateTo($"/api/documents/{doc.DocumentId}/download", forceLoad: true);
+    }
+
+    void ConfirmDelete(DocumentDto doc)
+    {
+        _deleteTarget = doc;
+        _showDelete = true;
+    }
+
+    async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        
+        _saving = true;
+        try
+        {
+            await Api.DeleteDocumentAsync(_deleteTarget.DocumentId);
+            _showDelete = false;
+            await _toast.ShowAsync(new() { Content = "Document deleted successfully", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    static string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
+    }
+
+    static bool IsPolicyDocument(DocumentDto document) =>
+        IsPolicyCategory(document, "Policy") ||
+        IsPolicyCategory(document, "Endorsement") ||
+        IsPolicyCategory(document, "Certificate") ||
+        IsPolicyCategory(document, "Binder") ||
+        IsPolicyCategory(document, "Declaration") ||
+        string.Equals(document.EntityName, "Policy", StringComparison.OrdinalIgnoreCase) ||
+        ContainsPolicyTag(document);
+
+    static bool IsPolicyCategory(DocumentDto document, string category) =>
+        string.Equals(document.CategoryCode, category, StringComparison.OrdinalIgnoreCase);
+
+    static bool ContainsPolicyTag(DocumentDto document) =>
+        !string.IsNullOrWhiteSpace(document.Tags) &&
+        document.Tags.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Any(x => string.Equals(x, "policy", StringComparison.OrdinalIgnoreCase));
+
+    void ResetUpload() => _form = new();
+
+    sealed class PolicyDocumentFormModel
+    {
+        [Required(ErrorMessage = "File Name is required.")]
+        [StringLength(260, ErrorMessage = "File Name cannot exceed 260 characters.")]
+        public string FileName { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Document Type is required.")]
+        [StringLength(100, ErrorMessage = "Document Type cannot exceed 100 characters.")]
+        public string DocumentTypeCode { get; set; } = "Policy";
+
+        [Required(ErrorMessage = "Category is required.")]
+        [StringLength(100, ErrorMessage = "Category cannot exceed 100 characters.")]
+        public string CategoryCode { get; set; } = "Policy";
+
+        [Required(ErrorMessage = "Storage Path is required.")]
+        [StringLength(500, ErrorMessage = "Storage Path cannot exceed 500 characters.")]
+        public string StoragePath { get; set; } = string.Empty;
+
+        [StringLength(200, ErrorMessage = "Content Type cannot exceed 200 characters.")]
+        public string? ContentType { get; set; } = "application/pdf";
+
+        [Range(0, long.MaxValue, ErrorMessage = "File Size must be zero or greater.")]
+        public long? FileSizeBytes { get; set; }
+
+        [StringLength(200, ErrorMessage = "Uploaded By cannot exceed 200 characters.")]
+        public string? UploadedByName { get; set; }
+
+        [StringLength(500, ErrorMessage = "Tags cannot exceed 500 characters.")]
+        public string? Tags { get; set; } = "policy";
+
+        [StringLength(1000, ErrorMessage = "Description cannot exceed 1000 characters.")]
+        public string? Description { get; set; }
+    }
+}

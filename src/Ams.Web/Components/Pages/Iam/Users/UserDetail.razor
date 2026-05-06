@@ -1,5 +1,7 @@
 @page "/iam/users/{UserId:guid}"
+@page "/users/{UserId:guid}"
 @page "/admin/users/{UserId:guid}"
+@page "/tenant/security/users/{UserId:guid}"
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
@@ -117,6 +119,37 @@ else
                 <i class="bi bi-clock" aria-hidden="true"></i> Last login: @FormatRelative(_user.LastLoginDateUtc)
             </span>
         </div>
+    </div>
+
+    <div class="ud-kpi-strip" aria-label="User detail sections">
+        <button type="button" class="ud-kpi-card @TabKpiClass(0)" @onclick="() => SetTabAsync(0)" title="View identity, contact, and profile information">
+            <span class="ud-kpi-icon ud-kpi-icon--profile"><i class="bi bi-person" aria-hidden="true"></i></span>
+            <span><strong>@(_user.UserTypeCode ?? "User")</strong><small>Profile</small></span>
+        </button>
+        <button type="button" class="ud-kpi-card @TabKpiClass(1)" @onclick="() => SetTabAsync(1)" title="View account security state">
+            <span class="ud-kpi-icon @(_user.IsLockedOut ? "ud-kpi-icon--danger" : "ud-kpi-icon--safe")"><i class="bi bi-shield-lock" aria-hidden="true"></i></span>
+            <span><strong>@(_user.IsLockedOut ? "Locked" : (_user.MfaEnabled ? "MFA On" : "MFA Off"))</strong><small>Security</small></span>
+        </button>
+        <button type="button" class="ud-kpi-card @TabKpiClass(2)" @onclick="() => SetTabAsync(2)" title="View assigned roles">
+            <span class="ud-kpi-icon ud-kpi-icon--roles"><i class="bi bi-people" aria-hidden="true"></i></span>
+            <span><strong>@AssignedRoleCount</strong><small>Roles</small></span>
+        </button>
+        <button type="button" class="ud-kpi-card @TabKpiClass(3)" @onclick="() => SetTabAsync(3)" title="View direct overrides and effective permissions">
+            <span class="ud-kpi-icon ud-kpi-icon--permissions"><i class="bi bi-key" aria-hidden="true"></i></span>
+            <span><strong>@EffectivePermissionCount</strong><small>Effective Access</small></span>
+        </button>
+        <button type="button" class="ud-kpi-card @TabKpiClass(4)" @onclick="() => SetTabAsync(4)" title="View scope assignments">
+            <span class="ud-kpi-icon ud-kpi-icon--scopes"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+            <span><strong>@_scopes.Count</strong><small>Scopes</small></span>
+        </button>
+        <button type="button" class="ud-kpi-card @TabKpiClass(11)" @onclick="() => SetTabAsync(11)" title="View branch access">
+            <span class="ud-kpi-icon ud-kpi-icon--branch"><i class="bi bi-building" aria-hidden="true"></i></span>
+            <span><strong>@_branchAccess.Count</strong><small>Branches</small></span>
+        </button>
+        <button type="button" class="ud-kpi-card @TabKpiClass(12)" @onclick="() => SetTabAsync(12)" title="View team memberships">
+            <span class="ud-kpi-icon ud-kpi-icon--teams"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+            <span><strong>@_userTeams.Count</strong><small>Teams</small></span>
+        </button>
     </div>
 
     <!-- Detail tabs -->
@@ -364,7 +397,7 @@ else
                 <ContentTemplate>
                     <div class="ud-tab-body">
                         <div class="ud-tab-toolbar">
-                            <span class="ud-tab-count">@_permissions.Count permission override(s)</span>
+                            <span class="ud-tab-count">@_effectivePermissions.Count effective permission(s)</span>
                             <button class="um-btn um-btn-ghost" @onclick="OpenAddPermission">
                                 <i class="bi bi-key-fill" aria-hidden="true"></i> Add Permission
                             </button>
@@ -375,6 +408,83 @@ else
                         }
                         else
                         {
+                            <div class="ud-perm-summary-grid">
+                                <div class="ud-info-card ud-perm-summary-card">
+                                    <span class="ud-sec-icon ud-sec-icon--on" aria-hidden="true"><i class="bi bi-check2-circle"></i></span>
+                                    <div>
+                                        <div class="ud-sec-label">Role + Direct Grants</div>
+                                        <div class="ud-sec-value">@_effectivePermissions.Count(p => !string.Equals(p.GrantSource, "Deny", StringComparison.OrdinalIgnoreCase))</div>
+                                        <div class="ud-sec-detail">Effective permissions after deny evaluation</div>
+                                    </div>
+                                </div>
+                                <div class="ud-info-card ud-perm-summary-card">
+                                    <span class="ud-sec-icon ud-sec-icon--neutral" aria-hidden="true"><i class="bi bi-key"></i></span>
+                                    <div>
+                                        <div class="ud-sec-label">Direct Overrides</div>
+                                        <div class="ud-sec-value">@_permissions.Count</div>
+                                        <div class="ud-sec-detail">Explicit user-level grants or denies</div>
+                                    </div>
+                                </div>
+                                <div class="ud-info-card ud-perm-summary-card">
+                                    <span class="ud-sec-icon ud-sec-icon--neutral" aria-hidden="true"><i class="bi bi-boxes"></i></span>
+                                    <div>
+                                        <div class="ud-sec-label">Resources</div>
+                                        <div class="ud-sec-value">@_effectivePermissions.Select(p => p.ResourceCode).Distinct().Count()</div>
+                                        <div class="ud-sec-detail">Unique secured resources</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="ud-section-heading-row">
+                                <h3 class="ud-section-title">Effective Permissions</h3>
+                                <span class="ud-tab-count">Role-derived plus direct access</span>
+                            </div>
+                            @if (_effectivePermissions.Count == 0)
+                            {
+                                <div class="ts-empty">
+                                    <i class="bi bi-key ts-empty-icon" aria-hidden="true"></i>
+                                    <div class="ts-empty-title">No effective permissions</div>
+                                    <div class="ts-empty-sub">This user does not currently receive permissions from active roles or direct overrides.</div>
+                                </div>
+                            }
+                            else
+                            {
+                                <SfGrid DataSource="_effectivePermissions"
+                                        AllowPaging="true"
+                                        AllowSorting="true"
+                                        CssClass="e-grid--compact">
+                                    <GridPageSettings PageSize="15" />
+                                    <GridColumns>
+                                        <GridColumn Field="@nameof(EffectivePermissionDto.PermissionName)" HeaderText="Permission" Width="200" />
+                                        <GridColumn Field="@nameof(EffectivePermissionDto.PermissionCode)" HeaderText="Code" Width="170" />
+                                        <GridColumn Field="@nameof(EffectivePermissionDto.ResourceCode)" HeaderText="Resource" Width="130" />
+                                        <GridColumn Field="@nameof(EffectivePermissionDto.ActionCode)" HeaderText="Action" Width="110" />
+                                        <GridColumn Field="@nameof(EffectivePermissionDto.GrantSource)" HeaderText="Source" Width="120">
+                                            <Template>
+                                                @{ var p = (EffectivePermissionDto)context; }
+                                                <span class="badge @(p.GrantSource == "Role" ? "badge-blue" : "badge-green")">@p.GrantSource</span>
+                                            </Template>
+                                        </GridColumn>
+                                        <GridColumn Field="@nameof(EffectivePermissionDto.RoleName)" HeaderText="Role" Width="150">
+                                            <Template>
+                                                @{ var p = (EffectivePermissionDto)context; }
+                                                <span>@(p.RoleName ?? "Direct")</span>
+                                            </Template>
+                                        </GridColumn>
+                                        <GridColumn Field="@nameof(EffectivePermissionDto.ExpiresDateUtc)" HeaderText="Expires" Width="110">
+                                            <Template>
+                                                @{ var p = (EffectivePermissionDto)context; }
+                                                <span>@(p.ExpiresDateUtc?.ToString("d") ?? "Never")</span>
+                                            </Template>
+                                        </GridColumn>
+                                    </GridColumns>
+                                </SfGrid>
+                            }
+
+                            <div class="ud-section-heading-row ud-section-heading-row--spaced">
+                                <h3 class="ud-section-title">Direct Permission Overrides</h3>
+                                <span class="ud-tab-count">@_permissions.Count explicit override(s)</span>
+                            </div>
                             <SfGrid DataSource="_permissions"
                                     AllowPaging="true"
                                     AllowSorting="true"
@@ -992,6 +1102,7 @@ else
     // ── Tab data ──────────────────────────────────────────────────────────────────
     private List<UserRoleDto>           _userRoles   = [];
     private List<UserPermissionDto>     _permissions = [];
+    private List<EffectivePermissionDto> _effectivePermissions = [];
     private List<UserScopeDto>          _scopes      = [];
     private List<UserBranchAccessDto>   _branchAccess = [];
     private List<UserTeamMembershipDto> _userTeams   = [];
@@ -1072,6 +1183,12 @@ else
         ? "ud-sec-card ud-sec-card--danger"
         : "ud-sec-card";
 
+    private int AssignedRoleCount => _userRoles.Count > 0 ? _userRoles.Count : _user?.AssignedRoleCount ?? 0;
+
+    private int EffectivePermissionCount => _effectivePermissions.Count;
+
+    private string TabKpiClass(int tab) => _tab == tab ? "ud-kpi-card--active" : string.Empty;
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────────
     protected override async Task OnParametersSetAsync()
     {
@@ -1099,6 +1216,9 @@ else
             _profile     = await Api.GetUserProfileAsync(UserId);
             _allBranches = (await Api.SearchBranchesAsync(_tenantId))?.Items.ToList() ?? [];
             SetCrumbs();
+            await LoadRolesTabAsync();
+            await LoadPermissionsTabAsync();
+            await LoadScopesTabAsync();
         }
         finally
         {
@@ -1110,13 +1230,18 @@ else
     {
         Breadcrumbs.SetCrumbs(
             new("Home",  "/"),
-            new("IAM",   "/iam"),
-            new("Users", "/iam/users"),
+            new("Administration", "/tenant/security/users"),
+            new("Users", "/tenant/security/users"),
             new(_user?.FullName ?? "User", null));
     }
 
     // ── Tab handling ──────────────────────────────────────────────────────────────
     private async Task OnTabChangedAsync(int tab)
+    {
+        await SetTabAsync(tab);
+    }
+
+    private async Task SetTabAsync(int tab)
     {
         _tab = tab;
         await LoadTabDataAsync(tab);
@@ -1159,7 +1284,7 @@ else
         StateHasChanged();
         try
         {
-            var result = await Api.SearchUserRolesAsync(_tenantId, UserId, null, null);
+            var result = await Api.SearchUserRolesAsync(_tenantId, UserId, null, null, pageSize: 1000);
             _userRoles = result?.Items.ToList() ?? [];
         }
         finally
@@ -1176,6 +1301,8 @@ else
         {
             var result = await Api.GetUserDirectPermissionsAsync(UserId);
             _permissions = result?.ToList() ?? [];
+            var effective = await Api.GetEffectivePermissionsAsync(UserId);
+            _effectivePermissions = effective?.ToList() ?? [];
         }
         finally
         {
@@ -1251,9 +1378,9 @@ else
             await Toast("User disabled.");
             await LoadUserAsync();
         }
-        catch
+        catch (Exception ex)
         {
-            await Toast("Failed to disable user.", isError: true);
+            await Toast($"Failed to disable user: {ex.Message}", isError: true);
         }
         finally
         {
@@ -1272,9 +1399,9 @@ else
             await Toast("User enabled.");
             await LoadUserAsync();
         }
-        catch
+        catch (Exception ex)
         {
-            await Toast("Failed to enable user.", isError: true);
+            await Toast($"Failed to enable user: {ex.Message}", isError: true);
         }
         finally
         {
@@ -1293,9 +1420,9 @@ else
             await Toast("Account unlocked.");
             await LoadUserAsync();
         }
-        catch
+        catch (Exception ex)
         {
-            await Toast("Failed to unlock account.", isError: true);
+            await Toast($"Failed to unlock account: {ex.Message}", isError: true);
         }
         finally
         {
@@ -1338,9 +1465,9 @@ else
             _userRoles.Clear();
             await LoadRolesTabAsync();
         }
-        catch
+        catch (Exception ex)
         {
-            await Toast("Failed to assign role.", isError: true);
+            await Toast($"Failed to assign role: {ex.Message}", isError: true);
         }
     }
 
@@ -1352,9 +1479,9 @@ else
             _userRoles.Remove(userRole);
             await Toast("Role revoked.");
         }
-        catch
+        catch (Exception ex)
         {
-            await Toast("Failed to revoke role.", isError: true);
+            await Toast($"Failed to revoke role: {ex.Message}", isError: true);
         }
     }
 
@@ -1383,9 +1510,9 @@ else
             _permissions.Clear();
             await LoadPermissionsTabAsync();
         }
-        catch
+        catch (Exception ex)
         {
-            await Toast("Failed to grant permission.", isError: true);
+            await Toast($"Failed to grant permission: {ex.Message}", isError: true);
         }
     }
 
@@ -1397,9 +1524,9 @@ else
             _permissions.Remove(perm);
             await Toast("Permission revoked.");
         }
-        catch
+        catch (Exception ex)
         {
-            await Toast("Failed to revoke permission.", isError: true);
+            await Toast($"Failed to revoke permission: {ex.Message}", isError: true);
         }
     }
 
@@ -1424,9 +1551,9 @@ else
             _scopes.Clear();
             await LoadScopesTabAsync();
         }
-        catch
+        catch (Exception ex)
         {
-            await Toast("Failed to assign scope.", isError: true);
+            await Toast($"Failed to assign scope: {ex.Message}", isError: true);
         }
         finally
         {
@@ -1442,9 +1569,9 @@ else
             _scopes.Remove(scope);
             await Toast("Scope revoked.");
         }
-        catch
+        catch (Exception ex)
         {
-            await Toast("Failed to revoke scope.", isError: true);
+            await Toast($"Failed to revoke scope: {ex.Message}", isError: true);
         }
     }
 
@@ -1575,7 +1702,7 @@ else
     }
 
     // ── Navigation ────────────────────────────────────────────────────────────────
-    private void NavigateToList() => Nav.NavigateTo("/iam/users");
+    private void NavigateToList() => Nav.NavigateTo("/tenant/security/users");
 
     // ── Helpers ───────────────────────────────────────────────────────────────────
     private string Initials()

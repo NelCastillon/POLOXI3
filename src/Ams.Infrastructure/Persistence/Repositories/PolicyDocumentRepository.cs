@@ -235,11 +235,11 @@ ORDER BY au.TargetTypeCode, au.TargetName;";
         var audienceId = Guid.NewGuid();
         const string sql = @"
 INSERT INTO Compliance.PolicyAudience
-    (AudienceId, PolicyDocumentId, TargetTypeCode, TargetId, TargetName,
-     IsRequired, AddedByUserId, AddedDateUtc, IsDeleted)
+    (AudienceId, TenantId, PolicyDocumentId, TargetTypeCode, TargetId, TargetName,
+     IsRequired, AddedByUserId, AddedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
 VALUES
-    (@AudienceId, @PolicyDocumentId, @TargetTypeCode, @TargetId, @TargetName,
-     @IsRequired, @AddedByUserId, GETUTCDATE(), 0);";
+    (@AudienceId, (SELECT TenantId FROM Compliance.PolicyDocument WHERE PolicyDocumentId = @PolicyDocumentId), @PolicyDocumentId, @TargetTypeCode, @TargetId, @TargetName,
+     @IsRequired, @AddedByUserId, GETUTCDATE(), GETUTCDATE(), @AddedByUserId, 0);";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
         {

@@ -1,4 +1,5 @@
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Features.Operations;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
@@ -28,4 +29,8 @@ public sealed class AgreementsController : ControllerBase
         var result = await _service.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
         return Ok(result);
     }
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateAgreementRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.CreateAsync(request, cancellationToken));
 }

@@ -1,5 +1,7 @@
 @page "/marketing/campaigns"
+@page "/communications/campaigns"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -88,14 +90,22 @@
     </select>
 </div>
 
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
 <!-- Grid -->
 <div class="mkc-grid-card app-datagrid">
-    <SfGrid TValue="CampaignRow" DataSource="_filtered" AllowPaging="true" AllowSorting="true" AllowFiltering="true"
-            EnableHover="true" RowHeight="56">
+    <SfGrid CssClass="marketing-grid" TValue="CampaignRow" DataSource="_filtered" AllowPaging="true" AllowSorting="true" AllowFiltering="true"
+            AllowTextWrap="true" EnableHover="true" RowHeight="64">
+        <GridTextWrapSettings WrapMode="WrapMode.Content" />
         <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
         <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50})" />
         <GridColumns>
-            <GridColumn HeaderText="Campaign" MinWidth="240" Field="@nameof(CampaignRow.Name)">
+            <GridColumn HeaderText="Campaign" MinWidth="340" Field="@nameof(CampaignRow.Name)">
                 <Template>
                     @{ var c = (CampaignRow)context; }
                     <div class="mkc-name-cell">
@@ -123,7 +133,7 @@
             <GridColumn Field="@nameof(CampaignRow.Revenue)" HeaderText="Revenue" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                 <Template>@{ var c = (CampaignRow)context; }<span class="mkc-mono mkc-bold">@c.Revenue.ToString("C0")</span></Template>
             </GridColumn>
-            <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+            <GridColumn HeaderText="" Width="96" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                 <Template>
                     @{ var c = (CampaignRow)context; }
                     <button class="um-btn um-btn-ghost um-btn-sm"
@@ -138,28 +148,36 @@
 
 @code {
     private SfToast? _toast;
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string _search = "";
     private string _filterStatus = "";
     private string _filterType = "";
+    private string? _loadError;
 
     private List<CampaignRow> _campaigns = [];
     private List<CampaignRow> _filtered  = [];
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Campaigns",""));
-        _campaigns =
-        [
-            new(1, "Q2 Cross-Sell — Umbrella",         "Multi-Channel", "Active",    "Commercial Clients",  new DateTime(2025,4,1),  4_820, 31.4m, 187, 94_000m),
-            new(2, "Home+Auto Bundle Push",             "Email",         "Active",    "Personal Lines",      new DateTime(2025,3,15), 11_200, 28.9m, 412, 206_000m),
-            new(3, "Teen Driver Add-On",                "SMS",           "Scheduled", "HH w/ Teen Drivers",  new DateTime(2025,5,1),  0, 0m, 0, 0m),
-            new(4, "Workers Comp Expansion — SMB",      "Email",         "Active",    "SMB Commercial",      new DateTime(2025,3,1),  3_400, 22.1m, 95, 57_000m),
-            new(5, "Benefits Upsell — Employers",       "Multi-Channel", "Active",    "Employer Groups",     new DateTime(2025,2,15), 1_900, 19.8m, 44, 88_000m),
-            new(6, "Lapsed Policy Win-Back",            "Email",         "Completed", "Lapsed — 60–180d",   new DateTime(2025,1,1),  6_300, 24.6m, 231, 115_500m),
-            new(7, "Business Package Expansion",        "Direct Mail",   "Draft",     "BOP Holders",         new DateTime(2025,6,1),  0, 0m, 0, 0m),
-            new(8, "Google Review Request — NPS 9+",   "SMS",           "Active",    "Promoters",           new DateTime(2025,3,20), 2_100, 41.2m, 680, 0m),
-        ];
-        ApplyFilters();
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Communications","/communications/inbox"), new("Campaigns",""));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchCommunicationCampaignsAsync(_tenantId, _search);
+            _campaigns = result?.Items.Select(c => new CampaignRow(c.CampaignId, c.Name, c.Type, c.Status, c.Segment, c.StartDate, c.Reached, c.OpenRate, c.Conversions, c.Revenue)).ToList() ?? [];
+            ApplyFilters();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load campaigns: {ex.Message}";
+            _campaigns = [];
+            _filtered = [];
+        }
     }
 
     private void ApplyFilters()
@@ -196,6 +214,6 @@
         _             => "bi-diagram-3",
     };
 
-    private sealed record CampaignRow(int Id, string Name, string Type, string Status, string Segment,
+    private sealed record CampaignRow(Guid Id, string Name, string Type, string Status, string Segment,
         DateTime StartDate, int Reached, decimal OpenRate, int Conversions, decimal Revenue);
 }

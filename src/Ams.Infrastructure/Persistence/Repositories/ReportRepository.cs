@@ -64,7 +64,7 @@ public sealed class ReportRepository : IReportRepository
             ;WITH Cte AS (
                 SELECT re.ReportExecutionId, re.TenantId, re.ReportDefinitionId,
                        rd.ReportName, re.ReportScheduleId, re.StatusCode, re.OutputFormat,
-                       re.StoragePath, re.FileSizeBytes, re.RowCount,
+                       re.StoragePath, re.FileSizeBytes, re.[RowCount] AS [RowCount],
                        re.StartedDateUtc, re.CompletedDateUtc, re.ErrorMessage,
                        re.RequestedByUserId, re.CreatedDateUtc
                 FROM Core.ReportExecution re

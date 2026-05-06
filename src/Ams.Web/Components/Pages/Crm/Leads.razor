@@ -246,10 +246,10 @@
                         <Template>
                             @{ var r = (LeadRow)context; }
                             <div class="ld-row-actions">
-                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenDetail(r)" title="View">
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenDetail(r)" title="View">
                                     <i class="bi bi-arrow-right" aria-hidden="true"></i>
                                 </button>
-                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="(e) => OpenRowMenu(r, e)" title="More">
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="(e) => OpenRowMenu(r, e)" title="More">
                                     <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
                                 </button>
                             </div>
@@ -1046,12 +1046,7 @@
     [
         new("Hot","Hot"), new("Warm","Warm"), new("Cold","Cold"),
     ];
-    private static readonly List<LabelValue> _ownerOptions =
-    [
-        new("Alice Carter","Alice Carter"), new("Bob Martinez","Bob Martinez"),
-        new("Carol Smith","Carol Smith"),   new("David Lee","David Lee"),
-        new("Eva Johnson","Eva Johnson"),
-    ];
+    private List<LabelValue> _ownerOptions = [];
     private static readonly List<LabelValue> _campaignOptions =
     [
         new("c1","Q3 Commercial BOP Drip"),
@@ -1072,8 +1067,24 @@
         _loading = true; StateHasChanged();
         try
         {
-            var response = await Api.SearchLeadsAsync(_tenantId);
-            _leads = response?.Items?.Select(MapToLeadRow).ToList() ?? [];
+            var leadsTask = Api.SearchLeadsAsync(_tenantId);
+            var usersTask = Api.SearchUsersAsync(_tenantId);
+            await Task.WhenAll(leadsTask, usersTask);
+
+            var users = usersTask.Result?.Items?.ToList() ?? [];
+            var ownerLookup = users.ToDictionary(u => u.UserId, u => string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName);
+
+            _ownerOptions = users
+                .Where(u => u.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase))
+                .Select(u => string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(n => n)
+                .Select(n => new LabelValue(n, n))
+                .ToList();
+
+            var response = leadsTask.Result;
+            _leads = response?.Items?.Select(l => MapToLeadRow(l, ownerLookup)).ToList() ?? [];
             RebuildDerived();
         }
         catch (Exception ex)
@@ -1084,8 +1095,9 @@
         finally { _loading = false; }
     }
 
-    private LeadRow MapToLeadRow(LeadDto dto)
+    private LeadRow MapToLeadRow(LeadDto dto, IReadOnlyDictionary<Guid, string> ownerLookup)
     {
+        var score = Math.Clamp(dto.Score ?? 0, 0, 100);
         return new LeadRow
         {
             LeadId = dto.LeadId,
@@ -1093,17 +1105,46 @@
             CompanyName = dto.AccountName ?? string.Empty,
             Email = dto.Email ?? string.Empty,
             Phone = dto.Phone ?? string.Empty,
-            Stage = dto.NurturingStageCode ?? "New",
-            Source = dto.SourceCode ?? string.Empty,
-            Owner = string.Empty,
-            Rating = "Cold",
-            Score = dto.Score ?? 0,
+            Stage = NormalizeStage(dto.NurturingStageCode, dto.StatusCode),
+            Source = string.IsNullOrWhiteSpace(dto.SourceCode) ? "Direct" : dto.SourceCode,
+            Owner = dto.AssignedToUserId.HasValue && ownerLookup.TryGetValue(dto.AssignedToUserId.Value, out var owner) ? owner : "Unassigned",
+            Rating = ScoreToRating(score),
+            Score = score,
             EstPremium = 0,
             CreatedAt = dto.CreatedDateUtc,
             LastActivity = null,
-            Notes = null
+            Notes = dto.InterestedService
         };
     }
+
+    private static string NormalizeStage(string? stage, int statusCode)
+    {
+        if (!string.IsNullOrWhiteSpace(stage))
+        {
+            return stage.Trim() switch
+            {
+                "Closed" => "Lost",
+                "Won" => "Converted",
+                var s => s
+            };
+        }
+
+        return statusCode switch
+        {
+            2 => "Contacted",
+            3 => "Qualified",
+            4 => "Converted",
+            5 => "Lost",
+            _ => "New",
+        };
+    }
+
+    private static string ScoreToRating(int score) => score switch
+    {
+        >= 80 => "Hot",
+        >= 50 => "Warm",
+        _ => "Cold",
+    };
 
     private void RebuildDerived()
     {
@@ -1181,8 +1222,8 @@
     private void OpenRowMenu(LeadRow r, Microsoft.AspNetCore.Components.Web.MouseEventArgs e)
     {
         _menuLead = r;
-        _menuX = e.ClientX;
-        _menuY = e.ClientY;
+        _menuX = Math.Max(12, e.ClientX - 208);
+        _menuY = Math.Max(12, e.ClientY - 4);
     }
 
     private void OnRowSelected(RowSelectEventArgs<LeadRow> args)

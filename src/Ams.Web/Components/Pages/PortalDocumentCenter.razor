@@ -1,6 +1,8 @@
 @page "/portal/documents"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
+@inject ConfirmationDialogService Confirmations
 
 <PageTitle>Portal Document Center — AMS</PageTitle>
 
@@ -145,6 +147,7 @@
 </SfDialog>
 
 @code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private SfToast? _toast;
     private string _search = string.Empty;
     private string _catFilter = string.Empty;
@@ -169,43 +172,47 @@
         (string.IsNullOrEmpty(_catFilter) || d.Category == _catFilter) &&
         (string.IsNullOrEmpty(_visFilter) || d.Visibility == _visFilter));
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Documents",""));
-        _docs =
-        [
-            new PortalDoc { Id=1,  Name="Commercial GL Declarations — 2025",        AccountName="Ortega Construction",   Category="Policy",      FileType="PDF", FileSizeKb=284, Visibility="Shared",     SharedAt=new DateTime(2025,1,10), ViewCount=6,  DownloadCount=3 },
-            new PortalDoc { Id=2,  Name="Auto ID Card — Vega Foods Fleet",           AccountName="Vega Foods Inc",        Category="ID Card",     FileType="PDF", FileSizeKb=44,  Visibility="Shared",     SharedAt=new DateTime(2025,2,1),  ViewCount=14, DownloadCount=9 },
-            new PortalDoc { Id=3,  Name="COI — Acme General (Ortega)",              AccountName="Ortega Construction",   Category="Certificate", FileType="PDF", FileSizeKb=62,  Visibility="Shared",     SharedAt=new DateTime(2025,3,5),  ViewCount=3,  DownloadCount=3 },
-            new PortalDoc { Id=4,  Name="Invoice #INV-2025-0481",                   AccountName="Vega Foods Inc",        Category="Invoice",     FileType="PDF", FileSizeKb=38,  Visibility="Shared",     SharedAt=new DateTime(2025,4,1),  ViewCount=2,  DownloadCount=1 },
-            new PortalDoc { Id=5,  Name="Homeowners Policy — Sullivan HH",          AccountName="Sullivan Manufacturing",Category="Policy",      FileType="PDF", FileSizeKb=312, Visibility="Shared",     SharedAt=new DateTime(2025,1,15), ViewCount=4,  DownloadCount=2 },
-            new PortalDoc { Id=6,  Name="Renewal Questionnaire — 2026",             AccountName="TechVault Inc",         Category="Form",        FileType="PDF", FileSizeKb=98,  Visibility="Shared",     SharedAt=new DateTime(2025,3,20), ViewCount=1,  DownloadCount=0 },
-            new PortalDoc { Id=7,  Name="Claim #CLM-2025-0042 — Adjuster Report",  AccountName="Ortega Construction",   Category="Claims",      FileType="PDF", FileSizeKb=450, Visibility="Agency Only", SharedAt=new DateTime(2025,2,28), ViewCount=0,  DownloadCount=0 },
-            new PortalDoc { Id=8,  Name="Auto Policy Declarations — Nguyen HH",    AccountName="Nguyen Family HH",      Category="Policy",      FileType="PDF", FileSizeKb=190, Visibility="Shared",     SharedAt=new DateTime(2025,1,22), ViewCount=8,  DownloadCount=5 },
-        ];
+        await LoadAsync();
     }
 
-    private void ToggleVisibility(PortalDoc d) =>
+    private async Task LoadAsync()
+    {
+        var result = await Api.SearchPortalAdminDocumentsAsync(_tenantId, _search);
+        _docs = result?.Items.Select(d => new PortalDoc { Id = d.Id, Name = d.Name, AccountName = d.AccountName, Category = d.Category, FileType = d.FileType, FileSizeKb = d.FileSizeKb, Visibility = d.Visibility, SharedAt = d.SharedAt, ViewCount = d.ViewCount, DownloadCount = d.DownloadCount }).ToList() ?? [];
+    }
+
+    private async Task ToggleVisibility(PortalDoc d)
+    {
         d.Visibility = d.Visibility == "Shared" ? "Agency Only" : "Shared";
+        await Api.SetPortalAdminRecordStatusAsync(d.Id, d.Visibility);
+        await LoadAsync();
+    }
 
     private async Task CommitShare()
     {
-        _newDoc.Id = _docs.Count + 1;
+        _newDoc.Id = Guid.NewGuid();
         _newDoc.SharedAt = DateTime.Today;
         _newDoc.FileType = "PDF";
         _newDoc.FileSizeKb = 120;
-        _docs.Add(_newDoc);
+        var json = System.Text.Json.JsonSerializer.Serialize(new { name = _newDoc.Name, accountName = _newDoc.AccountName, category = _newDoc.Category, fileType = _newDoc.FileType, fileSizeKb = _newDoc.FileSizeKb, visibility = _newDoc.Visibility, sharedAt = _newDoc.SharedAt, viewCount = 0, downloadCount = 0 });
+        await Api.CreatePortalAdminRecordAsync(new UpsertPortalAdminRecordRequest(_tenantId, "PortalDocument", _newDoc.Name, _newDoc.Name, _newDoc.Visibility, json));
         CloseUpload();
         if (_toast is not null)
             await _toast.ShowAsync(new ToastModel { Content = $"Document '{_newDoc.Name}' shared to portal.", CssClass = "e-toast-success" });
         _newDoc = new();
+        await LoadAsync();
     }
 
     private async Task RemoveDoc(PortalDoc d)
     {
-        _docs.Remove(d);
+        if (!await Confirmations.ConfirmAsync("Remove document", $"Remove {d.Name} from the portal document center?", "Remove")) return;
+        await Api.DeletePortalAdminRecordAsync(d.Id);
         if (_toast is not null)
             await _toast.ShowAsync(new ToastModel { Content = "Document removed from portal.", CssClass = "e-toast-success" });
+        await LoadAsync();
     }
 
     private void CloseUpload() { _showUpload = false; _newDoc = new(); }
@@ -244,7 +251,7 @@
 
     private sealed class PortalDoc
     {
-        public int      Id            { get; set; }
+        public Guid     Id            { get; set; }
         public string   Name          { get; set; } = string.Empty;
         public string   AccountName   { get; set; } = string.Empty;
         public string   Category      { get; set; } = "Policy";

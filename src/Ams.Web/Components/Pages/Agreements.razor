@@ -1,47 +1,58 @@
 ﻿@page "/agreements"
 @inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@using Ams.Application.Features.Operations
 
-<PageTitle>Agreements</PageTitle>
+<PageTitle>Agreements — Operations</PageTitle>
 
-<AppPageHeader Title="Agreements" Icon="bi-grid" />
+<AppPageHeader Title="Agreements" Subtitle="Manage agreement lifecycle, account commitments, and operational contracts" Icon="bi-file-earmark-check">
+    <Actions><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> New Agreement</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions>
+</AppPageHeader>
 
-<div class="toolbar">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+<div class="pc-kpi-strip">
+    <div class="pc-kpi-card @(_filter == null ? "pc-kpi-card--active" : "")" @onclick="() => SetFilter(null)" title="Show all agreements"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-files"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total</div></div></div>
+    <div class="pc-kpi-card @(_filter == 1 ? "pc-kpi-card--active" : "")" @onclick="() => SetFilter(1)" title="Filter: Draft"><span class="pc-kpi-icon pc-kpi-icon--warning"><i class="bi bi-pencil-square"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == 1)</div><div class="pc-kpi-label">Draft</div></div></div>
 </div>
 
-@if (_items is null)
-{
-    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
-}
-else
-{
-    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridPageSettings PageSize="10"></GridPageSettings>
-        <GridColumns>
+<AppFilterPanel @bind-SearchValue="_searchTerm" OnSearch="OnSearchAsync" SearchPlaceholder="Search agreements…" />
+@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div> }
 
-            <GridColumn Field="@nameof(AgreementDto.AgreementNumber)" HeaderText="Agreement #" Width="160"></GridColumn>
-            <GridColumn Field="@nameof(AgreementDto.AccountId)" HeaderText="Account Id" Width="240"></GridColumn>
-            <GridColumn Field="@nameof(AgreementDto.StatusCode)" HeaderText="Status" Width="100"></GridColumn>
-            <GridColumn Field="@nameof(AgreementDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="180"></GridColumn>
+<div class="um-grid-card">
+@if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div> }
+<SfGrid TValue="AgreementDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+    <GridEvents TValue="AgreementDto" RowSelected="OnRowSelected" />
+    <GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" />
+    <GridColumns>
+        <GridColumn Field="AgreementNumber" HeaderText="Agreement #" Width="170" />
+        <GridColumn Field="AccountId" HeaderText="Account Id" Width="250" />
+        <GridColumn Field="StatusCode" HeaderText="Status" Width="120" />
+        <GridColumn Field="CreatedDateUtc" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="180" />
+    </GridColumns>
+</SfGrid>
+</div>
 
-        </GridColumns>
-    </SfGrid>
-}
+<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false">
+    <DialogEvents Closed="ResetForm" />
+    <DialogContent><div class="um-modal-header"><i class="bi bi-file-earmark-check"></i><span>New Agreement</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div>
+    <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid">
+        <div class="um-field"><label>Agreement # <span class="text-danger">*</span></label><InputText @bind-Value="_form.AgreementNumber" class="um-input" /><ValidationMessage For="() => _form.AgreementNumber" class="text-danger" /></div>
+        <div class="um-field"><label>Account Id <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountIdText" class="um-input" /><ValidationMessage For="() => _form.AccountIdText" class="text-danger" /></div>
+        <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputText @bind-Value="_form.AgreementTypeCode" class="um-input" /><ValidationMessage For="() => _form.AgreementTypeCode" class="text-danger" /></div>
+        <div class="um-field"><label>Start Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.StartDate" class="um-input" /><ValidationMessage For="() => _form.StartDate" class="text-danger" /></div>
+        <div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="3" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+    </div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Create</button></div></EditForm></DialogContent>
+</SfDialog>
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+<style>@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }</style>
 
 @code {
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private string? _searchTerm;
-    private List<AgreementDto>? _items;
-
-    protected override async Task OnInitializedAsync()
-    {
-        await LoadAsync();
-    }
-
-    private async Task LoadAsync()
-    {
-        var result = await Api.SearchAgreementsAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? new List<AgreementDto>();
-    }
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    string? _searchTerm, _loadError; int? _filter; bool _loading, _saving, _showForm; List<AgreementDto> _items = [], _filtered = []; SfToast _toast = default!; AgreementForm _form = new();
+    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new("Agreements", null)); await LoadAsync(); }
+    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchAgreementsAsync(TenantId, _searchTerm); _items = result?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load agreements: {ex.Message}"; } finally { _loading = false; } }
+    Task OnSearchAsync() => LoadAsync(); void ApplyFilter() => _filtered = _filter.HasValue ? _items.Where(x => x.StatusCode == _filter.Value).ToList() : [.. _items]; void SetFilter(int? filter) { _filter = filter; ApplyFilter(); } void OnRowSelected(RowSelectEventArgs<AgreementDto> args) { }
+    void OpenCreate() { _form = new() { AgreementNumber = $"AGR-{DateTime.UtcNow:yyyyMMddHHmmss}", StartDate = DateOnly.FromDateTime(DateTime.Today) }; _showForm = true; }
+    async Task SaveAsync() { _saving = true; try { await Api.CreateAgreementAsync(new() { TenantId = TenantId, AgreementNumber = _form.AgreementNumber, AccountId = Guid.Parse(_form.AccountIdText), AgreementTypeCode = _form.AgreementTypeCode, StartDate = _form.StartDate, Description = _form.Description }); _showForm = false; await _toast.ShowAsync(new() { Content = "Agreement created", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
+    void ResetForm() => _form = new();
+    sealed class AgreementForm { [Required, StringLength(50)] public string AgreementNumber { get; set; } = string.Empty; [Required, RegularExpression("^[0-9a-fA-F-]{36}$", ErrorMessage = "Enter a valid Account Id.")] public string AccountIdText { get; set; } = string.Empty; [Required, StringLength(50)] public string AgreementTypeCode { get; set; } = "Agreement"; [Required] public DateOnly StartDate { get; set; } = DateOnly.FromDateTime(DateTime.Today); [StringLength(1000)] public string? Description { get; set; } }
 }

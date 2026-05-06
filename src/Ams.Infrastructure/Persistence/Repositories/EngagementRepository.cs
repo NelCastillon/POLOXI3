@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Engagements;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -38,5 +39,16 @@ SELECT COUNT(1) FROM OPS.EngagementTask WHERE TenantId = @TenantId AND IsDeleted
         var items = (await multi.ReadAsync<EngagementTaskDto>()).AsList();
         var total = await multi.ReadSingleAsync<int>();
         return new PagedResult<EngagementTaskDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateEngagementRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+INSERT INTO OPS.Engagement (EngagementId, TenantId, EngagementNumber, AccountId, AgreementId, EngagementName, EngagementTypeCode, OwnerUserId, StartDate, EndDate, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES (@EngagementId, @TenantId, @EngagementNumber, @AccountId, @AgreementId, @EngagementName, @EngagementTypeCode, @OwnerUserId, @StartDate, @EndDate, 'Active', SYSUTCDATETIME(), @CreatedByUserId, 0);";
+        var id = Guid.NewGuid();
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { EngagementId = id, request.TenantId, request.EngagementNumber, request.AccountId, request.AgreementId, request.EngagementName, request.EngagementTypeCode, request.OwnerUserId, request.StartDate, request.EndDate, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        return id;
     }
 }

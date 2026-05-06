@@ -1,0 +1,133 @@
+@page "/marketing/landing-pages"
+@namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Landing Pages — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Landing Pages"
+               Subtitle="DB-backed marketing landing pages, publication status, traffic, and conversion performance"
+               Icon="bi-layout-text-window">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/marketing/campaigns")'><i class="bi bi-megaphone"></i> Campaigns</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </Actions>
+</AppPageHeader>
+
+<div class="mkc-kpi-strip">
+    @Kpi(null, "bi-layout-text-window", "Total", _items.Count.ToString(), "mkc-ki-blue")
+    @Kpi("Published", "bi-globe2", "Published", _items.Count(x => x.Status == "Published").ToString(), "mkc-ki-green")
+    @Kpi("Draft", "bi-file-earmark", "Drafts", _items.Count(x => x.Status == "Draft").ToString(), "mkc-ki-blue")
+    @Kpi("Archived", "bi-archive", "Archived", _items.Count(x => x.Status == "Archived").ToString(), "mkc-ki-gray")
+    @Kpi("Converting", "bi-bullseye", "Conversions", _items.Sum(x => x.ConversionCount).ToString("N0"), "mkc-ki-amber")
+    @Kpi("HighTraffic", "bi-eye", "Views", _items.Sum(x => x.ViewCount).ToString("N0"), "mkc-ki-green")
+</div>
+
+<div class="mkc-filter-bar">
+    <div class="mkc-search-wrap">
+        <i class="bi bi-search mkc-si"></i>
+        <input class="mkc-search" placeholder="Search landing pages..." @bind="_search" @bind:event="oninput" @bind:after="ApplyFilter" />
+    </div>
+    <select class="mkc-sel" @bind="_statusFilter" @bind:after="ApplyFilter">
+        <option value="">All Status</option>
+        <option>Published</option><option>Draft</option><option>Archived</option>
+    </select>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i></button>
+    <span class="ms-auto" style="font-size:.75rem;color:var(--um-muted,#64748b)"><strong>@_filtered.Count</strong> page(s)</span>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<div class="mkc-grid-card app-datagrid position-relative">
+    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading landing pages…</span></div> }
+    <SfGrid CssClass="marketing-grid" TValue="MarketingLandingPageDto" DataSource="_filtered" AllowPaging="true" AllowSorting="true" AllowTextWrap="true" EnableHover="true" RowHeight="64">
+        <GridTextWrapSettings WrapMode="WrapMode.Content" />
+        <GridEvents TValue="MarketingLandingPageDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="20" PageSizes="@(new[] { 10, 20, 50 })" />
+        <GridColumns>
+            <GridColumn HeaderText="Landing Page" MinWidth="340" Field="@nameof(MarketingLandingPageDto.Name)">
+                <Template>
+                    @{ var p = (MarketingLandingPageDto)context; }
+                    <div class="mkc-name-cell"><div class="mkc-type-icon mkc-ti-page"><i class="bi bi-layout-text-window"></i></div><div><div class="mkc-item-name">@p.Name</div><div class="mkc-item-sub">/@p.Slug</div></div></div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(MarketingLandingPageDto.Status)" HeaderText="Status" Width="120"><Template>@{ var p=(MarketingLandingPageDto)context; }<span class="@StatusBadge(p.Status)">@p.Status</span></Template></GridColumn>
+            <GridColumn Field="@nameof(MarketingLandingPageDto.TemplateName)" HeaderText="Template" Width="170" />
+            <GridColumn Field="@nameof(MarketingLandingPageDto.CampaignName)" HeaderText="Campaign" Width="220" />
+            <GridColumn HeaderText="Views" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"><Template>@{ var p=(MarketingLandingPageDto)context; }<span class="mkc-mono">@p.ViewCount.ToString("N0")</span></Template></GridColumn>
+            <GridColumn HeaderText="Conv." Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"><Template>@{ var p=(MarketingLandingPageDto)context; }<span class="mkc-mono">@p.ConversionCount.ToString("N0")</span></Template></GridColumn>
+            <GridColumn HeaderText="Rate" Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"><Template>@{ var p=(MarketingLandingPageDto)context; }<span class="mkc-mono mkc-bold">@p.ConversionRate.ToString("N2")%</span></Template></GridColumn>
+            <GridColumn HeaderText="Published" Width="140"><Template>@{ var p=(MarketingLandingPageDto)context; }@(p.LastPublishedDateUtc?.ToString("MMM d, yyyy") ?? "—")</Template></GridColumn>
+            <GridColumn HeaderText="Actions" Width="170" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                <Template>
+                    @{ var p=(MarketingLandingPageDto)context; }
+                    @if (p.Status != "Published")
+                    { <button class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick="() => PublishAsync(p)"><i class="bi bi-globe2"></i></button> }
+                    @if (p.Status != "Archived")
+                    { <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => ArchiveAsync(p)"><i class="bi bi-archive"></i></button> }
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => Preview(p)"><i class="bi bi-eye"></i></button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<style>@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }</style>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+    private bool _loading;
+    private string? _loadError;
+    private string _search = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string? _activeFilter;
+    private List<MarketingLandingPageDto> _items = [];
+    private List<MarketingLandingPageDto> _filtered = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Marketing", "/marketing/campaigns"), new("Landing Pages", null));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; _loadError = null;
+        try
+        {
+            var result = await Api.SearchMarketingLandingPagesAsync(_tenantId, _search);
+            _items = result?.Items.ToList() ?? [];
+            ApplyFilter();
+        }
+        catch (Exception ex) { _loadError = $"Failed to load landing pages: {ex.Message}"; _items = []; _filtered = []; }
+        finally { _loading = false; }
+    }
+
+    private void SetKpiFilter(string? filter) { _activeFilter = _activeFilter == filter ? null : filter; ApplyFilter(); }
+    private void ApplyFilter()
+    {
+        var q = _items.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_search)) q = q.Where(x => x.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Slug.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.TemplateName.Contains(_search, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) q = q.Where(x => x.Status == _statusFilter);
+        q = _activeFilter switch { "Converting" => q.Where(x => x.ConversionCount > 0), "HighTraffic" => q.Where(x => x.ViewCount >= 3000), null => q, _ => q.Where(x => x.Status == _activeFilter) };
+        _filtered = q.ToList();
+    }
+    private void ResetFilters() { _search = string.Empty; _statusFilter = string.Empty; _activeFilter = null; ApplyFilter(); }
+    private void OnRowSelected(RowSelectEventArgs<MarketingLandingPageDto> args) => Preview(args.Data);
+    private async Task PublishAsync(MarketingLandingPageDto p) { await Api.PublishMarketingLandingPageAsync(p.LandingPageId); await LoadAsync(); if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Published {p.Name}.", CssClass = "e-toast-success" }); }
+    private async Task ArchiveAsync(MarketingLandingPageDto p) { await Api.ArchiveMarketingLandingPageAsync(p.LandingPageId); await LoadAsync(); if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Archived {p.Name}.", CssClass = "e-toast-warning" }); }
+    private async void Preview(MarketingLandingPageDto p) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Preview: {p.PublishedUrl}", CssClass = "e-toast-info" }); }
+    private static string StatusBadge(string s) => s switch { "Published" => "mkc-status mkc-st--completed", "Archived" => "mkc-status mkc-st--paused", _ => "mkc-status mkc-st--draft" };
+    private RenderFragment Kpi(string? filter, string icon, string label, string value, string color) => @<button type="button" class="mkc-kpi-card @(_activeFilter == filter ? "pc-kpi-card--active" : "")" @onclick="() => SetKpiFilter(filter)"><i class="bi @icon mkc-ki @color"></i><div><div class="mkc-kv">@value</div><div class="mkc-kl">@label</div></div></button>;
+}

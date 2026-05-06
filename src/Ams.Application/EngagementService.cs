@@ -2,6 +2,7 @@ using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Engagements;
 
 namespace Ams.Application;
 
@@ -12,4 +13,5 @@ public sealed class EngagementService : IEngagementService
     public Task<EngagementDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => _repository.GetByIdAsync(id, cancellationToken);
     public Task<PagedResult<EngagementDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
     public Task<PagedResult<EngagementTaskDto>> SearchTasksAsync(Guid tenantId, Guid? engagementId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => _repository.SearchTasksAsync(tenantId, engagementId, searchTerm, pageNumber, pageSize, cancellationToken);
+    public Task<Guid> CreateAsync(CreateEngagementRequest request, CancellationToken cancellationToken = default) => _repository.CreateAsync(request, cancellationToken);
 }

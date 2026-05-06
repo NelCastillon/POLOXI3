@@ -24,12 +24,23 @@ public sealed class WorkflowRepository : IWorkflowRepository
 
     public async Task<PagedResult<WorkflowInstanceDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
-        var sql = RepositorySql.BuildPagedSearchSql(
-            "Workflow.WorkflowInstance",
-            "WorkflowInstanceId, TenantId, TargetEntityName, TargetEntityId, StatusCodeId AS StatusCode, SubmittedDateUtc",
-            "TargetEntityName LIKE '%' + @SearchTerm + '%'",
-            "CreatedDateUtc DESC",
-            false);
+        const string sql = @"
+;WITH Cte AS (
+    SELECT WorkflowInstanceId, TenantId, TargetEntityName, TargetEntityId, StatusCodeId AS StatusCode, SubmittedDateUtc
+    FROM Workflow.WorkflowInstance
+    WHERE TenantId = @TenantId
+      AND (COL_LENGTH('Workflow.WorkflowInstance', 'IsDeleted') IS NULL OR IsDeleted = 0)
+      AND (@SearchTerm IS NULL OR @SearchTerm = '' OR TargetEntityName LIKE '%' + @SearchTerm + '%' OR CONVERT(NVARCHAR(50), TargetEntityId) LIKE '%' + @SearchTerm + '%')
+)
+SELECT * FROM Cte
+ORDER BY SubmittedDateUtc DESC
+OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+
+SELECT COUNT(1)
+FROM Workflow.WorkflowInstance
+WHERE TenantId = @TenantId
+  AND (COL_LENGTH('Workflow.WorkflowInstance', 'IsDeleted') IS NULL OR IsDeleted = 0)
+  AND (@SearchTerm IS NULL OR @SearchTerm = '' OR TargetEntityName LIKE '%' + @SearchTerm + '%' OR CONVERT(NVARCHAR(50), TargetEntityId) LIKE '%' + @SearchTerm + '%');";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var multi = await cn.QueryMultipleAsync(

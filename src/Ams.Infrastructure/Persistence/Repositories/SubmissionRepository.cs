@@ -14,7 +14,7 @@ public sealed class SubmissionRepository : ISubmissionRepository
     // ── Submission Register ───────────────────────────────────────────
 
     private const string SubmissionColumns = @"
-        s.SubmissionId, s.TenantId, s.AccountId, a.AccountName,
+        s.SubmissionId, s.TenantId, s.AccountId, a.AccountName, s.OpportunityId, o.OpportunityName,
         s.SubmissionNumber, s.LineOfBusiness, s.Status, s.Priority,
         s.AssignedToUserId, u.FullName AS AssignedToUserName,
         s.EffectiveDate, s.ExpirationDate, s.TargetPremium,
@@ -25,13 +25,14 @@ public sealed class SubmissionRepository : ISubmissionRepository
         const string sql = @"
 ;WITH Cte AS
 (
-    SELECT s.SubmissionId, s.TenantId, s.AccountId, a.AccountName,
+    SELECT s.SubmissionId, s.TenantId, s.AccountId, a.AccountName, s.OpportunityId, o.OpportunityName,
            s.SubmissionNumber, s.LineOfBusiness, s.Status, s.Priority,
            s.AssignedToUserId, u.FullName AS AssignedToUserName,
            s.EffectiveDate, s.ExpirationDate, s.TargetPremium,
            s.MarketCount, s.QuoteCount, s.CreatedDateUtc, s.ModifiedDateUtc
     FROM   Submissions.Submission s
     JOIN   Core.Account           a ON a.AccountId = s.AccountId
+    JOIN   CRM.Opportunity        o ON o.OpportunityId = s.OpportunityId
     LEFT JOIN Core.[User]         u ON u.UserId    = s.AssignedToUserId
     WHERE  s.TenantId   = @TenantId
       AND  s.IsDeleted  = 0
@@ -69,13 +70,14 @@ WHERE  s.TenantId  = @TenantId
     public async Task<SubmissionDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-SELECT s.SubmissionId, s.TenantId, s.AccountId, a.AccountName,
+SELECT s.SubmissionId, s.TenantId, s.AccountId, a.AccountName, s.OpportunityId, o.OpportunityName,
        s.SubmissionNumber, s.LineOfBusiness, s.Status, s.Priority,
        s.AssignedToUserId, u.FullName AS AssignedToUserName,
        s.EffectiveDate, s.ExpirationDate, s.TargetPremium,
        s.MarketCount, s.QuoteCount, s.CreatedDateUtc, s.ModifiedDateUtc
 FROM   Submissions.Submission s
 JOIN   Core.Account           a ON a.AccountId = s.AccountId
+JOIN   CRM.Opportunity        o ON o.OpportunityId = s.OpportunityId
 LEFT JOIN Core.[User]         u ON u.UserId    = s.AssignedToUserId
 WHERE  s.SubmissionId = @Id AND s.IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -86,11 +88,11 @@ WHERE  s.SubmissionId = @Id AND s.IsDeleted = 0;";
     {
         const string sql = @"
 INSERT INTO Submissions.Submission
-    (SubmissionId, TenantId, AccountId, SubmissionNumber, LineOfBusiness, Status, Priority,
+    (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, Priority,
      AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium, MarketCount, QuoteCount,
      CreatedDateUtc, IsDeleted)
 VALUES
-    (@SubmissionId, @TenantId, @AccountId,
+    (@SubmissionId, @TenantId, @AccountId, @OpportunityId,
      'SUB-' + FORMAT(GETUTCDATE(), 'yyyyMMdd') + '-' + RIGHT('0000' + CAST(NEXT VALUE FOR Submissions.SubmissionSeq AS VARCHAR), 4),
      @LineOfBusiness, 'Draft', @Priority,
      @AssignedToUserId, @EffectiveDate, @ExpirationDate, @TargetPremium, 0, 0,
@@ -102,6 +104,7 @@ VALUES
             SubmissionId     = id,
             request.TenantId,
             request.AccountId,
+            request.OpportunityId,
             request.LineOfBusiness,
             request.Priority,
             request.AssignedToUserId,

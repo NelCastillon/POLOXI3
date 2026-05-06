@@ -1,0 +1,73 @@
+@page "/portal/mobile-installs"
+@namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Mobile Installs — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
+
+<AppPageHeader Title="Mobile Installs" Subtitle="Native mobile app installations and adoption for client portal users" Icon="bi-phone">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/portal/my-account")'><i class="bi bi-arrow-left" aria-hidden="true"></i> My Account</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/portal/mobile")'><i class="bi bi-gear" aria-hidden="true"></i> Mobile Config</button>
+    </Actions>
+</AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>
+}
+
+<div class="pma-kpi-strip">
+    @Kpi("Total Installs", _items.Sum(x => x.Count).ToString("N0"), "bi-phone", "")
+    @Kpi("iOS", _items.Where(x => x.Category == "iOS").Sum(x => x.Count).ToString("N0"), "bi-apple", "iOS")
+    @Kpi("Android", _items.Where(x => x.Category == "Android").Sum(x => x.Count).ToString("N0"), "bi-android2", "Android")
+    @Kpi("Active", _items.Where(x => x.Status == "Active").Sum(x => x.Count).ToString("N0"), "bi-check-circle", "Active")
+</div>
+
+<div class="pma-panel app-datagrid">
+    <div class="pma-panel-hdr"><i class="bi bi-phone" aria-hidden="true"></i> Install Detail</div>
+    <div class="api-filter-bar">
+        <input class="api-search" placeholder="Search account, owner, or device…" @bind="_search" @bind:event="oninput" />
+        <select class="api-search" @bind="_filter"><option value="">All</option><option>iOS</option><option>Android</option><option>Active</option><option>Inactive</option></select>
+    </div>
+    <SfGrid TValue="PortalMetricRecordDto" DataSource="Filtered" AllowSorting="true" AllowPaging="true" AllowTextWrap="true" RowHeight="56">
+        <GridTextWrapSettings WrapMode="WrapMode.Content" />
+        <GridPageSettings PageSize="20" />
+        <GridColumns>
+            <GridColumn Field="@nameof(PortalMetricRecordDto.Name)" HeaderText="Account / User" MinWidth="220" />
+            <GridColumn Field="@nameof(PortalMetricRecordDto.Category)" HeaderText="Platform" Width="120" />
+            <GridColumn Field="@nameof(PortalMetricRecordDto.Status)" HeaderText="Status" Width="120" />
+            <GridColumn Field="@nameof(PortalMetricRecordDto.Owner)" HeaderText="Owner" MinWidth="160" />
+            <GridColumn Field="@nameof(PortalMetricRecordDto.Detail)" HeaderText="Device / Version" MinWidth="220" />
+            <GridColumn Field="@nameof(PortalMetricRecordDto.EventDateUtc)" HeaderText="Last Seen" Width="140" Type="ColumnType.DateTime" Format="MMM d, yyyy" />
+            <GridColumn Field="@nameof(PortalMetricRecordDto.Count)" HeaderText="Installs" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+        </GridColumns>
+    </SfGrid>
+</div>
+
+@code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+    private string _search = string.Empty;
+    private string _filter = string.Empty;
+    private string? _loadError;
+    private List<PortalMetricRecordDto> _items = [];
+
+    private IEnumerable<PortalMetricRecordDto> Filtered => _items.Where(i =>
+        (string.IsNullOrEmpty(_filter) || i.Category == _filter || i.Status == _filter) &&
+        (string.IsNullOrEmpty(_search) || i.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || i.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase) || i.Detail.Contains(_search, StringComparison.OrdinalIgnoreCase)));
+
+    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("Mobile Installs", "")); await LoadAsync(); }
+
+    private async Task LoadAsync()
+    {
+        try { _loadError = null; _items = (await Api.SearchPortalMetricRecordsAsync(_tenantId, "PortalMobileInstall"))?.Items.ToList() ?? []; }
+        catch (Exception ex) { _loadError = $"Unable to load mobile installs: {ex.Message}"; if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = _loadError, CssClass = "e-toast-danger" }); }
+    }
+
+    private RenderFragment Kpi(string label, string value, string icon, string filter) => @<button type="button" class="pma-kpi-card pma-ki-purple" @onclick="() => _filter = _filter == filter ? string.Empty : filter"><i class="bi @icon pma-kpi-icon"></i><div><div class="pma-kpi-value">@value</div><div class="pma-kpi-label">@label</div><span>@(string.IsNullOrEmpty(filter) ? "all records" : "click to filter")</span></div></button>;
+}

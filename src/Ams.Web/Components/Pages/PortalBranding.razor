@@ -1,5 +1,6 @@
 @page "/portal/branding"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Portal Branding — AMS</PageTitle>
@@ -167,14 +168,43 @@
 </div>
 
 @code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private SfToast? _toast;
+    private Guid _recordId;
 
     private BrandSettings _brand = new();
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Branding",""));
-        ResetDefaults();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var settings = await Api.GetPortalBrandingSettingsAsync(_tenantId);
+        var records = await Api.SearchPortalAdminRecordsAsync(_tenantId, "PortalBranding");
+        _recordId = records?.Items.FirstOrDefault()?.PortalAdminRecordId ?? Guid.Empty;
+        if (settings is null) { ResetDefaults(); return; }
+        _brand = new BrandSettings
+        {
+            DisplayName = settings.DisplayName,
+            Domain = settings.Domain,
+            SupportEmail = settings.SupportEmail,
+            SupportPhone = settings.SupportPhone,
+            WelcomeMessage = settings.WelcomeMessage,
+            PrimaryColor = settings.PrimaryColor,
+            AccentColor = settings.AccentColor,
+            NavBg = settings.NavBg,
+            NavText = settings.NavText,
+            EmailFromName = settings.EmailFromName,
+            EmailReplyTo = settings.EmailReplyTo,
+            EmailFooter = settings.EmailFooter,
+            ShowAgencyLogo = settings.ShowAgencyLogo,
+            ShowPoweredBy = settings.ShowPoweredBy,
+            ShowSupportChat = settings.ShowSupportChat,
+            ShowNewsWidget = settings.ShowNewsWidget
+        };
     }
 
     private void ResetDefaults()
@@ -202,6 +232,9 @@
 
     private async Task SaveAsync()
     {
+        var json = System.Text.Json.JsonSerializer.Serialize(_brand);
+        if (_recordId != Guid.Empty)
+            await Api.UpdatePortalAdminRecordAsync(_recordId, new UpsertPortalAdminRecordRequest(_tenantId, "PortalBranding", "branding", _brand.DisplayName, "Active", json));
         if (_toast is not null)
             await _toast.ShowAsync(new ToastModel { Content = "Portal branding saved successfully.", CssClass = "e-toast-success" });
     }

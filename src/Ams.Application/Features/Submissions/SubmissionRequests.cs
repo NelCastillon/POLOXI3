@@ -3,6 +3,7 @@ namespace Ams.Application.Features.Submissions;
 public sealed record CreateSubmissionRequest(
     Guid TenantId,
     Guid AccountId,
+    Guid OpportunityId,
     string LineOfBusiness,
     string Priority,
     DateTime EffectiveDate,

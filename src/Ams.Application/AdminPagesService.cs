@@ -19,6 +19,7 @@ public class AdminPagesService :
     ISlaPolicyService
 {
     private readonly IBusinessRuleRepository _businessRuleRepository;
+    private readonly IDepartmentRepository _departmentRepository;
     private readonly IDepartmentTeamRepository _departmentTeamRepository;
     private readonly IProducerStaffRepository _producerStaffRepository;
     private readonly ISystemSettingsRepository _systemSettingsRepository;
@@ -30,6 +31,7 @@ public class AdminPagesService :
 
     public AdminPagesService(
         IBusinessRuleRepository businessRuleRepository,
+        IDepartmentRepository departmentRepository,
         IDepartmentTeamRepository departmentTeamRepository,
         IProducerStaffRepository producerStaffRepository,
         ISystemSettingsRepository systemSettingsRepository,
@@ -40,6 +42,7 @@ public class AdminPagesService :
         ISlaPolicyRepository slaPolicyRepository)
     {
         _businessRuleRepository = businessRuleRepository;
+        _departmentRepository = departmentRepository;
         _departmentTeamRepository = departmentTeamRepository;
         _producerStaffRepository = producerStaffRepository;
         _systemSettingsRepository = systemSettingsRepository;
@@ -77,6 +80,21 @@ public class AdminPagesService :
     #endregion
 
     #region Departments & Teams
+
+    public Task<IReadOnlyList<DepartmentDto>> GetDepartmentsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _departmentRepository.GetAllAsync(tenantId, cancellationToken);
+
+    public Task<DepartmentDto?> GetDepartmentByIdAsync(Guid departmentId, CancellationToken cancellationToken = default)
+        => _departmentRepository.GetByIdAsync(departmentId, cancellationToken);
+
+    public Task<Guid> CreateDepartmentAsync(DepartmentDto department, Guid userId, CancellationToken cancellationToken = default)
+        => _departmentRepository.CreateAsync(department, userId, cancellationToken);
+
+    public Task UpdateDepartmentAsync(DepartmentDto department, Guid userId, CancellationToken cancellationToken = default)
+        => _departmentRepository.UpdateAsync(department, userId, cancellationToken);
+
+    public Task DeleteDepartmentAsync(Guid departmentId, CancellationToken cancellationToken = default)
+        => _departmentRepository.DeleteAsync(departmentId, cancellationToken);
 
     public Task<IReadOnlyList<DepartmentTeamDto>> GetTeamsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _departmentTeamRepository.GetAllAsync(tenantId, cancellationToken);

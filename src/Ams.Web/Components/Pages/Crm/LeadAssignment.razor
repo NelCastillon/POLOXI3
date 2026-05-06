@@ -410,7 +410,7 @@
             <div class="la-form-group">
                 <label for="producer">Assign to Producer</label>
                 <SfDropDownList TItem="ProducerRow" 
-                               TValue="int" 
+                               TValue="Guid" 
                                DataSource="_producers"
                                @bind-Value="_selectedProducerId"
                                ID="producer"
@@ -468,7 +468,7 @@ else if (_drawerMode == "assign-bulk" && _drawerOpen)
                 <div class="la-form-group">
                     <label for="bulk-producer">Assign All to</label>
                     <SfDropDownList TItem="ProducerRow" 
-                                   TValue="int" 
+                                   TValue="Guid" 
                                    DataSource="_producers"
                                    @bind-Value="_selectedProducerId"
                                    ID="bulk-producer"
@@ -505,8 +505,8 @@ else if (_drawerMode == "assign-bulk" && _drawerOpen)
 @code {
     // ── Types ───────────────────────────────────────────────────────────
     private sealed record View(string Id, string Label, string Icon);
-    private sealed record LeadRow(int Id, string Name, string Company, int Score, string Source, string Email, DateTime CreatedDate);
-    private sealed record ProducerRow(int Id, string Name, string Title, int LeadCount, int Capacity);
+    private sealed record LeadRow(Guid Id, string Name, string Company, int Score, string Source, string Email, DateTime CreatedDate);
+    private sealed record ProducerRow(Guid Id, string Name, string Title, int LeadCount, int Capacity);
     private sealed record RuleRow(int Id, string Name, string Strategy, string Criteria, string ProducerGroup, int MaxAssignments, bool Active);
     private sealed record HistoryRow(int Id, string LeadName, string ProducerName, DateTime AssignedDate, string Method);
     private sealed record KpiData(int UnassignedLeads, int TotalProducers, double AvgLeadsPerProducer, double WorkloadBalance);
@@ -530,9 +530,9 @@ else if (_drawerMode == "assign-bulk" && _drawerOpen)
     private List<ProducerRow> _producers = [];
     private List<RuleRow> _rules = [];
     private List<HistoryRow> _history = [];
-    private HashSet<int> _selectedLeads = [];
+    private HashSet<Guid> _selectedLeads = [];
     private LeadRow? _selectedLead;
-    private int _selectedProducerId;
+    private Guid _selectedProducerId;
     private string _drawerMode = string.Empty;
     private bool _drawerOpen;
     private string _assignmentNotes = string.Empty;
@@ -573,7 +573,7 @@ else if (_drawerMode == "assign-bulk" && _drawerOpen)
                 _leads = leadsResult.Items
                     .Where(l => l.AssignedToUserId == null) // Only unassigned leads
                     .Select(l => new LeadRow(
-                        (int)l.LeadId.GetHashCode(),
+                        l.LeadId,
                         $"{l.FirstName} {l.LastName}",
                         l.AccountName ?? "Unknown",
                         l.Score ?? 0,
@@ -591,11 +591,11 @@ else if (_drawerMode == "assign-bulk" && _drawerOpen)
                 _producers = usersResult.Items
                     .Where(u => u.StatusCode == "Active") // Only active users
                     .Select(u => new ProducerRow(
-                        (int)u.UserId.GetHashCode(),
+                        u.UserId,
                         u.FullName,
                         u.JobTitle ?? "Producer",
-                        0, // TODO: Load actual lead count from database
-                        20  // TODO: Load actual capacity from database
+                        leadsResult?.Items?.Count(l => l.AssignedToUserId == u.UserId) ?? 0,
+                        20
                     ))
                     .ToList();
             }
@@ -672,7 +672,7 @@ else if (_drawerMode == "assign-bulk" && _drawerOpen)
     }
 
     // ── Selection ────────────────────────────────────────────────────────
-    private void ToggleLead(int id, bool selected)
+    private void ToggleLead(Guid id, bool selected)
     {
         if (selected) _selectedLeads.Add(id);
         else _selectedLeads.Remove(id);
@@ -681,7 +681,7 @@ else if (_drawerMode == "assign-bulk" && _drawerOpen)
     private void SelectAllLeads(bool selected)
     {
         if (selected)
-            _selectedLeads = new HashSet<int>(GetVisibleLeads().Select(l => l.Id));
+            _selectedLeads = new HashSet<Guid>(GetVisibleLeads().Select(l => l.Id));
         else
             _selectedLeads.Clear();
     }
@@ -691,7 +691,7 @@ else if (_drawerMode == "assign-bulk" && _drawerOpen)
     {
         _drawerMode = "assign-single";
         _selectedLead = lead;
-        _selectedProducerId = 0;
+        _selectedProducerId = Guid.Empty;
         _assignmentNotes = string.Empty;
         _drawerOpen = true;
     }
@@ -701,13 +701,13 @@ else if (_drawerMode == "assign-bulk" && _drawerOpen)
         _drawerMode = "assign-bulk";
         _bulkStrategy = "Manual";
         _bulkGroup = "All";
-        _selectedProducerId = 0;
+        _selectedProducerId = Guid.Empty;
         _drawerOpen = true;
     }
 
     private async Task AssignLead()
     {
-        if (_selectedLead == null || _selectedProducerId == 0)
+        if (_selectedLead == null || _selectedProducerId == Guid.Empty)
         {
             await ShowToast("warning", "Invalid Selection", "Please select both lead and producer");
             return;
@@ -830,10 +830,10 @@ else if (_drawerMode == "assign-bulk" && _drawerOpen)
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
-    private string GetAvatarColor(int id)
+    private string GetAvatarColor(Guid id)
     {
         if (_avatarColors?.Length == 0) return "#cccccc";
-        return _avatarColors[Math.Abs(id) % _avatarColors.Length];
+        return _avatarColors[Math.Abs(id.GetHashCode()) % _avatarColors.Length];
     }
 
     private string GetScoreBadgeClass(int score) => score switch

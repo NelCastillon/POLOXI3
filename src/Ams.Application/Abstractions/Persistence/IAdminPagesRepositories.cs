@@ -29,6 +29,18 @@ public interface IDepartmentTeamRepository
 }
 
 /// <summary>
+/// Repository interface for departments
+/// </summary>
+public interface IDepartmentRepository
+{
+    Task<IReadOnlyList<DepartmentDto>> GetAllAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<DepartmentDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<Guid> CreateAsync(DepartmentDto department, Guid userId, CancellationToken cancellationToken = default);
+    Task UpdateAsync(DepartmentDto department, Guid userId, CancellationToken cancellationToken = default);
+    Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
 /// Repository interface for producers and staff
 /// </summary>
 public interface IProducerStaffRepository

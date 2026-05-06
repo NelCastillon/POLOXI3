@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Operations;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -51,5 +52,16 @@ public sealed class AgreementRepository : IAgreementRepository
             PageNumber = pageNumber,
             PageSize = pageSize
         };
+    }
+
+    public async Task<Guid> CreateAsync(CreateAgreementRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+INSERT INTO Sales.Agreement (AgreementId, TenantId, AgreementNumber, AccountId, OpportunityId, AgreementStatusCodeId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES (@AgreementId, @TenantId, @AgreementNumber, @AccountId, NULL, 1, SYSUTCDATETIME(), @CreatedByUserId, 0);";
+        var id = Guid.NewGuid();
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { AgreementId = id, request.TenantId, request.AgreementNumber, request.AccountId, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        return id;
     }
 }

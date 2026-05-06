@@ -1,4 +1,6 @@
 @page "/iam/roles/{RoleId:guid}"
+@page "/roles/{RoleId:guid}"
+@page "/tenant/security/roles/{RoleId:guid}"
 @rendermode @(new InteractiveServerRenderMode(prerender: false))
 @inject ApiClient Api
 @inject NavigationManager Nav
@@ -98,6 +100,33 @@ else
                     @(_role.IsActive ? "Deactivate" : "Activate")
                 </button>
             </div>
+        </div>
+
+        <div class="rd-kpi-strip" aria-label="Role detail sections">
+            <button type="button" class="rd-kpi-card @TabKpiClass("overview")" @onclick='() => SetTab("overview")' title="View role summary and audit flags">
+                <span class="rd-kpi-icon rd-kpi-icon--overview"><i class="bi bi-info-circle" aria-hidden="true"></i></span>
+                <span><strong>@_role.RoleTypeCode</strong><small>Overview</small></span>
+            </button>
+            <button type="button" class="rd-kpi-card @TabKpiClass("permissions")" @onclick='() => SetTab("permissions")' title="View permissions assigned to this role">
+                <span class="rd-kpi-icon rd-kpi-icon--permissions"><i class="bi bi-key" aria-hidden="true"></i></span>
+                <span><strong>@AssignedPermissionCount</strong><small>Permissions</small></span>
+            </button>
+            <button type="button" class="rd-kpi-card @TabKpiClass("users")" @onclick='() => SetTab("users")' title="View users assigned to this role">
+                <span class="rd-kpi-icon rd-kpi-icon--users"><i class="bi bi-people" aria-hidden="true"></i></span>
+                <span><strong>@AssignedUserCount</strong><small>Assigned Users</small></span>
+            </button>
+            <button type="button" class="rd-kpi-card @TabKpiClass("scopes")" @onclick='() => SetTab("scopes")' title="View access scopes held by role users">
+                <span class="rd-kpi-icon rd-kpi-icon--scopes"><i class="bi bi-diagram-3" aria-hidden="true"></i></span>
+                <span><strong>@(_scopesLoaded ? _scopes.Count : "—")</strong><small>Scope Defaults</small></span>
+            </button>
+            <button type="button" class="rd-kpi-card @TabKpiClass("sod")" @onclick='() => SetTab("sod")' title="View segregation-of-duty conflicts">
+                <span class="rd-kpi-icon @(_sodLoaded && _sodConflicts.Count > 0 ? "rd-kpi-icon--danger" : "rd-kpi-icon--safe")"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>
+                <span><strong>@(_sodLoaded ? _sodConflicts.Count : "—")</strong><small>SoD Conflicts</small></span>
+            </button>
+            <button type="button" class="rd-kpi-card @TabKpiClass("audit")" @onclick='() => SetTab("audit")' title="View audit timeline and field changes">
+                <span class="rd-kpi-icon rd-kpi-icon--audit"><i class="bi bi-clock-history" aria-hidden="true"></i></span>
+                <span><strong>@(_auditLoaded ? _timeline.Count + _fieldChanges.Count : "—")</strong><small>Audit Events</small></span>
+            </button>
         </div>
 
         <!-- ── Tabs ───────────────────────────────────── -->
@@ -706,6 +735,7 @@ else
                             </div>
                         </div>
                         <SfGrid TValue="UserScopeDto"
+                                DataSource="@filteredScopes"
                                 AllowPaging="true" AllowSorting="true" RowHeight="48">
                             <GridPageSettings PageSize="20" />
                             <GridColumns>
@@ -891,6 +921,7 @@ else
                                 </div>
                             </div>
                             <SfGrid TValue="FieldChangeLogDto"
+                                    DataSource="@filteredChanges"
                                     AllowPaging="true" AllowSorting="true" RowHeight="48">
                                 <GridPageSettings PageSize="20" />
                                 <GridColumns>
@@ -1060,7 +1091,15 @@ else
     private SfToast? _toast;
 
     // ── Lifecycle ─────────────────────────────────────────────
-    protected override async Task OnInitializedAsync() => await LoadRoleAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadRoleAsync();
+        if (_role is not null)
+        {
+            await LoadPermissionsAsync();
+            await LoadUserRolesAsync();
+        }
+    }
 
     private async Task LoadRoleAsync()
     {
@@ -1166,7 +1205,13 @@ else
         finally { _loadingAudit = false; _auditLoaded = true; StateHasChanged(); }
     }
 
-    private void GoBack() => Nav.NavigateTo("/iam/roles");
+    private void GoBack() => Nav.NavigateTo("/tenant/security/roles");
+
+    private int AssignedPermissionCount => _permissions.Count > 0 ? _permissions.Count : _role?.PermissionCount ?? 0;
+
+    private int AssignedUserCount => _userRoles.Count > 0 ? _userRoles.Count : _role?.UserCount ?? 0;
+
+    private string TabKpiClass(string tab) => _activeTab == tab ? "rd-kpi-card--active" : string.Empty;
 
     // ── Permissions helpers ───────────────────────────────────
     private HashSet<Guid> AssignedIds => [.. _permissions.Select(p => p.PermissionId)];

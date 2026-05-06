@@ -109,6 +109,13 @@
     </div>
 </div>
 
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
 <!-- Queue grid -->
 <div class="eq-grid-wrap">
     <SfGrid DataSource="FilteredItems" AllowSorting="true" AllowPaging="true" Height="520px">
@@ -187,6 +194,7 @@
     private SfToast _toast = default!;
     private string _search = "", _filterStatus = "", _filterPriority = "";
     private bool _showRequest, _showVoid;
+    private string? _loadError;
     private string? _reqDoc, _reqSigner, _reqEmail, _reqPriority = "Normal", _reqMessage;
     private DateTime _reqDue = DateTime.Today.AddDays(5);
     private ESignRow? _voidTarget;
@@ -222,27 +230,43 @@
 
     private async Task LoadAsync()
     {
-        var dtos = await Api.GetESignRequestsAsync(_tenantId);
-        _items = (dtos ?? []).Select(d => new ESignRow(
-            d.ESignRequestId, d.Document, d.PolicyNumber,
-            d.SignerName, d.SignerEmail, d.Priority, d.Status,
-            d.IsOverdue, d.SentDate, d.DueDate, d.CompletedDate)).ToList();
+        _loadError = null;
+        try
+        {
+            var dtos = await Api.GetESignRequestsAsync(_tenantId);
+            _items = (dtos ?? []).Select(d => new ESignRow(
+                d.ESignRequestId, d.Document, d.PolicyNumber,
+                d.SignerName, d.SignerEmail, d.Priority, d.Status,
+                d.IsOverdue, d.SentDate, d.DueDate, d.CompletedDate)).ToList();
+        }
+        catch (Exception ex)
+        {
+            _items = [];
+            _loadError = $"Failed to load e-signature requests: {ex.Message}";
+        }
     }
 
     async Task SendRequestAsync()
     {
-        var docId = Guid.NewGuid(); // placeholder until doc selector is wired to real DocumentId
-        await Api.SendESignRequestAsync(new SendESignRequest(
-            _tenantId, docId,
-            _reqSigner ?? string.Empty,
-            _reqEmail ?? string.Empty,
-            _reqDue,
-            _reqPriority ?? "Normal",
-            _reqMessage));
-        _showRequest = false;
-        _reqDoc = _reqSigner = _reqEmail = _reqMessage = null; _reqPriority = "Normal";
-        await LoadAsync();
-        await _toast.ShowAsync(new ToastModel { Content = "Signature request sent.", CssClass = "e-toast-success" });
+        try
+        {
+            var docId = Guid.NewGuid(); // placeholder until doc selector is wired to real DocumentId
+            await Api.SendESignRequestAsync(new SendESignRequest(
+                _tenantId, docId,
+                _reqSigner ?? string.Empty,
+                _reqEmail ?? string.Empty,
+                _reqDue,
+                _reqPriority ?? "Normal",
+                _reqMessage));
+            _showRequest = false;
+            _reqDoc = _reqSigner = _reqEmail = _reqMessage = null; _reqPriority = "Normal";
+            await LoadAsync();
+            await _toast.ShowAsync(new ToastModel { Content = "Signature request sent.", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = $"Send failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
     }
 
     void OpenVoid(ESignRow r) { _voidTarget = r; _voidReason = null; _showVoid = true; }
@@ -250,24 +274,45 @@
     async Task ConfirmVoidAsync()
     {
         if (_voidTarget is null) return;
-        await Api.VoidESignRequestAsync(_voidTarget.ESignRequestId, _voidReason);
-        _showVoid = false;
-        await LoadAsync();
-        await _toast.ShowAsync(new ToastModel { Content = "Request voided.", CssClass = "e-toast-warning" });
+        try
+        {
+            await Api.VoidESignRequestAsync(_voidTarget.ESignRequestId, _voidReason);
+            _showVoid = false;
+            await LoadAsync();
+            await _toast.ShowAsync(new ToastModel { Content = "Request voided.", CssClass = "e-toast-warning" });
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = $"Void failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
     }
 
     async Task Remind(ESignRow r)
     {
-        await Api.RemindESignRequestAsync(r.ESignRequestId);
-        await _toast.ShowAsync(new ToastModel { Content = $"Reminder sent to {r.SignerName}.", CssClass = "e-toast-success" });
+        try
+        {
+            await Api.RemindESignRequestAsync(r.ESignRequestId);
+            await _toast.ShowAsync(new ToastModel { Content = $"Reminder sent to {r.SignerName}.", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = $"Reminder failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
     }
 
     async Task RemindAll()
     {
         var pending = Items.Where(r => r.Status is "Sent" or "Viewed").ToList();
-        foreach (var r in pending)
-            await Api.RemindESignRequestAsync(r.ESignRequestId);
-        await _toast.ShowAsync(new ToastModel { Content = $"Reminders sent to {pending.Count} pending signers.", CssClass = "e-toast-success" });
+        try
+        {
+            foreach (var r in pending)
+                await Api.RemindESignRequestAsync(r.ESignRequestId);
+            await _toast.ShowAsync(new ToastModel { Content = $"Reminders sent to {pending.Count} pending signers.", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = $"Reminder failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
     }
 
     record ESignRow(Guid ESignRequestId, string Document, string? PolicyNumber, string SignerName, string SignerEmail,

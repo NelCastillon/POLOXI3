@@ -42,6 +42,10 @@
         <span>Scanning for duplicates…</span>
     </div>
 }
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+}
 else if (!_groups.Any())
 {
     <div class="ldup-empty-state">
@@ -109,6 +113,7 @@ else
 @code {
     bool _loading = true;
     int _resolved;
+    string? _loadError;
     List<DupGroup> _groups = [];
 
     protected override async Task OnInitializedAsync()
@@ -120,9 +125,22 @@ else
     async Task LoadAsync()
     {
         _loading = true;
-        await Task.Delay(0);
-        _groups = BuildStub();
-        _loading = false;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchLeadsAsync(_tenantId);
+            var leads = result?.Items?.ToList() ?? [];
+            _groups = BuildDuplicateGroups(leads);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Scan failed: {ex.Message}";
+            _groups = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     async Task MergeAsync(DupGroup grp)
@@ -146,24 +164,35 @@ else
 
     static string ConfClass(int c) => c >= 90 ? "high" : c >= 70 ? "med" : "low";
 
-    static List<DupGroup> BuildStub() =>
-    [
-        new("Email address", 97,
-        [
-            new("James","Okafor","j.okafor@bluesky.io","(555) 201-0001","BlueSky Tech","New",74,"Jan 12, 2025", true),
-            new("Jim","Okafor","j.okafor@bluesky.io","(555) 201-0001","Blue Sky Technology","Contacted",68,"Jan 15, 2025", false),
-        ]),
-        new("Name + phone", 84,
-        [
-            new("Maria","Delgado","m.delgado@coastal.com","(555) 202-0002","Coastal Partners","Contacted",63,"Dec 9, 2024", true),
-            new("Maria","Delgado","maria.delgado@gmail.com","(555) 202-0002","Coastal Partners LLC","New",40,"Jan 3, 2025", false),
-        ]),
-        new("Company + email domain", 71,
-        [
-            new("Tyler","Brooks","t.brooks@apexmfg.com","(555) 203-0003","Apex Manufacturing","Qualified",88,"Nov 20, 2024", true),
-            new("T.","Brooks","tyler.b@apexmfg.com","(555) 203-9999","Apex Mfg","New",22,"Jan 18, 2025", false),
-        ]),
-    ];
+    static List<DupGroup> BuildDuplicateGroups(IEnumerable<LeadDto> leads)
+    {
+        var groups = new List<DupGroup>();
+        groups.AddRange(BuildGroups(leads.Where(l => !string.IsNullOrWhiteSpace(l.Email)).GroupBy(l => l.Email!.Trim().ToLowerInvariant()), "Email address", 97));
+        groups.AddRange(BuildGroups(leads.Where(l => !string.IsNullOrWhiteSpace(l.Phone)).GroupBy(l => DigitsOnly(l.Phone!)), "Phone number", 90));
+        groups.AddRange(BuildGroups(leads.GroupBy(l => $"{l.FirstName.Trim().ToLowerInvariant()}|{l.LastName.Trim().ToLowerInvariant()}|{l.AccountName?.Trim().ToLowerInvariant()}"), "Name + company", 84));
+
+        return groups
+            .GroupBy(g => string.Join('|', g.Leads.Select(l => l.LeadId).OrderBy(id => id)))
+            .Select(g => g.OrderByDescending(x => x.Confidence).First())
+            .OrderByDescending(g => g.Confidence)
+            .ThenByDescending(g => g.Leads.Count)
+            .ToList();
+    }
+
+    static IEnumerable<DupGroup> BuildGroups(IEnumerable<IGrouping<string, LeadDto>> source, string reason, int confidence) =>
+        source
+            .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
+            .Select(g => new DupGroup(reason, confidence, g.OrderBy(l => l.CreatedDateUtc).Select((l, i) => new DupLead(l, i == 0)).ToList()));
+
+    static string DigitsOnly(string value) => new(value.Where(char.IsDigit).ToArray());
+
+    static string NormalizeStage(string? stage, int statusCode)
+    {
+        if (!string.IsNullOrWhiteSpace(stage)) return stage.Trim() == "Won" ? "Converted" : stage.Trim() == "Closed" ? "Lost" : stage.Trim();
+        return statusCode switch { 2 => "Contacted", 3 => "Qualified", 4 => "Converted", 5 => "Lost", _ => "New" };
+    }
+
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
 
     class DupGroup(string matchReason, int confidence, List<DupLead> leads)
     {
@@ -172,15 +201,16 @@ else
         public List<DupLead> Leads { get; } = leads;
     }
 
-    class DupLead(string first, string last, string email, string phone, string company, string stage, int score, string createdDate, bool isPrimary)
+    class DupLead(LeadDto lead, bool isPrimary)
     {
-        public string FullName    { get; } = $"{first} {last}";
-        public string Email       { get; } = email;
-        public string Phone       { get; } = phone;
-        public string Company     { get; } = company;
-        public string Stage       { get; } = stage;
-        public int    Score       { get; } = score;
-        public string CreatedDate { get; } = createdDate;
+        public Guid   LeadId      { get; } = lead.LeadId;
+        public string FullName    { get; } = $"{lead.FirstName} {lead.LastName}".Trim();
+        public string Email       { get; } = lead.Email ?? "—";
+        public string Phone       { get; } = lead.Phone ?? "—";
+        public string Company     { get; } = lead.AccountName ?? "—";
+        public string Stage       { get; } = NormalizeStage(lead.NurturingStageCode, lead.StatusCode);
+        public int    Score       { get; } = Math.Clamp(lead.Score ?? 0, 0, 100);
+        public string CreatedDate { get; } = lead.CreatedDateUtc.ToString("MMM d, yyyy");
         public bool   IsPrimary   { get; set; } = isPrimary;
     }
 }

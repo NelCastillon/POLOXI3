@@ -1,5 +1,6 @@
 @page "/portal/mobile"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Mobile Experience Config — AMS</PageTitle>
@@ -168,43 +169,33 @@
 </div>
 
 @code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private SfToast? _toast;
     private bool _showPreview;
+    private Guid _recordId;
 
     private MobileConfig _cfg = new();
 
     private List<PushNotif> _notifications = [];
     private List<MobileFeature> _features = [];
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Mobile Config",""));
-        _cfg = new MobileConfig { AppName = "Sullivan Agency App", BundleId = "com.sullivanagency.client", AppVersion = "2.4.1", BiometricLogin = true, ForceAppLock = true, LockTimeoutMinutes = 15, RequireMfaOnMobile = true };
-        _notifications =
-        [
-            new PushNotif { Name="Renewal Reminders",      Description="Push reminder 60/30/14 days before policy renewal",            Enabled=true  },
-            new PushNotif { Name="Payment Due Alerts",     Description="Notify client when invoice is generated or payment is due",     Enabled=true  },
-            new PushNotif { Name="Claim Status Updates",   Description="Push updates when a claim status changes",                      Enabled=true  },
-            new PushNotif { Name="Request Fulfilled",      Description="Notify when a COI or policy change request is completed",       Enabled=true  },
-            new PushNotif { Name="New Document Available", Description="Alert when agency shares a new document",                       Enabled=true  },
-            new PushNotif { Name="Secure Message Received",Description="Push when a new secure message arrives from the agency",        Enabled=false },
-            new PushNotif { Name="Promotional Messages",   Description="Agency marketing and cross-sell offers",                        Enabled=false },
-        ];
-        _features =
-        [
-            new MobileFeature { Name="View Policies",     Icon="bi-shield-check",      IconCss="pm-fi-blue",   Enabled=true  },
-            new MobileFeature { Name="Request COI",       Icon="bi-file-earmark-text", IconCss="pm-fi-green",  Enabled=true  },
-            new MobileFeature { Name="Pay Invoice",       Icon="bi-credit-card",       IconCss="pm-fi-green",  Enabled=true  },
-            new MobileFeature { Name="ID Cards",          Icon="bi-person-vcard",      IconCss="pm-fi-blue",   Enabled=true  },
-            new MobileFeature { Name="Documents",         Icon="bi-folder2",           IconCss="pm-fi-purple", Enabled=true  },
-            new MobileFeature { Name="Secure Chat",       Icon="bi-chat-lock",         IconCss="pm-fi-amber",  Enabled=true  },
-            new MobileFeature { Name="Claim FNOL",        Icon="bi-exclamation-circle",IconCss="pm-fi-red",    Enabled=false },
-            new MobileFeature { Name="E-Sign",            Icon="bi-pen",               IconCss="pm-fi-purple", Enabled=true  },
-        ];
+        var settings = await Api.GetPortalMobileSettingsAsync(_tenantId);
+        var records = await Api.SearchPortalAdminRecordsAsync(_tenantId, "PortalMobile");
+        _recordId = records?.Items.FirstOrDefault()?.PortalAdminRecordId ?? Guid.Empty;
+        if (settings is null) return;
+        _cfg = new MobileConfig { AppName = settings.AppName, IosUrl = settings.IosUrl, AndroidUrl = settings.AndroidUrl, BundleId = settings.BundleId, AppVersion = settings.AppVersion, BiometricLogin = settings.BiometricLogin, ForceAppLock = settings.ForceAppLock, LockTimeoutMinutes = settings.LockTimeoutMinutes, RequireMfaOnMobile = settings.RequireMfaOnMobile };
+        _notifications = settings.Notifications.Select(n => new PushNotif { Name = n.Name, Description = n.Description, Enabled = n.Enabled }).ToList();
+        _features = settings.Features.Select(f => new MobileFeature { Name = f.Name, Icon = f.Icon, IconCss = f.IconCss, Enabled = f.Enabled }).ToList();
     }
 
     private async Task SaveAsync()
     {
+        var json = System.Text.Json.JsonSerializer.Serialize(new { _cfg.AppName, _cfg.IosUrl, _cfg.AndroidUrl, _cfg.BundleId, _cfg.AppVersion, _cfg.BiometricLogin, _cfg.ForceAppLock, _cfg.LockTimeoutMinutes, _cfg.RequireMfaOnMobile, Notifications = _notifications, Features = _features });
+        if (_recordId != Guid.Empty)
+            await Api.UpdatePortalAdminRecordAsync(_recordId, new UpsertPortalAdminRecordRequest(_tenantId, "PortalMobile", "mobile", _cfg.AppName, "Active", json));
         if (_toast is not null)
             await _toast.ShowAsync(new ToastModel { Content = "Mobile configuration saved.", CssClass = "e-toast-success" });
     }

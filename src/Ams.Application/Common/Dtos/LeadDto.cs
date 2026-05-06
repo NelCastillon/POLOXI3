@@ -4,6 +4,7 @@ public sealed class LeadDto
 {
     public Guid LeadId { get; set; }
     public Guid TenantId { get; set; }
+    public Guid? AccountId { get; set; }
     public string LeadNumber { get; set; } = string.Empty;
     public string? AccountName { get; set; }
     public string FirstName { get; set; } = string.Empty;

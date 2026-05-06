@@ -272,7 +272,7 @@ public sealed class AuditRepository : IAuditRepository
     {
         const string sql = """
             SELECT TOP(@Top) * FROM (
-                SELECT Id AS EntryId, 'Audit' AS SourceType, EntityName, EntityId,
+                SELECT AuditLogId AS EntryId, 'Audit' AS SourceType, EntityName, EntityId,
                        ActionName + ' (' + EventTypeCode + ')' AS Summary, NULL AS Detail,
                        PerformedByUserId, PerformedDateUtc AS OccurredDateUtc
                 FROM Audit.AuditLog

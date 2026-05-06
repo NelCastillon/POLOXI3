@@ -578,8 +578,8 @@ public sealed partial class ApiClient
     }
 
     // User-Role assignments
-    public Task<PagedResult<UserRoleDto>?> SearchUserRolesAsync(Guid tenantId, Guid? userId = null, Guid? roleId = null, bool? isActive = null, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<UserRoleDto>>($"api/iam/user-roles?tenantId={tenantId}&userId={userId}&roleId={roleId}&isActive={isActive}", cancellationToken);
+    public Task<PagedResult<UserRoleDto>?> SearchUserRolesAsync(Guid tenantId, Guid? userId = null, Guid? roleId = null, bool? isActive = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<UserRoleDto>>($"api/iam/user-roles?tenantId={tenantId}&userId={userId}&roleId={roleId}&isActive={isActive}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
     public async Task<Guid> AssignUserRoleAsync(AssignUserRoleRequest request, CancellationToken cancellationToken = default)
     {
@@ -599,8 +599,8 @@ public sealed partial class ApiClient
         => _httpClient.GetFromJsonAsync<IEnumerable<EffectivePermissionDto>>($"api/iam/users/{userId}/effective-permissions", cancellationToken);
 
     // User Scopes
-    public Task<PagedResult<UserScopeDto>?> SearchUserScopesAsync(Guid tenantId, Guid? userId = null, string? scopeTypeCode = null, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<UserScopeDto>>($"api/iam/user-scopes?tenantId={tenantId}&userId={userId}&scopeTypeCode={Uri.EscapeDataString(scopeTypeCode ?? string.Empty)}", cancellationToken);
+    public Task<PagedResult<UserScopeDto>?> SearchUserScopesAsync(Guid tenantId, Guid? userId = null, string? scopeTypeCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<UserScopeDto>>($"api/iam/user-scopes?tenantId={tenantId}&userId={userId}&scopeTypeCode={Uri.EscapeDataString(scopeTypeCode ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
     public Task<IEnumerable<UserScopeDto>?> GetUserScopesAsync(Guid userId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IEnumerable<UserScopeDto>>($"api/iam/users/{userId}/scopes", cancellationToken);
@@ -715,6 +715,67 @@ public sealed partial class ApiClient
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
     }
 
+    public Task<PagedResult<PortalAdminUserDto>?> SearchPortalAdminUsersAsync(Guid tenantId, string? searchTerm = null, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PortalAdminUserDto>>($"api/portal-admin/users?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+
+    public Task<PagedResult<PortalAdminRequestDto>?> SearchPortalAdminRequestsAsync(Guid tenantId, string? searchTerm = null, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PortalAdminRequestDto>>($"api/portal-admin/requests?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+
+    public Task<PagedResult<PortalAdminDocumentDto>?> SearchPortalAdminDocumentsAsync(Guid tenantId, string? searchTerm = null, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PortalAdminDocumentDto>>($"api/portal-admin/documents?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+
+    public Task<PagedResult<PortalAdminActivityDto>?> SearchPortalAdminActivityAsync(Guid tenantId, string? searchTerm = null, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PortalAdminActivityDto>>($"api/portal-admin/activity?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+
+    public Task<PagedResult<PortalCapabilityDto>?> GetPortalCapabilitiesAsync(Guid tenantId, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PortalCapabilityDto>>($"api/portal-admin/capabilities?tenantId={tenantId}", ct);
+
+    public Task<PortalBrandingSettingsDto?> GetPortalBrandingSettingsAsync(Guid tenantId, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PortalBrandingSettingsDto>($"api/portal-admin/branding?tenantId={tenantId}", ct);
+
+    public Task<PortalMobileSettingsDto?> GetPortalMobileSettingsAsync(Guid tenantId, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PortalMobileSettingsDto>($"api/portal-admin/mobile?tenantId={tenantId}", ct);
+
+    public Task<PortalMyAccountDto?> GetPortalMyAccountAsync(Guid tenantId, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PortalMyAccountDto>($"api/portal-admin/my-account?tenantId={tenantId}", ct);
+
+    public async Task UpdatePortalMyAccountAsync(Guid tenantId, PortalMyAccountDto account, CancellationToken ct = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/portal-admin/my-account?tenantId={tenantId}", account, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<PagedResult<PortalMetricRecordDto>?> SearchPortalMetricRecordsAsync(Guid tenantId, string kind, string? searchTerm = null, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PortalMetricRecordDto>>($"api/portal-admin/metrics/{Uri.EscapeDataString(kind)}?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+
+    public Task<PagedResult<PortalAdminRecordDto>?> SearchPortalAdminRecordsAsync(Guid tenantId, string kind, string? searchTerm = null, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PortalAdminRecordDto>>($"api/portal-admin/records?tenantId={tenantId}&kind={Uri.EscapeDataString(kind)}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", ct);
+
+    public async Task SetPortalAdminRecordStatusAsync(Guid id, string status, CancellationToken ct = default)
+    {
+        var response = await _httpClient.PostAsync($"api/portal-admin/records/{id}/status?status={Uri.EscapeDataString(status)}", null, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<Guid> CreatePortalAdminRecordAsync(UpsertPortalAdminRecordRequest request, CancellationToken ct = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/portal-admin/records", request, ct);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: ct))!.Id;
+    }
+
+    public async Task UpdatePortalAdminRecordAsync(Guid id, UpsertPortalAdminRecordRequest request, CancellationToken ct = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/portal-admin/records/{id}", request, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeletePortalAdminRecordAsync(Guid id, CancellationToken ct = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/portal-admin/records/{id}", ct);
+        response.EnsureSuccessStatusCode();
+    }
+
     // -- Account Notes ----------------------------------------
     public Task<PagedResult<AccountNoteDto>?> SearchAccountNotesAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<AccountNoteDto>>($"api/client/account-notes?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
@@ -784,6 +845,28 @@ public sealed partial class ApiClient
     }
 
     // -- Operations -------------------------------------------
+    public Task<PagedResult<TaskItemDto>?> SearchTaskItemsAsync(Guid tenantId, string? searchTerm = null, string? stageCode = null, string? statusCode = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<TaskItemDto>>($"api/ops/tasks?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&stageCode={Uri.EscapeDataString(stageCode ?? string.Empty)}&statusCode={Uri.EscapeDataString(statusCode ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateTaskItemAsync(CreateTaskItemRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/ops/tasks", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateTaskItemAsync(Guid id, UpdateTaskItemRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/ops/tasks/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteTaskItemAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/ops/tasks/{id}?modifiedByUserId={modifiedByUserId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     public Task<PagedResult<AgreementDto>?> SearchAgreementsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<AgreementDto>>($"api/agreements?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -805,6 +888,13 @@ public sealed partial class ApiClient
 
     public Task<PagedResult<EngagementDto>?> SearchEngagementsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<EngagementDto>>($"api/engagements?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public async Task<Guid> CreateEngagementAsync(CreateEngagementRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/engagements", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
 
     public Task<PagedResult<EngagementTaskDto>?> SearchEngagementTasksAsync(Guid tenantId, Guid? engagementId = null, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<EngagementTaskDto>>($"api/engagements/tasks?tenantId={tenantId}&engagementId={engagementId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
@@ -1222,6 +1312,15 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    public Task<PagedResult<CommunicationCampaignDto>?> SearchCommunicationCampaignsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<CommunicationCampaignDto>>($"api/communications/campaigns?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public Task<PagedResult<CommunicationAppointmentDto>?> SearchCommunicationAppointmentsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<CommunicationAppointmentDto>>($"api/communications/appointments?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public Task<PagedResult<CommunicationOutreachContactDto>?> SearchCommunicationOutreachAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<CommunicationOutreachContactDto>>($"api/communications/outreach?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
     // -- Audit ------------------------------------------------
     public Task<PagedResult<AuditLogDto>?> SearchAuditAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<AuditLogDto>>($"api/audit?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
@@ -1343,6 +1442,56 @@ public sealed partial class ApiClient
 
     public Task<PagedResult<ReportDefinitionDto>?> SearchReportDefinitionsAsync(string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<ReportDefinitionDto>>($"api/reports/definitions?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public Task<PagedResult<ReportExecutionDto>?> SearchReportExecutionsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<ReportExecutionDto>>($"api/reports/executions?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public Task<PagedResult<ReportScheduleDto>?> SearchReportSchedulesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<ReportScheduleDto>>($"api/reports/schedules?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public async Task<Guid> RunReportAsync(Guid reportDefinitionId, RunReportRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/reports/definitions/{reportDefinitionId}/run", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public async Task<Guid> ScheduleReportAsync(ScheduleReportRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/reports/schedules", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public Task<PagedResult<MarketingEmailBlastDto>?> SearchMarketingEmailBlastsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<MarketingEmailBlastDto>>($"api/marketing/email-blasts?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public async Task SendMarketingEmailBlastAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/marketing/email-blasts/{id}/send", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task PauseMarketingEmailBlastAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/marketing/email-blasts/{id}/pause", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<PagedResult<MarketingLandingPageDto>?> SearchMarketingLandingPagesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<MarketingLandingPageDto>>($"api/marketing/landing-pages?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public async Task PublishMarketingLandingPageAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/marketing/landing-pages/{id}/publish", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ArchiveMarketingLandingPageAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/marketing/landing-pages/{id}/archive", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
 
     public Task<PagedResult<ConfigurationSettingDto>?> SearchConfigurationSettingsAsync(string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<ConfigurationSettingDto>>($"api/platform/configuration?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);

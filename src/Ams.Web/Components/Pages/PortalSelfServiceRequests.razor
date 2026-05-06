@@ -1,5 +1,6 @@
 @page "/portal/requests"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Self-Service Requests — AMS</PageTitle>
@@ -117,6 +118,7 @@
 </div>
 
 @code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private SfToast? _toast;
     private string _statusTab  = "All";
     private string _search     = string.Empty;
@@ -129,35 +131,43 @@
         (string.IsNullOrEmpty(_search) || r.ClientName.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.Summary.Contains(_search, StringComparison.OrdinalIgnoreCase) || r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
         (string.IsNullOrEmpty(_typeFilter) || r.RequestType == _typeFilter));
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Requests",""));
-        var now = DateTime.Now;
-        _requests =
-        [
-            new SsRequest { Id=1,  SubmittedAt=now.AddMinutes(-12), ClientName="Marcus Lee",      AccountName="Sullivan Manufacturing", RequestType="COI Request",            Summary="COI for Lakeview Office Park — GL/WC",     Priority="Urgent",  AssignedTo="Beth N.",  Status="Open"        },
-            new SsRequest { Id=2,  SubmittedAt=now.AddMinutes(-28), ClientName="James Ortega",    AccountName="Ortega Construction",   RequestType="Policy Change",          Summary="Add new equipment — 2024 Cat Excavator",   Priority="Normal",  AssignedTo="Tom R.",   Status="In Progress" },
-            new SsRequest { Id=3,  SubmittedAt=now.AddMinutes(-45), ClientName="Rachel Nguyen",   AccountName="Nguyen Family HH",      RequestType="Document Upload",        Summary="Uploaded photos of home renovation",       Priority="Low",     AssignedTo="—",        Status="Open"        },
-            new SsRequest { Id=4,  SubmittedAt=now.AddHours(-2),    ClientName="Carlos Vega",     AccountName="Vega Foods Inc",        RequestType="Payment",                Summary="Paid Invoice INV-2025-0481 — $3,200",      Priority="Normal",  AssignedTo="System",   Status="Fulfilled"   },
-            new SsRequest { Id=5,  SubmittedAt=now.AddHours(-3),    ClientName="Nicole Thornton", AccountName="Thornton Household",    RequestType="Secure Message",         Summary="Question re: deductible for claim #042",   Priority="Normal",  AssignedTo="Beth N.",  Status="In Progress" },
-            new SsRequest { Id=6,  SubmittedAt=now.AddHours(-4),    ClientName="Frank Castillo",  AccountName="Castillo Auto Group",   RequestType="COI Request",            Summary="COI for new dealer floor plan lender",     Priority="Urgent",  AssignedTo="Tom R.",   Status="In Progress" },
-            new SsRequest { Id=7,  SubmittedAt=now.AddHours(-5),    ClientName="Brittany Walsh",  AccountName="TechVault Inc",         RequestType="Renewal Questionnaire",  Summary="Submitted 2026 renewal data form",         Priority="Normal",  AssignedTo="System",   Status="Fulfilled"   },
-            new SsRequest { Id=8,  SubmittedAt=now.AddHours(-6),    ClientName="Marcus Lee",      AccountName="Sullivan Manufacturing", RequestType="Claim Intake",          Summary="FNOL — equipment theft at job site",       Priority="Urgent",  AssignedTo="—",        Status="Open"        },
-            new SsRequest { Id=9,  SubmittedAt=now.AddHours(-8),    ClientName="Sandra Kim",      AccountName="Kim Realty LLC",        RequestType="Policy Change",          Summary="Remove 123 Oak Ave from schedule",         Priority="Normal",  AssignedTo="—",        Status="Open"        },
-            new SsRequest { Id=10, SubmittedAt=now.AddHours(-10),   ClientName="James Ortega",    AccountName="Ortega Construction",   RequestType="COI Request",            Summary="COI for River City Bid — GL only",         Priority="Normal",  AssignedTo="Beth N.",  Status="Fulfilled"   },
-        ];
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var result = await Api.SearchPortalAdminRequestsAsync(_tenantId, _search);
+        _requests = result?.Items.Select(r => new SsRequest
+        {
+            Id = r.Id,
+            SubmittedAt = r.SubmittedAt,
+            ClientName = r.ClientName,
+            AccountName = r.AccountName,
+            RequestType = r.RequestType,
+            Summary = r.Summary,
+            Priority = r.Priority,
+            AssignedTo = r.AssignedTo,
+            Status = r.Status
+        }).ToList() ?? [];
     }
 
     private async Task Claim(SsRequest r)
     {
         r.Status = "In Progress"; r.AssignedTo = "Me";
+        await Api.SetPortalAdminRecordStatusAsync(r.Id, r.Status);
         if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Request #{r.Id} claimed.", CssClass = "e-toast-success" });
+        await LoadAsync();
     }
 
     private async Task Fulfill(SsRequest r)
     {
         r.Status = "Fulfilled";
+        await Api.SetPortalAdminRecordStatusAsync(r.Id, r.Status);
         if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Request #{r.Id} marked fulfilled.", CssClass = "e-toast-success" });
+        await LoadAsync();
     }
 
     private static string TypeBadge(string t) => t switch
@@ -194,7 +204,7 @@
 
     private sealed class SsRequest
     {
-        public int      Id          { get; set; }
+        public Guid     Id          { get; set; }
         public DateTime SubmittedAt { get; set; }
         public string   ClientName  { get; set; } = string.Empty;
         public string   AccountName { get; set; } = string.Empty;

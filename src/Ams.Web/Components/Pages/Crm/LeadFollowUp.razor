@@ -3,6 +3,8 @@
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.LeadActivities
 
 <PageTitle>Lead Follow-up — CRM</PageTitle>
 
@@ -559,7 +561,7 @@
             <div class="lf-form-group">
                 <label for="lead">Lead <span class="lf-required">*</span></label>
                 <SfDropDownList TItem="LeadOption" 
-                               TValue="int" 
+                               TValue="Guid" 
                                DataSource="_leadOptions"
                                @bind-Value="_formData.LeadId"
                                ID="lead"
@@ -641,12 +643,12 @@
 @code {
     // ── Types ───────────────────────────────────────────────────────────
     private sealed record View(string Id, string Label, string Icon);
-    private sealed record FollowUpRow(int Id, string LeadName, string CompanyName, int LeadId, string ActivityType, string ContactMethod, DateTime DueDate, string Priority, string Status, string Notes);
-    private sealed record LeadOption(int Id, string Name, string Company);
+    private sealed record FollowUpRow(Guid Id, string LeadName, string CompanyName, Guid LeadId, string ActivityType, string ContactMethod, DateTime DueDate, string Priority, string Status, string Notes);
+    private sealed record LeadOption(Guid Id, string Name, string Company);
     private sealed record KpiData(int ScheduledFollowUps, int OverdueFollowUps, int CompletedFollowUps, double CompletionRate);
     private class FollowUpFormData
     {
-        public int LeadId { get; set; }
+        public Guid LeadId { get; set; }
         public string ActivityType { get; set; } = string.Empty;
         public DateTime DueDate { get; set; }
         public string Priority { get; set; } = "Medium";
@@ -715,18 +717,16 @@
             if (leadsResult?.Items != null)
             {
                 _leadOptions = leadsResult.Items
-                    .Select(l => new LeadOption(
-                        (int)l.LeadId.GetHashCode(),
-                        $"{l.FirstName} {l.LastName}",
-                        l.AccountName ?? "Unknown"
-                    ))
+                    .Select(l => new LeadOption(l.LeadId, $"{l.FirstName} {l.LastName}".Trim(), l.AccountName ?? "Unknown"))
                     .ToList();
             }
 
-            // TODO: Load follow-up activities from LeadActivities API or dedicated follow-up endpoint
-            // Example: var activitiesResult = await Api.SearchLeadActivitiesAsync(_tenantId);
-            // For now, initialize with empty list
-            _allFollowUps = [];
+            var activitiesResult = await Api.SearchLeadActivitiesAsync(_tenantId);
+            var leadLookup = _leadOptions.ToDictionary(l => l.Id);
+            _allFollowUps = activitiesResult?.Items?
+                .Where(a => a.LeadId.HasValue && IsFollowUpActivity(a))
+                .Select(a => MapFollowUp(a, leadLookup))
+                .ToList() ?? [];
 
             UpdateKpi();
             OrganizeFollowUps();
@@ -799,7 +799,7 @@
         _editingFollowUp = null;
         _formData = new()
         {
-            LeadId = 0,
+            LeadId = Guid.Empty,
             ActivityType = string.Empty,
             DueDate = DateTime.Now.AddDays(1),
             Priority = "Medium",
@@ -842,7 +842,7 @@
 
     private async Task SaveFollowUp()
     {
-        if (_formData.LeadId == 0 || string.IsNullOrEmpty(_formData.ActivityType))
+        if (_formData.LeadId == Guid.Empty || string.IsNullOrEmpty(_formData.ActivityType))
         {
             await ShowToast("warning", "Invalid Input", "Please select lead and activity type");
             return;
@@ -853,17 +853,19 @@
 
         try
         {
-            // TODO: Call API to save follow-up when endpoint is available
-            // if (_editingFollowUp != null)
-            //     await Api.UpdateLeadActivityAsync(_editingFollowUp.Id, new UpdateLeadActivityRequest { ... });
-            // else
-            //     await Api.CreateLeadActivityAsync(new CreateLeadActivityRequest 
-            //     { 
-            //         LeadId = _formData.LeadId,
-            //         ActivityType = _formData.ActivityType,
-            //         DueDate = _formData.DueDate,
-            //         ...
-            //     });
+            if (_editingFollowUp is null)
+            {
+                await Api.CreateLeadActivityAsync(new CreateLeadActivityRequest
+                {
+                    TenantId = _tenantId,
+                    LeadId = _formData.LeadId,
+                    ActivityTypeCode = _formData.ActivityType,
+                    Subject = $"Follow-up: {_formData.ActivityType}",
+                    Notes = _formData.Notes,
+                    ActivityDate = _formData.DueDate,
+                    OutcomeCode = _formData.Status,
+                });
+            }
 
             if (_editingFollowUp != null)
             {
@@ -871,7 +873,7 @@
             }
 
             _allFollowUps.Add(new(
-                _editingFollowUp?.Id ?? _allFollowUps.Count + 1,
+                _editingFollowUp?.Id ?? Guid.NewGuid(),
                 lead.Name,
                 lead.Company,
                 _formData.LeadId,
@@ -904,7 +906,39 @@
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
-    private string GetAvatarColor(int id) => _avatarColors[id % _avatarColors.Length];
+    private static bool IsFollowUpActivity(LeadActivityDto activity) =>
+        activity.Subject.Contains("follow", StringComparison.OrdinalIgnoreCase) ||
+        activity.ActivityTypeCode.Contains("follow", StringComparison.OrdinalIgnoreCase) ||
+        activity.OutcomeCode is "Pending" or "Completed" or "Cancelled";
+
+    private static FollowUpRow MapFollowUp(LeadActivityDto activity, IReadOnlyDictionary<Guid, LeadOption> leadLookup)
+    {
+        var lead = activity.LeadId.HasValue && leadLookup.TryGetValue(activity.LeadId.Value, out var option) ? option : null;
+        var status = activity.IsCompleted ? "Completed" : activity.ActivityDate < DateTime.Now ? "Overdue" : activity.OutcomeCode ?? "Pending";
+        return new(
+            activity.ActivityId,
+            activity.LeadName ?? lead?.Name ?? "Unknown Lead",
+            lead?.Company ?? "—",
+            activity.LeadId ?? Guid.Empty,
+            activity.ActivityTypeCode,
+            ContactMethod(activity.ActivityTypeCode),
+            activity.ActivityDate,
+            PriorityFromDate(activity.ActivityDate, activity.IsCompleted),
+            status,
+            activity.Notes ?? activity.Subject);
+    }
+
+    private static string ContactMethod(string activityType) => activityType switch
+    {
+        "Call" or "Phone Call" => "Phone Call",
+        "Email" => "Email",
+        "Meeting" => "Meeting",
+        _ => activityType,
+    };
+
+    private static string PriorityFromDate(DateTime dueDate, bool completed) => completed ? "Low" : dueDate.Date <= DateTime.Now.Date ? "High" : dueDate <= DateTime.Now.AddDays(2) ? "Medium" : "Low";
+
+    private string GetAvatarColor(Guid id) => _avatarColors[Math.Abs(id.GetHashCode()) % _avatarColors.Length];
 
     private string GetPriorityClass(string priority) => priority switch
     {

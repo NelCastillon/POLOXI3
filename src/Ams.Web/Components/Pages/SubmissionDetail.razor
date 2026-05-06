@@ -92,12 +92,12 @@ else
 
     <!-- ── KPI STRIP ─────────────────────────────────────────────── -->
     <div class="sd-kpi-strip">
-        @KpiCard("bi-building",       "Markets Targeted",  _markets.Count.ToString(),                         "sd-kpi-mkt")
-        @KpiCard("bi-send-check",     "Submitted To",      _markets.Count(m=>m.Status!="Pending").ToString(), "sd-kpi-sent")
-        @KpiCard("bi-journal-text",   "Quotes Received",   _quotes.Count.ToString(),                          "sd-kpi-q")
-        @KpiCard("bi-cash-stack",     "Lowest Quote",      _quotes.Any() ? _quotes.Min(q=>q.Premium).ToString("C0") : "—", "sd-kpi-low")
-        @KpiCard("bi-cash-coin",      "Highest Quote",     _quotes.Any() ? _quotes.Max(q=>q.Premium).ToString("C0") : "—", "sd-kpi-high")
-        @KpiCard("bi-file-earmark",   "Documents",         _docs.Count.ToString(),                            "sd-kpi-doc")
+        @KpiCard("bi-building",       "Markets Targeted",  _markets.Count.ToString(),                         "sd-kpi-mkt",  "markets", 1)
+        @KpiCard("bi-send-check",     "Submitted To",      _markets.Count(m=>m.Status!="Pending").ToString(), "sd-kpi-sent", "submitted", 1)
+        @KpiCard("bi-journal-text",   "Quotes Received",   _quotes.Count.ToString(),                          "sd-kpi-q",    "quotes", 4)
+        @KpiCard("bi-cash-stack",     "Lowest Quote",      _quotes.Any() ? _quotes.Min(q=>q.Premium).ToString("C0") : "—", "sd-kpi-low", "lowest", 4)
+        @KpiCard("bi-cash-coin",      "Highest Quote",     _quotes.Any() ? _quotes.Max(q=>q.Premium).ToString("C0") : "—", "sd-kpi-high", "highest", 4)
+        @KpiCard("bi-file-earmark",   "Documents",         _docs.Count.ToString(),                            "sd-kpi-doc",  "docs", 2)
     </div>
 
     <!-- ── TABS ──────────────────────────────────────────────────── -->
@@ -230,7 +230,7 @@ else
                             </button>
                         </div>
                         <div class="sd-market-grid">
-                            @foreach (var mkt in _markets)
+                            @foreach (var mkt in FilteredMarkets)
                             {
                                 <div class="sd-mkt-card sd-mkt-@CssMktStatus(mkt.Status)">
                                     <div class="sd-mkt-head">
@@ -293,14 +293,14 @@ else
                         <div class="sd-tab-toolbar">
                             <span class="sd-toolbar-title">
                                 <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
-                                @_docs.Count document@(_docs.Count==1?"":"s")
+                                 @FilteredDocs.Count() document@(FilteredDocs.Count()==1?"":"s")
                             </span>
                             <button class="um-btn um-btn-primary um-btn-sm">
                                 <i class="bi bi-cloud-upload" aria-hidden="true"></i> Upload
                             </button>
                         </div>
                         <div class="sd-doc-type-groups">
-                            @foreach (var grp in _docs.GroupBy(d => d.DocType))
+                            @foreach (var grp in FilteredDocs.GroupBy(d => d.DocType))
                             {
                                 <div class="sd-doc-group">
                                     <div class="sd-doc-group-head">@grp.Key <span>(@grp.Count())</span></div>
@@ -417,13 +417,13 @@ else
                         <div class="sd-tab-toolbar">
                             <span class="sd-toolbar-title">
                                 <i class="bi bi-journal-text" aria-hidden="true"></i>
-                                @_quotes.Count quote@(_quotes.Count==1?"":"s") received
+                                @FilteredQuotes.Count() quote@(FilteredQuotes.Count()==1?"":"s") received
                             </span>
                             <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => _showAddQuote = true'>
                                 <i class="bi bi-plus-lg" aria-hidden="true"></i> Enter Quote
                             </button>
                         </div>
-                        @if (!_quotes.Any())
+                        @if (!FilteredQuotes.Any())
                         {
                             <div class="sd-empty-state">
                                 <i class="bi bi-journal-x sd-empty-icon" aria-hidden="true"></i>
@@ -433,7 +433,7 @@ else
                         else
                         {
                             <div class="sd-quote-grid">
-                                @foreach (var q in _quotes.OrderBy(q => q.Premium))
+                                @foreach (var q in FilteredQuotes.OrderBy(q => q.Premium))
                                 {
                                     <div class="sd-quote-card @(q.Selected ? "sd-quote-selected" : "") @(q.IsLowest ? "sd-quote-lowest" : "")">
                                         @if (q.IsLowest)
@@ -761,6 +761,7 @@ else
     bool   _loading      = true;
     int    _tab          = 0;
     string _commFilter   = "All";
+    string? _kpiFilter   = null;
     bool   _showActionDlg = false;
     bool   _showAddMarket = false;
     bool   _showAddQuote  = false;
@@ -782,6 +783,23 @@ else
     QuoteItem _newQuote = new();
 
     double QProgress => _questions.Count == 0 ? 0 : (double)_questions.Count(q => q.Answered) / _questions.Count * 100;
+
+    IEnumerable<Market> FilteredMarkets => _kpiFilter switch
+    {
+        "markets" => _markets,
+        "submitted" => _markets.Where(m => m.Status != "Pending"),
+        _ => _markets,
+    };
+
+    IEnumerable<QuoteItem> FilteredQuotes => _kpiFilter switch
+    {
+        "quotes" => _quotes,
+        "lowest" => _quotes.Where(q => q.IsLowest),
+        "highest" => _quotes.Any() ? _quotes.Where(q => q.Premium == _quotes.Max(x => x.Premium)) : [],
+        _ => _quotes,
+    };
+
+    IEnumerable<DocItem> FilteredDocs => _kpiFilter == "docs" ? _docs : _docs;
 
     // ── Domain models ─────────────────────────────────────────────
     sealed class SubModel
@@ -1183,9 +1201,21 @@ else
             <span class="sd-field-val">@(string.IsNullOrEmpty(val) ? "—" : val)</span>
         </div>;
 
-    RenderFragment KpiCard(string icon, string label, string val, string css) =>
-        @<div class="sd-kpi-card @css">
+    RenderFragment KpiCard(string icon, string label, string val, string css, string filterKey, int tabIndex)
+    {
+        var isActive = _kpiFilter == filterKey;
+        return @<button type="button"
+                        class="sd-kpi-card @css @(isActive ? "sd-kpi-active" : "")"
+                        @onclick="() => SetKpiFilter(filterKey, tabIndex)"
+                        title="@(isActive ? "Clear filter" : $"Filter by {label}")">
             <div class="sd-kpi-val">@val</div>
             <div class="sd-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
-        </div>;
+        </button>;
+    }
+
+    void SetKpiFilter(string filterKey, int tabIndex)
+    {
+        _kpiFilter = _kpiFilter == filterKey ? null : filterKey;
+        _tab = tabIndex;
+    }
 }

@@ -9,7 +9,7 @@ public sealed class ESignRepository : IESignRepository
 {
     private const string SelectColumns = @"
         e.ESignRequestId, e.TenantId, e.DocumentId,
-        d.FileName AS Document, d.PolicyNumber,
+        COALESCE(d.FileName, 'Document unavailable') AS Document, CAST(NULL AS NVARCHAR(100)) AS PolicyNumber,
         e.SignerName, e.SignerEmail, e.Priority, e.Status,
         CASE WHEN e.Status IN ('Sent','Viewed') AND e.DueDate < GETUTCDATE() THEN CAST(1 AS BIT) ELSE CAST(0 AS BIT) END AS IsOverdue,
         e.SentDate, e.DueDate, e.CompletedDate, e.Message, e.VoidReason";

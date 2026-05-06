@@ -1,4 +1,5 @@
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Features.Engagements;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
@@ -24,4 +25,8 @@ public sealed class EngagementsController : ControllerBase
     [HttpGet("tasks")]
     public async Task<IActionResult> SearchTasks([FromQuery] Guid tenantId, [FromQuery] Guid? engagementId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
         => Ok(await _service.SearchTasksAsync(tenantId, engagementId, searchTerm, pageNumber, pageSize, cancellationToken));
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateEngagementRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.CreateAsync(request, cancellationToken));
 }

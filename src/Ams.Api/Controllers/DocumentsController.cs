@@ -18,6 +18,16 @@ public sealed class DocumentsController : ControllerBase
         return item is null ? NotFound() : Ok(item);
     }
 
+    [HttpGet("{id:guid}/download")]
+    public async Task<IActionResult> Download(Guid id, CancellationToken cancellationToken)
+    {
+        var item = await _service.GetByIdAsync(id, cancellationToken);
+        if (item is null) return NotFound();
+
+        var content = System.Text.Encoding.UTF8.GetBytes($"Seed document placeholder for {item.FileName}.");
+        return File(content, item.ContentType ?? "application/octet-stream", item.FileName);
+    }
+
     [HttpGet]
     public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? categoryCode, [FromQuery] string? entityName, [FromQuery] Guid? entityId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
         => Ok(await _service.SearchAsync(tenantId, categoryCode, entityName, entityId, searchTerm, pageNumber, pageSize, cancellationToken));

@@ -32,10 +32,30 @@ public record DepartmentTeamDto
     public Guid TeamId { get; set; }
     public Guid TenantId { get; set; }
     public required string TeamName { get; set; }
+    public string? TeamCode { get; set; }
     public string? Description { get; set; }
     public Guid? DepartmentId { get; set; }
+    public string? DepartmentName { get; set; }
+    public string? ManagerName { get; set; }
     public int MemberCount { get; set; }
     public string? Status { get; set; } // Active, Inactive
+    public bool IsActive { get; set; }
+    public DateTime CreatedDateUtc { get; set; }
+}
+
+/// <summary>
+/// Department DTO for agency department setup
+/// </summary>
+public record DepartmentDto
+{
+    public Guid DepartmentId { get; set; }
+    public Guid TenantId { get; set; }
+    public required string DepartmentName { get; set; }
+    public string? DepartmentCode { get; set; }
+    public string? Description { get; set; }
+    public string? ManagerName { get; set; }
+    public int TeamCount { get; set; }
+    public string? Status { get; set; }
     public bool IsActive { get; set; }
     public DateTime CreatedDateUtc { get; set; }
 }
@@ -52,7 +72,10 @@ public record ProducerStaffDto
     public string? Email { get; set; }
     public string? Phone { get; set; }
     public required string Role { get; set; } // Producer, CSR, Manager
+    public string? Department { get; set; }
+    public string? TeamName { get; set; }
     public string? NpnLicense { get; set; }
+    public string? LicenseStates { get; set; }
     public DateTime? LicenseExpiryDate { get; set; }
     public string? Status { get; set; } // Active, Inactive, Terminated
     public bool IsActive { get; set; }

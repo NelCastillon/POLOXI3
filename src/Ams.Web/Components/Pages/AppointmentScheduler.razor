@@ -1,5 +1,6 @@
 @page "/communications/appointments"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -143,6 +144,13 @@
     @Kpi("bi-arrow-repeat",  "Rescheduled",  _appts.Count(a => a.Status == "Rescheduled").ToString(),                                                             "as-ki-gray")
     @Kpi("bi-graph-up",      "Show Rate",    $"{(_appts.Count(a=>a.Status is "Completed" or "Cancelled") > 0 ? _appts.Count(a=>a.Status=="Completed")*100/_appts.Count(a=>a.Status is "Completed" or "Cancelled") : 0)}%","as-ki-green")
 </div>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
 
 <!-- ── TWO-PANEL LAYOUT ───────────────────────────────────────────── -->
 <div class="as-layout">
@@ -339,10 +347,12 @@
 
 @code {
     SfToast _toast = default!;
+    readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     string _tab          = "today";
     string _search       = "";
     string _typeFilter   = "";
     string _statusFilter = "";
+    string? _loadError;
 
     bool         _showDlg  = false;
     bool         _showLogDlg = false;
@@ -396,10 +406,47 @@
         _          => true
     };
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Communications","/communications/inbox"), new("Appointments",""));
-        BuildStub();
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchCommunicationAppointmentsAsync(_tenantId, _search);
+            _appts = result?.Items.Select(a => new Appointment
+            {
+                Id = a.AppointmentId,
+                AccountName = a.AccountName,
+                ContactName = a.ContactName,
+                Type = a.Type,
+                Channel = a.Channel,
+                Status = a.Status,
+                Duration = a.Duration,
+                Producer = a.Producer,
+                CsrOwner = a.CsrOwner,
+                Branch = a.Branch,
+                Notes = a.Notes,
+                Outcome = a.Outcome,
+                OutcomeNotes = a.OutcomeNotes,
+                FollowUp = a.FollowUp,
+                SendConfirmation = a.SendConfirmation,
+                SendReminder = a.SendReminder,
+                ScheduledDate = a.ScheduledDate,
+                ScheduledTime = a.ScheduledTime
+            }).ToList() ?? [];
+            _selectedAppt ??= _appts.FirstOrDefault(a => a.ScheduledDate?.Date == DateTime.Today) ?? _appts.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load appointments: {ex.Message}";
+            _appts = [];
+            _selectedAppt = null;
+        }
     }
 
     void BuildStub()

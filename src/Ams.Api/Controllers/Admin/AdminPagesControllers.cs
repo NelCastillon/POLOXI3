@@ -219,6 +219,79 @@ public class AdminTeamsController : ControllerBase
 }
 
 [ApiController]
+[Route("api/admin/departments")]
+[Authorize]
+public class AdminDepartmentsController : ControllerBase
+{
+    private readonly AdminPagesService _service;
+    private readonly ILogger<AdminDepartmentsController> _logger;
+
+    public AdminDepartmentsController(AdminPagesService service, ILogger<AdminDepartmentsController> logger)
+    {
+        _service = service;
+        _logger = logger;
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<IReadOnlyList<DepartmentDto>>> GetDepartmentsAsync(
+        [FromQuery] Guid tenantId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var departments = await _service.GetDepartmentsAsync(tenantId, cancellationToken);
+            return Ok(departments);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving departments");
+            return StatusCode(500, new { error = "Failed to retrieve departments" });
+        }
+    }
+
+    [HttpPost]
+    public async Task<ActionResult<Guid>> CreateDepartmentAsync(
+        [FromBody] DepartmentDto department,
+        [FromQuery] Guid tenantId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var userId = Guid.Parse(User.FindFirst("sub")?.Value ?? Guid.Empty.ToString());
+            var id = await _service.CreateDepartmentAsync(department with { TenantId = tenantId }, userId, cancellationToken);
+            return CreatedAtAction(nameof(GetDepartmentAsync), new { id }, id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error creating department");
+            return StatusCode(500, new { error = "Failed to create department" });
+        }
+    }
+
+    [HttpGet("{id}")]
+    public async Task<ActionResult<DepartmentDto>> GetDepartmentAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var department = await _service.GetDepartmentByIdAsync(id, cancellationToken);
+        return department == null ? NotFound() : Ok(department);
+    }
+
+    [HttpPut("{id}")]
+    public async Task<IActionResult> UpdateDepartmentAsync(Guid id, [FromBody] DepartmentDto department, CancellationToken cancellationToken = default)
+    {
+        if (id != department.DepartmentId) return BadRequest(new { error = "ID mismatch" });
+        await _service.UpdateDepartmentAsync(department, Guid.Parse(User.FindFirst("sub")?.Value ?? Guid.Empty.ToString()), cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> DeleteDepartmentAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        await _service.DeleteDepartmentAsync(id, cancellationToken);
+        return NoContent();
+    }
+}
+
+[ApiController]
 [Route("api/admin/staff")]
 [Authorize]
 public class AdminStaffController : ControllerBase

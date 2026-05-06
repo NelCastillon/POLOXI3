@@ -1,0 +1,335 @@
+@namespace Ams.Web.Components.Pages
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="@Title" Subtitle="@Subtitle" Icon="@Icon">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="() => _showSchedule = true">
+            <i class="bi bi-calendar-plus" aria-hidden="true"></i> Schedule
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="ExportVisibleAsync" disabled="@(!_filtered.Any())">
+            <i class="bi bi-download" aria-hidden="true"></i> Export View
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<div class="rl-kpi-strip">
+    @KpiCard(null, "bi-file-earmark-bar-graph", "Reports", _reports.Count.ToString(), "rl-ki-blue")
+    @KpiCard("Scheduled", "bi-calendar-check", "Scheduled", _reports.Count(r => IsScheduled(r.ReportDefinitionId)).ToString(), "rl-ki-green")
+    @KpiCard("Active", "bi-check-circle", "Active", _reports.Count(r => r.IsActive).ToString(), "rl-ki-green")
+    @KpiCard("Recent", "bi-play-circle", "Run 30d", _executions.Count.ToString(), "rl-ki-amber")
+    @KpiCard("Exportable", "bi-download", "Exportable", _reports.Count(r => r.OutputFormats.Contains("Excel") || r.OutputFormats.Contains("CSV")).ToString(), "rl-ki-blue")
+</div>
+
+<div class="rl-filter-bar">
+    <div class="rl-search-wrap">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input class="rl-search" placeholder="Search reports…" @bind="_search" @bind:event="oninput" @bind:after="ApplyFilter" />
+    </div>
+    <select class="rl-sel" @bind="_moduleFilter" @bind:after="ApplyFilter">
+        <option value="">All Modules</option>
+        @foreach (var module in _reports.Select(r => r.ModuleCode).Distinct().Order())
+        {
+            <option value="@module">@module</option>
+        }
+    </select>
+    <select class="rl-sel" @bind="_formatFilter" @bind:after="ApplyFilter">
+        <option value="">All Formats</option>
+        <option value="PDF">PDF</option>
+        <option value="Excel">Excel</option>
+        <option value="CSV">CSV</option>
+    </select>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
+        <i class="bi bi-x" aria-hidden="true"></i>
+    </button>
+    <span class="ms-auto" style="font-size:.75rem;color:var(--um-muted,#64748b)"><strong>@_filtered.Count</strong> report(s)</span>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<div class="rl-list-wrap position-relative">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading reports…</span></div>
+    }
+    <SfGrid TValue="ReportDefinitionDto" DataSource="_filtered" AllowSorting="true" AllowPaging="true" EnableHover="true" RowHeight="52">
+        <GridEvents TValue="ReportDefinitionDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="25" PageSizes="@(new[] { 10, 25, 50 })" />
+        <GridColumns>
+            <GridColumn HeaderText="Report" MinWidth="280" Field="@nameof(ReportDefinitionDto.ReportName)">
+                <Template>
+                    @{ var r = (ReportDefinitionDto)context; }
+                    <div class="rl-list-name-cell">
+                        <div class="rl-list-icon @CatIconCss(r.ModuleCode)"><i class="bi @CatIcon(r.ModuleCode)" aria-hidden="true"></i></div>
+                        <div>
+                            <div class="rl-ln">@r.ReportName</div>
+                            <div class="rl-ld">@r.Description</div>
+                        </div>
+                    </div>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(ReportDefinitionDto.ModuleCode)" HeaderText="Module" Width="120">
+                <Template>@{ var r = (ReportDefinitionDto)context; }<span class="@CatBadge(r.ModuleCode)">@r.ModuleCode</span></Template>
+            </GridColumn>
+            <GridColumn Field="@nameof(ReportDefinitionDto.ReportTypeCode)" HeaderText="Type" Width="110" />
+            <GridColumn Field="@nameof(ReportDefinitionDto.OutputFormats)" HeaderText="Formats" Width="130" />
+            <GridColumn HeaderText="Scheduled" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
+                <Template>@{ var r = (ReportDefinitionDto)context; }<i class="bi @(IsScheduled(r.ReportDefinitionId) ? "bi-check-circle-fill rl-yes" : "bi-dash rl-no")" aria-hidden="true"></i></Template>
+            </GridColumn>
+            <GridColumn HeaderText="Last Run" Width="140">
+                <Template>@{ var r = (ReportDefinitionDto)context; }@LastRunLabel(r.ReportDefinitionId)</Template>
+            </GridColumn>
+            <GridColumn HeaderText="Actions" Width="170" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" AllowSorting="false">
+                <Template>
+                    @{ var r = (ReportDefinitionDto)context; }
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => RunReportAsync(r)" title="Run now"><i class="bi bi-play-fill" aria-hidden="true"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenSchedule(r)" title="Schedule"><i class="bi bi-calendar-plus" aria-hidden="true"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => ExportReportAsync(r)" title="Export"><i class="bi bi-download" aria-hidden="true"></i></button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<SfDialog @bind-Visible="_showSchedule" Width="480px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header">
+            <i class="bi bi-calendar-plus"></i><span>Schedule Report</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showSchedule = false"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div class="um-modal-body">
+            <div class="um-form-grid">
+                <div class="um-field um-field--full">
+                    <label>Report <span class="text-danger">*</span></label>
+                    <SfDropDownList TValue="Guid" TItem="ReportDefinitionDto" DataSource="_reports" @bind-Value="_schedReportId" Placeholder="Select report">
+                        <DropDownListFieldSettings Value="ReportDefinitionId" Text="ReportName" />
+                    </SfDropDownList>
+                </div>
+                <div class="um-field">
+                    <label>Frequency</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_freqOpts" @bind-Value="_schedFreq" />
+                </div>
+                <div class="um-field">
+                    <label>Format</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_fmtOpts" @bind-Value="_schedFormat" />
+                </div>
+                <div class="um-field um-field--full">
+                    <label>Deliver to <span class="text-danger">*</span></label>
+                    <SfTextBox @bind-Value="_schedEmail" Placeholder="ops@agencybinder.local" />
+                </div>
+            </div>
+        </div>
+        <div class="um-modal-footer">
+            <button class="um-btn um-btn-ghost" @onclick="() => _showSchedule = false">Cancel</button>
+            <button class="um-btn um-btn-primary" @onclick="ScheduleAsync">Schedule</button>
+        </div>
+    </DialogContent>
+</SfDialog>
+
+<style>
+@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
+</style>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Reports";
+    [Parameter] public string Subtitle { get; set; } = "Run, schedule, and export reports";
+    [Parameter] public string Icon { get; set; } = "bi-collection-fill";
+    [Parameter] public string? Module { get; set; }
+
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+    private bool _loading;
+    private bool _showSchedule;
+    private string? _loadError;
+    private string _search = string.Empty;
+    private string _moduleFilter = string.Empty;
+    private string _formatFilter = string.Empty;
+    private string? _activeFilter;
+    private Guid _schedReportId;
+    private string _schedFreq = "Weekly";
+    private string _schedFormat = "PDF";
+    private string _schedEmail = "ops@agencybinder.local";
+
+    private readonly string[] _freqOpts = ["Daily", "Weekly", "Monthly", "Quarterly"];
+    private readonly string[] _fmtOpts = ["PDF", "Excel", "CSV"];
+    private List<ReportDefinitionDto> _reports = [];
+    private List<ReportDefinitionDto> _filtered = [];
+    private List<ReportExecutionDto> _executions = [];
+    private List<ReportScheduleDto> _schedules = [];
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var defs = await Api.SearchReportDefinitionsAsync(null);
+            var execs = await Api.SearchReportExecutionsAsync(_tenantId, null);
+            var schedules = await Api.SearchReportSchedulesAsync(_tenantId, null);
+            _reports = defs?.Items.Where(r => string.IsNullOrEmpty(Module) || r.ModuleCode.Equals(Module, StringComparison.OrdinalIgnoreCase)).ToList() ?? [];
+            _executions = execs?.Items.Where(e => _reports.Any(r => r.ReportDefinitionId == e.ReportDefinitionId)).ToList() ?? [];
+            _schedules = schedules?.Items.Where(s => _reports.Any(r => r.ReportDefinitionId == s.ReportDefinitionId)).ToList() ?? [];
+            _schedReportId = _reports.FirstOrDefault()?.ReportDefinitionId ?? Guid.Empty;
+            ApplyFilter();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load report data: {ex.Message}";
+            _reports = [];
+            _filtered = [];
+            _executions = [];
+            _schedules = [];
+        }
+        finally { _loading = false; }
+    }
+
+    private void SetKpiFilter(string? filter)
+    {
+        _activeFilter = _activeFilter == filter ? null : filter;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        var q = _reports.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_search))
+            q = q.Where(r => r.ReportName.Contains(_search, StringComparison.OrdinalIgnoreCase) || (r.Description?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false));
+        if (!string.IsNullOrWhiteSpace(_moduleFilter)) q = q.Where(r => r.ModuleCode == _moduleFilter);
+        if (!string.IsNullOrWhiteSpace(_formatFilter)) q = q.Where(r => r.OutputFormats.Contains(_formatFilter, StringComparison.OrdinalIgnoreCase));
+        q = _activeFilter switch
+        {
+            "Scheduled" => q.Where(r => IsScheduled(r.ReportDefinitionId)),
+            "Active" => q.Where(r => r.IsActive),
+            "Recent" => q.Where(r => _executions.Any(e => e.ReportDefinitionId == r.ReportDefinitionId)),
+            "Exportable" => q.Where(r => r.OutputFormats.Contains("Excel") || r.OutputFormats.Contains("CSV")),
+            _ => q
+        };
+        _filtered = q.OrderBy(r => r.ModuleCode).ThenBy(r => r.ReportName).ToList();
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _moduleFilter = string.Empty;
+        _formatFilter = string.Empty;
+        _activeFilter = null;
+        ApplyFilter();
+    }
+
+    private void OnRowSelected(RowSelectEventArgs<ReportDefinitionDto> args) => OpenSchedule(args.Data);
+
+    private void OpenSchedule(ReportDefinitionDto report)
+    {
+        _schedReportId = report.ReportDefinitionId;
+        _schedFormat = report.OutputFormats.Contains("Excel") ? "Excel" : report.OutputFormats.Contains("CSV") ? "CSV" : "PDF";
+        _showSchedule = true;
+    }
+
+    private async Task RunReportAsync(ReportDefinitionDto report)
+    {
+        try
+        {
+            var format = report.OutputFormats.Contains("Excel") ? "Excel" : report.OutputFormats.Contains("CSV") ? "CSV" : "PDF";
+            await Api.RunReportAsync(report.ReportDefinitionId, new RunReportRequest(_tenantId, format));
+            await LoadAsync();
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Report run completed: {report.ReportName}", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Run failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private async Task ExportReportAsync(ReportDefinitionDto report)
+    {
+        try
+        {
+            var format = report.OutputFormats.Contains("Excel") ? "Excel" : report.OutputFormats.Contains("CSV") ? "CSV" : "PDF";
+            await Api.RunReportAsync(report.ReportDefinitionId, new RunReportRequest(_tenantId, format));
+            await LoadAsync();
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Export generated: {report.ReportName} ({format})", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Export failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private async Task ExportVisibleAsync()
+    {
+        foreach (var report in _filtered.Take(1))
+        {
+            await ExportReportAsync(report);
+            return;
+        }
+    }
+
+    private async Task ScheduleAsync()
+    {
+        if (_schedReportId == Guid.Empty || string.IsNullOrWhiteSpace(_schedEmail)) return;
+        try
+        {
+            await Api.ScheduleReportAsync(new ScheduleReportRequest(_tenantId, _schedReportId, _schedFreq, _schedFormat, _schedEmail));
+            _showSchedule = false;
+            await LoadAsync();
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Report scheduled for {_schedEmail}.", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = $"Schedule failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private bool IsScheduled(Guid id) => _schedules.Any(s => s.ReportDefinitionId == id && s.IsActive);
+    private string LastRunLabel(Guid id) => _executions.Where(e => e.ReportDefinitionId == id).OrderByDescending(e => e.CreatedDateUtc).FirstOrDefault()?.CreatedDateUtc.ToString("MMM d, yyyy") ?? "Never";
+
+    private RenderFragment KpiCard(string? filter, string icon, string label, string value, string color) => @<button type="button" class="rl-kpi-card @(_activeFilter == filter ? "pc-kpi-card--active" : "")" @onclick="() => SetKpiFilter(filter)">
+        <div class="rl-kpi-icon @color"><i class="bi @icon" aria-hidden="true"></i></div>
+        <div><div class="rl-kv">@value</div><div class="rl-kl">@label</div></div>
+    </button>;
+
+    private static string CatIcon(string c) => c switch
+    {
+        "Sales" => "bi-graph-up-arrow",
+        "Policy" => "bi-shield-check",
+        "Retention" => "bi-arrow-clockwise",
+        "Claims" => "bi-exclamation-circle",
+        "Finance" => "bi-bank",
+        "Producer" => "bi-person-badge",
+        "Marketing" => "bi-megaphone",
+        "Compliance" => "bi-patch-check",
+        _ => "bi-file-earmark-bar-graph"
+    };
+
+    private static string CatIconCss(string c) => c switch
+    {
+        "Claims" => "rl-ci-red",
+        "Finance" or "Retention" => "rl-ci-green",
+        "Producer" => "rl-ci-purple",
+        "Marketing" => "rl-ci-amber",
+        _ => "rl-ci-blue"
+    };
+
+    private static string CatBadge(string c) => c switch
+    {
+        "Claims" => "rl-badge rl-badge--red",
+        "Finance" or "Retention" => "rl-badge rl-badge--green",
+        "Producer" => "rl-badge rl-badge--purple",
+        "Marketing" => "rl-badge rl-badge--amber",
+        _ => "rl-badge rl-badge--blue"
+    };
+}
