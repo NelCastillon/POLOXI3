@@ -1,75 +1,95 @@
 @page "/workbench/calendar"
 @namespace Ams.Web.Components.Pages.Workbench
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Operations
+@using System.ComponentModel.DataAnnotations
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>My Calendar — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_toastMessage is not null)
+{
+    <div class="mt-toast @(_toastIsError ? "mt-toast--danger" : "mt-toast--success")" role="status">
+        <i class="bi @(_toastIsError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
 
 <AppPageHeader Title="My Calendar"
-               Subtitle="Your scheduled calls, meetings, tasks, renewals and deadlines"
+               Subtitle="Tenant Admin schedule for calls, meetings, tasks, agency events and critical deadlines"
                Icon="bi-calendar3">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="PrevMonth" title="Previous month">
-            <i class="bi bi-chevron-left" aria-hidden="true"></i>
-        </button>
-        <span class="mc-month-label">@_viewDate.ToString("MMMM yyyy")</span>
-        <button class="um-btn um-btn-ghost" @onclick="NextMonth" title="Next month">
-            <i class="bi bi-chevron-right" aria-hidden="true"></i>
-        </button>
+        <button class="um-btn um-btn-ghost" @onclick="PrevPeriod" title="Previous period"><i class="bi bi-chevron-left"></i></button>
+        <span class="mc-month-label">@PeriodLabel</span>
+        <button class="um-btn um-btn-ghost" @onclick="NextPeriod" title="Next period"><i class="bi bi-chevron-right"></i></button>
         <button class="um-btn um-btn-ghost" @onclick="GoToday">Today</button>
-        <button class="um-btn um-btn-primary" @onclick="NewEvent">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Event
-        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh calendar"><i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")"></i></button>
+        <button class="um-btn um-btn-primary" @onclick="NewEvent"><i class="bi bi-plus-lg"></i> New Event</button>
     </Actions>
 </AppPageHeader>
 
-<!-- KPI strip -->
+<section class="mc-hero">
+    <div>
+        <span class="mc-eyebrow">Tenant Admin Calendar</span>
+        <h2>Schedule Command Center</h2>
+        <p>Coordinate renewal reviews, producer follow-ups, service deadlines, workflow milestones and tenant administration events from one modern calendar workspace.</p>
+    </div>
+    <div class="mc-hero-actions">
+        <button class="um-btn um-btn-primary" @onclick="NewEvent"><i class="bi bi-plus-lg"></i> Schedule Event</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/activities")'><i class="bi bi-lightning"></i> Activity Stream</button>
+    </div>
+</section>
+
 <div class="mc-kpi-strip">
-    @KpiCard("bi-calendar-event",   "Today",       TodayEvents.Count().ToString(),              "mc-kpi-today",    "today")
-    @KpiCard("bi-calendar-week",    "This Week",   ThisWeekEvents.Count().ToString(),            "mc-kpi-week",     "week")
-    @KpiCard("bi-calendar3",        "This Month",  ThisMonthEvents.Count().ToString(),           "mc-kpi-month",    "month")
-    @KpiCard("bi-telephone-fill",   "Calls",       _events.Count(e => e.Type == "Call").ToString(),    "mc-kpi-call",  "Call")
-    @KpiCard("bi-calendar-event-fill","Meetings",  _events.Count(e => e.Type == "Meeting").ToString(), "mc-kpi-meet",  "Meeting")
-    @KpiCard("bi-check2-square",    "Tasks",       _events.Count(e => e.Type == "Task").ToString(),    "mc-kpi-task",  "Task")
-    @KpiCard("bi-flag-fill",        "Deadlines",   _events.Count(e => e.Type == "Deadline").ToString(),"mc-kpi-dead",  "Deadline")
+    @KpiCard("bi-calendar-event", "Today", EventsForToday.Count().ToString(), "Events today", "mc-kpi-today", "__today")
+    @KpiCard("bi-calendar-week", "This Week", EventsForWeek.Count().ToString(), "Upcoming this week", "mc-kpi-week", "__week")
+    @KpiCard("bi-calendar3", "This Month", EventsForMonth.Count().ToString(), "Visible month events", "mc-kpi-month", "__month")
+    @KpiCard("bi-telephone-fill", "Calls", _events.Count(e => e.Type == "Call").ToString(), "Call events", "mc-kpi-call", "Call")
+    @KpiCard("bi-calendar-event-fill", "Meetings", _events.Count(e => e.Type == "Meeting").ToString(), "Meetings", "mc-kpi-meet", "Meeting")
+    @KpiCard("bi-check2-square", "Tasks", _events.Count(e => e.Type == "Task").ToString(), "Tasks", "mc-kpi-task", "Task")
+    @KpiCard("bi-flag-fill", "Deadlines", _events.Count(e => e.Type == "Deadline").ToString(), "Deadlines", "mc-kpi-dead", "Deadline")
 </div>
 
-<!-- View tabs -->
-<div class="mc-view-tabs">
-    @foreach (var t in _tabs)
-    {
-        <button class="mc-view-tab @(_activeTab == t.Key ? "mc-view-tab--active" : "")"
-                @onclick="() => _activeTab = t.Key">
-            <i class="bi @t.Icon" aria-hidden="true"></i> @t.Label
-        </button>
-    }
-    <div class="mc-tab-spacer"></div>
-    <!-- Type filter pills -->
-    <div class="mc-type-pills">
-        @foreach (var p in _typePills)
+<div class="mc-command-bar">
+    <div class="mc-search-wrap">
+        <i class="bi bi-search"></i>
+        <input @bind="_search" @bind:event="oninput" placeholder="Search title, notes, type…" />
+    </div>
+    <div class="mc-view-tabs">
+        @foreach (var tab in _tabs)
         {
-            <button class="mc-pill @(_typeFilter == p ? "mc-pill-active" : "")"
-                    @onclick="() => ToggleType(p)">@p</button>
+            <button class="mc-view-tab @(_activeTab == tab.Key ? "mc-view-tab--active" : "")" @onclick="() => _activeTab = tab.Key"><i class="bi @tab.Icon"></i> @tab.Label</button>
         }
     </div>
+    <div class="mc-type-pills">
+        @foreach (var type in CalendarTypes)
+        {
+            <button class="mc-pill @(_activeFilter == type ? "mc-pill-active" : "")" @onclick="() => SetFilter(type)">@type</button>
+        }
+    </div>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
 </div>
 
-<!-- Body -->
-<div class="mc-body">
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger mt-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>
+}
 
+@if (_loading)
+{
+    <div class="mt-loading" aria-live="polite"><div class="um-spinner"></div><span>Loading Tenant Admin calendar…</span></div>
+}
+
+<div class="mc-body">
     @if (_activeTab == "month")
     {
-        <!-- ── Month view ──────────────────────────────────────────── -->
         <div class="mc-month-wrap">
-
-            <!-- Calendar grid -->
             <div class="mc-month-grid-wrap">
                 <div class="mc-dow-row">
-                    @foreach (var d in new[]{"Sun","Mon","Tue","Wed","Thu","Fri","Sat"})
+                    @foreach (var d in DaysOfWeek)
                     {
                         <div class="mc-dow">@d</div>
                     }
@@ -77,314 +97,256 @@
                 <div class="mc-month-grid">
                     @foreach (var day in CalendarDays)
                     {
-                        var isToday   = day.Date == DateTime.Today;
-                        var isCurMon  = day.Month == _viewDate.Month;
-                        var isSelected= day.Date == _selectedDate;
-                        var dayEvts   = EventsOn(day).ToList();
-                        <div class="mc-day @(isCurMon ? "" : "mc-day-other") @(isToday ? "mc-day-today" : "") @(isSelected ? "mc-day-sel" : "")"
-                             @onclick="() => SelectDay(day)">
-                            <div class="mc-day-num">@day.Day</div>
-                            <div class="mc-day-events">
-                                @foreach (var e in dayEvts.Take(3))
+                        var date = DateOnly.FromDateTime(day);
+                        var dayEvents = EventsOn(date).ToList();
+                        <button class="mc-day @(day.Month == _viewDate.Month ? "" : "mc-day-other") @(date == Today ? "mc-day-today" : "") @(date == _selectedDate ? "mc-day-sel" : "")" @onclick="() => SelectDay(date)">
+                            <span class="mc-day-num">@day.Day</span>
+                            <span class="mc-day-events">
+                                @foreach (var item in dayEvents.Take(4))
                                 {
-                                    <div class="mc-day-evt mc-evt-@e.Type.ToLower()" title="@e.Title">
-                                        <span class="mc-evt-dot"></span>
-                                        <span class="mc-evt-lbl">@e.Title</span>
-                                    </div>
+                                    <span class="mc-day-evt mc-evt-@TypeCss(item.Type)" title="@item.Title"><span class="mc-evt-dot"></span><span class="mc-evt-lbl">@item.Title</span></span>
                                 }
-                                @if (dayEvts.Count > 3)
+                                @if (dayEvents.Count > 4)
                                 {
-                                    <div class="mc-day-more">+@(dayEvts.Count - 3) more</div>
+                                    <span class="mc-day-more">+@(dayEvents.Count - 4) more</span>
                                 }
-                            </div>
-                        </div>
+                            </span>
+                        </button>
                     }
                 </div>
             </div>
 
-            <!-- Day panel -->
-            <div class="mc-day-panel">
+            <aside class="mc-day-panel">
                 <div class="mc-day-panel-hdr">
-                    <span class="mc-day-panel-date">
-                        @_selectedDate.ToString("dddd, MMMM d")
-                        @if (_selectedDate.Date == DateTime.Today) { <span class="mc-today-badge">Today</span> }
-                    </span>
+                    <span class="mc-day-panel-date">@_selectedDate.ToString("dddd, MMMM d") @if (_selectedDate == Today) { <span class="mc-today-badge">Today</span> }</span>
                     <span class="mc-day-panel-count">@SelectedDayEvents.Count() event(s)</span>
                 </div>
-                @if (SelectedDayEvents.Any())
-                {
-                    <div class="mc-day-event-list">
-                        @foreach (var e in SelectedDayEvents.OrderBy(x => x.StartTime))
-                        {
-                            <div class="mc-day-event-row mc-der-@e.Type.ToLower()" @onclick="() => OpenEvent(e)">
-                                <div class="mc-der-time">@e.StartTime.ToString("h:mm tt")</div>
-                                <div class="mc-der-dot"></div>
-                                <div class="mc-der-body">
-                                    <div class="mc-der-title">@e.Title</div>
-                                    @if (!string.IsNullOrEmpty(e.Account))
-                                    {
-                                        <div class="mc-der-acct">@e.Account</div>
-                                    }
-                                </div>
-                                <span class="mc-type-chip mc-tc-@e.Type.ToLower()">@e.Type</span>
-                            </div>
-                        }
-                    </div>
-                }
-                else
-                {
-                    <div class="mc-day-empty"><i class="bi bi-calendar-check" aria-hidden="true"></i> Nothing scheduled.</div>
-                }
-            </div>
-
+                <div class="mc-day-event-list">
+                    @foreach (var item in SelectedDayEvents)
+                    {
+                        <div class="mc-day-event-row mc-der-@TypeCss(item.Type)" @onclick="() => SelectEvent(item)">
+                            <div class="mc-der-time">@DisplayTime(item)</div>
+                            <div class="mc-der-dot"></div>
+                            <div class="mc-der-body"><div class="mc-der-title">@item.Title</div><div class="mc-der-acct">@DisplayOwner(item)</div></div>
+                            <span class="mc-type-chip mc-tc-@TypeCss(item.Type)">@item.Type</span>
+                        </div>
+                    }
+                    @if (!SelectedDayEvents.Any())
+                    {
+                        <div class="mc-day-empty"><i class="bi bi-calendar-check"></i> Nothing scheduled.</div>
+                    }
+                </div>
+            </aside>
         </div>
     }
-
     else if (_activeTab == "week")
     {
-        <!-- ── Week view ───────────────────────────────────────────── -->
         <div class="mc-week-wrap">
-            <div class="mc-week-nav">
-                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="PrevWeek"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
-                <span class="mc-week-label">Week of @WeekStart.ToString("MMM d") – @WeekEnd.ToString("MMM d, yyyy")</span>
-                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="NextWeek"><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
-            </div>
             <div class="mc-week-grid">
                 @foreach (var day in WeekDays)
                 {
-                    var isToday = day.Date == DateTime.Today;
-                    var dayEvts = FilteredEvents.Where(e => e.StartTime.Date == day.Date).OrderBy(e => e.StartTime).ToList();
-                    <div class="mc-week-col @(isToday ? "mc-week-col-today" : "")">
-                        <div class="mc-week-col-hdr">
-                            <div class="mc-week-dow">@day.ToString("ddd")</div>
-                            <div class="mc-week-daynum @(isToday ? "mc-week-daynum-today" : "")">@day.Day</div>
-                            @if (dayEvts.Any())
-                            {
-                                <span class="mc-week-badge">@dayEvts.Count</span>
-                            }
-                        </div>
+                    var date = DateOnly.FromDateTime(day);
+                    var dayEvents = EventsOn(date).ToList();
+                    <section class="mc-week-col @(date == Today ? "mc-week-col-today" : "")">
+                        <header class="mc-week-col-hdr"><span class="mc-week-dow">@day.ToString("ddd")</span><span class="mc-week-daynum @(date == Today ? "mc-week-daynum-today" : "")">@day.Day</span><span class="mc-week-badge">@dayEvents.Count</span></header>
                         <div class="mc-week-events">
-                            @foreach (var e in dayEvts)
+                            @foreach (var item in dayEvents)
                             {
-                                <div class="mc-week-evt mc-evt-@e.Type.ToLower()" @onclick="() => OpenEvent(e)" title="@e.Title">
-                                    <span class="mc-week-evt-time">@e.StartTime.ToString("h:mm tt")</span>
-                                    <span class="mc-week-evt-title">@e.Title</span>
-                                    @if (!string.IsNullOrEmpty(e.Account))
-                                    {
-                                        <span class="mc-week-evt-acct">@e.Account</span>
-                                    }
-                                </div>
+                                <button class="mc-week-evt mc-evt-@TypeCss(item.Type)" @onclick="() => SelectEvent(item)"><span class="mc-week-evt-time">@DisplayTime(item)</span><span class="mc-week-evt-title">@item.Title</span><span class="mc-week-evt-acct">@item.Type</span></button>
                             }
-                            @if (!dayEvts.Any())
+                            @if (!dayEvents.Any())
                             {
-                                <div class="mc-week-empty-day"></div>
+                                <div class="mc-week-empty-day">Open</div>
                             }
                         </div>
-                    </div>
+                    </section>
                 }
             </div>
         </div>
     }
-
     else
     {
-        <!-- ── Agenda view ─────────────────────────────────────────── -->
         <div class="mc-agenda-wrap">
-            @foreach (var grp in AgendaGroups)
+            @foreach (var group in AgendaGroups)
             {
-                <div class="mc-agenda-date-sep"><span>@grp.Label</span></div>
-                @foreach (var e in grp.Events)
+                <div class="mc-agenda-date-sep"><span>@group.Label</span></div>
+                @foreach (var item in group.Events)
                 {
-                    <div class="mc-agenda-row @(e.StartTime.Date < DateTime.Today ? "mc-agenda-past" : "")"
-                         @onclick="() => OpenEvent(e)">
-                        <div class="mc-agenda-time">
-                            <div class="mc-agenda-tod">@e.StartTime.ToString("h:mm tt")</div>
-                            @if (e.DurationMinutes > 0)
-                            {
-                                <div class="mc-agenda-dur">@e.DurationMinutes min</div>
-                            }
-                        </div>
-                        <div class="mc-agenda-icon mc-ai-@e.Type.ToLower()">
-                            <i class="bi @TypeIcon(e.Type)" aria-hidden="true"></i>
-                        </div>
-                        <div class="mc-agenda-body">
-                            <div class="mc-agenda-title">@e.Title</div>
-                            @if (!string.IsNullOrEmpty(e.Account))
-                            {
-                                <div class="mc-agenda-acct"><i class="bi bi-building" aria-hidden="true"></i> @e.Account</div>
-                            }
-                            @if (!string.IsNullOrEmpty(e.Notes))
-                            {
-                                <div class="mc-agenda-notes">@e.Notes</div>
-                            }
-                        </div>
-                        <span class="mc-type-chip mc-tc-@e.Type.ToLower()">@e.Type</span>
+                    <div class="mc-agenda-row @(item.Date < Today ? "mc-agenda-past" : "")" @onclick="() => SelectEvent(item)">
+                        <div class="mc-agenda-time"><div class="mc-agenda-tod">@DisplayTime(item)</div><div class="mc-agenda-dur">@item.Type</div></div>
+                        <div class="mc-agenda-icon mc-ai-@TypeCss(item.Type)"><i class="bi @TypeIcon(item.Type)"></i></div>
+                        <div class="mc-agenda-body"><div class="mc-agenda-title">@item.Title</div><div class="mc-agenda-acct"><i class="bi bi-person-check"></i> @DisplayOwner(item)</div>@if (!string.IsNullOrWhiteSpace(item.Notes)) { <div class="mc-agenda-notes">@item.Notes</div> }</div>
+                        <span class="mc-type-chip mc-tc-@TypeCss(item.Type)">@item.Type</span>
                     </div>
                 }
             }
             @if (!AgendaGroups.Any())
             {
-                <div class="mc-empty"><i class="bi bi-calendar-x mc-empty-icon" aria-hidden="true"></i><span>No events to show.</span></div>
+                <div class="mc-empty"><i class="bi bi-calendar-x mc-empty-icon"></i><span>No events to show.</span></div>
             }
         </div>
     }
-
 </div>
 
+@if (_selected is not null)
+{
+    <aside class="mc-event-panel">
+        <div class="mc-event-panel-hdr"><span class="mc-type-chip mc-tc-@TypeCss(_selected.Type)">@_selected.Type</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _selected = null"><i class="bi bi-x-lg"></i></button></div>
+        <h3>@_selected.Title</h3>
+        <p>@(string.IsNullOrWhiteSpace(_selected.Notes) ? "No notes recorded." : _selected.Notes)</p>
+        <div class="mc-event-meta"><div><span>Date</span><strong>@_selected.Date.ToString("MMM d, yyyy")</strong></div><div><span>Time</span><strong>@DisplayTime(_selected)</strong></div><div><span>Status</span><strong>@_selected.Status</strong></div><div><span>Time Zone</span><strong>@_selected.TimeZoneId</strong></div><div><span>Owner</span><strong>@DisplayOwner(_selected)</strong></div></div>
+        <div class="mc-event-actions"><button class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil"></i> Edit</button><button class="um-btn um-btn-ghost" @onclick="() => OpenDetail(_selected)"><i class="bi bi-arrow-up-right-square"></i> Detail</button><button class="um-btn um-btn-danger" @onclick="() => ShowDelete(_selected)"><i class="bi bi-trash"></i> Delete</button></div>
+    </aside>
+}
+
+@if (_showForm)
+{
+    <div class="mt-modal-backdrop" @onclick="CloseForm">
+        <div class="mt-modal" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-calendar3"></i><span>@(_editId.HasValue ? "Edit Calendar Event" : "New Calendar Event")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Start <span class="text-danger">*</span></label><InputDate Type="InputDateType.DateTimeLocal" @bind-Value="_form.StartLocal" class="um-input" /><ValidationMessage For="() => _form.StartLocal" class="text-danger" /></div>
+                    <div class="um-field"><label>End</label><InputDate Type="InputDateType.DateTimeLocal" @bind-Value="_form.EndLocal" class="um-input" /><ValidationMessage For="() => _form.EndLocal" class="text-danger" /></div>
+                    <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.Type" class="um-input">@foreach (var type in CalendarTypes) { <option>@type</option> }</InputSelect><ValidationMessage For="() => _form.Type" class="text-danger" /></div>
+                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.Status" class="um-input">@foreach (var status in StatusCodes) { <option>@status</option> }</InputSelect><ValidationMessage For="() => _form.Status" class="text-danger" /></div>
+                    <div class="um-field"><label>Time Zone <span class="text-danger">*</span></label><InputText @bind-Value="_form.TimeZoneId" class="um-input" /><ValidationMessage For="() => _form.TimeZoneId" class="text-danger" /></div>
+                    <div class="um-field"><label class="mc-check"><InputCheckbox @bind-Value="_form.AllDay" /> All day</label></div>
+                    <div class="um-field um-field--full"><label>Title <span class="text-danger">*</span></label><InputText @bind-Value="_form.Title" class="um-input" /><ValidationMessage For="() => _form.Title" class="text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_form.Notes" class="um-input" rows="4" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div>
+                </div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete && _selected is not null)
+{
+    <div class="mt-modal-backdrop" @onclick="() => _showDelete = false">
+        <div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
+            <div class="um-confirm-title">Delete calendar event?</div>
+            <div class="um-confirm-text">This will remove <strong>@_selected.Title</strong> from your Tenant Admin calendar.</div>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
+
 @code {
-    SfToast _toast = default!;
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    static readonly Guid TenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+    static readonly string[] CalendarTypes = ["Call", "Meeting", "Task", "Event", "Deadline", "Note"];
+    static readonly string[] StatusCodes = ["Scheduled", "Completed", "Cancelled", "Rescheduled"];
+    static readonly string[] DaysOfWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    static DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
 
-    DateTime _viewDate    = new(DateTime.Today.Year, DateTime.Today.Month, 1);
-    DateTime _selectedDate = DateTime.Today;
-    string   _activeTab   = "month";
-    string   _typeFilter  = "";
+    DateTime _viewDate = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    DateOnly _selectedDate = Today;
+    string _activeTab = "month";
+    string _activeFilter = string.Empty;
+    string _search = string.Empty;
+    string? _loadError;
+    string? _toastMessage;
+    bool _toastIsError;
+    bool _loading;
+    bool _saving;
+    bool _showForm;
+    bool _showDelete;
+    Guid? _editId;
+    CalEvent? _selected;
+    EventForm _form = new();
+    readonly List<CalEvent> _events = [];
+    readonly TabDef[] _tabs = [new("month", "Month", "bi-calendar3"), new("week", "Week", "bi-calendar-week"), new("agenda", "Agenda", "bi-list-ul")];
 
-    sealed record TabDef(string Key, string Label, string Icon);
-    readonly TabDef[] _tabs =
-    [
-        new("month",  "Month",  "bi-calendar3"),
-        new("week",   "Week",   "bi-calendar-week"),
-        new("agenda", "Agenda", "bi-list-ul"),
-    ];
-    readonly string[] _typePills = ["Call", "Meeting", "Task", "Event", "Deadline"];
-
-    sealed class CalEvent
-    {
-        public Guid     Id              { get; set; }
-        public string   Title           { get; set; } = "";
-        public string   Account         { get; set; } = "";
-        public string   Type            { get; set; } = "";
-        public string   Notes           { get; set; } = "";
-        public DateTime StartTime       { get; set; }
-        public int      DurationMinutes { get; set; }
-    }
-
-    readonly List<CalEvent> _events = new();
-
-    IEnumerable<CalEvent> FilteredEvents =>
-        _events.Where(e => string.IsNullOrEmpty(_typeFilter) || e.Type == _typeFilter);
-
-    IEnumerable<CalEvent> TodayEvents     => FilteredEvents.Where(e => e.StartTime.Date == DateTime.Today);
-    IEnumerable<CalEvent> ThisWeekEvents  => FilteredEvents.Where(e => e.StartTime.Date >= DateTime.Today && e.StartTime.Date < DateTime.Today.AddDays(7));
-    IEnumerable<CalEvent> ThisMonthEvents => FilteredEvents.Where(e => e.StartTime.Year == DateTime.Today.Year && e.StartTime.Month == DateTime.Today.Month);
-    IEnumerable<CalEvent> SelectedDayEvents => FilteredEvents.Where(e => e.StartTime.Date == _selectedDate.Date);
-
-    IEnumerable<CalEvent> EventsOn(DateTime day) =>
-        FilteredEvents.Where(e => e.StartTime.Date == day.Date).OrderBy(e => e.StartTime);
-
-    // ── Calendar grid helpers ──────────────────────────────────────
-    IEnumerable<DateTime> CalendarDays
-    {
-        get
-        {
-            var first   = new DateTime(_viewDate.Year, _viewDate.Month, 1);
-            var start   = first.AddDays(-(int)first.DayOfWeek);
-            var last    = new DateTime(_viewDate.Year, _viewDate.Month, DateTime.DaysInMonth(_viewDate.Year, _viewDate.Month));
-            var end     = last.AddDays(6 - (int)last.DayOfWeek);
-            for (var d = start; d <= end; d = d.AddDays(1)) yield return d;
-        }
-    }
-
-    // ── Week helpers ───────────────────────────────────────────────
-    DateTime WeekStart => _selectedDate.AddDays(-(int)_selectedDate.DayOfWeek);
-    DateTime WeekEnd   => WeekStart.AddDays(6);
+    string PeriodLabel => _activeTab == "week" ? $"Week of {WeekStart:MMM d}" : _viewDate.ToString("MMMM yyyy");
+    IEnumerable<CalEvent> FilteredEvents => _events.Where(e =>
+        (string.IsNullOrEmpty(_search) || e.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) || e.Type.Contains(_search, StringComparison.OrdinalIgnoreCase) || e.Notes.Contains(_search, StringComparison.OrdinalIgnoreCase))
+        && (string.IsNullOrEmpty(_activeFilter) || _activeFilter switch { "__today" => e.Date == Today, "__week" => e.Date >= Today && e.Date <= DateOnly.FromDateTime(DateTime.Today.AddDays(7)), "__month" => e.Date.Year == _viewDate.Year && e.Date.Month == _viewDate.Month, _ => e.Type == _activeFilter }));
+    IEnumerable<CalEvent> EventsForToday => _events.Where(e => e.Date == Today);
+    IEnumerable<CalEvent> EventsForWeek => _events.Where(e => e.Date >= Today && e.Date <= DateOnly.FromDateTime(DateTime.Today.AddDays(7)));
+    IEnumerable<CalEvent> EventsForMonth => _events.Where(e => e.Date.Year == _viewDate.Year && e.Date.Month == _viewDate.Month);
+    IEnumerable<CalEvent> SelectedDayEvents => EventsOn(_selectedDate);
+    IEnumerable<CalEvent> EventsOn(DateOnly date) => FilteredEvents.Where(e => e.Date == date).OrderBy(e => e.StartLocal);
+    DateTime WeekStart => _selectedDate.ToDateTime(TimeOnly.MinValue).AddDays(-(int)_selectedDate.ToDateTime(TimeOnly.MinValue).DayOfWeek);
     IEnumerable<DateTime> WeekDays => Enumerable.Range(0, 7).Select(i => WeekStart.AddDays(i));
+    IEnumerable<DateTime> CalendarDays { get { var first = new DateTime(_viewDate.Year, _viewDate.Month, 1); var start = first.AddDays(-(int)first.DayOfWeek); var end = first.AddMonths(1).AddDays(-1).AddDays(6 - (int)first.AddMonths(1).AddDays(-1).DayOfWeek); for (var day = start; day <= end; day = day.AddDays(1)) yield return day; } }
+    IEnumerable<AgendaGroup> AgendaGroups => FilteredEvents.OrderBy(e => e.Date).ThenBy(e => e.StartLocal).GroupBy(e => e.Date).Select(g => new AgendaGroup(FormatDateLabel(g.Key), g.ToList()));
 
-    // ── Agenda groups ──────────────────────────────────────────────
-    sealed record AgendaGroup(string Label, List<CalEvent> Events);
-    IEnumerable<AgendaGroup> AgendaGroups =>
-        FilteredEvents
-            .Where(e => e.StartTime >= DateTime.Today.Date)
-            .OrderBy(e => e.StartTime)
-            .GroupBy(e => e.StartTime.Date)
-            .Select(g => new AgendaGroup(FormatDateLabel(g.Key), g.ToList()));
-
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("My Calendar", "/workbench/calendar"));
-        BuildStub();
+        await LoadAsync();
     }
 
-    void BuildStub()
+    async Task LoadAsync()
     {
-        var rnd      = new Random(13);
-        var accounts = new[]{ "Sullivan Mfg. LLC","Metro Freight Co.","Apex Medical Group","Dallas Roofing LLC","Bridgewater Hotels","Pioneer Automotive","Greenleaf Nurseries","Sun Valley Resort" };
-        var types    = new[]{ "Call","Call","Meeting","Meeting","Task","Event","Deadline" };
-        var callTitles = new[]{ "Renewal Review Call","Quote Presentation Call","Policy Review","Follow-up Call","Broker Check-in" };
-        var meetTitles = new[]{ "Renewal Strategy Meeting","Team Standup","Carrier Meeting","Account Review","Underwriter Meeting","Claims Review" };
-        var taskTitles = new[]{ "Submit ACORD 25","Send Renewal Proposal","Process Endorsement","Request Loss Runs","Update CRM" };
-        var evtTitles  = new[]{ "E&S Market Webinar","CE Credit Course","Industry Conference","Agency All-Hands","Carrier Roadshow" };
-        var deadTitles = new[]{ "Q2 Goal Submission Deadline","Audit Filing Deadline","Open Enrollment Deadline","Rate Lock Deadline" };
-        var notes      = new[]{ "","Confirm attendance day before","Bring proposal packet","","Review binder first","" };
-
-        _events.Clear();
-        for (int i = 0; i < 55; i++)
+        _loading = true;
+        _loadError = null;
+        try
         {
-            var type  = types[rnd.Next(types.Length)];
-            var title = type switch
-            {
-                "Call"     => callTitles[rnd.Next(callTitles.Length)],
-                "Meeting"  => meetTitles[rnd.Next(meetTitles.Length)],
-                "Task"     => taskTitles[rnd.Next(taskTitles.Length)],
-                "Event"    => evtTitles[rnd.Next(evtTitles.Length)],
-                _          => deadTitles[rnd.Next(deadTitles.Length)],
-            };
-            var acct   = type is "Deadline" or "Event" ? "" : accounts[rnd.Next(accounts.Length)];
-            var offset = rnd.Next(-14, 45);
-            var hour   = rnd.Next(8, 18);
-            _events.Add(new CalEvent
-            {
-                Id              = Guid.NewGuid(),
-                Title           = title,
-                Account         = acct,
-                Type            = type,
-                Notes           = notes[rnd.Next(notes.Length)],
-                StartTime       = DateTime.Today.AddDays(offset).AddHours(hour).AddMinutes(rnd.Next(0,4)*15),
-                DurationMinutes = type is "Call" or "Meeting" ? rnd.Next(1,5) * 15 : 0,
-            });
+            var rangeStart = new DateTime(_viewDate.Year, _viewDate.Month, 1).AddMonths(-1).ToUniversalTime();
+            var rangeEnd = new DateTime(_viewDate.Year, _viewDate.Month, 1).AddMonths(2).AddDays(7).ToUniversalTime();
+            var result = await Api.SearchCalendarEventsAsync(TenantId, startUtc: rangeStart, endUtc: rangeEnd, pageSize: 500);
+            _events.Clear();
+            _events.AddRange((result?.Items ?? []).Select(ToEvent));
+            _selected = _selected is null ? FilteredEvents.FirstOrDefault(e => e.Date == _selectedDate) : FilteredEvents.FirstOrDefault(e => e.Id == _selected.Id) ?? FilteredEvents.FirstOrDefault();
         }
+        catch (Exception ex) { _loadError = $"Failed to load calendar: {ex.Message}"; }
+        finally { _loading = false; }
     }
 
-    void SelectDay(DateTime d) { _selectedDate = d; }
-    void PrevMonth()  => _viewDate = _viewDate.AddMonths(-1);
-    void NextMonth()  => _viewDate = _viewDate.AddMonths(1);
-    void GoToday()    { _viewDate = new(DateTime.Today.Year, DateTime.Today.Month, 1); _selectedDate = DateTime.Today; }
-    void PrevWeek()   => _selectedDate = _selectedDate.AddDays(-7);
-    void NextWeek()   => _selectedDate = _selectedDate.AddDays(7);
-    void ToggleType(string t)       => _typeFilter = _typeFilter == t ? string.Empty : t;
-    void ToggleKpi(string? filter)  => _typeFilter = _typeFilter == (filter ?? string.Empty) ? string.Empty : (filter ?? string.Empty);
+    void SelectDay(DateOnly date) { _selectedDate = date; _selected = EventsOn(date).FirstOrDefault(); }
+    void SelectEvent(CalEvent item) { _selected = item; _selectedDate = item.Date; }
+    void PrevPeriod() { if (_activeTab == "week") _selectedDate = DateOnly.FromDateTime(_selectedDate.ToDateTime(TimeOnly.MinValue).AddDays(-7)); else _viewDate = _viewDate.AddMonths(-1); }
+    void NextPeriod() { if (_activeTab == "week") _selectedDate = DateOnly.FromDateTime(_selectedDate.ToDateTime(TimeOnly.MinValue).AddDays(7)); else _viewDate = _viewDate.AddMonths(1); }
+    void GoToday() { _viewDate = new(DateTime.Today.Year, DateTime.Today.Month, 1); _selectedDate = Today; _activeFilter = string.Empty; }
+    void SetFilter(string? filter) => _activeFilter = _activeFilter == (filter ?? string.Empty) ? string.Empty : (filter ?? string.Empty);
+    void ResetFilters() { _activeFilter = string.Empty; _search = string.Empty; }
+    void NewEvent() { _editId = null; var start = _selectedDate.ToDateTime(new TimeOnly(9, 0)); _form = new() { StartLocal = start, EndLocal = start.AddHours(1), Type = "Meeting", Status = "Scheduled" }; _showForm = true; }
+    void OpenEdit(CalEvent item) { _editId = item.Id; _form = new() { StartLocal = item.StartLocal, EndLocal = item.EndLocal, Type = item.Type, Status = item.Status, Title = item.Title, Notes = item.Notes, AllDay = item.AllDay, TimeZoneId = item.TimeZoneId }; _showForm = true; }
+    void OpenDetail(CalEvent item) => SelectEvent(item);
+    void ShowDelete(CalEvent item) { _selected = item; _showDelete = true; }
+    void CloseForm() { _showForm = false; _form = new(); }
+    void ShowToast(string message, bool isError = false) { _toastMessage = message; _toastIsError = isError; }
+    void ClearToast() => _toastMessage = null;
 
-    async Task NewEvent()
+    async Task SaveAsync()
     {
-        await _toast.ShowAsync(new ToastModel { Title="New Event", Content="Event creation form coming soon.", CssClass="e-toast-info" });
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+                await Api.UpdateCalendarEventAsync(_editId.Value, new() { Title = _form.Title, Notes = _form.Notes, EventTypeCode = _form.Type, StatusCode = _form.Status, StartDateTimeUtc = _form.StartLocal.ToUniversalTime(), EndDateTimeUtc = _form.EndLocal?.ToUniversalTime(), AllDay = _form.AllDay, TimeZoneId = _form.TimeZoneId, OrganizerUserId = TenantAdminUserId, AssignedToUserId = TenantAdminUserId, ModifiedByUserId = TenantAdminUserId });
+            else
+                await Api.CreateCalendarEventAsync(new() { TenantId = TenantId, Title = _form.Title, Notes = _form.Notes, EventTypeCode = _form.Type, StatusCode = _form.Status, StartDateTimeUtc = _form.StartLocal.ToUniversalTime(), EndDateTimeUtc = _form.EndLocal?.ToUniversalTime(), AllDay = _form.AllDay, TimeZoneId = _form.TimeZoneId, OrganizerUserId = TenantAdminUserId, AssignedToUserId = TenantAdminUserId, CreatedByUserId = TenantAdminUserId });
+            _showForm = false;
+            ShowToast("Calendar event saved");
+            await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", isError: true); }
+        finally { _saving = false; }
     }
 
-    async Task OpenEvent(CalEvent e)
+    async Task ExecuteDeleteAsync()
     {
-        await _toast.ShowAsync(new ToastModel { Title=e.Title, Content=$"{e.Type} · {e.StartTime:MMM d, h:mm tt}", CssClass="e-toast-info" });
+        if (_selected is null) return;
+        _saving = true;
+        try { await Api.DeleteCalendarEventAsync(_selected.Id, TenantAdminUserId); _showDelete = false; ShowToast("Calendar event deleted"); await LoadAsync(); }
+        catch (Exception ex) { ShowToast($"Delete failed: {ex.Message}", isError: true); }
+        finally { _saving = false; }
     }
 
-    static string TypeIcon(string t) => t switch
-    {
-        "Call"     => "bi-telephone-fill",
-        "Meeting"  => "bi-calendar-event-fill",
-        "Task"     => "bi-check2-square",
-        "Event"    => "bi-star-fill",
-        "Deadline" => "bi-flag-fill",
-        _          => "bi-calendar3"
-    };
+    static CalEvent ToEvent(CalendarEventDto item) => new(item.EventId, item.Title, item.EventTypeCode, item.StatusCode, item.Notes ?? string.Empty, DateOnly.FromDateTime(item.StartDateTimeUtc.ToLocalTime()), item.StartDateTimeUtc.ToLocalTime(), item.EndDateTimeUtc?.ToLocalTime(), item.AllDay, item.TimeZoneId, item.AssignedToUserId ?? item.OrganizerUserId);
+    static string DisplayTime(CalEvent item) => item.AllDay ? "All day" : item.EndLocal is null ? item.StartLocal.ToString("h:mm tt") : $"{item.StartLocal:h:mm tt}–{item.EndLocal:h:mm tt}";
+    static string DisplayOwner(CalEvent item) => item.AssignedToUserId == TenantAdminUserId ? "Tenant Admin" : "Assigned user";
+    static string TypeCss(string type) => type.ToLowerInvariant().Replace(" ", "-");
+    static string TypeIcon(string type) => type switch { "Call" => "bi-telephone-fill", "Meeting" => "bi-calendar-event-fill", "Task" => "bi-check2-square", "Deadline" => "bi-flag-fill", "Event" => "bi-star-fill", _ => "bi-calendar3" };
+    static string FormatDateLabel(DateOnly date) => date == Today ? "Today" : date == DateOnly.FromDateTime(DateTime.Today.AddDays(1)) ? "Tomorrow" : date.ToString("dddd, MMMM d");
+    RenderFragment KpiCard(string icon, string label, string val, string title, string css, string? filter) => @<button class="mc-kpi-card @css @(_activeFilter == (filter ?? string.Empty) ? "mc-kpi-active" : "")" title="@title" @onclick="() => SetFilter(filter)"><div class="mc-kpi-val">@val</div><div class="mc-kpi-lbl"><i class="bi @icon"></i> @label</div></button>;
 
-    static string FormatDateLabel(DateTime d)
-    {
-        if (d.Date == DateTime.Today)            return "Today";
-        if (d.Date == DateTime.Today.AddDays(1)) return "Tomorrow";
-        return d.ToString("dddd, MMMM d");
-    }
-
-    RenderFragment KpiCard(string icon, string label, string val, string css, string? filter) =>
-        @<button class="mc-kpi-card @css @(_typeFilter == (filter ?? string.Empty) ? "mc-kpi-active" : "")"
-                 @onclick="() => ToggleKpi(filter)">
-            <div class="mc-kpi-val">@val</div>
-            <div class="mc-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
-        </button>;
+    sealed record TabDef(string Key, string Label, string Icon);
+    sealed record CalEvent(Guid Id, string Title, string Type, string Status, string Notes, DateOnly Date, DateTime StartLocal, DateTime? EndLocal, bool AllDay, string TimeZoneId, Guid? AssignedToUserId);
+    sealed record AgendaGroup(string Label, List<CalEvent> Events);
+    sealed class EventForm { [Required] public DateTime StartLocal { get; set; } = DateTime.Today.AddHours(9); public DateTime? EndLocal { get; set; } = DateTime.Today.AddHours(10); public bool AllDay { get; set; } [Required, StringLength(50)] public string Type { get; set; } = "Meeting"; [Required, StringLength(50)] public string Status { get; set; } = "Scheduled"; [Required, StringLength(100)] public string TimeZoneId { get; set; } = "America/Chicago"; [Required, StringLength(200)] public string Title { get; set; } = string.Empty; [StringLength(2000)] public string? Notes { get; set; } }
 }

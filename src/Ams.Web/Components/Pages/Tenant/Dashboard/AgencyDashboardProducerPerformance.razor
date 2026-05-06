@@ -22,6 +22,10 @@
         <span>Loading producer data…</span>
     </div>
 }
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger ad-alert-danger" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError</div>
+}
 else if (_rows is null || _rows.Count == 0)
 {
     <div class="ad-empty"><i class="bi bi-person-badge" aria-hidden="true"></i><span>No producer data available.</span></div>
@@ -30,35 +34,39 @@ else
 {
     <!-- ── Summary strip ──────────────────────────────────────── -->
     <div class="ad-kpi-strip">
-        <div class="ad-kpi-card ad-kpi--branches">
+        <button type="button" class="ad-kpi-card ad-kpi--branches @KpiClass("all")" @onclick='() => SetFilter("all")' title="Show all producers">
             <div class="ad-kpi-icon"><i class="bi bi-people" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_rows.Count</div>
                 <div class="ad-kpi-lbl">Active Producers</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--premium">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--premium @KpiClass("premium")" @onclick='() => SetFilter("premium")' title="Show producers with premium MTD">
             <div class="ad-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_rows.Sum(r => r.WrittenPremiumMtd).ToString("C0")</div>
                 <div class="ad-kpi-lbl">Total Written MTD</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--leads">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--leads @KpiClass("leads")" @onclick='() => SetFilter("leads")' title="Show producers with open leads">
             <div class="ad-kpi-icon"><i class="bi bi-person-plus" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_rows.Sum(r => r.OpenLeads)</div>
                 <div class="ad-kpi-lbl">Total Open Leads</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--policies">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--policies @KpiClass("quotes")" @onclick='() => SetFilter("quotes")' title="Show producers with quotes MTD">
             <div class="ad-kpi-icon"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_rows.Sum(r => r.QuotesMtd)</div>
                 <div class="ad-kpi-lbl">Quotes MTD</div>
             </div>
-        </div>
+        </button>
     </div>
+    @if (_activeFilter != "all")
+    {
+        <div class="ad-filter-bar"><span class="ad-filter-chip"><i class="bi bi-funnel" aria-hidden="true"></i> @FilterLabel(_activeFilter)</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => SetFilter("all")'><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button></div>
+    }
 
     <!-- ── Leaderboard table ─────────────────────────────────── -->
     <div class="ad-card">
@@ -82,7 +90,7 @@ else
                 </thead>
                 <tbody>
                     @{int rank = 0;}
-                    @foreach (var p in _rows.OrderByDescending(r => r.WrittenPremiumYtd))
+                    @foreach (var p in FilteredRows.OrderByDescending(r => r.WrittenPremiumYtd))
                     {
                         rank++;
                         var initials = string.Concat(p.DisplayName.Split(' ').Select(w => w.Length > 0 ? w[0].ToString() : "")).ToUpper();
@@ -130,6 +138,15 @@ else
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private List<ProducerPerformanceDto>? _rows;
     private bool _loading;
+    private string? _loadError;
+    private string _activeFilter = "all";
+    private IEnumerable<ProducerPerformanceDto> FilteredRows => (_rows ?? []).Where(p => _activeFilter switch
+    {
+        "premium" => p.WrittenPremiumMtd > 0 || p.WrittenPremiumYtd > 0,
+        "leads" => p.OpenLeads > 0 || p.OpenOpportunities > 0,
+        "quotes" => p.QuotesMtd > 0,
+        _ => true,
+    });
 
     protected override async Task OnInitializedAsync()
     {
@@ -139,8 +156,13 @@ else
 
     private async Task LoadAsync()
     {
-        _loading = true;
+        _loading = true; _loadError = null;
         try { _rows = await Api.GetProducerPerformanceAsync(_tenantId); }
+        catch (Exception ex) { _loadError = $"Failed to load producer performance: {ex.Message}"; _rows = []; }
         finally { _loading = false; }
     }
+
+    private void SetFilter(string filter) => _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
+    private string KpiClass(string filter) => _activeFilter == filter ? "ad-kpi-card--active" : string.Empty;
+    private static string FilterLabel(string filter) => filter switch { "premium" => "Producers with premium", "leads" => "Producers with open pipeline", "quotes" => "Producers with quotes MTD", _ => "All producers" };
 }

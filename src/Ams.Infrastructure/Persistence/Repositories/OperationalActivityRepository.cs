@@ -41,4 +41,30 @@ VALUES (@ActivityId, @TenantId, @AccountId, @EngagementId, @AgreementId, @Activi
         await cn.ExecuteAsync(new CommandDefinition(sql, new { ActivityId = id, request.TenantId, request.AccountId, request.EngagementId, request.AgreementId, request.ActivityDate, request.ActivityTypeCode, request.Subject, request.Notes, request.PerformedByUserId, request.CreatedByUserId }, cancellationToken: cancellationToken));
         return id;
     }
+
+    public async Task UpdateAsync(Guid id, UpdateOperationalActivityRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE OPS.OperationalActivityLog
+SET AccountId = @AccountId,
+    EngagementId = @EngagementId,
+    AgreementId = @AgreementId,
+    ActivityDate = @ActivityDate,
+    ActivityTypeCode = @ActivityTypeCode,
+    Subject = @Subject,
+    Notes = @Notes,
+    PerformedByUserId = @PerformedByUserId,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE ActivityId = @ActivityId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { ActivityId = id, request.AccountId, request.EngagementId, request.AgreementId, request.ActivityDate, request.ActivityTypeCode, request.Subject, request.Notes, request.PerformedByUserId, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        const string sql = "UPDATE OPS.OperationalActivityLog SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ModifiedByUserId WHERE ActivityId = @ActivityId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { ActivityId = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+    }
 }

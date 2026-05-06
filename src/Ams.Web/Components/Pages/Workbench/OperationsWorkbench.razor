@@ -137,6 +137,13 @@
         </label>
     </div>
 
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError
+        </div>
+    }
+
     @if (_loading)
     {
         <div class="ow-loading" aria-live="polite">
@@ -555,6 +562,7 @@
 
     // ── State ─────────────────────────────────────────────────────────────────────
     private bool    _loading        = false;
+    private string? _loadError;
     private string  _activeQueue    = "overdue-tasks";
     private int     _queueFocus     = 0;
     private OpsItem? _selectedItem  = null;
@@ -629,17 +637,27 @@
         StateHasChanged();
         try
         {
-            // TODO: Api.GetOperationsWorkbenchAsync(_tenantId, _filterAssignee)
-            await Task.Delay(0);
-
-            _overdueTasks        = [];
+            _loadError = null;
+            var result = await Api.GetOperationsWorkbenchAsync(_tenantId, null, _filterMyItems || _filterAssignee == "me", _filterAssignee);
+            _overdueTasks = result?.OverdueTasks.Select(ToOpsItem).ToList() ?? [];
+            _pendingEndorsements = result?.PendingEndorsements.Select(ToOpsItem).ToList() ?? [];
+            _certRequests = result?.CertificateRequests.Select(ToOpsItem).ToList() ?? [];
+            _renewalFollowups = result?.RenewalFollowups.Select(ToOpsItem).ToList() ?? [];
+            _docExceptions = result?.DocExceptions.Select(ToOpsItem).ToList() ?? [];
+            _failedDownloads = result?.FailedDownloads.Select(ToOpsItem).ToList() ?? [];
+            _failedAutomations = result?.FailedAutomations.Select(ToOpsItem).ToList() ?? [];
+            _counts = ToCounts(result?.Counts);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load operations workbench: {ex.Message}";
+            _overdueTasks = [];
             _pendingEndorsements = [];
-            _certRequests        = [];
-            _renewalFollowups    = [];
-            _docExceptions       = [];
-            _failedDownloads     = [];
-            _failedAutomations   = [];
-
+            _certRequests = [];
+            _renewalFollowups = [];
+            _docExceptions = [];
+            _failedDownloads = [];
+            _failedAutomations = [];
             RefreshCounts();
         }
         finally { _loading = false; }
@@ -728,16 +746,30 @@
 
     private async Task RetryItemAsync(OpsItem item)
     {
-        // TODO: Api.RetryOpsItemAsync(_tenantId, item.ItemId)
-        await Task.Delay(0);
-        await ShowToastAsync($"Retrying: {item.Title}", "e-toast-info");
+        try
+        {
+            await Api.RetryOperationsWorkbenchItemAsync(_tenantId, item.ItemId);
+            await LoadAsync();
+            await ShowToastAsync($"Retry queued: {item.Title}", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Retry failed: {ex.Message}", "e-toast-danger");
+        }
     }
 
     private async Task SkipStepAsync(OpsItem item)
     {
-        // TODO: Api.SkipAutomationStepAsync(_tenantId, item.ItemId)
-        await Task.Delay(0);
-        await ShowToastAsync($"Step skipped: {item.Title}", "e-toast-info");
+        try
+        {
+            await Api.SkipOperationsWorkbenchStepAsync(_tenantId, item.ItemId);
+            await LoadAsync();
+            await ShowToastAsync($"Step skipped: {item.Title}", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Skip failed: {ex.Message}", "e-toast-danger");
+        }
     }
 
     // ── Counts ────────────────────────────────────────────────────────────────────
@@ -780,6 +812,44 @@
         "Won"        => "ow-stage-badge ow-stage-badge--won",
         "Lost"       => "ow-stage-badge ow-stage-badge--lost",
         _            => "ow-stage-badge",
+    };
+
+    private static QueueCounts ToCounts(OperationsWorkbenchCountsDto? c) => c is null ? new() : new()
+    {
+        OverdueTasks = c.OverdueTasks,
+        PendingEndorsements = c.PendingEndorsements,
+        CertificateRequests = c.CertificateRequests,
+        RenewalFollowups = c.RenewalFollowups,
+        DocIndexingExceptions = c.DocIndexingExceptions,
+        FailedDownloads = c.FailedDownloads,
+        FailedAutomations = c.FailedAutomations,
+    };
+
+    private static OpsItem ToOpsItem(OperationsWorkbenchItemDto i) => new()
+    {
+        ItemId = i.ItemId,
+        QueueName = i.QueueName,
+        Title = i.Title,
+        RefNumber = i.RefNumber,
+        AccountName = i.AccountName,
+        PolicyNumber = i.PolicyNumber,
+        CertHolder = i.CertHolder,
+        LobCode = i.LobCode,
+        AssignedTo = i.AssignedTo,
+        Priority = i.Priority,
+        DueDate = i.DueDate,
+        FollowUpDate = i.FollowUpDate,
+        CreatedAt = i.CreatedAt,
+        AgeDays = i.AgeDays,
+        Premium = i.Premium,
+        ErrorMessage = i.ErrorMessage,
+        RetryCount = i.RetryCount,
+        AutomationStep = i.AutomationStep,
+        RenewalStage = i.RenewalStage,
+        Notes = i.Notes,
+        CanRetry = i.CanRetry,
+        IsAssignedToMe = i.IsAssignedToMe,
+        DetailUrl = i.DetailUrl,
     };
 
     // ── Models ────────────────────────────────────────────────────────────────────

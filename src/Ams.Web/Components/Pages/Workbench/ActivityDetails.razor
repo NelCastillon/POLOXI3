@@ -1,0 +1,140 @@
+@page "/workbench/activities/{ActivityId:guid}"
+@namespace Ams.Web.Components.Pages.Workbench
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Activity Detail — AMS</PageTitle>
+
+@if (_toastMessage is not null)
+{
+    <div class="mt-toast @(_toastIsError ? "mt-toast--danger" : "mt-toast--success")" role="status">
+        <i class="bi @(_toastIsError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
+
+<AppPageHeader Title="Activity Detail"
+               Subtitle="Tenant Admin activity record review"
+               Icon="bi-lightning">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/activities")'><i class="bi bi-arrow-left"></i> Back to Activities</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")"></i></button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger mt-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>
+}
+else if (_loading)
+{
+    <div class="mt-loading"><div class="um-spinner"></div><span>Loading activity detail…</span></div>
+}
+else if (_activity is not null)
+{
+    <section class="td-hero">
+        <div>
+            <div class="td-meta">
+                <span class="td-chip"><i class="bi @TypeIcon(_activity.ActivityTypeCode)"></i>@_activity.ActivityTypeCode</span>
+                <span class="td-chip"><i class="bi bi-calendar3"></i>@_activity.ActivityDate.ToString("MMM d, yyyy")</span>
+                <span class="td-chip"><i class="bi bi-person-check"></i>@(_activity.PerformedByUserId == TenantAdminUserId ? "Tenant Admin" : "Assigned user")</span>
+            </div>
+            <h2 class="td-title">@_activity.Subject</h2>
+            <div class="td-meta"><span class="td-chip"><i class="bi bi-clock"></i>Logged @_activity.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span></div>
+        </div>
+        <div class="td-actions">
+            <button class="um-btn um-btn-danger" @onclick="() => _showDelete = true" disabled="@_saving"><i class="bi bi-trash"></i> Delete</button>
+        </div>
+    </section>
+
+    <div class="td-grid">
+        <section class="td-panel">
+            <h3><i class="bi bi-card-text"></i>Notes</h3>
+            <div class="td-description">@(string.IsNullOrWhiteSpace(_activity.Notes) ? "No notes recorded." : _activity.Notes)</div>
+        </section>
+        <section class="td-panel">
+            <h3><i class="bi bi-info-circle"></i>Activity Information</h3>
+            <div class="td-detail-list">
+                <div class="td-detail-row"><span>Activity Id</span><strong>@_activity.ActivityId</strong></div>
+                <div class="td-detail-row"><span>Account</span><strong>@(_activity.AccountId?.ToString() ?? "—")</strong></div>
+                <div class="td-detail-row"><span>Engagement</span><strong>@(_activity.EngagementId?.ToString() ?? "—")</strong></div>
+                <div class="td-detail-row"><span>Agreement</span><strong>@(_activity.AgreementId?.ToString() ?? "—")</strong></div>
+            </div>
+        </section>
+    </div>
+}
+
+@if (_showDelete && _activity is not null)
+{
+    <div class="mt-modal-backdrop" @onclick="() => _showDelete = false">
+        <div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
+            <div class="um-confirm-title">Delete activity?</div>
+            <div class="um-confirm-text">This will remove <strong>@_activity.Subject</strong> from the Tenant Admin activity stream.</div>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid ActivityId { get; set; }
+    static readonly Guid TenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+    OperationalActivityLogDto? _activity;
+    string? _loadError;
+    string? _toastMessage;
+    bool _toastIsError;
+    bool _loading;
+    bool _saving;
+    bool _showDelete;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("My Activities", "/workbench/activities"), new("Activity Detail", Nav.Uri));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _activity = await Api.GetOperationalActivityByIdAsync(ActivityId);
+            if (_activity is null) _loadError = "Activity not found.";
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load activity: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    async Task ExecuteDeleteAsync()
+    {
+        if (_activity is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteOperationalActivityAsync(_activity.ActivityId, TenantAdminUserId);
+            Nav.NavigateTo("/workbench/activities");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    void ShowToast(string message, bool isError = false) { _toastMessage = message; _toastIsError = isError; }
+    void ClearToast() => _toastMessage = null;
+    static string TypeIcon(string type) => type switch { "Call" => "bi-telephone-fill", "Email" => "bi-envelope-fill", "Meeting" => "bi-calendar-event-fill", "Task" => "bi-check2-square", "Workflow" => "bi-diagram-3-fill", _ => "bi-sticky-fill" };
+}

@@ -82,6 +82,7 @@ SET Title = @Title,
     StageCode = @StageCode,
     PriorityCode = @PriorityCode,
     StatusCode = @StatusCode,
+    RelatedEntityName = @RelatedEntityName,
     AssignedToUserId = @AssignedToUserId,
     DueDate = @DueDate,
     CompletedDate = @CompletedDate,
@@ -89,7 +90,7 @@ SET Title = @Title,
     ModifiedByUserId = @ModifiedByUserId
 WHERE TaskItemId = @TaskItemId AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new { TaskItemId = id, request.Title, request.Description, request.TaskTypeCode, request.StageCode, request.PriorityCode, request.StatusCode, request.AssignedToUserId, request.DueDate, request.CompletedDate, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TaskItemId = id, request.Title, request.Description, request.TaskTypeCode, request.StageCode, request.PriorityCode, request.StatusCode, request.RelatedEntityName, request.AssignedToUserId, request.DueDate, request.CompletedDate, request.ModifiedByUserId }, cancellationToken: cancellationToken));
     }
 
     public async Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default)

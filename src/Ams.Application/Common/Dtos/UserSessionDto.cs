@@ -6,6 +6,8 @@ public sealed class UserSessionDto
     public Guid TenantId { get; set; }
     public Guid UserId { get; set; }
     public string? UserFullName { get; set; }
+    public string? UserEmail { get; set; }
+    public string? UserAgent { get; set; }
     public string? DeviceType { get; set; }
     public string? IpAddress { get; set; }
     public DateTime LoginDateUtc { get; set; }

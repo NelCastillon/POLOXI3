@@ -17,4 +17,10 @@ public sealed class UserSessionService : IUserSessionService
 
     public Task<PagedResult<UserSessionDto>> SearchAsync(Guid tenantId, Guid? userId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, userId, searchTerm, pageNumber, pageSize, cancellationToken);
+
+    public Task RevokeAsync(Guid sessionId, string? reason = null, CancellationToken cancellationToken = default)
+        => _repository.RevokeAsync(sessionId, reason, cancellationToken);
+
+    public Task RevokeAllAsync(Guid tenantId, Guid? userId = null, string? reason = null, CancellationToken cancellationToken = default)
+        => _repository.RevokeAllAsync(tenantId, userId, reason, cancellationToken);
 }

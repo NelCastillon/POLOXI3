@@ -28,4 +28,18 @@ public sealed class OperationalActivitiesController : ControllerBase
         var id = await _service.CreateAsync(request, cancellationToken);
         return Ok(id);
     }
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateOperationalActivityRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdateAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] Guid? modifiedByUserId, CancellationToken cancellationToken)
+    {
+        await _service.DeleteAsync(id, modifiedByUserId, cancellationToken);
+        return NoContent();
+    }
 }

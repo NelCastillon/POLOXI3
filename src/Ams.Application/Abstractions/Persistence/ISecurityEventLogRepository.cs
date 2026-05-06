@@ -5,5 +5,5 @@ namespace Ams.Application.Abstractions.Persistence;
 
 public interface ISecurityEventLogRepository
 {
-    Task<PagedResult<SecurityEventLogDto>> SearchAsync(string? searchTerm, string? eventTypeCode, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
+    Task<PagedResult<SecurityEventLogDto>> SearchAsync(Guid? tenantId = null, string? searchTerm = null, string? eventTypeCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
 }

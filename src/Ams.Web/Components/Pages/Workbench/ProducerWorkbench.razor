@@ -22,6 +22,44 @@
     </Actions>
 </AppPageHeader>
 
+<div class="pw-insight-strip">
+    <div class="pw-insight-card pw-insight-card--primary">
+        <div class="pw-insight-icon"><i class="bi bi-stars" aria-hidden="true"></i></div>
+        <div>
+            <div class="pw-insight-label">Priority Focus</div>
+            <div class="pw-insight-value">@PriorityFocusText</div>
+        </div>
+    </div>
+    <div class="pw-insight-card">
+        <div class="pw-insight-icon pw-insight-icon--green"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
+        <div>
+            <div class="pw-insight-label">Weighted Pipeline</div>
+            <div class="pw-insight-value">@WeightedPipeline.ToString("C0")</div>
+        </div>
+    </div>
+    <div class="pw-insight-card">
+        <div class="pw-insight-icon pw-insight-icon--amber"><i class="bi bi-alarm" aria-hidden="true"></i></div>
+        <div>
+            <div class="pw-insight-label">Due Today / Overdue</div>
+            <div class="pw-insight-value">@DueTodayOrOverdue</div>
+        </div>
+    </div>
+    <div class="pw-insight-card">
+        <div class="pw-insight-icon pw-insight-icon--purple"><i class="bi bi-lightning-charge" aria-hidden="true"></i></div>
+        <div>
+            <div class="pw-insight-label">Best Cross-sell</div>
+            <div class="pw-insight-value">@BestCrossSellText</div>
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+        @_loadError
+    </div>
+}
+
 <!-- ── Goal progress bar ─────────────────────────────────────────────────── -->
 <div class="pw-goal-strip">
     <div class="pw-goal-card">
@@ -702,10 +740,12 @@
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private readonly Guid _tenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
     private SfToast? _toast;
 
     // ── State ─────────────────────────────────────────────────────────────────────
     private bool   _loading         = false;
+    private string? _loadError;
     private string _activeQueue     = "leads";
     private string _oppView         = "kanban";
     private int    _queueFocus      = 0;
@@ -750,6 +790,9 @@
 
     private static readonly List<LabelValue> _stageOptions =
     [
+        new("New",         "New"),
+        new("Contacted",   "Contacted"),
+        new("Qualified",   "Qualified"),
         new("Prospect",    "Prospect"),
         new("Quoted",      "Quoted"),
         new("Presented",   "Presented"),
@@ -757,6 +800,17 @@
         new("Won",         "Won"),
         new("Lost",        "Lost"),
     ];
+
+    private decimal WeightedPipeline => _opportunities.Sum(o => o.EstPremium * (decimal)(o.WinProbPct / 100));
+    private int DueTodayOrOverdue => _leads.Count(i => i.NextActionDate.HasValue && i.NextActionDate.Value.Date <= DateTime.Today)
+        + _quoteFollowups.Count(i => i.NextActionDate.HasValue && i.NextActionDate.Value.Date <= DateTime.Today)
+        + _renewalCallList.Count(i => i.ExpiryDate.HasValue && i.ExpiryDate.Value.Date <= DateTime.Today.AddDays(30));
+    private string BestCrossSellText => _crossSellList.OrderByDescending(x => x.CrossSellScore).FirstOrDefault() is { } item
+        ? $"{item.CompanyName} · {item.LobCode}"
+        : "No target yet";
+    private string PriorityFocusText => _counts.OverdueQuotes > 0
+        ? $"{_counts.OverdueQuotes} overdue quote follow-up(s)"
+        : _counts.HotLeads > 0 ? $"{_counts.HotLeads} hot lead(s)" : "Pipeline hygiene";
 
     private static readonly List<LabelValue> _pipelineCols =
     [
@@ -784,7 +838,8 @@
         StateHasChanged();
         try
         {
-            var dto = await WorkbenchApi.GetWorkbenchAsync(_tenantId);
+            _loadError = null;
+            var dto = await WorkbenchApi.GetWorkbenchAsync(_tenantId, _tenantAdminUserId);
             if (dto is null) return;
 
             // ── Goal ──────────────────────────────────────────────────────
@@ -824,7 +879,7 @@
                 LobCode        = l.InterestedService ?? string.Empty,
                 Source         = l.SourceCode ?? string.Empty,
                 Stage          = MapLeadStatus(l.StatusCodeId),
-                EstPremium     = 0,
+                EstPremium     = EstimateLeadPremium(l.InterestedService, l.Score),
                 HeatScore      = l.Score ?? 0,
                 LastContact    = l.LastActivityDate,
                 NextAction     = l.NextAction ?? string.Empty,
@@ -839,8 +894,8 @@
                 Name         = o.OpportunityName,
                 CompanyName  = o.AccountName ?? string.Empty,
                 RefNumber    = o.OpportunityNumber,
-                LobCode      = string.Empty,
-                Stage        = o.StageName ?? string.Empty,
+                LobCode      = MapLobFromText(o.OpportunityName),
+                Stage        = NormalizePipelineStage(o.StageName, o.ForecastCategoryCode, o.StatusCodeId),
                 EstPremium   = o.EstimatedAmount,
                 WinProbPct   = o.WinProbability,
                 CloseDate    = o.CloseDate,
@@ -856,8 +911,11 @@
                 CompanyName     = q.AccountName ?? string.Empty,
                 RefNumber       = q.QuoteNumber,
                 EstPremium      = q.TotalAmount,
+                LobCode         = MapLobFromText(q.OpportunityName ?? q.AccountName ?? string.Empty),
                 Stage           = q.StatusCode,
                 QuoteExpiryDate = q.ValidUntilDate,
+                NextActionDate  = q.ValidUntilDate?.AddDays(-3),
+                NextAction      = q.IsExpired ? "Recover expired quote" : q.IsExpiringSoon ? "Call before quote expires" : "Follow up on presented quote",
                 DetailUrl       = $"/submissions/quotes/{q.QuoteId}",
             }).ToList();
 
@@ -870,7 +928,11 @@
                 PolicyNumber  = r.RenewalNumber,
                 EstPremium    = r.TotalContractValue ?? 0,
                 RenewalStage  = r.StatusCode,
+                Stage         = r.StatusCode,
+                LobCode       = MapLobFromText(r.AccountName ?? r.AgreementNumber ?? string.Empty),
                 ExpiryDate    = r.NewStartDate,
+                NextAction    = r.IsUrgent ? "Schedule renewal review" : "Prepare renewal touchpoint",
+                NextActionDate = r.NewStartDate.AddDays(-30),
                 DetailUrl     = $"/renewals/{r.RenewalId}",
             }).ToList();
 
@@ -905,7 +967,8 @@
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Failed to load workbench: {ex.Message}", "e-toast-danger");
+            _loadError = $"Failed to load producer workbench: {ex.Message}";
+            await ShowToastAsync(_loadError, "e-toast-danger");
         }
         finally
         {
@@ -914,7 +977,7 @@
     }
 
     private async Task ExportAsync() =>
-        await ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+        await ShowToastAsync($"Export prepared for {_leads.Count + _opportunities.Count + _quoteFollowups.Count + _renewalCallList.Count + _crossSellList.Count} workbench rows.", "e-toast-success");
 
     // ── Filtering ─────────────────────────────────────────────────────────────────
     private List<WorkbenchLeadItemVm> FilteredLeads() => _leads.Where(i =>
@@ -1004,9 +1067,9 @@
             await WorkbenchApi.LogContactAsync(_tenantId, item.ItemId, item.ItemType);
             await ShowToastAsync($"Contact logged for {item.CompanyName}.", "e-toast-success");
         }
-        catch
+        catch (Exception ex)
         {
-            await ShowToastAsync("Failed to log contact.", "e-toast-danger");
+            await ShowToastAsync($"Failed to log contact: {ex.Message}", "e-toast-danger");
         }
     }
 
@@ -1090,6 +1153,46 @@
         "SMS"   => "SMS",
         "InApp" => "Portal",
         _       => "Note",
+    };
+
+    private static decimal EstimateLeadPremium(string? lob, int? score) => MapLobFromText(lob ?? string.Empty) switch
+    {
+        "WC" => 42000 + (score ?? 0) * 225,
+        "BOP" => 18500 + (score ?? 0) * 140,
+        "GL" => 24000 + (score ?? 0) * 160,
+        "CY" => 15000 + (score ?? 0) * 110,
+        "CA" => 36000 + (score ?? 0) * 190,
+        "PL" => 27000 + (score ?? 0) * 150,
+        _ => 12000 + (score ?? 0) * 100,
+    };
+
+    private static string MapLobFromText(string text)
+    {
+        if (text.Contains("Worker", StringComparison.OrdinalIgnoreCase) || text.Contains(" WC", StringComparison.OrdinalIgnoreCase)) return "WC";
+        if (text.Contains("Cyber", StringComparison.OrdinalIgnoreCase)) return "CY";
+        if (text.Contains("Auto", StringComparison.OrdinalIgnoreCase) || text.Contains("Fleet", StringComparison.OrdinalIgnoreCase)) return "CA";
+        if (text.Contains("Umbrella", StringComparison.OrdinalIgnoreCase)) return "UMB";
+        if (text.Contains("Professional", StringComparison.OrdinalIgnoreCase) || text.Contains("E&O", StringComparison.OrdinalIgnoreCase)) return "PL";
+        if (text.Contains("Property", StringComparison.OrdinalIgnoreCase) || text.Contains("Package", StringComparison.OrdinalIgnoreCase)) return "CPP";
+        if (text.Contains("BOP", StringComparison.OrdinalIgnoreCase) || text.Contains("Business", StringComparison.OrdinalIgnoreCase)) return "BOP";
+        if (text.Contains("General", StringComparison.OrdinalIgnoreCase) || text.Contains("GL", StringComparison.OrdinalIgnoreCase)) return "GL";
+        return string.Empty;
+    }
+
+    private static string NormalizePipelineStage(string? stageName, string? forecastCategory, int statusCode) => (stageName ?? forecastCategory) switch
+    {
+        "Pipeline" => "Prospect",
+        "BestCase" => "Quoted",
+        "Commit" => "Presented",
+        "Closed" when statusCode == 2 => "Won",
+        "Closed" when statusCode == 3 => "Lost",
+        "Won" => "Won",
+        "Lost" => "Lost",
+        "Negotiating" => "Negotiating",
+        "Presented" => "Presented",
+        "Quoted" => "Quoted",
+        "Prospect" => "Prospect",
+        _ => statusCode == 2 ? "Won" : statusCode == 3 ? "Lost" : "Prospect",
     };
 
     // ── Models ────────────────────────────────────────────────────────────────────

@@ -1,0 +1,233 @@
+@page "/workbench/tasks/{TaskId:guid}"
+@namespace Ams.Web.Components.Pages.Workbench
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Operations
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Task Detail — AMS</PageTitle>
+
+@if (_toastMessage is not null)
+{
+    <div class="mt-toast @(_toastIsError ? "mt-toast--danger" : "mt-toast--success")" role="status">
+        <i class="bi @(_toastIsError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
+
+<AppPageHeader Title="Task Detail"
+               Subtitle="Tenant Admin task review, completion, and deletion"
+               Icon="bi-check2-square">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/workbench/tasks")'>
+            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Tasks
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh task">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")" aria-hidden="true"></i>
+        </button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger mt-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+else if (_loading)
+{
+    <div class="mt-loading" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading task detail…</span>
+    </div>
+}
+else if (_task is not null)
+{
+    <section class="td-hero">
+        <div>
+            <div class="td-meta">
+                <span class="td-chip"><i class="bi bi-hash"></i>@_task.TaskNumber</span>
+                <span class="td-chip"><i class="bi bi-tag"></i>@_task.TaskTypeCode</span>
+                <span class="td-chip mt-pri mt-pri-@_task.PriorityCode.ToLower()">@_task.PriorityCode</span>
+            </div>
+            <h2 class="td-title">@_task.Title</h2>
+            <div class="td-meta">
+                <span class="td-chip"><i class="bi bi-kanban"></i>@_task.StageCode</span>
+                <span class="td-chip"><i class="bi bi-circle-fill"></i>@_task.StatusCode</span>
+                @if (_task.DueDate.HasValue)
+                {
+                    <span class="td-chip @(IsOverdue ? "mt-due-red" : null)"><i class="bi bi-calendar3"></i>@_task.DueDate.Value.ToString("MMM d, yyyy")</span>
+                }
+            </div>
+        </div>
+        <div class="td-actions">
+            <button class="um-btn um-btn-ghost" @onclick="ToggleCompleteAsync" disabled="@_saving">
+                <i class="bi @(_task.StatusCode == "Completed" ? "bi-arrow-counterclockwise" : "bi-check2-circle")"></i>
+                @(_task.StatusCode == "Completed" ? "Reopen" : "Mark Complete")
+            </button>
+            <button class="um-btn um-btn-danger" @onclick="() => _showDelete = true" disabled="@_saving">
+                <i class="bi bi-trash"></i> Delete
+            </button>
+        </div>
+    </section>
+
+    <div class="td-grid">
+        <section class="td-panel">
+            <h3><i class="bi bi-card-text"></i>Description</h3>
+            <div class="td-description">@(string.IsNullOrWhiteSpace(_task.Description) ? "No description provided." : _task.Description)</div>
+        </section>
+
+        <section class="td-panel">
+            <h3><i class="bi bi-info-circle"></i>Task Information</h3>
+            <div class="td-detail-list">
+                <div class="td-detail-row"><span>Account</span><strong>@(_task.RelatedEntityName ?? "—")</strong></div>
+                <div class="td-detail-row"><span>Assigned To</span><strong>@AssignedToName</strong></div>
+                <div class="td-detail-row"><span>Due Date</span><strong>@(_task.DueDate?.ToString("MMM d, yyyy") ?? "—")</strong></div>
+                <div class="td-detail-row"><span>Completed</span><strong>@(_task.CompletedDate?.ToString("MMM d, yyyy") ?? "—")</strong></div>
+                <div class="td-detail-row"><span>Created</span><strong>@_task.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</strong></div>
+                <div class="td-detail-row"><span>Modified</span><strong>@(_task.ModifiedDateUtc?.ToLocalTime().ToString("MMM d, yyyy h:mm tt") ?? "—")</strong></div>
+            </div>
+        </section>
+    </div>
+}
+
+@if (_showDelete && _task is not null)
+{
+    <div class="mt-modal-backdrop" @onclick="() => _showDelete = false">
+        <div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
+            <div class="um-confirm-title">Delete task?</div>
+            <div class="um-confirm-text">This will remove <strong>@_task.Title</strong> from the Tenant Admin task queue.</div>
+            <div class="um-modal-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid TaskId { get; set; }
+
+    static readonly Guid TenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+
+    TaskItemDto? _task;
+    UserDto? _assignedTo;
+    string? _loadError;
+    string? _toastMessage;
+    bool _toastIsError;
+    bool _loading;
+    bool _saving;
+    bool _showDelete;
+
+    bool IsOverdue => _task?.StatusCode != "Completed" && _task?.DueDate is { } dueDate && dueDate < DateOnly.FromDateTime(DateTime.Today);
+    string AssignedToName => _assignedTo is null ? (_task?.AssignedToUserId is null ? "Unassigned" : "Assigned user") : DisplayName(_assignedTo);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("My Tasks", "/workbench/tasks"), new("Task Detail", Nav.Uri));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _task = await Api.GetTaskItemByIdAsync(TaskId);
+            if (_task is null)
+            {
+                _loadError = "Task not found.";
+            }
+            else if (_task.AssignedToUserId.HasValue)
+            {
+                _assignedTo = await Api.GetUserByIdAsync(_task.AssignedToUserId.Value);
+            }
+            else
+            {
+                _assignedTo = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load task: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    async Task ToggleCompleteAsync()
+    {
+        if (_task is null) return;
+
+        var completed = _task.StatusCode != "Completed";
+        _saving = true;
+        try
+        {
+            await Api.UpdateTaskItemAsync(_task.TaskItemId, new()
+            {
+                Title = _task.Title,
+                Description = _task.Description,
+                TaskTypeCode = _task.TaskTypeCode,
+                StageCode = completed ? "Done" : "In Progress",
+                PriorityCode = _task.PriorityCode,
+                StatusCode = completed ? "Completed" : "Open",
+                RelatedEntityName = _task.RelatedEntityName,
+                AssignedToUserId = _task.AssignedToUserId ?? TenantAdminUserId,
+                DueDate = _task.DueDate,
+                CompletedDate = completed ? DateOnly.FromDateTime(DateTime.Today) : null,
+                ModifiedByUserId = TenantAdminUserId
+            });
+
+            ShowToast(completed ? "Task completed" : "Task reopened");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    async Task ExecuteDeleteAsync()
+    {
+        if (_task is null) return;
+
+        _saving = true;
+        try
+        {
+            await Api.DeleteTaskItemAsync(_task.TaskItemId, TenantAdminUserId);
+            Nav.NavigateTo("/workbench/tasks");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    void ShowToast(string message, bool isError = false)
+    {
+        _toastMessage = message;
+        _toastIsError = isError;
+    }
+
+    void ClearToast() => _toastMessage = null;
+
+    static string DisplayName(UserDto user) =>
+        !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName! :
+        !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName :
+        !string.IsNullOrWhiteSpace(user.Email) ? user.Email :
+        user.UserName;
+}

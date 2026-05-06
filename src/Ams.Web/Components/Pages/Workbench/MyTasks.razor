@@ -1,24 +1,29 @@
 @page "/workbench/tasks"
 @namespace Ams.Web.Components.Pages.Workbench
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Operations
+@using Microsoft.AspNetCore.Components.Forms
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>My Tasks — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
-    <MenuFieldSettings Text="Text" IconCss="IconCss" />
-</SfContextMenu>
+@if (_toastMessage is not null)
+{
+    <div class="mt-toast @(_toastIsError ? "mt-toast--danger" : "mt-toast--success")" role="status">
+        <i class="bi @(_toastIsError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
 
 <AppPageHeader Title="My Tasks"
                Subtitle="All tasks assigned to you — due today, upcoming, overdue and completed"
                Icon="bi-check2-square">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="Refresh">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
+        <button class="um-btn um-btn-ghost" @onclick="Refresh" disabled="@_loading" title="Refresh task queue">
+            <i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")" aria-hidden="true"></i>
         </button>
         <button class="um-btn um-btn-primary" @onclick="NewTask">
             <i class="bi bi-plus-lg" aria-hidden="true"></i> New Task
@@ -26,19 +31,32 @@
     </Actions>
 </AppPageHeader>
 
-<!-- KPI strip -->
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger mt-load-error" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+@if (_loading)
+{
+    <div class="mt-loading" aria-live="polite">
+        <div class="um-spinner" aria-hidden="true"></div>
+        <span>Loading tenant admin task queue…</span>
+    </div>
+}
+
 <div class="mt-kpi-strip">
-    @KpiCard("bi-list-check",     "All",       _rows.Count.ToString(),                                           "mt-kpi-all",     null)
-    @KpiCard("bi-sun",            "Due Today", _rows.Count(r => !r.Done && r.DueDate.Date == DateTime.Today).ToString(), "mt-kpi-today",   "today")
-    @KpiCard("bi-alarm-fill",     "Overdue",   _rows.Count(r => !r.Done && r.DueDate < DateTime.Today).ToString(),"mt-kpi-overdue", "overdue")
-    @KpiCard("bi-calendar-week",  "This Week", _rows.Count(r => !r.Done && r.DueDate.Date <= DateTime.Today.AddDays(7)).ToString(), "mt-kpi-week", "week")
-    @KpiCard("bi-check-circle",   "Completed", _rows.Count(r => r.Done).ToString(),                              "mt-kpi-done",    "completed")
+    @KpiCard("bi-list-check", "All", _rows.Count.ToString(), "All Tenant Admin tasks", "mt-kpi-all", null)
+    @KpiCard("bi-sun", "Due Today", _rows.Count(r => !r.Done && r.DueDate.Date == DateTime.Today).ToString(), "Tasks due today", "mt-kpi-today", "today")
+    @KpiCard("bi-alarm-fill", "Overdue", _rows.Count(r => !r.Done && r.DueDate < DateTime.Today).ToString(), "Overdue tasks requiring attention", "mt-kpi-overdue", "overdue")
+    @KpiCard("bi-calendar-week", "This Week", _rows.Count(r => !r.Done && r.DueDate.Date <= DateTime.Today.AddDays(7)).ToString(), "Open tasks due in the next seven days", "mt-kpi-week", "week")
+    @KpiCard("bi-check-circle", "Completed", _rows.Count(r => r.Done).ToString(), "Completed Tenant Admin tasks", "mt-kpi-done", "completed")
 </div>
 
-<!-- Filter bar -->
 <div class="mt-filter-bar">
-    <input class="e-input mt-search" @bind="_search" @bind:event="oninput"
-           placeholder="Search tasks, account, notes…" />
+    <input class="mt-input mt-search" @bind="_search" @bind:event="oninput"
+           placeholder="Search tasks, account, assignee, notes…" />
     <div class="mt-pill-group">
         @foreach (var p in _duePills)
         {
@@ -46,13 +64,13 @@
                     @onclick="() => _dueFilter = p.Key">@p.Label</button>
         }
     </div>
-    <select class="e-input mt-filter-sel" @bind="_priFilter">
+    <select class="mt-input mt-filter-sel" @bind="_priFilter">
         <option value="">All Priorities</option>
         <option>High</option><option>Medium</option><option>Low</option>
     </select>
-    <select class="e-input mt-filter-sel" @bind="_catFilter">
+    <select class="mt-input mt-filter-sel" @bind="_catFilter">
         <option value="">All Categories</option>
-        @foreach (var c in _categories) { <option>@c</option> }
+        @foreach (var c in Categories) { <option>@c</option> }
     </select>
     <label class="mt-toggle">
         <input type="checkbox" @bind="_showDone" /> Show completed
@@ -63,7 +81,6 @@
     <span class="mt-filter-count">@Filtered.Count() tasks</span>
 </div>
 
-<!-- Task board view tabs -->
 <div class="mt-view-tabs">
     @foreach (var t in _tabs)
     {
@@ -75,12 +92,10 @@
     }
 </div>
 
-<!-- Content -->
 <div class="mt-content">
 
     @if (_activeTab == "list")
     {
-        <!-- List view: grouped by due section -->
         @foreach (var grp in GroupedFiltered)
         {
             <div class="mt-group-hd">
@@ -89,18 +104,21 @@
             </div>
             @foreach (var r in grp.Items)
             {
-                <div class="mt-task-row @(r.IsOverdue && !r.Done ? "mt-row-overdue" : "")">
+                <div class="mt-task-row @(r.IsOverdue && !r.Done ? "mt-row-overdue" : "")" @onclick="() => OpenDetails(r)">
                     <button class="mt-check @(r.Done ? "mt-check--done" : "")"
+                            @onclick:stopPropagation="true"
                             @onclick="() => ToggleDone(r)">
                         <i class="bi @(r.Done ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i>
                     </button>
                     <div class="mt-row-body">
                         <span class="mt-row-title @(r.Done ? "mt-done-text" : "")">@r.Title</span>
                         <div class="mt-row-meta">
+                            <span class="mt-row-number"><i class="bi bi-hash" aria-hidden="true"></i> @r.TaskNumber</span>
                             @if (!string.IsNullOrEmpty(r.Account))
                             {
                                 <span><i class="bi bi-building" aria-hidden="true"></i> @r.Account</span>
                             }
+                            <span><i class="bi bi-person-check" aria-hidden="true"></i> @r.AssignedTo</span>
                             <span><i class="bi bi-tag" aria-hidden="true"></i> @r.Category</span>
                             @if (!string.IsNullOrEmpty(r.Notes))
                             {
@@ -108,7 +126,7 @@
                             }
                         </div>
                     </div>
-                    <div class="mt-row-right">
+                    <div class="mt-row-right" @onclick:stopPropagation="true">
                         <span class="mt-pri mt-pri-@r.Priority.ToLower()">@r.Priority</span>
                         <span class="mt-due @(r.IsOverdue && !r.Done ? "mt-due-red" : "")">
                             <i class="bi bi-calendar3" aria-hidden="true"></i>
@@ -116,9 +134,18 @@
                         </span>
                         <button class="um-btn um-btn-ghost um-btn-xs"
                                 @onclick:stopPropagation="true"
-                                @onclick="(e) => { _selected = r; _ctx.Open(e.ClientX, e.ClientY); }">
+                                @onclick="() => ToggleActions(r)">
                             <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
                         </button>
+                        @if (_actionsForId == r.TaskId)
+                        {
+                            <div class="mt-actions-menu">
+                                <button type="button" @onclick="() => OpenDetails(r)"><i class="bi bi-arrow-right-circle"></i> Open</button>
+                                <button type="button" @onclick="() => ToggleDone(r)"><i class="bi bi-check-circle"></i> @(r.Done ? "Reopen" : "Mark Complete")</button>
+                                <button type="button" @onclick="() => OpenEdit(r)"><i class="bi bi-pencil"></i> Edit</button>
+                                <button type="button" @onclick="() => ShowDelete(r)" class="mt-action-danger"><i class="bi bi-trash"></i> Delete</button>
+                            </div>
+                        }
                     </div>
                 </div>
             }
@@ -133,62 +160,107 @@
     }
     else
     {
-        <!-- Grid view -->
-        <SfGrid DataSource="@Filtered.ToList()" AllowSorting="true" AllowPaging="true"
-                AllowResizing="true" RowHeight="46" @ref="_grid">
-            <GridPageSettings PageSize="25" />
-            <GridColumns>
-                <GridColumn HeaderText="Done" Width="65">
-                    <Template>
-                        @{ var r = (TaskRow)context; }
-                        <button class="mt-check @(r.Done ? "mt-check--done" : "")" @onclick="() => ToggleDone(r)">
-                            <i class="bi @(r.Done ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i>
-                        </button>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="Title"    HeaderText="Task"      MinWidth="220">
-                    <Template>
-                        @{ var r = (TaskRow)context; }
-                        <span class="@(r.Done ? "mt-done-text" : "") @(r.IsOverdue && !r.Done ? "mt-overdue-text" : "")">@r.Title</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="Account"  HeaderText="Account"   Width="175" />
-                <GridColumn Field="Category" HeaderText="Category"  Width="145" />
-                <GridColumn Field="Priority" HeaderText="Priority"  Width="100">
-                    <Template>
-                        @{ var r = (TaskRow)context; }
-                        <span class="mt-pri mt-pri-@r.Priority.ToLower()">@r.Priority</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="DueDate"  HeaderText="Due"       Width="115">
-                    <Template>
-                        @{ var r = (TaskRow)context; }
-                        <span class="@(r.IsOverdue && !r.Done ? "mt-due-red" : "")">
-                            @r.DueDate.ToString("MM/dd/yyyy")
-                        </span>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="AssignedBy" HeaderText="Assigned By" Width="145" />
-                <GridColumn HeaderText="" Width="52" AllowSorting="false">
-                    <Template>
-                        @{ var r = (TaskRow)context; }
-                        <button class="um-btn um-btn-ghost um-btn-xs"
-                                @onclick:stopPropagation="true"
-                                @onclick="(e) => { _selected = r; _ctx.Open(e.ClientX, e.ClientY); }">
-                            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-                        </button>
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
+        <div class="mt-table-wrap">
+            <table class="mt-table">
+                <thead>
+                    <tr>
+                        <th>Done</th>
+                        <th>Task</th>
+                        <th>Account</th>
+                        <th>Category</th>
+                        <th>Priority</th>
+                        <th>Due</th>
+                        <th>Assigned To</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in Filtered.ToList())
+                    {
+                        <tr class="@(r.IsOverdue && !r.Done ? "mt-table-overdue" : "")" @onclick="() => OpenDetails(r)">
+                            <td><button class="mt-check @(r.Done ? "mt-check--done" : "")" @onclick:stopPropagation="true" @onclick="() => ToggleDone(r)"><i class="bi @(r.Done ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i></button></td>
+                            <td><span class="@(r.Done ? "mt-done-text" : "") @(r.IsOverdue && !r.Done ? "mt-overdue-text" : "")">@r.Title</span></td>
+                            <td>@r.Account</td>
+                            <td>@r.Category</td>
+                            <td><span class="mt-pri mt-pri-@r.Priority.ToLower()">@r.Priority</span></td>
+                            <td><span class="@(r.IsOverdue && !r.Done ? "mt-due-red" : "")">@r.DueDate.ToString("MM/dd/yyyy")</span></td>
+                            <td>@r.AssignedTo</td>
+                            <td class="mt-table-actions" @onclick:stopPropagation="true">
+                                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ToggleActions(r)"><i class="bi bi-three-dots-vertical"></i></button>
+                                @if (_actionsForId == r.TaskId)
+                                {
+                                    <div class="mt-actions-menu mt-actions-menu--table">
+                                        <button type="button" @onclick="() => OpenDetails(r)"><i class="bi bi-arrow-right-circle"></i> Open</button>
+                                        <button type="button" @onclick="() => ToggleDone(r)"><i class="bi bi-check-circle"></i> @(r.Done ? "Reopen" : "Mark Complete")</button>
+                                        <button type="button" @onclick="() => OpenEdit(r)"><i class="bi bi-pencil"></i> Edit</button>
+                                        <button type="button" @onclick="() => ShowDelete(r)" class="mt-action-danger"><i class="bi bi-trash"></i> Delete</button>
+                                    </div>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
     }
 
 </div>
 
+@if (_showForm)
+{
+    <div class="mt-modal-backdrop" @onclick="CloseForm">
+        <div class="mt-modal" @onclick:stopPropagation="true">
+        <div class="um-modal-header">
+            <i class="bi bi-check2-square"></i>
+            <span>@(_editId.HasValue ? "Edit Task" : "New Task")</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <EditForm Model="_form" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field"><label>Task # <span class="text-danger">*</span></label><InputText @bind-Value="_form.TaskNumber" class="um-input" disabled="@_editId.HasValue" /><ValidationMessage For="() => _form.TaskNumber" class="text-danger" /></div>
+                    <div class="um-field"><label>Title <span class="text-danger">*</span></label><InputText @bind-Value="_form.Title" class="um-input" /><ValidationMessage For="() => _form.Title" class="text-danger" /></div>
+                    <div class="um-field"><label>Category <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.TaskTypeCode" class="um-input">@foreach (var c in Categories) { <option value="@c">@c</option> }</InputSelect><ValidationMessage For="() => _form.TaskTypeCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Stage <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StageCode" class="um-input"><option>Intake</option><option>In Progress</option><option>Review</option><option>Approval</option><option>Done</option></InputSelect><ValidationMessage For="() => _form.StageCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Priority <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.PriorityCode" class="um-input"><option>Low</option><option>Medium</option><option>High</option></InputSelect><ValidationMessage For="() => _form.PriorityCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option>Open</option><option>Blocked</option><option>Completed</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Assigned To</label><InputSelect @bind-Value="_form.AssignedToUserId" class="um-input"><option value="">Unassigned</option>@foreach (var user in _assignees) { <option value="@user.UserId">@user.Name</option> }</InputSelect><ValidationMessage For="() => _form.AssignedToUserId" class="text-danger" /></div>
+                    <div class="um-field"><label>Due Date</label><InputDate @bind-Value="_form.DueDate" class="um-input" /><ValidationMessage For="() => _form.DueDate" class="text-danger" /></div>
+                    <div class="um-field"><label>Account / Related Entity</label><InputText @bind-Value="_form.RelatedEntityName" class="um-input" /><ValidationMessage For="() => _form.RelatedEntityName" class="text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Description / Notes</label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="4" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-save"></i> Save</button>
+            </div>
+        </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="mt-modal-backdrop" @onclick="() => _showDelete = false">
+        <div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
+            <div class="um-confirm-title">Delete task?</div>
+            <div class="um-confirm-text">This will remove <strong>@_selected?.Title</strong> from the Tenant Admin task queue.</div>
+            <div class="um-modal-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
-    SfToast _toast = default!;
-    SfContextMenu<CtxItem> _ctx = default!;
-    SfGrid<TaskRow>? _grid;
+    string? _toastMessage;
+    bool _toastIsError;
+
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    static readonly Guid TenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
 
     string _search    = "";
     string _dueFilter = "";
@@ -196,6 +268,14 @@
     string _catFilter = "";
     bool   _showDone  = false;
     string _activeTab = "list";
+    string? _loadError;
+    bool _loading;
+    bool _saving;
+    bool _showForm;
+    bool _showDelete;
+    Guid? _actionsForId;
+    Guid? _editId;
+    TaskFormModel _form = new();
 
     TaskRow? _selected;
 
@@ -216,38 +296,36 @@
         new("completed", "Completed"),
     ];
 
-    readonly string[] _categories = { "Renewal", "Quote Follow-up", "Certificate", "Endorsement", "Call", "Document", "Admin", "Billing", "Claim" };
+    static readonly string[] Categories = { "Renewal", "Quote Follow-up", "Certificate", "Endorsement", "Call", "Document", "Admin", "Billing", "Claim", "Approval" };
+
+    sealed record UserOption(Guid UserId, string Name);
 
     sealed class TaskRow
     {
         public Guid     TaskId     { get; set; }
+        public string   TaskNumber { get; set; } = "";
         public string   Title      { get; set; } = "";
         public string   Account    { get; set; } = "";
         public string   Category   { get; set; } = "";
         public string   Priority   { get; set; } = "";
         public DateTime DueDate    { get; set; }
-        public string   AssignedBy { get; set; } = "";
+        public Guid?    AssignedToUserId { get; set; }
+        public string   AssignedTo { get; set; } = "";
         public string   Notes      { get; set; } = "";
+        public string   Stage      { get; set; } = "Intake";
+        public string   Status     { get; set; } = "Open";
         public bool     Done       { get; set; }
         public bool     IsOverdue  => !Done && DueDate.Date < DateTime.Today;
     }
 
-    sealed record CtxItem(string Text, string IconCss);
-    readonly List<CtxItem> _ctxItems =
-    [
-        new("Open",          "bi bi-arrow-right-circle"),
-        new("Mark Complete", "bi bi-check-circle"),
-        new("Edit",          "bi bi-pencil"),
-        new("Reassign",      "bi bi-person-fill-gear"),
-        new("Delete",        "bi bi-trash"),
-    ];
-
     readonly List<TaskRow> _rows = new();
+    readonly List<UserOption> _assignees = new();
 
     IEnumerable<TaskRow> Filtered => _rows.Where(r =>
         (string.IsNullOrEmpty(_search) ||
          r.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
          r.Account.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+         r.AssignedTo.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
          r.Notes.Contains(_search, StringComparison.OrdinalIgnoreCase))
         && (_showDone || !r.Done)
         && (string.IsNullOrEmpty(_priFilter) || r.Priority == _priFilter)
@@ -288,81 +366,272 @@
         _      => 0
     };
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("My Tasks", "/workbench/tasks"));
-        BuildStub();
+        await LoadAsync();
     }
 
-    void BuildStub()
+    async Task LoadAsync()
     {
-        var rnd = new Random(7);
-        var titles = new[]
+        _loading = true;
+        _loadError = null;
+        try
         {
-            "Follow up on Hartford quote — Sullivan Mfg.",
-            "Send cert of insurance to Metro Freight",
-            "Review renewal proposal — Apex Medical",
-            "Call back Bridgewater Hotels re: premium change",
-            "Prepare ACORD 25 — Dallas Roofing LLC",
-            "Update pipeline forecast Q2",
-            "Process endorsement request — Pioneer Automotive",
-            "Verify loss runs received — Laredo Steel Works",
-            "Confirm effective date — Greenleaf Nurseries",
-            "Request updated financials — Sun Valley Resort",
-            "Schedule renewal meeting — Coastal Seafood",
-            "Review claims report — Metro Freight Co.",
-            "Send non-renewal notice — Crestview Elementary",
-            "Set up new client portal — Dallas Roofing",
-            "Complete ACORD 140 — Apex Medical Group",
-        };
-        var accounts  = new[]{ "Sullivan Mfg. LLC","Metro Freight Co.","Apex Medical Group","Dallas Roofing LLC","Bridgewater Hotels","Pioneer Automotive","Laredo Steel Works","Greenleaf Nurseries","Sun Valley Resort","Coastal Seafood Dist.","Crestview Elementary" };
-        var assignees = new[]{ "Maria Santos","James Park","Sarah Kim","Kevin Obi","Lisa Chen" };
-        var notes     = new[]{ "","Urgent — client called twice","Waiting on underwriter","Documents attached","",  "Client prefers morning calls" };
-        var pris      = new[]{ "High","High","Medium","Low","Medium" };
-
-        _rows.Clear();
-        for (int i = 0; i < titles.Length; i++)
+            await LoadAssigneesAsync();
+            var result = await Api.SearchTaskItemsAsync(TenantId, _search, pageSize: 250);
+            _rows.Clear();
+            _rows.AddRange((result?.Items ?? []).Select(ToRow));
+        }
+        catch (Exception ex)
         {
-            var offsetDays = i < 3 ? -rnd.Next(1, 4) : i < 6 ? 0 : rnd.Next(1, 14);
-            _rows.Add(new TaskRow
-            {
-                TaskId     = Guid.NewGuid(),
-                Title      = titles[i],
-                Account    = accounts[rnd.Next(accounts.Length)],
-                Category   = _categories[rnd.Next(_categories.Length)],
-                Priority   = pris[rnd.Next(pris.Length)],
-                DueDate    = DateTime.Today.AddDays(offsetDays),
-                AssignedBy = assignees[rnd.Next(assignees.Length)],
-                Notes      = notes[rnd.Next(notes.Length)],
-                Done       = i >= 13,
-            });
+            _loadError = $"Failed to load tasks: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
         }
     }
 
-    void ToggleDone(TaskRow r) => r.Done = !r.Done;
-    void Refresh()              => BuildStub();
+    async Task ToggleDone(TaskRow r)
+    {
+        r.Done = !r.Done;
+        r.Status = r.Done ? "Completed" : "Open";
+        r.Stage = r.Done ? "Done" : "In Progress";
+        try
+        {
+            await Api.UpdateTaskItemAsync(r.TaskId, new()
+            {
+                Title = r.Title,
+                Description = r.Notes,
+                TaskTypeCode = r.Category,
+                StageCode = r.Stage,
+                PriorityCode = r.Priority,
+                StatusCode = r.Status,
+                RelatedEntityName = r.Account,
+                AssignedToUserId = r.AssignedToUserId ?? TenantAdminUserId,
+                DueDate = DateOnly.FromDateTime(r.DueDate),
+                CompletedDate = r.Done ? DateOnly.FromDateTime(DateTime.Today) : null,
+                ModifiedByUserId = TenantAdminUserId
+            });
+            ShowToast(r.Done ? "Task completed" : "Task reopened");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            r.Done = !r.Done;
+            r.Status = r.Done ? "Completed" : "Open";
+            r.Stage = r.Done ? "Done" : "In Progress";
+            ShowToast($"Update failed: {ex.Message}", isError: true);
+        }
+    }
+
+    Task Refresh() => LoadAsync();
     void ResetFilters()         { _search=""; _dueFilter=""; _priFilter=""; _catFilter=""; _showDone=false; }
+
+    void ToggleActions(TaskRow row)
+    {
+        _selected = row;
+        _actionsForId = _actionsForId == row.TaskId ? null : row.TaskId;
+    }
+
+    void OpenDetails(TaskRow row)
+    {
+        _actionsForId = null;
+        Nav.NavigateTo($"/workbench/tasks/{row.TaskId}");
+    }
 
     async Task NewTask()
     {
-        await _toast.ShowAsync(new ToastModel { Title="New Task", Content="Task creation form coming soon.", CssClass="e-toast-info" });
+        _editId = null;
+        _form = new()
+        {
+            TaskNumber = $"WT-ADM-{DateTime.UtcNow:yyyyMMddHHmmss}",
+            AssignedToUserId = TenantAdminUserId,
+            DueDate = DateOnly.FromDateTime(DateTime.Today)
+        };
+        _showForm = true;
     }
 
-    async Task OnCtxSelected(MenuEventArgs<CtxItem> args)
+    void ShowDelete(TaskRow row) { _selected = row; _actionsForId = null; _showDelete = true; }
+
+    void CloseForm()
     {
-        if (_selected is null) return;
-        switch (args.Item.Text)
+        _showForm = false;
+        ResetForm();
+    }
+
+    void ShowToast(string message, bool isError = false)
+    {
+        _toastMessage = message;
+        _toastIsError = isError;
+    }
+
+    void ClearToast() => _toastMessage = null;
+
+    void OpenEdit(TaskRow row)
+    {
+        _editId = row.TaskId;
+        _form = new()
         {
-            case "Mark Complete": ToggleDone(_selected); break;
-            default:
-                await _toast.ShowAsync(new ToastModel { Title=args.Item.Text, Content=$"Action on: {_selected.Title}", CssClass="e-toast-info" });
-                break;
+            TaskNumber = row.TaskNumber,
+            Title = row.Title,
+            Description = row.Notes,
+            TaskTypeCode = row.Category,
+            StageCode = row.Stage,
+            PriorityCode = row.Priority,
+            StatusCode = row.Status,
+            RelatedEntityName = row.Account,
+            AssignedToUserId = row.AssignedToUserId ?? TenantAdminUserId,
+            DueDate = DateOnly.FromDateTime(row.DueDate)
+        };
+        _showForm = true;
+    }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+            {
+                await Api.UpdateTaskItemAsync(_editId.Value, new()
+                {
+                    Title = _form.Title,
+                    Description = _form.Description,
+                    TaskTypeCode = _form.TaskTypeCode,
+                    StageCode = _form.StatusCode == "Completed" ? "Done" : _form.StageCode,
+                    PriorityCode = _form.PriorityCode,
+                    StatusCode = _form.StatusCode,
+                    RelatedEntityName = _form.RelatedEntityName,
+                    AssignedToUserId = _form.AssignedToUserId,
+                    DueDate = _form.DueDate,
+                    CompletedDate = _form.StatusCode == "Completed" ? DateOnly.FromDateTime(DateTime.Today) : null,
+                    ModifiedByUserId = TenantAdminUserId
+                });
+            }
+            else
+            {
+                await Api.CreateTaskItemAsync(new()
+                {
+                    TenantId = TenantId,
+                    TaskNumber = _form.TaskNumber,
+                    Title = _form.Title,
+                    Description = _form.Description,
+                    TaskTypeCode = _form.TaskTypeCode,
+                    StageCode = _form.StageCode,
+                    PriorityCode = _form.PriorityCode,
+                    StatusCode = _form.StatusCode,
+                    RelatedEntityName = _form.RelatedEntityName,
+                    AssignedToUserId = _form.AssignedToUserId,
+                    DueDate = _form.DueDate,
+                    CreatedByUserId = TenantAdminUserId
+                });
+            }
+
+            _showForm = false;
+            ShowToast("Task saved");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _saving = false;
         }
     }
 
-    RenderFragment KpiCard(string icon, string label, string val, string css, string? filter) =>
+    async Task ExecuteDeleteAsync()
+    {
+        if (_selected is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteTaskItemAsync(_selected.TaskId, TenantAdminUserId);
+            _showDelete = false;
+            ShowToast("Task deleted");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    void ResetForm() => _form = new();
+
+    async Task LoadAssigneesAsync()
+    {
+        if (_assignees.Count > 0) return;
+
+        try
+        {
+            var users = await Api.SearchUsersAsync(TenantId);
+            _assignees.Clear();
+            _assignees.AddRange((users?.Items ?? [])
+                .OrderBy(u => DisplayName(u))
+                .Select(u => new UserOption(u.UserId, DisplayName(u))));
+        }
+        catch
+        {
+        }
+
+        if (!_assignees.Any(a => a.UserId == TenantAdminUserId))
+        {
+            _assignees.Insert(0, new(TenantAdminUserId, "Tenant Admin"));
+        }
+    }
+
+    TaskRow ToRow(TaskItemDto item) => new()
+    {
+        TaskId = item.TaskItemId,
+        TaskNumber = item.TaskNumber,
+        Title = item.Title,
+        Account = item.RelatedEntityName ?? string.Empty,
+        Category = item.TaskTypeCode,
+        Priority = item.PriorityCode,
+        DueDate = item.DueDate?.ToDateTime(TimeOnly.MinValue) ?? DateTime.Today,
+        AssignedToUserId = item.AssignedToUserId,
+        AssignedTo = ResolveAssignee(item.AssignedToUserId),
+        Notes = item.Description ?? string.Empty,
+        Stage = item.StageCode,
+        Status = item.StatusCode,
+        Done = item.StatusCode == "Completed"
+    };
+
+    sealed class TaskFormModel
+    {
+        [Required, StringLength(50)] public string TaskNumber { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Title { get; set; } = string.Empty;
+        [StringLength(2000)] public string? Description { get; set; }
+        [Required, StringLength(50)] public string TaskTypeCode { get; set; } = "Admin";
+        [Required, StringLength(50)] public string StageCode { get; set; } = "Intake";
+        [Required, StringLength(50)] public string PriorityCode { get; set; } = "Medium";
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Open";
+        public Guid? AssignedToUserId { get; set; }
+        [StringLength(100)] public string? RelatedEntityName { get; set; }
+        public DateOnly? DueDate { get; set; }
+    }
+
+    string ResolveAssignee(Guid? userId) =>
+        userId is null ? "Unassigned" : _assignees.FirstOrDefault(a => a.UserId == userId)?.Name ?? "Assigned user";
+
+    static string DisplayName(UserDto user) =>
+        !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName! :
+        !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName :
+        !string.IsNullOrWhiteSpace(user.Email) ? user.Email :
+        user.UserName;
+
+    RenderFragment KpiCard(string icon, string label, string val, string title, string css, string? filter) =>
         @<button class="mt-kpi-card @css @(_dueFilter == (filter ?? "") ? "mt-kpi-active" : "")"
-                 @onclick="() => _dueFilter = (filter ?? _dueFilter)">
+                 title="@title"
+                 @onclick="() => _dueFilter = (filter ?? string.Empty)">
             <div class="mt-kpi-val">@val</div>
             <div class="mt-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
         </button>;

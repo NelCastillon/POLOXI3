@@ -65,6 +65,9 @@ public sealed class UpdateTaskItemRequest
     public string StatusCode { get; set; } = "Open";
 
     public Guid? AssignedToUserId { get; set; }
+
+    [StringLength(100)]
+    public string? RelatedEntityName { get; set; }
     public DateOnly? DueDate { get; set; }
     public DateOnly? CompletedDate { get; set; }
     public Guid? ModifiedByUserId { get; set; }

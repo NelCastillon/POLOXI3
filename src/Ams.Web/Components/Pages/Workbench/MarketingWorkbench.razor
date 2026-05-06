@@ -274,6 +274,7 @@
     private SfToast? _toast;
 
     private bool   _loading  = false;
+    private string? _loadError;
     private string _scope    = "me";
     private string _branchId = string.Empty;
     private string _teamId   = string.Empty;
@@ -332,9 +333,22 @@
         _loading = true; StateHasChanged();
         try
         {
-            await Task.Delay(0);
-            _campaigns   = []; _outreach  = []; _referrals  = [];
-            _events      = []; _content   = []; _leadSources = [];
+            _loadError = null;
+            var result = await Api.GetMarketingWorkbenchAsync(_tenantId, null, _scope == "team", _branchId, _teamId);
+            _campaigns = result?.Campaigns.Select(ToMktItem).ToList() ?? [];
+            _outreach = result?.Outreach.Select(ToMktItem).ToList() ?? [];
+            _referrals = result?.Referrals.Select(ToMktItem).ToList() ?? [];
+            _events = result?.Events.Select(ToMktItem).ToList() ?? [];
+            _content = result?.Content.Select(ToMktItem).ToList() ?? [];
+            _leadSources = result?.LeadSources.Select(ToLeadSource).ToList() ?? [];
+            _c = ToCounts(result?.Counts);
+            RebuildSla();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load marketing workbench: {ex.Message}";
+            _campaigns = []; _outreach = []; _referrals = [];
+            _events = []; _content = []; _leadSources = [];
             _c = new();
             RebuildSla();
         }
@@ -355,16 +369,23 @@
     {
         _aiLoading = true; StateHasChanged();
         await Task.Delay(0);
-        _aiSummary     = "No AI summary available yet. Wire up Api.GetWorkbenchAiSummaryAsync() to populate this field.";
+        _aiSummary     = $"Marketing has {_c.ActiveCampaigns} active campaigns generating {_c.CampaignLeads:N0} leads. {_c.OutreachOverdue} outreach tasks are overdue, {_c.ContentPendingApproval} content items need approval, and lead conversion is {_c.ConversionRate:F1}%.";
         _aiGeneratedAt = DateTime.Now;
         _aiLoading     = false;
     }
 
     private async Task ApproveAsync(MktItem i)
     {
-        // TODO: Api.ApproveContentAsync(_tenantId, i.ItemId)
-        await Task.Delay(0);
-        await ShowToastAsync($"\"{i.Title}\" approved.", "e-toast-success");
+        try
+        {
+            await Api.ApproveMarketingWorkbenchContentAsync(_tenantId, i.ItemId);
+            await LoadAsync();
+            await ShowToastAsync($"\"{i.Title}\" approved.", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Approval failed: {ex.Message}", "e-toast-danger");
+        }
     }
 
     private Task SaveViewAsync(WorkbenchShell.SavedView v)
@@ -390,6 +411,60 @@
     private string KpiClass(int n) => "wb-kpi-card" + (_kpiFocus == n ? " wb-kpi-card--active" : "");
     private RenderFragment KpiDot(int n) => _kpiFocus == n ? @<span class="wb-kpi-dot" aria-hidden="true"></span> : _ => { };
     private void OpenDetail(MktItem i) => _selected = i;
+
+    private static MktCounts ToCounts(MarketingWorkbenchCountsDto? c) => c is null ? new() : new()
+    {
+        ActiveCampaigns = c.ActiveCampaigns,
+        CampaignLeads = c.CampaignLeads,
+        OutreachTasks = c.OutreachTasks,
+        OutreachOverdue = c.OutreachOverdue,
+        Referrals = c.Referrals,
+        ReferralsConverted = c.ReferralsConverted,
+        UpcomingEvents = c.UpcomingEvents,
+        EventFollowUps = c.EventFollowUps,
+        ContentPendingApproval = c.ContentPendingApproval,
+        TotalLeads = c.TotalLeads,
+        LeadsConverted = c.LeadsConverted,
+        ConversionRate = c.ConversionRate,
+        CostPerLead = c.CostPerLead,
+    };
+
+    private static MktItem ToMktItem(MarketingWorkbenchItemDto i) => new()
+    {
+        ItemId = i.ItemId,
+        Title = i.Title,
+        RefNumber = i.RefNumber,
+        ContactName = i.ContactName,
+        CampaignName = i.CampaignName,
+        Channel = i.Channel,
+        ContentType = i.ContentType,
+        TargetAudience = i.TargetAudience,
+        AssignedTo = i.AssignedTo,
+        ReviewedBy = i.ReviewedBy,
+        Location = i.Location,
+        Priority = i.Priority,
+        SlaStatus = i.SlaStatus,
+        Status = i.Status,
+        Budget = i.Budget,
+        EstPremium = i.EstPremium,
+        Leads = i.Leads,
+        Conversions = i.Conversions,
+        Attendees = i.Attendees,
+        DueDate = i.DueDate,
+        EndDate = i.EndDate,
+        EventDate = i.EventDate,
+        ReceivedDate = i.ReceivedDate,
+        Notes = i.Notes,
+        DetailUrl = i.DetailUrl,
+    };
+
+    private static LeadSource ToLeadSource(MarketingWorkbenchLeadSourceDto s) => new()
+    {
+        SourceName = s.SourceName,
+        Leads = s.Leads,
+        Converted = s.Converted,
+        AvgPremium = s.AvgPremium,
+    };
 
     private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
     {

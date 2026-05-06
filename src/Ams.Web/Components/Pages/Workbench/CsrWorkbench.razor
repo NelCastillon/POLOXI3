@@ -33,6 +33,13 @@
     </ExtraActions>
     <Queues>
 
+        @if (!string.IsNullOrWhiteSpace(_loadError))
+        {
+            <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+                @_loadError
+            </div>
+        }
+
         <!-- ── KPI strip ─────────────────────────────────────────────────── -->
         <div class="wb-kpi-strip">
             <div class="@KpiClass(1)" @onclick='() => FocusQueue(1, "service-requests")' role="button" tabindex="0">
@@ -226,9 +233,11 @@
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private readonly Guid _tenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
     private SfToast? _toast;
 
     private bool    _loading  = false;
+    private string? _loadError;
     private string  _scope    = "me";
     private string  _branchId = string.Empty;
     private string  _teamId   = string.Empty;
@@ -294,24 +303,40 @@
         _loading = true; StateHasChanged();
         try
         {
-            await Task.Delay(0);
-            _serviceRequests  = []; _endorsements    = [];
-            _certificates     = []; _billingEnquiries= [];
-            _complaints       = []; _followUps       = [];
+            _loadError = null;
+            var teamScope = _scope.Equals("team", StringComparison.OrdinalIgnoreCase);
+            var data = await Api.GetCsrWorkbenchAsync(_tenantId, _tenantAdminUserId, teamScope, _branchId, _teamId);
+
+            _serviceRequests = data?.ServiceRequests.Select(MapItem).ToList() ?? [];
+            _endorsements = data?.Endorsements.Select(MapItem).ToList() ?? [];
+            _certificates = data?.Certificates.Select(MapItem).ToList() ?? [];
+            _billingEnquiries = data?.BillingEnquiries.Select(MapItem).ToList() ?? [];
+            _complaints = data?.Complaints.Select(MapItem).ToList() ?? [];
+            _followUps = data?.FollowUps.Select(MapItem).ToList() ?? [];
+            _c = MapCounts(data?.Counts);
+            RebuildSla();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"CSR workbench load failed: {ex.Message}";
+            _serviceRequests = []; _endorsements = [];
+            _certificates = []; _billingEnquiries = [];
+            _complaints = []; _followUps = [];
             _c = new();
             RebuildSla();
+            await ShowToastAsync(_loadError, "e-toast-danger");
         }
         finally { _loading = false; }
     }
 
     private void RebuildSla() => _slaItems =
     [
-        new() { QueueName = "Service Requests",  InSla = _c.ServiceRequests,  Breached = 0 },
-        new() { QueueName = "Endorsements",      InSla = _c.Endorsements,     Breached = 0 },
-        new() { QueueName = "Certificates",      InSla = _c.Certificates,     Breached = 0 },
-        new() { QueueName = "Billing Enquiries", InSla = _c.BillingEnquiries, Breached = 0 },
-        new() { QueueName = "Complaints",        InSla = _c.Complaints,       Breached = 0 },
-        new() { QueueName = "Follow-ups",        InSla = _c.FollowUps,        Breached = 0 },
+        new() { QueueName = "Service Requests",  InSla = _serviceRequests.Count(x => x.SlaStatus != "Breached"),  Breached = _serviceRequests.Count(x => x.SlaStatus == "Breached") },
+        new() { QueueName = "Endorsements",      InSla = _endorsements.Count(x => x.SlaStatus != "Breached"),     Breached = _endorsements.Count(x => x.SlaStatus == "Breached") },
+        new() { QueueName = "Certificates",      InSla = _certificates.Count(x => x.SlaStatus != "Breached"),     Breached = _certificates.Count(x => x.SlaStatus == "Breached") },
+        new() { QueueName = "Billing Enquiries", InSla = _billingEnquiries.Count(x => x.SlaStatus != "Breached"), Breached = _billingEnquiries.Count(x => x.SlaStatus == "Breached") },
+        new() { QueueName = "Complaints",        InSla = _complaints.Count(x => x.SlaStatus != "Breached"),       Breached = _complaints.Count(x => x.SlaStatus == "Breached") },
+        new() { QueueName = "Follow-ups",        InSla = _followUps.Count(x => x.SlaStatus != "Breached"),        Breached = _followUps.Count(x => x.SlaStatus == "Breached") },
     ];
 
     private async Task OnBranchChangedAsync(string v) { _branchId = v; await LoadAsync(); }
@@ -321,10 +346,55 @@
     {
         _aiLoading = true; StateHasChanged();
         await Task.Delay(0);
-        _aiSummary     = "No AI summary available yet. Wire up Api.GetWorkbenchAiSummaryAsync() to populate this field.";
+        var breached = AllItems().Count(x => x.SlaStatus == "Breached");
+        var atRisk = AllItems().Count(x => x.SlaStatus == "At Risk");
+        var urgent = AllItems().Count(x => x.Priority is "Critical" or "Urgent");
+        _aiSummary = $"Tenant Admin CSR queue has {AllItems().Count()} open items: {urgent} critical/urgent, {breached} breached SLA, and {atRisk} at risk. Prioritize complaints, overdue follow-ups, and certificate requests needed today.";
         _aiGeneratedAt = DateTime.Now;
         _aiLoading     = false;
     }
+
+    private IEnumerable<WbItem> AllItems() => _serviceRequests
+        .Concat(_endorsements)
+        .Concat(_certificates)
+        .Concat(_billingEnquiries)
+        .Concat(_complaints)
+        .Concat(_followUps);
+
+    private static CsrCounts MapCounts(CsrWorkbenchCountsDto? dto) => dto is null
+        ? new CsrCounts()
+        : new CsrCounts
+        {
+            ServiceRequests = dto.ServiceRequests,
+            Endorsements = dto.Endorsements,
+            Certificates = dto.Certificates,
+            BillingEnquiries = dto.BillingEnquiries,
+            Complaints = dto.Complaints,
+            FollowUps = dto.FollowUps,
+            OverdueFollowUps = dto.OverdueFollowUps,
+        };
+
+    private static WbItem MapItem(CsrWorkbenchItemDto dto) => new()
+    {
+        ItemId = dto.ItemId,
+        Title = dto.Title,
+        RefNumber = dto.RefNumber,
+        AccountName = dto.AccountName,
+        PolicyNumber = dto.PolicyNumber,
+        CertHolder = dto.CertHolder,
+        Category = dto.Category,
+        Channel = dto.Channel,
+        AssignedTo = dto.AssignedTo,
+        Priority = dto.Priority,
+        SlaStatus = dto.SlaStatus,
+        EscalationLevel = dto.EscalationLevel,
+        DueDate = dto.DueDate,
+        CreatedAt = dto.CreatedAt,
+        AgeDays = dto.AgeDays,
+        Amount = dto.Amount,
+        Notes = dto.Notes,
+        DetailUrl = dto.DetailUrl,
+    };
 
     private Task SaveViewAsync(WorkbenchShell.SavedView v)
     {

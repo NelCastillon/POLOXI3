@@ -22,6 +22,10 @@
         <span>Loading branch data…</span>
     </div>
 }
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger ad-alert-danger" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError</div>
+}
 else if (_rows is null || _rows.Count == 0)
 {
     <div class="ad-empty"><i class="bi bi-diagram-3" aria-hidden="true"></i><span>No branch data available.</span></div>
@@ -30,35 +34,39 @@ else
 {
     <!-- ── Summary strip ──────────────────────────────────────── -->
     <div class="ad-kpi-strip">
-        <div class="ad-kpi-card ad-kpi--branches">
+        <button type="button" class="ad-kpi-card ad-kpi--branches @KpiClass("all")" @onclick='() => SetFilter("all")' title="Show all branches">
             <div class="ad-kpi-icon"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_rows.Count</div>
                 <div class="ad-kpi-lbl">Branches</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--premium">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--premium @KpiClass("premium")" @onclick='() => SetFilter("premium")' title="Show branches with written premium">
             <div class="ad-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_rows.Sum(r => r.WrittenPremiumYtd).ToString("C0")</div>
                 <div class="ad-kpi-lbl">Total Written YTD</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--policies">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--policies @KpiClass("policies")" @onclick='() => SetFilter("policies")' title="Show branches with active policies">
             <div class="ad-kpi-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_rows.Sum(r => r.ActivePolicies).ToString("N0")</div>
                 <div class="ad-kpi-lbl">Total Policies</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--ar">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--ar @KpiClass("ar")" @onclick='() => SetFilter("ar")' title="Show branches with outstanding AR">
             <div class="ad-kpi-icon"><i class="bi bi-receipt" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_rows.Sum(r => r.OutstandingAr).ToString("C0")</div>
                 <div class="ad-kpi-lbl">Total AR</div>
             </div>
-        </div>
+        </button>
     </div>
+    @if (_activeFilter != "all")
+    {
+        <div class="ad-filter-bar"><span class="ad-filter-chip"><i class="bi bi-funnel" aria-hidden="true"></i> @FilterLabel(_activeFilter)</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => SetFilter("all")'><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button></div>
+    }
 
     <!-- ── Branch table ───────────────────────────────────────── -->
     <div class="ad-card">
@@ -79,7 +87,7 @@ else
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var b in _rows.OrderByDescending(r => r.WrittenPremiumYtd))
+                    @foreach (var b in FilteredRows.OrderByDescending(r => r.WrittenPremiumYtd))
                     {
                         <tr>
                             <td>
@@ -124,6 +132,15 @@ else
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private List<BranchPerformanceDto>? _rows;
     private bool _loading;
+    private string? _loadError;
+    private string _activeFilter = "all";
+    private IEnumerable<BranchPerformanceDto> FilteredRows => (_rows ?? []).Where(b => _activeFilter switch
+    {
+        "premium" => b.WrittenPremiumYtd > 0 || b.WrittenPremiumMtd > 0,
+        "policies" => b.ActivePolicies > 0,
+        "ar" => b.OutstandingAr > 0,
+        _ => true,
+    });
 
     protected override async Task OnInitializedAsync()
     {
@@ -133,8 +150,13 @@ else
 
     private async Task LoadAsync()
     {
-        _loading = true;
+        _loading = true; _loadError = null;
         try { _rows = await Api.GetBranchPerformanceAsync(_tenantId); }
+        catch (Exception ex) { _loadError = $"Failed to load branch performance: {ex.Message}"; _rows = []; }
         finally { _loading = false; }
     }
+
+    private void SetFilter(string filter) => _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
+    private string KpiClass(string filter) => _activeFilter == filter ? "ad-kpi-card--active" : string.Empty;
+    private static string FilterLabel(string filter) => filter switch { "premium" => "Branches with written premium", "policies" => "Branches with active policies", "ar" => "Branches with outstanding AR", _ => "All branches" };
 }

@@ -1,398 +1,183 @@
 @page "/workbench/notifications"
 @namespace Ams.Web.Components.Pages.Workbench
-@inject NavigationManager Nav
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Communications
+@using System.ComponentModel.DataAnnotations
+@inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
-@inject ConfirmationDialogService Confirmations
 
 <PageTitle>Notifications — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems" ItemSelected="OnCtxSelected">
-    <MenuFieldSettings Text="Text" IconCss="IconCss" />
-</SfContextMenu>
+@if (_toastMessage is not null)
+{
+    <div class="mt-toast @(_toastIsError ? "mt-toast--danger" : "mt-toast--success")" role="status">
+        <i class="bi @(_toastIsError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
 
 <AppPageHeader Title="Notifications"
-               Subtitle="Alerts, reminders, approvals and system messages"
+               Subtitle="Tenant Admin alerts, reminders, approvals, delivery status, and system messages"
                Icon="bi-bell">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="Refresh">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
-        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")"></i></button>
         @if (Unread > 0)
         {
-            <button class="um-btn um-btn-ghost" @onclick="MarkAllRead">
-                <i class="bi bi-check2-all" aria-hidden="true"></i> Mark All Read
-            </button>
+            <button class="um-btn um-btn-ghost" @onclick="MarkAllReadAsync" disabled="@_saving"><i class="bi bi-check2-all"></i> Mark All Read</button>
         }
-        <button class="um-btn um-btn-ghost" @onclick="DeleteReadAsync">
-            <i class="bi bi-trash" aria-hidden="true"></i> Delete Read
-        </button>
+        <button class="um-btn um-btn-ghost" @onclick="DeleteReadAsync" disabled="@_saving"><i class="bi bi-trash"></i> Delete Read</button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> New Notification</button>
     </Actions>
 </AppPageHeader>
 
-<!-- KPI strip -->
+<section class="mn-hero">
+    <div>
+        <span class="mn-eyebrow">Tenant Admin Inbox</span>
+        <h2>Notification Command Center</h2>
+        <p>Monitor delivery status, triage approvals, act on urgent alerts, and keep team messages organized from one polished workspace.</p>
+    </div>
+    <div class="mn-hero-actions">
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Compose</button>
+        <button class="um-btn um-btn-ghost" @onclick="MarkAllReadAsync" disabled="@(Unread == 0 || _saving)"><i class="bi bi-check2-all"></i> Clear Unread</button>
+    </div>
+</section>
+
 <div class="mn-kpi-strip">
-    @KpiCard("bi-bell-fill",       "All",       _rows.Count.ToString(),                                                    "mn-kpi-all",      null)
-    @KpiCard("bi-circle-fill",     "Unread",    Unread.ToString(),                                                         "mn-kpi-unread",   "__unread")
-    @KpiCard("bi-exclamation-triangle-fill","Alerts",  _rows.Count(r => r.Type == "Alert").ToString(),                    "mn-kpi-alert",    "Alert")
-    @KpiCard("bi-alarm-fill",      "Reminders", _rows.Count(r => r.Type == "Reminder").ToString(),                        "mn-kpi-reminder", "Reminder")
-    @KpiCard("bi-check-circle-fill","Approvals",_rows.Count(r => r.Type == "Approval").ToString(),                        "mn-kpi-approval", "Approval")
-    @KpiCard("bi-info-circle-fill","Info",      _rows.Count(r => r.Type == "Info").ToString(),                            "mn-kpi-info",     "Info")
-    @KpiCard("bi-gear-fill",       "System",    _rows.Count(r => r.Type == "System").ToString(),                          "mn-kpi-system",   "System")
+    @KpiCard("bi-bell-fill", "All", _items.Count.ToString(), "All notifications", "mn-kpi-all", null)
+    @KpiCard("bi-circle-fill", "Unread", Unread.ToString(), "Unread notifications", "mn-kpi-unread", "__unread")
+    @KpiCard("bi-exclamation-triangle-fill", "Alerts", CountType("Alert").ToString(), "Alert notifications", "mn-kpi-alert", "Alert")
+    @KpiCard("bi-alarm-fill", "Reminders", CountType("Reminder").ToString(), "Reminder notifications", "mn-kpi-reminder", "Reminder")
+    @KpiCard("bi-check-circle-fill", "Approvals", CountType("Approval").ToString(), "Approval notifications", "mn-kpi-approval", "Approval")
+    @KpiCard("bi-info-circle-fill", "Info", CountType("Info").ToString(), "Info notifications", "mn-kpi-info", "Info")
+    @KpiCard("bi-gear-fill", "System", CountType("System").ToString(), "System notifications", "mn-kpi-system", "System")
 </div>
 
-<!-- Filter bar -->
-<div class="mn-filter-bar">
-    <input class="e-input mn-search" @bind="_search" @bind:event="oninput"
-           placeholder="Search notifications…" />
-    <label class="mn-toggle">
-        <input type="checkbox" @bind="_unreadOnly" /> Unread only
-    </label>
-    <select class="e-input mn-filter-sel" @bind="_dateFilter">
-        <option value="0">All time</option>
-        <option value="1">Today</option>
-        <option value="7">Last 7 days</option>
-        <option value="30">Last 30 days</option>
-    </select>
-    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
-        <i class="bi bi-x" aria-hidden="true"></i> Reset
-    </button>
+<div class="mn-command-bar">
+    <div class="mn-search-wrap"><i class="bi bi-search"></i><input @bind="_search" @bind:event="oninput" placeholder="Search notifications…" /></div>
+    <label class="mn-toggle"><input type="checkbox" @bind="_unreadOnly" /> Unread only</label>
+    <select class="mn-filter-sel" @bind="_dateFilter"><option value="0">All time</option><option value="1">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select>
+    <div class="mn-view-tabs">@foreach (var tab in _tabs) { <button class="mn-view-tab @(_activeTab == tab.Key ? "mn-view-tab--active" : "")" @onclick="() => _activeTab = tab.Key"><i class="bi @tab.Icon"></i> @tab.Label <span class="mn-tab-count">@Filtered.Count()</span></button> }</div>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
     <span class="mn-filter-count">@Filtered.Count() notification(s)</span>
 </div>
 
-<!-- View tabs -->
-<div class="mn-view-tabs">
-    @foreach (var t in _tabs)
-    {
-        <button class="mn-view-tab @(_activeTab == t.Key ? "mn-view-tab--active" : "")"
-                @onclick="() => _activeTab = t.Key">
-            <i class="bi @t.Icon" aria-hidden="true"></i> @t.Label
-            <span class="mn-tab-count">@Filtered.Count()</span>
-        </button>
-    }
-</div>
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger mt-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError</div>
+}
 
-<!-- Content -->
+@if (_loading)
+{
+    <div class="mt-loading"><div class="um-spinner"></div><span>Loading Tenant Admin notifications…</span></div>
+}
+
 <div class="mn-content">
-
     @if (_activeTab == "feed")
     {
         <div class="mn-feed">
-            @foreach (var grp in NotifGroups)
+            @foreach (var group in NotificationGroups)
             {
-                <div class="mn-date-sep"><span>@grp.Label</span></div>
-                @foreach (var n in grp.Items)
+                <div class="mn-date-sep"><span>@group.Label</span></div>
+                @foreach (var item in group.Items)
                 {
-                    <div class="mn-item @(!n.IsRead ? "mn-item-unread" : "")"
-                         @onclick="() => Open(n)"
-                         @oncontextmenu:preventDefault="true"
-                         @oncontextmenu="(e) => { _selected = n; _ctx.Open(e.ClientX, e.ClientY); }">
-
-                        <!-- Unread dot -->
-                        <div class="mn-unread-dot-wrap">
-                            @if (!n.IsRead)
-                            {
-                                <span class="mn-unread-dot" aria-label="Unread"></span>
-                            }
-                        </div>
-
-                        <!-- Type icon -->
-                        <div class="mn-icon mn-icon-@n.Type.ToLower()">
-                            <i class="bi @TypeIcon(n.Type)" aria-hidden="true"></i>
-                        </div>
-
-                        <!-- Body -->
+                    <div class="mn-item @(!item.IsRead ? "mn-item-unread" : null) @(_selected?.NotificationId == item.NotificationId ? "mn-item-selected" : null)" @onclick="() => Open(item)">
+                        <div class="mn-unread-dot-wrap">@if (!item.IsRead) { <span class="mn-unread-dot" aria-label="Unread"></span> }</div>
+                        <div class="mn-icon mn-icon-@TypeCss(NotificationType(item))"><i class="bi @TypeIcon(NotificationType(item))"></i></div>
                         <div class="mn-body">
-                            <div class="mn-hdr">
-                                <span class="mn-title">@n.Title</span>
-                                <span class="mn-type-chip mn-tc-@n.Type.ToLower()">@n.Type</span>
-                                @if (n.IsActionable && !n.IsActioned)
-                                {
-                                    <span class="mn-action-badge"><i class="bi bi-hand-index-fill" aria-hidden="true"></i> Action needed</span>
-                                }
-                            </div>
-                            <div class="mn-msg">@n.Message</div>
-                            @if (n.IsActionable && !n.IsActioned)
+                            <div class="mn-hdr"><span class="mn-title">@Title(item)</span><span class="mn-type-chip mn-tc-@TypeCss(NotificationType(item))">@NotificationType(item)</span><span class="mn-status-chip mn-status-@TypeCss(item.StatusCode)">@item.StatusCode</span>@if (IsActionable(item)) { <span class="mn-action-badge"><i class="bi bi-hand-index-fill"></i> Action needed</span> }</div>
+                            <div class="mn-msg">@item.Body</div>
+                            @if (IsActionable(item))
                             {
-                                <div class="mn-action-btns">
-                                    <button class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick="() => Approve(n)">
-                                        <i class="bi bi-check-lg" aria-hidden="true"></i> Approve
-                                    </button>
-                                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => Decline(n)">
-                                        <i class="bi bi-x-lg" aria-hidden="true"></i> Decline
-                                    </button>
-                                </div>
+                                <div class="mn-action-btns"><button class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick="() => ApproveAsync(item)"><i class="bi bi-check-lg"></i> Approve</button><button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => DeclineAsync(item)"><i class="bi bi-x-lg"></i> Decline</button></div>
                             }
                         </div>
-
-                        <!-- Time + actions -->
-                        <div class="mn-right">
-                            <span class="mn-time">@FormatAge(n.ReceivedAt)</span>
-                            <button class="um-btn um-btn-ghost um-btn-xs mn-ctx-btn"
-                                    @onclick:stopPropagation="true"
-                                    @onclick="(e) => { _selected = n; _ctx.Open(e.ClientX, e.ClientY); }">
-                                <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-                            </button>
-                        </div>
+                        <div class="mn-right"><span class="mn-time">@FormatAge(item.CreatedDateUtc)</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => ToggleReadAsync(item)"><i class="bi @(item.IsRead ? "bi-circle" : "bi-check-circle")"></i></button><button class="um-btn um-btn-ghost um-btn-xs ma-danger" @onclick:stopPropagation="true" @onclick="() => ShowDelete(item)"><i class="bi bi-trash"></i></button></div>
                     </div>
                 }
             }
             @if (!Filtered.Any())
             {
-                <div class="mn-empty">
-                    <i class="bi bi-bell-slash mn-empty-icon" aria-hidden="true"></i>
-                    <span>You're all caught up — no notifications here.</span>
-                </div>
+                <div class="mn-empty"><i class="bi bi-bell-slash mn-empty-icon"></i><span>You're all caught up — no notifications here.</span></div>
             }
         </div>
     }
     else
     {
-        <SfGrid DataSource="@Filtered.ToList()" AllowSorting="true" AllowPaging="true"
-                AllowResizing="true" RowHeight="46" @ref="_grid">
-            <GridPageSettings PageSize="25" />
-            <GridColumns>
-                <GridColumn HeaderText="" Width="40" AllowSorting="false">
-                    <Template>
-                        @{ var n = (NotifRow)context; }
-                        @if (!n.IsRead) { <span class="mn-unread-dot" title="Unread"></span> }
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="Type" HeaderText="Type" Width="115">
-                    <Template>
-                        @{ var n = (NotifRow)context; }
-                        <span class="mn-type-chip mn-tc-@n.Type.ToLower()">
-                            <i class="bi @TypeIcon(n.Type)" aria-hidden="true"></i> @n.Type
-                        </span>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="Title"   HeaderText="Title"     MinWidth="220" />
-                <GridColumn Field="Message" HeaderText="Message"   MinWidth="260">
-                    <Template>
-                        @{ var n = (NotifRow)context; }
-                        <span class="mn-grid-msg">@n.Message</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="ReceivedAt" HeaderText="Received" Width="160">
-                    <Template>
-                        @{ var n = (NotifRow)context; }
-                        <span>@n.ReceivedAt.ToString("MM/dd/yyyy h:mm tt")</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="IsRead" HeaderText="Read" Width="70" DisplayAsCheckBox="true" />
-                <GridColumn HeaderText="" Width="52" AllowSorting="false">
-                    <Template>
-                        @{ var n = (NotifRow)context; }
-                        <button class="um-btn um-btn-ghost um-btn-xs"
-                                @onclick:stopPropagation="true"
-                                @onclick="(e) => { _selected = n; _ctx.Open(e.ClientX, e.ClientY); }">
-                            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-                        </button>
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
+        <div class="mn-table-wrap"><table class="mn-table"><thead><tr><th></th><th>Type</th><th>Subject</th><th>Status</th><th>Channel</th><th>Received</th><th></th></tr></thead><tbody>@foreach (var item in Filtered.ToList()) { <tr class="@(!item.IsRead ? "mn-table-unread" : null)" @onclick="() => Open(item)"><td>@if (!item.IsRead) { <span class="mn-unread-dot"></span> }</td><td><span class="mn-type-chip mn-tc-@TypeCss(NotificationType(item))">@NotificationType(item)</span></td><td><strong>@Title(item)</strong><div class="mn-grid-msg">@item.Body</div></td><td><span class="mn-status-chip mn-status-@TypeCss(item.StatusCode)">@item.StatusCode</span></td><td>@item.ChannelCode</td><td>@item.CreatedDateUtc.ToLocalTime().ToString("MMM d, h:mm tt")</td><td class="mn-table-actions" @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ToggleReadAsync(item)"><i class="bi @(item.IsRead ? "bi-circle" : "bi-check-circle")"></i></button><button class="um-btn um-btn-ghost um-btn-xs ma-danger" @onclick="() => ShowDelete(item)"><i class="bi bi-trash"></i></button></td></tr> }</tbody></table></div>
     }
-
 </div>
 
+@if (_selected is not null)
+{
+    <aside class="mn-detail-panel"><div class="mn-detail-header"><span class="mn-type-chip mn-tc-@TypeCss(NotificationType(_selected))">@NotificationType(_selected)</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _selected = null"><i class="bi bi-x-lg"></i></button></div><h3>@Title(_selected)</h3><p>@_selected.Body</p><div class="mn-detail-grid"><div><span>Status</span><strong>@_selected.StatusCode</strong></div><div><span>Channel</span><strong>@_selected.ChannelCode</strong></div><div><span>Entity</span><strong>@(_selected.EntityName ?? "—")</strong></div><div><span>Received</span><strong>@_selected.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</strong></div></div><div class="mn-detail-actions"><button class="um-btn um-btn-primary" @onclick="() => ToggleReadAsync(_selected)"><i class="bi bi-check2"></i> @(_selected.IsRead ? "Mark Unread" : "Mark Read")</button><button class="um-btn um-btn-danger" @onclick="() => ShowDelete(_selected)"><i class="bi bi-trash"></i> Delete</button></div></aside>
+}
+
+@if (_showForm)
+{
+    <div class="mt-modal-backdrop" @onclick="CloseForm"><div class="mt-modal" @onclick:stopPropagation="true"><div class="um-modal-header"><i class="bi bi-bell"></i><span>New Notification</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div><EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid"><div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.Type" class="um-input">@foreach (var type in NotificationTypes) { <option>@type</option> }</InputSelect><ValidationMessage For="() => _form.Type" class="text-danger" /></div><div class="um-field"><label>Channel <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.ChannelCode" class="um-input"><option>InApp</option><option>Email</option><option>SMS</option></InputSelect><ValidationMessage For="() => _form.ChannelCode" class="text-danger" /></div><div class="um-field um-field--full"><label>Subject <span class="text-danger">*</span></label><InputText @bind-Value="_form.Subject" class="um-input" /><ValidationMessage For="() => _form.Subject" class="text-danger" /></div><div class="um-field um-field--full"><label>Message <span class="text-danger">*</span></label><InputTextArea @bind-Value="_form.Body" class="um-input" rows="4" /><ValidationMessage For="() => _form.Body" class="text-danger" /></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Send</button></div></EditForm></div></div>
+}
+
+@if (_showDelete && _selected is not null)
+{
+    <div class="mt-modal-backdrop" @onclick="() => _showDelete = false"><div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div><div class="um-confirm-title">Delete notification?</div><div class="um-confirm-text">This will remove <strong>@Title(_selected)</strong>.</div><div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></div>
+}
+
 @code {
-    SfToast _toast = default!;
-    SfContextMenu<CtxItem> _ctx = default!;
-    SfGrid<NotifRow>? _grid;
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    static readonly Guid TenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+    static readonly string[] NotificationTypes = ["Alert", "Reminder", "Approval", "Info", "System"];
+    string _search = string.Empty;
+    bool _unreadOnly;
+    int _dateFilter;
+    string _activeTab = "feed";
+    string _activeFilter = string.Empty;
+    string? _loadError;
+    string? _toastMessage;
+    bool _toastIsError;
+    bool _loading;
+    bool _saving;
+    bool _showForm;
+    bool _showDelete;
+    NotificationDto? _selected;
+    NotificationForm _form = new();
+    List<NotificationDto> _items = [];
+    readonly TabDef[] _tabs = [new("feed", "Feed", "bi-rss"), new("table", "Table", "bi-table")];
 
-    string _search     = "";
-    bool   _unreadOnly = false;
-    int    _dateFilter = 0;
-    string _activeTab  = "feed";
-    string _typeFilter = "";
+    int Unread => _items.Count(x => !x.IsRead);
+    IEnumerable<NotificationDto> Filtered => _items.Where(x => (string.IsNullOrEmpty(_activeFilter) || _activeFilter switch { "__unread" => !x.IsRead, _ => NotificationType(x) == _activeFilter }) && (!_unreadOnly || !x.IsRead) && (string.IsNullOrEmpty(_search) || Title(x).Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Body.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.StatusCode.Contains(_search, StringComparison.OrdinalIgnoreCase)) && (_dateFilter == 0 || x.CreatedDateUtc >= DateTime.UtcNow.AddDays(-_dateFilter))).OrderByDescending(x => x.CreatedDateUtc);
+    IEnumerable<NotifGroup> NotificationGroups => Filtered.GroupBy(x => x.CreatedDateUtc.ToLocalTime().Date).OrderByDescending(g => g.Key).Select(g => new NotifGroup(FormatDateLabel(g.Key), g.ToList()));
 
-    NotifRow? _selected;
+    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("Notifications", "/workbench/notifications")); await LoadAsync(); }
+    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchNotificationsAsync(TenantId, _search, pageSize: 250); _items = result?.Items.ToList() ?? []; _selected = _selected is null ? Filtered.FirstOrDefault() : Filtered.FirstOrDefault(x => x.NotificationId == _selected.NotificationId) ?? Filtered.FirstOrDefault(); } catch (Exception ex) { _loadError = $"Failed to load notifications: {ex.Message}"; } finally { _loading = false; } }
+    void SetFilter(string? filter) => _activeFilter = _activeFilter == (filter ?? string.Empty) ? string.Empty : (filter ?? string.Empty);
+    void ResetFilters() { _search = string.Empty; _unreadOnly = false; _dateFilter = 0; _activeFilter = string.Empty; }
+    async Task Open(NotificationDto item) { _selected = item; if (!item.IsRead) await SetReadAsync(item, true); }
+    void OpenCreate() { _form = new(); _showForm = true; }
+    void CloseForm() { _showForm = false; _form = new(); }
+    void ShowDelete(NotificationDto item) { _selected = item; _showDelete = true; }
+    void ShowToast(string message, bool isError = false) { _toastMessage = message; _toastIsError = isError; }
+    void ClearToast() => _toastMessage = null;
+    int CountType(string type) => _items.Count(x => NotificationType(x) == type);
 
+    async Task SaveAsync() { _saving = true; try { await Api.CreateNotificationAsync(new() { TenantId = TenantId, RecipientUserId = TenantAdminUserId, ChannelCode = _form.ChannelCode, Subject = $"[{_form.Type}] {_form.Subject}", Body = _form.Body, EntityName = _form.Type, StatusCode = _form.ChannelCode == "InApp" ? "Delivered" : "Sent", SentDateUtc = DateTime.UtcNow, CreatedByUserId = TenantAdminUserId }); _showForm = false; ShowToast("Notification sent"); await LoadAsync(); } catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", true); } finally { _saving = false; } }
+    async Task SetReadAsync(NotificationDto item, bool isRead) { try { await Api.SetNotificationReadAsync(item.NotificationId, isRead); item.IsRead = isRead; item.ReadDateUtc = isRead ? DateTime.UtcNow : null; } catch (Exception ex) { ShowToast($"Update failed: {ex.Message}", true); } }
+    Task ToggleReadAsync(NotificationDto item) => SetReadAsync(item, !item.IsRead);
+    async Task MarkAllReadAsync() { _saving = true; try { await Api.MarkAllNotificationsReadAsync(TenantId, TenantAdminUserId); ShowToast("All notifications marked read"); await LoadAsync(); } catch (Exception ex) { ShowToast($"Update failed: {ex.Message}", true); } finally { _saving = false; } }
+    async Task DeleteReadAsync() { _saving = true; try { await Api.DeleteReadNotificationsAsync(TenantId, TenantAdminUserId); ShowToast("Read notifications deleted"); await LoadAsync(); } catch (Exception ex) { ShowToast($"Delete failed: {ex.Message}", true); } finally { _saving = false; } }
+    async Task ExecuteDeleteAsync() { if (_selected is null) return; _saving = true; try { await Api.DeleteNotificationAsync(_selected.NotificationId); _showDelete = false; ShowToast("Notification deleted"); await LoadAsync(); } catch (Exception ex) { ShowToast($"Delete failed: {ex.Message}", true); } finally { _saving = false; } }
+    async Task ApproveAsync(NotificationDto item) { try { await Api.SetNotificationStatusAsync(item.NotificationId, "Approved"); item.StatusCode = "Approved"; item.IsRead = true; ShowToast("Approval accepted"); } catch (Exception ex) { ShowToast($"Approval failed: {ex.Message}", true); } }
+    async Task DeclineAsync(NotificationDto item) { try { await Api.SetNotificationStatusAsync(item.NotificationId, "Declined"); item.StatusCode = "Declined"; item.IsRead = true; ShowToast("Approval declined"); } catch (Exception ex) { ShowToast($"Decline failed: {ex.Message}", true); } }
+
+    static string Title(NotificationDto item) => string.IsNullOrWhiteSpace(item.Subject) ? "(No subject)" : item.Subject;
+    static string NotificationType(NotificationDto item) { var title = Title(item); foreach (var type in NotificationTypes) if (title.Contains(type, StringComparison.OrdinalIgnoreCase) || string.Equals(item.EntityName, type, StringComparison.OrdinalIgnoreCase)) return type; return item.StatusCode == "Failed" ? "Alert" : "Info"; }
+    static bool IsActionable(NotificationDto item) => NotificationType(item) == "Approval" && item.StatusCode is not ("Approved" or "Declined");
+    static string TypeCss(string value) => value.ToLowerInvariant().Replace(" ", "-");
+    static string TypeIcon(string type) => type switch { "Alert" => "bi-exclamation-triangle-fill", "Reminder" => "bi-alarm-fill", "Approval" => "bi-check-circle-fill", "System" => "bi-gear-fill", _ => "bi-info-circle-fill" };
+    static string FormatDateLabel(DateTime date) => date.Date == DateTime.Today ? "Today" : date.Date == DateTime.Today.AddDays(-1) ? "Yesterday" : date.ToString("dddd, MMMM d");
+    static string FormatAge(DateTime utc) { var diff = DateTime.UtcNow - utc; if (diff.TotalMinutes < 60) return $"{Math.Max(1, (int)diff.TotalMinutes)}m ago"; if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago"; if (diff.TotalDays < 7) return $"{(int)diff.TotalDays}d ago"; return utc.ToLocalTime().ToString("MMM d"); }
+    RenderFragment KpiCard(string icon, string label, string val, string title, string css, string? filter) => @<button class="mn-kpi-card @css @(_activeFilter == (filter ?? string.Empty) ? "mn-kpi-active" : "")" title="@title" @onclick="() => SetFilter(filter)"><div class="mn-kpi-val">@val</div><div class="mn-kpi-lbl"><i class="bi @icon"></i> @label</div></button>;
     sealed record TabDef(string Key, string Label, string Icon);
-    readonly TabDef[] _tabs =
-    [
-        new("feed", "Notification Feed", "bi-rss"),
-        new("grid", "Grid View",         "bi-table"),
-    ];
-
-    sealed record CtxItem(string Text, string IconCss);
-    readonly List<CtxItem> _ctxItems =
-    [
-        new("Mark as Read",    "bi bi-check-circle"),
-        new("Mark as Unread",  "bi bi-circle"),
-        new("Open",            "bi bi-arrow-right-circle"),
-        new("Delete",          "bi bi-trash"),
-    ];
-
-    sealed class NotifRow
-    {
-        public Guid     Id           { get; set; }
-        public string   Type         { get; set; } = "";   // Alert | Reminder | Approval | Info | System
-        public string   Title        { get; set; } = "";
-        public string   Message      { get; set; } = "";
-        public DateTime ReceivedAt   { get; set; }
-        public bool     IsRead       { get; set; }
-        public bool     IsActionable { get; set; }
-        public bool     IsActioned   { get; set; }
-    }
-
-    sealed record NotifGroup(string Label, List<NotifRow> Items);
-
-    readonly List<NotifRow> _rows = new();
-
-    int Unread => _rows.Count(r => !r.IsRead);
-
-    IEnumerable<NotifRow> Filtered => _rows.Where(r =>
-        (string.IsNullOrEmpty(_typeFilter) || (_typeFilter == "__unread" ? !r.IsRead : r.Type == _typeFilter))
-        && (!_unreadOnly || !r.IsRead)
-        && (string.IsNullOrEmpty(_search) ||
-            r.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-            r.Message.Contains(_search, StringComparison.OrdinalIgnoreCase))
-        && (_dateFilter == 0 || r.ReceivedAt >= DateTime.Now.AddDays(-_dateFilter))
-    ).OrderByDescending(r => r.ReceivedAt);
-
-    IEnumerable<NotifGroup> NotifGroups =>
-        Filtered.GroupBy(r => r.ReceivedAt.Date)
-                .OrderByDescending(g => g.Key)
-                .Select(g => new NotifGroup(FormatDateLabel(g.Key), g.ToList()));
-
-    protected override void OnInitialized()
-    {
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("Notifications", "/workbench/notifications"));
-        BuildStub();
-    }
-
-    void BuildStub()
-    {
-        var rnd   = new Random(17);
-        var types = new[]{ "Alert","Alert","Reminder","Reminder","Approval","Info","System" };
-
-        var data = new (string Type, string Title, string Msg, bool Actionable)[]
-        {
-            ("Alert",    "Policy Expiring in 7 Days",          "Sullivan Mfg. LLC — GL policy #HBP-44892 expires on {date}. Renewal quote required.",                                                  false),
-            ("Alert",    "High-Risk Account Flag",             "Apex Medical Group has been flagged by underwriting for loss ratio >75%. Review required before binding.",                              false),
-            ("Alert",    "Payment Overdue",                    "Metro Freight Co. premium payment is 14 days past due. Total outstanding: $4,820.00.",                                                  false),
-            ("Alert",    "Coverage Gap Detected",              "Dallas Roofing LLC has no active umbrella policy. Estimated exposure: $2.2M.",                                                          false),
-            ("Reminder", "Renewal Call Scheduled Tomorrow",    "Bridgewater Hotels renewal review call is scheduled for tomorrow at 10:00 AM. Prepare quote comparison.",                              false),
-            ("Reminder", "Submit ACORD Before COB",            "ACORD 25 for Pioneer Automotive must be submitted before 5:00 PM today.",                                                               false),
-            ("Reminder", "Q2 Goals Due Friday",                "Your Q2 written premium goal submission is due this Friday. Current progress: 71%.",                                                    false),
-            ("Reminder", "Annual Review Due",                  "Greenleaf Nurseries is due for its annual policy review. Last review was 14 months ago.",                                              false),
-            ("Approval", "Endorsement Request — Pending",      "Pioneer Automotive has submitted an endorsement request to add a scheduled vehicle. Effective date: {date}. Awaiting your approval.",  true),
-            ("Approval", "Bind Authority Request",             "CSR James Park is requesting bind authority for a new BOP policy. Premium: $3,400/yr. Account: Sun Valley Resort.",                    true),
-            ("Approval", "Quote Release — Approval Needed",    "A $47,500 annual premium quote for Laredo Steel Works is pending your release to the client.",                                         true),
-            ("Info",     "Market Update: E&S Capacity",        "Markel and Lloyd's have announced reduced capacity for habitational risks effective next quarter.",                                     false),
-            ("Info",     "Carrier: Hartford Rate Change",      "Hartford has filed a 6.2% rate increase for commercial auto in TX. Effective next renewal cycle.",                                     false),
-            ("Info",     "New Account Assigned to You",        "Coastal Seafood Distribution has been assigned to your book of business by Team Leader Maria Santos.",                                 false),
-            ("Info",     "CE Credit Reminder",                 "You have 4.0 CE credits remaining to complete before your license renewal deadline in 60 days.",                                       false),
-            ("System",   "Password Expires in 7 Days",        "Your AMS portal password will expire in 7 days. Please update it to avoid service interruption.",                                       false),
-            ("System",   "Scheduled Maintenance Tonight",      "AMS will undergo maintenance from 11:00 PM – 2:00 AM. The system will be read-only during this window.",                              false),
-            ("System",   "Two-Factor Auth Enabled",            "Two-factor authentication has been successfully enabled for your account.",                                                             false),
-            ("System",   "Report Ready: Monthly Production",  "Your monthly production report for {month} is ready to download from the Reports section.",                                            false),
-        };
-
-        _rows.Clear();
-        for (int i = 0; i < 45; i++)
-        {
-            var d    = data[rnd.Next(data.Length)];
-            var ago  = rnd.Next(0, 20 * 24 * 60);
-            var date = DateTime.Now.AddMinutes(-ago).ToString("MMM d");
-            _rows.Add(new NotifRow
-            {
-                Id           = Guid.NewGuid(),
-                Type         = d.Type,
-                Title        = d.Title,
-                Message      = d.Msg.Replace("{date}", DateTime.Today.AddDays(rnd.Next(3,30)).ToString("MMM d"))
-                                    .Replace("{month}", DateTime.Today.AddMonths(-1).ToString("MMMM yyyy")),
-                ReceivedAt   = DateTime.Now.AddMinutes(-ago),
-                IsRead       = rnd.Next(3) != 0,
-                IsActionable = d.Actionable,
-                IsActioned   = false,
-            });
-        }
-        // Ensure some unread
-        foreach (var r in _rows.OrderBy(_ => rnd.Next()).Take(8))
-            r.IsRead = false;
-
-        _rows.Sort((a, b) => b.ReceivedAt.CompareTo(a.ReceivedAt));
-    }
-
-    void Open(NotifRow n)
-    {
-        n.IsRead = true;
-    }
-
-    async Task Approve(NotifRow n)
-    {
-        n.IsActioned = true; n.IsRead = true;
-        await _toast.ShowAsync(new ToastModel { Title="Approved", Content=n.Title, CssClass="e-toast-success" });
-    }
-
-    async Task Decline(NotifRow n)
-    {
-        n.IsActioned = true; n.IsRead = true;
-        await _toast.ShowAsync(new ToastModel { Title="Declined", Content=n.Title, CssClass="e-toast-warning" });
-    }
-
-    void MarkAllRead() { foreach (var r in _rows) r.IsRead = true; }
-
-    async Task DeleteReadAsync()
-    {
-        if (!await Confirmations.ConfirmAsync("Delete read notifications", "Delete all read notifications? This cannot be undone.", "Delete")) return;
-        _rows.RemoveAll(r => r.IsRead);
-    }
-
-    void Refresh()      => BuildStub();
-    void ResetFilters() { _search=""; _unreadOnly=false; _dateFilter=0; }
-    void ToggleKpi(string? filter)  => _typeFilter = _typeFilter == (filter ?? string.Empty) ? string.Empty : (filter ?? string.Empty);
-
-    async Task OnCtxSelected(MenuEventArgs<CtxItem> args)
-    {
-        if (_selected is null) return;
-        switch (args.Item.Text)
-        {
-            case "Mark as Read":   _selected.IsRead = true;  break;
-            case "Mark as Unread": _selected.IsRead = false; break;
-            case "Delete":         _rows.Remove(_selected);  break;
-            default:
-                await _toast.ShowAsync(new ToastModel { Title=args.Item.Text, Content=_selected.Title, CssClass="e-toast-info" });
-                break;
-        }
-    }
-
-    static string TypeIcon(string t) => t switch
-    {
-        "Alert"    => "bi-exclamation-triangle-fill",
-        "Reminder" => "bi-alarm-fill",
-        "Approval" => "bi-check-circle-fill",
-        "Info"     => "bi-info-circle-fill",
-        "System"   => "bi-gear-fill",
-        _          => "bi-bell-fill"
-    };
-
-    static string FormatDateLabel(DateTime d)
-    {
-        if (d.Date == DateTime.Today)            return "Today";
-        if (d.Date == DateTime.Today.AddDays(-1)) return "Yesterday";
-        return d.ToString("dddd, MMMM d");
-    }
-
-    static string FormatAge(DateTime dt)
-    {
-        var diff = DateTime.Now - dt;
-        if (diff.TotalMinutes < 60)  return $"{(int)diff.TotalMinutes}m ago";
-        if (diff.TotalHours   < 24)  return $"{(int)diff.TotalHours}h ago";
-        if (diff.TotalDays    < 7)   return $"{(int)diff.TotalDays}d ago";
-        return dt.ToString("MMM d");
-    }
-
-    RenderFragment KpiCard(string icon, string label, string val, string css, string? filter) =>
-        @<button class="mn-kpi-card @css @(_typeFilter == (filter ?? string.Empty) ? "mn-kpi-active" : "")"
-                 @onclick="() => ToggleKpi(filter)">
-            <div class="mn-kpi-val">@val</div>
-            <div class="mn-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
-        </button>;
+    sealed record NotifGroup(string Label, List<NotificationDto> Items);
+    sealed class NotificationForm { [Required, StringLength(50)] public string Type { get; set; } = "Info"; [Required, StringLength(50)] public string ChannelCode { get; set; } = "InApp"; [Required, StringLength(200)] public string Subject { get; set; } = string.Empty; [Required, StringLength(2000)] public string Body { get; set; } = string.Empty; }
 }

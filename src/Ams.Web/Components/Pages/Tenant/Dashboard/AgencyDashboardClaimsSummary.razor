@@ -25,6 +25,10 @@
         <span>Loading claims data…</span>
     </div>
 }
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger ad-alert-danger" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError</div>
+}
 else if (_data is null)
 {
     <div class="ad-empty"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><span>No claims data available.</span></div>
@@ -33,41 +37,47 @@ else
 {
     <!-- ── KPI strip ───────────────────────────────────────────── -->
     <div class="ad-kpi-strip">
-        <div class="ad-kpi-card ad-kpi--claims">
+        <button type="button" class="ad-kpi-card ad-kpi--claims @KpiClass("open")" @onclick='() => SetFilter("open")' title="Show open claim statuses">
             <div class="ad-kpi-icon"><i class="bi bi-exclamation-circle" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_data.TotalOpenClaims</div>
                 <div class="ad-kpi-lbl">Open Claims</div>
                 <div class="ad-kpi-sub">+@_data.NewClaimsMtd new MTD</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--premium">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--premium @KpiClass("reserved")" @onclick='() => SetFilter("reserved")' title="Show statuses with reserves">
             <div class="ad-kpi-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_data.TotalReservedAmount.ToString("C0")</div>
                 <div class="ad-kpi-lbl">Total Reserves</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--ar">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--ar @KpiClass("paid")" @onclick='() => SetFilter("paid")' title="Show line of business summary">
             <div class="ad-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_data.TotalPaidMtd.ToString("C0")</div>
                 <div class="ad-kpi-lbl">Paid MTD</div>
                 <div class="ad-kpi-sub">@_data.ClosedClaimsMtd closed MTD</div>
             </div>
-        </div>
-        <div class="ad-kpi-card @(_data.LitigatedClaims > 0 ? "ad-kpi--claims" : "ad-kpi--policies")">
+        </button>
+        <button type="button" class="ad-kpi-card @(_data.LitigatedClaims > 0 ? "ad-kpi--claims" : "ad-kpi--policies") @KpiClass("litigated")" @onclick='() => SetFilter("litigated")' title="Show litigation-sensitive claims metrics">
             <div class="ad-kpi-icon"><i class="bi bi-briefcase" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_data.LitigatedClaims</div>
                 <div class="ad-kpi-lbl">Litigated Claims</div>
                 <div class="ad-kpi-sub">Avg close @_data.AvgDaysToClose.ToString("F0") days</div>
             </div>
-        </div>
+        </button>
     </div>
+    @if (_activeFilter != "all")
+    {
+        <div class="ad-filter-bar"><span class="ad-filter-chip"><i class="bi bi-funnel" aria-hidden="true"></i> @FilterLabel(_activeFilter)</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => SetFilter("all")'><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button></div>
+    }
 
     <!-- ── By status + By LOB ─────────────────────────────────── -->
     <div class="ad-two-col">
+        @if (ShowStatusCard)
+        {
         <div class="ad-card">
             <div class="ad-card-hd"><i class="bi bi-tags" aria-hidden="true"></i> Claims by Status</div>
             @if (_data.ByStatus.Count == 0)
@@ -86,7 +96,7 @@ else
                             </tr>
                         </thead>
                         <tbody>
-                            @foreach (var s in _data.ByStatus.OrderByDescending(x => x.Count))
+                            @foreach (var s in FilteredStatuses.OrderByDescending(x => x.Count))
                             {
                                 <tr>
                                     <td>
@@ -101,7 +111,10 @@ else
                 </div>
             }
         </div>
+        }
 
+        @if (ShowLobCard)
+        {
         <div class="ad-card">
             <div class="ad-card-hd"><i class="bi bi-pie-chart" aria-hidden="true"></i> Claims by Line of Business</div>
             @if (_data.ByLob.Count == 0)
@@ -133,6 +146,7 @@ else
                 </div>
             }
         </div>
+        }
     </div>
 }
 
@@ -140,6 +154,15 @@ else
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private ClaimsSummaryDto? _data;
     private bool _loading;
+    private string? _loadError;
+    private string _activeFilter = "all";
+    private bool ShowStatusCard => _activeFilter is "all" or "open" or "reserved" or "litigated";
+    private bool ShowLobCard => _activeFilter is "all" or "paid";
+    private IEnumerable<ClaimsByStatusDto> FilteredStatuses => (_data?.ByStatus ?? []).Where(s => _activeFilter switch
+    {
+        "reserved" => s.Reserved > 0,
+        _ => true,
+    });
 
     protected override async Task OnInitializedAsync()
     {
@@ -149,10 +172,15 @@ else
 
     private async Task LoadAsync()
     {
-        _loading = true;
+        _loading = true; _loadError = null;
         try { _data = await Api.GetClaimsSummaryAsync(_tenantId); }
+        catch (Exception ex) { _loadError = $"Failed to load claims summary: {ex.Message}"; _data = null; }
         finally { _loading = false; }
     }
+
+    private void SetFilter(string filter) => _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
+    private string KpiClass(string filter) => _activeFilter == filter ? "ad-kpi-card--active" : string.Empty;
+    private static string FilterLabel(string filter) => filter switch { "open" => "Open claims", "reserved" => "Claims with reserves", "paid" => "LOB summary", "litigated" => "Litigation metrics", _ => "All claims" };
 
     private static string StatusBadgeClass(string status) => status.ToLower() switch
     {

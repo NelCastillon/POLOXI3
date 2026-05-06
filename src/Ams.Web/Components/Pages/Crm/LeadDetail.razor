@@ -17,6 +17,12 @@
         <span>Loading lead…</span>
     </div>
 }
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" role="alert">
+        @_loadError
+    </div>
+}
 else if (_lead is null)
 {
     <div class="ldd-not-found">
@@ -909,6 +915,7 @@ else
 
     private SfToast? _toast;
     private bool     _loading = true;
+    private string?  _loadError;
     private int      _tab     = 0;
 
     // ── Core record ───────────────────────────────────────────────────────────
@@ -1010,7 +1017,7 @@ else
     ];
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnParametersSetAsync()
     {
         await LoadAsync();
     }
@@ -1020,9 +1027,16 @@ else
         _loading = true; StateHasChanged();
         try
         {
-            // TODO: replace stubs with real API calls
-            await Task.Delay(0);
-            _lead = BuildStub();
+            _loadError = null;
+            var dto = await Api.GetLeadByIdAsync(LeadId);
+            if (dto is null)
+            {
+                _lead = null;
+                return;
+            }
+
+            var owner = await ResolveOwnerNameAsync(dto.TenantId, dto.AssignedToUserId);
+            _lead = MapToLeadDetail(dto, owner);
 
             _contacts      = [];
             _interestLines = [];
@@ -1041,8 +1055,83 @@ else
                 new("Leads", "/crm/leads"),
                 new(_lead.FullName, $"/crm/leads/{LeadId}"));
         }
+        catch (Exception ex)
+        {
+            _loadError = $"Error loading lead: {ex.Message}";
+            _lead = null;
+            await Toast(_loadError, "e-toast-danger");
+        }
         finally { _loading = false; }
     }
+
+    private async Task<string> ResolveOwnerNameAsync(Guid tenantId, Guid? assignedToUserId)
+    {
+        if (!assignedToUserId.HasValue)
+        {
+            return "Unassigned";
+        }
+
+        var users = await Api.SearchUsersAsync(tenantId);
+        var user = users?.Items.FirstOrDefault(u => u.UserId == assignedToUserId.Value);
+        return user is null
+            ? "Unassigned"
+            : string.IsNullOrWhiteSpace(user.DisplayName) ? user.FullName : user.DisplayName;
+    }
+
+    private static LeadDetailModel MapToLeadDetail(LeadDto dto, string owner)
+    {
+        var score = Math.Clamp(dto.Score ?? 0, 0, 100);
+        var source = string.IsNullOrWhiteSpace(dto.SourceCode) ? "Direct" : dto.SourceCode;
+
+        return new LeadDetailModel
+        {
+            LeadId = dto.LeadId,
+            FirstName = dto.FirstName,
+            LastName = dto.LastName,
+            CompanyName = dto.AccountName ?? string.Empty,
+            Email = dto.Email ?? string.Empty,
+            Phone = dto.Phone,
+            InterestedService = dto.InterestedService,
+            Stage = NormalizeStage(dto.NurturingStageCode, dto.StatusCode),
+            Rating = ScoreToRating(score),
+            Source = source,
+            Owner = owner,
+            Score = score,
+            EstPremium = 0,
+            CreatedAt = dto.CreatedDateUtc,
+            LastTouch = source,
+            Notes = dto.InterestedService,
+        };
+    }
+
+    private static string NormalizeStage(string? stage, int statusCode)
+    {
+        if (!string.IsNullOrWhiteSpace(stage))
+        {
+            return stage.Trim() switch
+            {
+                "Closed" => "Lost",
+                "Won" => "Converted",
+                var s => s
+            };
+        }
+
+        return statusCode switch
+        {
+            2 => "Contacted",
+            3 => "Qualified",
+            4 => "Converted",
+            5 => "Lost",
+            _ => "New",
+        };
+    }
+
+    private static string ScoreToRating(int score) => score switch
+    {
+        >= 80 => "Hot",
+        >= 50 => "Warm",
+        _ => "Cold",
+    };
 
     private void BuildRightPanel()
     {
@@ -1342,38 +1431,6 @@ else
         _        => "ldd-nba-ic--other",
     };
 
-    // ── Stub data ─────────────────────────────────────────────────────────────
-    private LeadDetailModel BuildStub() => new()
-    {
-        LeadId      = LeadId,
-        FirstName   = "Morgan",
-        LastName    = "Sullivan",
-        CompanyName = "Sullivan Manufacturing LLC",
-        Title       = "CFO",
-        Email       = "morgan.sullivan@sullivanmfg.com",
-        Phone       = "(312) 555-0192",
-        Website     = "www.sullivanmfg.com",
-        Industry    = "Manufacturing",
-        EmployeeCount = 120,
-        AnnualRevenue = 8_500_000m,
-        Stage       = "Qualified",
-        Rating      = "Hot",
-        Source      = "Referral",
-        Owner       = "Alice Carter",
-        Score       = 82,
-        EstPremium  = 42_000m,
-        CampaignName= "Q3 Commercial BOP Drip",
-        ReferredBy  = "James Whitfield",
-        LastTouch   = "Website",
-        UtmMedium   = "email",
-        UtmSource   = "newsletter",
-        CreatedAt   = DateTime.UtcNow.AddDays(-45),
-        ModifiedAt  = DateTime.UtcNow.AddDays(-3),
-        LastActivity= DateTime.UtcNow.AddDays(-4),
-        Street = "1200 W Industrial Pkwy", City = "Chicago", State = "IL", Zip = "60607", Country = "USA",
-        Notes = "Strong referral from James. CFO is actively seeking replacement for expiring BOP and GL. Responsive to email. Follow up on loss run request.",
-    };
-
     // ── Models ────────────────────────────────────────────────────────────────
     private sealed class LeadDetailModel
     {
@@ -1385,6 +1442,7 @@ else
         public string   Title         { get; set; } = string.Empty;
         public string   Email         { get; set; } = string.Empty;
         public string?  Phone         { get; set; }
+        public string?  InterestedService { get; set; }
         public string?  Website       { get; set; }
         public string?  Industry      { get; set; }
         public int?     EmployeeCount { get; set; }

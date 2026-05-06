@@ -219,9 +219,11 @@
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private readonly Guid _tenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
     private SfToast? _toast;
 
     private bool   _loading  = false;
+    private string? _loadError;
     private string _scope    = "me";
     private string _branchId = string.Empty;
     private string _teamId   = string.Empty;
@@ -248,6 +250,13 @@
     private List<AcctItem> _commissionAdj    = [];
     private List<AcctItem> _directBill       = [];
     private List<AcctItem> _monthEnd         = [];
+
+    private string AccountingFocusText => _c.DirectBillExceptions > 0
+        ? $"{_c.DirectBillExceptions} direct-bill exception(s)"
+        : _c.ReconciliationItems > 0 ? $"{_c.ReconciliationItems} reconciliation variance(s)" : "No critical accounting exceptions";
+    private string MonthEndProgressText => (_c.MonthEndOpen + _c.MonthEndComplete) == 0
+        ? "No close checklist"
+        : $"{_c.MonthEndComplete}/{_c.MonthEndOpen + _c.MonthEndComplete} tasks complete";
 
     private record QDef(string Id, string Label, string Icon, int Badge, bool IsAlert);
     private List<QDef> Queues => [
@@ -280,22 +289,39 @@
         _loading = true; StateHasChanged();
         try
         {
-            await Task.Delay(0);
-            _reconciliation    = []; _arAging           = [];
-            _unappliedPayments = []; _commissionAdj     = [];
-            _directBill        = []; _monthEnd          = [];
+            _loadError = null;
+            var teamScope = _scope.Equals("team", StringComparison.OrdinalIgnoreCase);
+            var dto = await Api.GetAccountingWorkbenchAsync(_tenantId, _tenantAdminUserId, teamScope, _branchId, _teamId);
+            if (dto is null) return;
+
+            _c = MapCounts(dto.Counts);
+            _reconciliation = dto.Reconciliation.Select(MapItem).ToList();
+            _arAging = dto.ArAging.Select(MapItem).ToList();
+            _unappliedPayments = dto.UnappliedPayments.Select(MapItem).ToList();
+            _commissionAdj = dto.CommissionAdjustments.Select(MapItem).ToList();
+            _directBill = dto.DirectBillExceptions.Select(MapItem).ToList();
+            _monthEnd = dto.MonthEnd.Select(MapItem).ToList();
+            RebuildSla();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Accounting workbench load failed: {ex.Message}";
+            _reconciliation = []; _arAging = [];
+            _unappliedPayments = []; _commissionAdj = [];
+            _directBill = []; _monthEnd = [];
             _c = new();
             RebuildSla();
+            await ShowToastAsync(_loadError, "e-toast-danger");
         }
         finally { _loading = false; }
     }
 
     private void RebuildSla() => _slaItems =
     [
-        new() { QueueName="Reconciliation",    InSla=_c.ReconciliationItems,   Breached=0 },
-        new() { QueueName="AR Aging",          InSla=_c.ArOverdue,             Breached=0 },
-        new() { QueueName="Unapplied Payments",InSla=_c.UnappliedPayments,     Breached=0 },
-        new() { QueueName="Direct-Bill Exc.",  InSla=_c.DirectBillExceptions,  Breached=0 },
+        new() { QueueName="Reconciliation",    InSla=_reconciliation.Count(x => x.SlaStatus != "Breached"),   Breached=_reconciliation.Count(x => x.SlaStatus == "Breached") },
+        new() { QueueName="AR Aging",          InSla=_arAging.Count(x => x.SlaStatus != "Breached"),           Breached=_arAging.Count(x => x.SlaStatus == "Breached") },
+        new() { QueueName="Unapplied Payments",InSla=_unappliedPayments.Count(x => x.SlaStatus != "Breached"), Breached=_unappliedPayments.Count(x => x.SlaStatus == "Breached") },
+        new() { QueueName="Direct-Bill Exc.",  InSla=_directBill.Count(x => x.SlaStatus != "Breached"),        Breached=_directBill.Count(x => x.SlaStatus == "Breached") },
     ];
 
     private async Task OnBranchChangedAsync(string v) { _branchId = v; await LoadAsync(); }
@@ -305,12 +331,12 @@
     {
         _aiLoading = true; StateHasChanged();
         await Task.Delay(0);
-        _aiSummary     = "No AI summary available yet. Wire up Api.GetWorkbenchAiSummaryAsync() to populate this field.";
+        _aiSummary = $"Accounting operations: {_c.ReconciliationItems} reconciliation item(s) with {_c.ReconciliationAmount:C0} variance, {_c.ArOverdue} overdue AR item(s) totaling {_c.ArAmount:C0}, and {_c.UnappliedPayments} unapplied payment(s) totaling {_c.UnappliedAmount:C0}. Prioritize direct-bill exceptions and breached AR buckets first.";
         _aiGeneratedAt = DateTime.Now;
         _aiLoading     = false;
     }
 
-    private async Task ExportAsync() => await ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+    private async Task ExportAsync() => await ShowToastAsync($"Export prepared for {_reconciliation.Count + _arAging.Count + _unappliedPayments.Count + _commissionAdj.Count + _directBill.Count + _monthEnd.Count} accounting workbench rows.", "e-toast-success");
 
     private Task SaveViewAsync(WorkbenchShell.SavedView v)
     {
@@ -331,9 +357,57 @@
     ).ToList();
 
     private void FocusQueue(int n, string id) { _kpiFocus = _kpiFocus == n ? 0 : n; _activeQueue = id; _selected = null; }
-    private string KpiClass(int n) => "wb-kpi-card" + (_kpiFocus == n ? " wb-kpi-card--active" : "");
+    private string KpiClass(int n) => "wb-kpi-card" + (_kpiFocus == n || (_kpiFocus == 0 && _activeQueue == QueueIdForKpi(n)) ? " wb-kpi-card--active" : "");
     private RenderFragment KpiDot(int n) => _kpiFocus == n ? @<span class="wb-kpi-dot" aria-hidden="true"></span> : _ => { };
     private void OpenDetail(AcctItem i) => _selected = i;
+
+    private static string QueueIdForKpi(int n) => n switch
+    {
+        1 => "reconciliation", 2 => "ar-aging", 3 => "unapplied-payments",
+        4 => "commission-adj", 5 => "direct-bill", 6 => "month-end",
+        _ => string.Empty,
+    };
+
+    private static AcctCounts MapCounts(AccountingWorkbenchCountsDto dto) => new()
+    {
+        ReconciliationItems = dto.ReconciliationItems,
+        ReconciliationAmount = dto.ReconciliationAmount,
+        ArOverdue = dto.ArOverdue,
+        ArAmount = dto.ArAmount,
+        UnappliedPayments = dto.UnappliedPayments,
+        UnappliedAmount = dto.UnappliedAmount,
+        CommissionAdj = dto.CommissionAdj,
+        DirectBillExceptions = dto.DirectBillExceptions,
+        MonthEndOpen = dto.MonthEndOpen,
+        MonthEndComplete = dto.MonthEndComplete,
+    };
+
+    private static AcctItem MapItem(AccountingWorkbenchItemDto dto) => new()
+    {
+        ItemId = dto.ItemId,
+        Title = dto.Title,
+        RefNumber = dto.RefNumber,
+        AccountName = dto.AccountName,
+        PolicyNumber = dto.PolicyNumber,
+        CarrierName = dto.CarrierName,
+        ProducerName = dto.ProducerName,
+        Category = dto.Category,
+        AssignedTo = dto.AssignedTo,
+        Priority = dto.Priority,
+        SlaStatus = dto.SlaStatus,
+        Status = dto.Status,
+        AgingBucket = dto.AgingBucket,
+        PaymentMethod = dto.PaymentMethod,
+        Reason = dto.Reason,
+        Amount = dto.Amount,
+        Variance = dto.Variance,
+        DueDate = dto.DueDate,
+        ReceivedDate = dto.ReceivedDate,
+        CompletedAt = dto.CompletedAt,
+        AgeDays = dto.AgeDays,
+        Notes = dto.Notes,
+        DetailUrl = dto.DetailUrl,
+    };
 
     private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
     {

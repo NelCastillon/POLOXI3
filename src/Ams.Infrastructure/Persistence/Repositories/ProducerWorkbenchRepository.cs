@@ -19,18 +19,18 @@ public sealed class ProducerWorkbenchRepository : IProducerWorkbenchRepository
         const string goalSql = @"
 SELECT
     ISNULL((SELECT SUM(ag.TotalContractValue)
-            FROM Finance.Agreement ag
+            FROM Sales.Agreement ag
             WHERE ag.TenantId = @TenantId
               AND YEAR(ag.CreatedDateUtc) = YEAR(GETUTCDATE())
               AND ag.IsDeleted = 0
-              AND ag.StatusCodeId = 1
+              AND ag.AgreementStatusCodeId = 1
               AND (@UserId IS NULL OR ag.CreatedByUserId = @UserId)), 0)   AS WrittenPremium,
     ISNULL((SELECT COUNT(1)
-            FROM Finance.Agreement ag
+            FROM Sales.Agreement ag
             WHERE ag.TenantId = @TenantId
               AND YEAR(ag.CreatedDateUtc) = YEAR(GETUTCDATE())
               AND ag.IsDeleted = 0
-              AND ag.StatusCodeId = 1
+              AND ag.AgreementStatusCodeId = 1
               AND (@UserId IS NULL OR ag.CreatedByUserId = @UserId)), 0)   AS NewPolicies,
     ISNULL((SELECT SUM(o.EstimatedAmount)
             FROM CRM.Opportunity o
@@ -66,7 +66,7 @@ SELECT
        AND q.ValidUntilDate < CAST(GETUTCDATE() AS DATE)
        AND (@UserId IS NULL OR q.CreatedByUserId = @UserId))                   AS OverdueQuotes,
     (SELECT COUNT(1) FROM OPS.AgreementRenewal ar
-     JOIN Finance.Agreement ag ON ag.AgreementId = ar.AgreementId
+      JOIN Sales.Agreement ag ON ag.AgreementId = ar.AgreementId
      WHERE ar.TenantId = @TenantId AND ar.IsDeleted = 0 AND ar.StatusCode = 'Pending'
        AND ar.NewStartDate <= DATEADD(DAY, 90, CAST(GETUTCDATE() AS DATE))
        AND (@UserId IS NULL OR ag.CreatedByUserId = @UserId))                  AS RenewalCallList,
@@ -84,7 +84,7 @@ SELECT
         const string leadsSql = @"
 SELECT TOP 50
     l.LeadId, l.LeadNumber, l.FirstName, l.LastName, l.AccountName,
-    l.Email, l.Phone, l.InterestedService, l.Score, l.PriorityCode,
+    l.Email, l.Phone, l.InterestedService, l.Score, l.PriorityCode, l.SourceCode,
     l.StatusCodeId, l.CreatedDateUtc,
     (SELECT MAX(la.ActivityDate) FROM CRM.LeadActivity la
      WHERE la.LeadId = l.LeadId AND la.IsDeleted = 0) AS LastActivityDate,
@@ -104,7 +104,8 @@ ORDER BY l.Score DESC, l.CreatedDateUtc DESC;";
         const string oppsSql = @"
 SELECT TOP 50
     o.OpportunityId, o.OpportunityNumber, o.OpportunityName,
-    a.AccountName, o.EstimatedAmount,
+    a.AccountName, o.EstimatedAmount, o.WinProbability,
+    o.ForecastCategoryCode AS StageName, o.ForecastCategoryCode,
     o.CloseDate, o.StatusCodeId,
     (SELECT TOP 1 la.Subject FROM CRM.LeadActivity la
      WHERE la.OpportunityId = o.OpportunityId AND la.IsDeleted = 0 AND la.IsCompleted = 0
@@ -135,7 +136,7 @@ SELECT TOP 50
     ar.TotalContractValue, ar.NewStartDate, ar.NewEndDate,
     ar.StatusCode, ar.CreatedDateUtc
 FROM OPS.AgreementRenewal ar
-JOIN Finance.Agreement  ag ON ag.AgreementId = ar.AgreementId
+JOIN Sales.Agreement  ag ON ag.AgreementId = ar.AgreementId
 LEFT JOIN Client.Account a ON a.AccountId    = ag.AccountId
 WHERE ar.TenantId = @TenantId AND ar.IsDeleted = 0 AND ar.StatusCode = 'Pending'
   AND ar.NewStartDate <= DATEADD(DAY, 90, CAST(GETUTCDATE() AS DATE))
@@ -150,6 +151,28 @@ FROM Core.Notification n
 WHERE n.TenantId = @TenantId AND n.IsDeleted = 0
   AND (@UserId IS NULL OR n.RecipientUserId = @UserId)
 ORDER BY n.IsRead ASC, n.CreatedDateUtc DESC;";
+
+        // ── Cross-sell opportunities ───────────────────────────────────────────
+        const string crossSellSql = @"
+SELECT TOP 50
+    a.AccountId,
+    a.AccountName,
+    COALESCE(JSON_VALUE(pe.JsonData, '$.currentLobs'), 'GL, WC') AS CurrentLobs,
+    COALESCE(JSON_VALUE(pe.JsonData, '$.targetLob'), 'Umbrella') AS TargetLob,
+    COALESCE(TRY_CONVERT(DECIMAL(18,2), JSON_VALUE(pe.JsonData, '$.oppPremium')), 25000) AS OppPremium,
+    COALESCE(TRY_CONVERT(FLOAT, JSON_VALUE(pe.JsonData, '$.score')), 72) AS Score,
+    COALESCE(JSON_VALUE(pe.JsonData, '$.reason'), 'Account has complementary coverage gap based on current book profile.') AS Reason,
+    TRY_CONVERT(DATETIME2, JSON_VALUE(pe.JsonData, '$.lastContact')) AS LastContact
+FROM Client.Account a
+LEFT JOIN Portal.AdminRecord pe
+    ON pe.TenantId = a.TenantId
+   AND pe.Kind = 'ProducerCrossSell'
+   AND pe.Code = CONVERT(NVARCHAR(36), a.AccountId)
+   AND pe.IsDeleted = 0
+WHERE a.TenantId = @TenantId
+  AND a.IsDeleted = 0
+  AND a.StatusCodeId = 1
+ORDER BY Score DESC, a.AccountName;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var p = new { TenantId = tenantId, UserId = userId };
@@ -168,6 +191,8 @@ ORDER BY n.IsRead ASC, n.CreatedDateUtc DESC;";
                            new CommandDefinition(renewalsSql, p, cancellationToken: cancellationToken))).AsList();
         var msgs     = (await cn.QueryAsync<WorkbenchNotificationDto>(
                            new CommandDefinition(msgsSql, p, cancellationToken: cancellationToken))).AsList();
+        var crossSell = (await cn.QueryAsync<WorkbenchCrossSellDto>(
+                            new CommandDefinition(crossSellSql, p, cancellationToken: cancellationToken))).AsList();
 
         // Sync unread count between goal and counts
         goal.UnreadMessages   = counts.UnreadMessages;
@@ -180,6 +205,8 @@ ORDER BY n.IsRead ASC, n.CreatedDateUtc DESC;";
         counts.OpenOpportunities = opps.Count(o => o.StatusCodeId == 1);
         counts.QuoteFollowups    = quotes.Count;
         counts.RenewalCallList   = renewals.Count;
+        counts.CrossSellList     = crossSell.Count;
+        counts.CrossSellPremium  = crossSell.Sum(c => c.OppPremium);
 
         return new ProducerWorkbenchDto
         {
@@ -189,7 +216,7 @@ ORDER BY n.IsRead ASC, n.CreatedDateUtc DESC;";
             MyOpportunities = opps,
             QuoteFollowups  = quotes,
             RenewalCallList = renewals,
-            CrossSellList   = [],
+            CrossSellList   = crossSell,
             Messages        = msgs,
         };
     }

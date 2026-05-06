@@ -25,6 +25,10 @@
         <span>Loading billing data…</span>
     </div>
 }
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger ad-alert-danger" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError</div>
+}
 else if (_data is null)
 {
     <div class="ad-empty"><i class="bi bi-receipt" aria-hidden="true"></i><span>No billing data available.</span></div>
@@ -33,41 +37,47 @@ else
 {
     <!-- ── KPI strip ───────────────────────────────────────────── -->
     <div class="ad-kpi-strip">
-        <div class="ad-kpi-card ad-kpi--ar">
+        <button type="button" class="ad-kpi-card ad-kpi--ar @KpiClass("ar")" @onclick='() => SetFilter("ar")' title="Show AR aging details">
             <div class="ad-kpi-icon"><i class="bi bi-receipt" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_data.OutstandingArTotal.ToString("C0")</div>
                 <div class="ad-kpi-lbl">Outstanding AR</div>
                 <div class="ad-kpi-sub">@_data.TotalOpenInvoices open invoices</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--policies">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--policies @KpiClass("collected")" @onclick='() => SetFilter("collected")' title="Show collection summary">
             <div class="ad-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_data.CollectedMtd.ToString("C0")</div>
                 <div class="ad-kpi-lbl">Collected MTD</div>
             </div>
-        </div>
-        <div class="ad-kpi-card @(_data.OverdueBalance > 0 ? "ad-kpi--claims" : "ad-kpi--retention")">
+        </button>
+        <button type="button" class="ad-kpi-card @(_data.OverdueBalance > 0 ? "ad-kpi--claims" : "ad-kpi--retention") @KpiClass("overdue")" @onclick='() => SetFilter("overdue")' title="Show overdue AR buckets">
             <div class="ad-kpi-icon"><i class="bi bi-hourglass" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_data.OverdueBalance.ToString("C0")</div>
                 <div class="ad-kpi-lbl">Overdue Balance</div>
                 <div class="ad-kpi-sub">@_data.OverdueInvoiceCount overdue invoices</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--premium">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--premium @KpiClass("commissions")" @onclick='() => SetFilter("commissions")' title="Show commission summary">
             <div class="ad-kpi-icon"><i class="bi bi-percent" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_data.PendingCommissions.ToString("C0")</div>
                 <div class="ad-kpi-lbl">Pending Commissions</div>
                 <div class="ad-kpi-sub">@_data.PaidCommissionsMtd.ToString("C0") paid MTD</div>
             </div>
-        </div>
+        </button>
     </div>
+    @if (_activeFilter != "all")
+    {
+        <div class="ad-filter-bar"><span class="ad-filter-chip"><i class="bi bi-funnel" aria-hidden="true"></i> @FilterLabel(_activeFilter)</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => SetFilter("all")'><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button></div>
+    }
 
     <!-- ── AR Aging + Commission breakdown ─────────────────────── -->
     <div class="ad-two-col">
+        @if (ShowAgingCard)
+        {
         <div class="ad-card">
             <div class="ad-card-hd"><i class="bi bi-hourglass-split" aria-hidden="true"></i> AR Aging Buckets</div>
             @if (_data.ArAging.Count == 0)
@@ -77,7 +87,7 @@ else
             else
             {
                 <div class="ad-aging-grid">
-                    @foreach (var bucket in _data.ArAging)
+                    @foreach (var bucket in FilteredAging)
                     {
                         <div class="ad-aging-card @(bucket.BucketLabel.Contains("90") || bucket.BucketLabel.Contains("61") ? "ad-aging-card--overdue" : "")">
                             <div class="ad-aging-lbl">@bucket.BucketLabel</div>
@@ -89,7 +99,7 @@ else
                 <!-- bar chart of aging -->
                 <div class="ad-section-lbl" style="margin-top:1.1rem">Distribution</div>
                 <div class="ad-trend-rows">
-                    @foreach (var bucket in _data.ArAging)
+                    @foreach (var bucket in FilteredAging)
                     {
                         var pct2 = MaxBucket(_data) > 0 ? (double)(bucket.Amount / MaxBucket(_data) * 100) : 0;
                         <div class="ad-trend-row">
@@ -104,7 +114,10 @@ else
                 </div>
             }
         </div>
+        }
 
+        @if (ShowSummaryCard)
+        {
         <div class="ad-card">
             <div class="ad-card-hd"><i class="bi bi-percent" aria-hidden="true"></i> Commission Summary</div>
             <div class="ad-kpi-rows">
@@ -144,6 +157,7 @@ else
                 </div>
             </div>
         </div>
+        }
     </div>
 }
 
@@ -151,6 +165,11 @@ else
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private BillingSummaryDto? _data;
     private bool _loading;
+    private string? _loadError;
+    private string _activeFilter = "all";
+    private bool ShowAgingCard => _activeFilter is "all" or "ar" or "overdue";
+    private bool ShowSummaryCard => _activeFilter is "all" or "collected" or "commissions";
+    private List<ArAgingBucketDto> FilteredAging => (_data?.ArAging ?? []).Where(b => _activeFilter != "overdue" || b.BucketLabel.Contains("30") || b.BucketLabel.Contains("60") || b.BucketLabel.Contains("90")).ToList();
 
     protected override async Task OnInitializedAsync()
     {
@@ -160,11 +179,16 @@ else
 
     private async Task LoadAsync()
     {
-        _loading = true;
+        _loading = true; _loadError = null;
         try { _data = await Api.GetBillingSummaryAsync(_tenantId); }
+        catch (Exception ex) { _loadError = $"Failed to load billing summary: {ex.Message}"; _data = null; }
         finally { _loading = false; }
     }
 
-    private static decimal MaxBucket(BillingSummaryDto d) =>
-        d.ArAging.Count > 0 ? d.ArAging.Max(b => b.Amount) : 1m;
+    private decimal MaxBucket(BillingSummaryDto d) =>
+        FilteredAging.Count > 0 ? FilteredAging.Max(b => b.Amount) : 1m;
+
+    private void SetFilter(string filter) => _activeFilter = _activeFilter == filter && filter != "all" ? "all" : filter;
+    private string KpiClass(string filter) => _activeFilter == filter ? "ad-kpi-card--active" : string.Empty;
+    private static string FilterLabel(string filter) => filter switch { "ar" => "AR aging", "collected" => "Collections", "overdue" => "Overdue AR", "commissions" => "Commissions", _ => "All billing" };
 }

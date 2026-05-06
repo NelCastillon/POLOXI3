@@ -205,6 +205,16 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IForecastService, ForecastService>();
         services.AddScoped<IProducerWorkbenchRepository, ProducerWorkbenchRepository>();
         services.AddScoped<IProducerWorkbenchService, ProducerWorkbenchService>();
+        services.AddScoped<ICsrWorkbenchRepository, CsrWorkbenchRepository>();
+        services.AddScoped<ICsrWorkbenchService, CsrWorkbenchService>();
+        services.AddScoped<IServiceManagerWorkbenchRepository, ServiceManagerWorkbenchRepository>();
+        services.AddScoped<IServiceManagerWorkbenchService, ServiceManagerWorkbenchService>();
+        services.AddScoped<IAccountingWorkbenchRepository, AccountingWorkbenchRepository>();
+        services.AddScoped<IAccountingWorkbenchService, AccountingWorkbenchService>();
+        services.AddScoped<IMarketingWorkbenchRepository, MarketingWorkbenchRepository>();
+        services.AddScoped<IMarketingWorkbenchService, MarketingWorkbenchService>();
+        services.AddScoped<IOperationsWorkbenchRepository, OperationsWorkbenchRepository>();
+        services.AddScoped<IOperationsWorkbenchService, OperationsWorkbenchService>();
 
         // ── Client and Account engines ───────────────────────────────
         services.AddScoped<IAccountNoteRepository, AccountNoteRepository>();
@@ -225,6 +235,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAgreementRenewalRepository, AgreementRenewalRepository>();
         services.AddScoped<IServiceRequestRepository, ServiceRequestRepository>();
         services.AddScoped<IOperationalActivityRepository, OperationalActivityRepository>();
+        services.AddScoped<ICalendarEventRepository, CalendarEventRepository>();
 
         services.AddScoped<IEngagementMilestoneService, EngagementMilestoneService>();
         services.AddScoped<ITaskItemService, TaskItemService>();
@@ -233,6 +244,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAgreementRenewalService, AgreementRenewalService>();
         services.AddScoped<IServiceRequestService, ServiceRequestService>();
         services.AddScoped<IOperationalActivityService, OperationalActivityService>();
+        services.AddScoped<ICalendarEventService, CalendarEventService>();
 
         // ── Billing extended engines ─────────────────────────────────
         services.AddScoped<IRateCardRepository, RateCardRepository>();

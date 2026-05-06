@@ -22,6 +22,12 @@
         <span>Loading KPIs…</span>
     </div>
 }
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger ad-alert-danger" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError
+    </div>
+}
 else if (_data is null)
 {
     <div class="ad-empty"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><span>Could not load KPI data.</span></div>
@@ -30,41 +36,51 @@ else
 {
     <!-- ── Top KPI strip ─────────────────────────────────────── -->
     <div class="ad-kpi-strip">
-        <div class="ad-kpi-card ad-kpi--premium">
+        <button type="button" class="ad-kpi-card ad-kpi--premium @KpiClass("premium")" @onclick='() => SetFilter("premium")' title="Filter detailed sections to premium metrics">
             <div class="ad-kpi-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_data.WrittenPremiumYtd.ToString("C0")</div>
                 <div class="ad-kpi-lbl">Written Premium YTD</div>
                 <div class="ad-kpi-sub">Prior YTD: @_data.WrittenPremiumPriorYtd.ToString("C0")</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--retention">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--retention @KpiClass("policy")" @onclick='() => SetFilter("policy")' title="Filter detailed sections to policy and retention metrics">
             <div class="ad-kpi-icon"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_data.RetentionRate.ToString("F1")%</div>
                 <div class="ad-kpi-lbl">Retention Rate</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--leads">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--leads @KpiClass("pipeline")" @onclick='() => SetFilter("pipeline")' title="Filter detailed sections to lead and quote metrics">
             <div class="ad-kpi-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_data.LeadConversionRate.ToString("F1")%</div>
                 <div class="ad-kpi-lbl">Lead Conversion</div>
                 <div class="ad-kpi-sub">@_data.LeadsThisMonth leads this month</div>
             </div>
-        </div>
-        <div class="ad-kpi-card ad-kpi--policies">
+        </button>
+        <button type="button" class="ad-kpi-card ad-kpi--policies @KpiClass("policy")" @onclick='() => SetFilter("policy")' title="Filter detailed sections to policy and retention metrics">
             <div class="ad-kpi-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></div>
             <div class="ad-kpi-body">
                 <div class="ad-kpi-val">@_data.TotalActivePolicies.ToString("N0")</div>
                 <div class="ad-kpi-lbl">Active Policies</div>
                 <div class="ad-kpi-sub">+@_data.NewPoliciesMtd new, -@_data.CancelledPoliciesMtd cancelled MTD</div>
             </div>
-        </div>
+        </button>
     </div>
+
+    @if (!string.IsNullOrEmpty(_activeFilter))
+    {
+        <div class="ad-filter-bar">
+            <span class="ad-filter-chip"><i class="bi bi-funnel" aria-hidden="true"></i> @FilterLabel(_activeFilter)</span>
+            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ClearFilter"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        </div>
+    }
 
     <!-- ── Detailed KPI rows ────────────────────────────────── -->
     <div class="ad-two-col">
+        @if (ShowSection("premium"))
+        {
         <div class="ad-card">
             <div class="ad-card-hd"><i class="bi bi-cash-coin" aria-hidden="true"></i> Premium Metrics</div>
             <div class="ad-kpi-rows">
@@ -95,7 +111,10 @@ else
                 </div>
             </div>
         </div>
+        }
 
+        @if (ShowSection("pipeline"))
+        {
         <div class="ad-card">
             <div class="ad-card-hd"><i class="bi bi-funnel" aria-hidden="true"></i> Pipeline Metrics</div>
             <div class="ad-kpi-rows">
@@ -125,7 +144,10 @@ else
                 </div>
             </div>
         </div>
+        }
 
+        @if (ShowSection("policy"))
+        {
         <div class="ad-card">
             <div class="ad-card-hd"><i class="bi bi-shield-check" aria-hidden="true"></i> Policy Metrics</div>
             <div class="ad-kpi-rows">
@@ -147,7 +169,10 @@ else
                 </div>
             </div>
         </div>
+        }
 
+        @if (ShowSection("producer"))
+        {
         <div class="ad-card">
             <div class="ad-card-hd"><i class="bi bi-person-badge" aria-hidden="true"></i> Producer Metrics</div>
             <div class="ad-kpi-rows">
@@ -161,6 +186,7 @@ else
                 </div>
             </div>
         </div>
+        }
     </div>
 }
 
@@ -168,6 +194,8 @@ else
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private AgencyKpiDto? _data;
     private bool _loading;
+    private string? _loadError;
+    private string? _activeFilter;
 
     protected override async Task OnInitializedAsync()
     {
@@ -177,8 +205,15 @@ else
 
     private async Task LoadAsync()
     {
-        _loading = true;
+        _loading = true; _loadError = null;
         try { _data = await Api.GetAgencyKpisAsync(_tenantId); }
+        catch (Exception ex) { _loadError = $"Failed to load agency KPIs: {ex.Message}"; _data = null; }
         finally { _loading = false; }
     }
+
+    private void SetFilter(string filter) => _activeFilter = _activeFilter == filter ? null : filter;
+    private void ClearFilter() => _activeFilter = null;
+    private bool ShowSection(string section) => string.IsNullOrEmpty(_activeFilter) || _activeFilter == section || (_activeFilter == "policy" && section == "producer");
+    private string KpiClass(string filter) => _activeFilter == filter ? "ad-kpi-card--active" : string.Empty;
+    private static string FilterLabel(string filter) => filter switch { "premium" => "Premium metrics", "pipeline" => "Pipeline metrics", "policy" => "Policy and producer metrics", _ => "Filtered" };
 }

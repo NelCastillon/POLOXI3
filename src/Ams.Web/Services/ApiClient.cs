@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
@@ -393,8 +394,18 @@ public sealed partial class ApiClient
     public Task<UserDto?> GetUserByIdAsync(Guid userId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<UserDto>($"api/users/{userId}", cancellationToken);
 
-    public Task<UserProfileDto?> GetUserProfileAsync(Guid userId, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<UserProfileDto>($"api/users/{userId}/profile", cancellationToken);
+    public async Task<UserProfileDto?> GetUserProfileAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.GetAsync($"api/users/{userId}/profile", cancellationToken);
+
+        if (response.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.NotFound || response.Content.Headers.ContentLength == 0)
+        {
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<UserProfileDto>(cancellationToken: cancellationToken);
+    }
 
     public async Task UpdateUserProfileAsync(Guid userId, UpdateUserProfileRequest request, CancellationToken cancellationToken = default)
     {
@@ -685,6 +696,9 @@ public sealed partial class ApiClient
     public Task<PagedResult<LeadDto>?> SearchLeadsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<LeadDto>>($"api/leads?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
+    public Task<LeadDto?> GetLeadByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<LeadDto>($"api/leads/{id}", cancellationToken);
+
     public Task<PagedResult<OpportunityDto>?> SearchOpportunitiesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<OpportunityDto>>($"api/opportunities?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -848,6 +862,9 @@ public sealed partial class ApiClient
     public Task<PagedResult<TaskItemDto>?> SearchTaskItemsAsync(Guid tenantId, string? searchTerm = null, string? stageCode = null, string? statusCode = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<TaskItemDto>>($"api/ops/tasks?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&stageCode={Uri.EscapeDataString(stageCode ?? string.Empty)}&statusCode={Uri.EscapeDataString(statusCode ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
+    public Task<TaskItemDto?> GetTaskItemByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<TaskItemDto>($"api/ops/tasks/{id}", cancellationToken);
+
     public async Task<Guid> CreateTaskItemAsync(CreateTaskItemRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/ops/tasks", request, cancellationToken);
@@ -949,14 +966,87 @@ public sealed partial class ApiClient
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
     }
 
-    public Task<PagedResult<OperationalActivityLogDto>?> SearchOperationalActivitiesAsync(Guid tenantId, Guid? accountId = null, Guid? engagementId = null, string? searchTerm = null, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<OperationalActivityLogDto>>($"api/ops/activities?tenantId={tenantId}&accountId={accountId}&engagementId={engagementId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+    public Task<PagedResult<OperationalActivityLogDto>?> SearchOperationalActivitiesAsync(Guid tenantId, Guid? accountId = null, Guid? engagementId = null, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<OperationalActivityLogDto>>($"api/ops/activities?tenantId={tenantId}&accountId={accountId}&engagementId={engagementId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<OperationalActivityLogDto?> GetOperationalActivityByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<OperationalActivityLogDto>($"api/ops/activities/{id}", cancellationToken);
 
     public async Task<Guid> CreateOperationalActivityAsync(CreateOperationalActivityRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/ops/activities", request, cancellationToken);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateOperationalActivityAsync(Guid id, UpdateOperationalActivityRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/ops/activities/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteOperationalActivityAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/ops/activities/{id}?modifiedByUserId={modifiedByUserId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<PagedResult<CalendarEventDto>?> SearchCalendarEventsAsync(Guid tenantId, DateTime? startUtc = null, DateTime? endUtc = null, Guid? assignedToUserId = null, string? eventTypeCode = null, string? statusCode = null, string? searchTerm = null, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<CalendarEventDto>>($"api/ops/calendar-events?tenantId={tenantId}&startUtc={startUtc:o}&endUtc={endUtc:o}&assignedToUserId={assignedToUserId}&eventTypeCode={Uri.EscapeDataString(eventTypeCode ?? string.Empty)}&statusCode={Uri.EscapeDataString(statusCode ?? string.Empty)}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<CalendarEventDto?> GetCalendarEventByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<CalendarEventDto>($"api/ops/calendar-events/{id}", cancellationToken);
+
+    public async Task<Guid> CreateCalendarEventAsync(CreateCalendarEventRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/ops/calendar-events", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateCalendarEventAsync(Guid id, UpdateCalendarEventRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/ops/calendar-events/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteCalendarEventAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/ops/calendar-events/{id}?modifiedByUserId={modifiedByUserId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<CsrWorkbenchDto?> GetCsrWorkbenchAsync(Guid tenantId, Guid? userId = null, bool teamScope = false, string? branchId = null, string? teamId = null, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/workbench/csr?tenantId={tenantId}&teamScope={teamScope}";
+        if (userId.HasValue) url += $"&userId={userId.Value}";
+        if (!string.IsNullOrWhiteSpace(branchId)) url += $"&branchId={Uri.EscapeDataString(branchId)}";
+        if (!string.IsNullOrWhiteSpace(teamId)) url += $"&teamId={Uri.EscapeDataString(teamId)}";
+        return _httpClient.GetFromJsonAsync<CsrWorkbenchDto>(url, cancellationToken);
+    }
+
+    public Task<ServiceManagerWorkbenchDto?> GetServiceManagerWorkbenchAsync(Guid tenantId, Guid? userId = null, bool teamScope = true, string? branchId = null, string? teamId = null, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/workbench/service-manager?tenantId={tenantId}&teamScope={teamScope}";
+        if (userId.HasValue) url += $"&userId={userId.Value}";
+        if (!string.IsNullOrWhiteSpace(branchId)) url += $"&branchId={Uri.EscapeDataString(branchId)}";
+        if (!string.IsNullOrWhiteSpace(teamId)) url += $"&teamId={Uri.EscapeDataString(teamId)}";
+        return _httpClient.GetFromJsonAsync<ServiceManagerWorkbenchDto>(url, cancellationToken);
+    }
+
+    public async Task AssignServiceManagerWorkbenchItemAsync(Guid tenantId, Guid itemId, Guid assignedToUserId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/workbench/service-manager/assign?tenantId={tenantId}&itemId={itemId}&assignedToUserId={assignedToUserId}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<AccountingWorkbenchDto?> GetAccountingWorkbenchAsync(Guid tenantId, Guid? userId = null, bool teamScope = false, string? branchId = null, string? teamId = null, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/workbench/accounting?tenantId={tenantId}&teamScope={teamScope}";
+        if (userId.HasValue) url += $"&userId={userId.Value}";
+        if (!string.IsNullOrWhiteSpace(branchId)) url += $"&branchId={Uri.EscapeDataString(branchId)}";
+        if (!string.IsNullOrWhiteSpace(teamId)) url += $"&teamId={Uri.EscapeDataString(teamId)}";
+        return _httpClient.GetFromJsonAsync<AccountingWorkbenchDto>(url, cancellationToken);
     }
 
     // -- Billing ----------------------------------------------
@@ -1434,8 +1524,48 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    public Task<PagedResult<NotificationDto>?> SearchNotificationsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<NotificationDto>>($"api/notifications?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+    public Task<PagedResult<NotificationDto>?> SearchNotificationsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<NotificationDto>>($"api/notifications?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<NotificationDto?> GetNotificationByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<NotificationDto>($"api/notifications/{id}", cancellationToken);
+
+    public async Task<Guid> CreateNotificationAsync(CreateNotificationRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/notifications", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task SetNotificationReadAsync(Guid id, bool isRead, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/notifications/{id}/read?isRead={isRead}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SetNotificationStatusAsync(Guid id, string statusCode, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/notifications/{id}/status?statusCode={Uri.EscapeDataString(statusCode)}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task MarkAllNotificationsReadAsync(Guid tenantId, Guid recipientUserId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/notifications/mark-all-read?tenantId={tenantId}&recipientUserId={recipientUserId}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteNotificationAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/notifications/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteReadNotificationsAsync(Guid tenantId, Guid recipientUserId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/notifications/read?tenantId={tenantId}&recipientUserId={recipientUserId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
 
     public Task<PagedResult<NotificationTemplateDto>?> SearchNotificationTemplatesAsync(string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<NotificationTemplateDto>>($"api/notifications/templates?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
@@ -1504,6 +1634,18 @@ public sealed partial class ApiClient
 
     public Task<PagedResult<UserSessionDto>?> SearchUserSessionsAsync(Guid tenantId, Guid? userId = null, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<UserSessionDto>>($"api/platform/sessions?tenantId={tenantId}&userId={userId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public async Task RevokeUserSessionAsync(Guid sessionId, string? reason = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/platform/sessions/{sessionId}/revoke?reason={Uri.EscapeDataString(reason ?? string.Empty)}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RevokeAllUserSessionsAsync(Guid tenantId, Guid? userId = null, string? reason = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/platform/sessions/revoke-all?tenantId={tenantId}&userId={userId}&reason={Uri.EscapeDataString(reason ?? string.Empty)}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
 
     // -- IAM extended engines ---------------------------------
     public Task<PagedResult<UserGroupDto>?> SearchUserGroupsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
@@ -2342,9 +2484,10 @@ public sealed partial class ApiClient
     }
 
     // -- Security Event Logs ----------------------------------
-    public Task<PagedResult<SecurityEventLogDto>?> SearchSecurityEventLogsAsync(string? searchTerm = null, string? eventTypeCode = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    public Task<PagedResult<SecurityEventLogDto>?> SearchSecurityEventLogsAsync(string? searchTerm = null, string? eventTypeCode = null, Guid? tenantId = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var url = $"api/security-event-logs?pageNumber={pageNumber}&pageSize={pageSize}";
+        if (tenantId.HasValue) url += $"&tenantId={tenantId.Value}";
         if (!string.IsNullOrEmpty(searchTerm)) url += $"&searchTerm={Uri.EscapeDataString(searchTerm)}";
         if (!string.IsNullOrEmpty(eventTypeCode)) url += $"&eventTypeCode={Uri.EscapeDataString(eventTypeCode)}";
         return _httpClient.GetFromJsonAsync<PagedResult<SecurityEventLogDto>>(url, cancellationToken);

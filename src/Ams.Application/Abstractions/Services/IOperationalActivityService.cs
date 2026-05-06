@@ -9,4 +9,6 @@ public interface IOperationalActivityService
     Task<OperationalActivityLogDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<PagedResult<OperationalActivityLogDto>> SearchAsync(Guid tenantId, Guid? accountId, Guid? engagementId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
     Task<Guid> CreateAsync(CreateOperationalActivityRequest request, CancellationToken cancellationToken = default);
+    Task UpdateAsync(Guid id, UpdateOperationalActivityRequest request, CancellationToken cancellationToken = default);
+    Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default);
 }
