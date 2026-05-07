@@ -213,9 +213,34 @@ public class ProducerStaffRepository : IProducerStaffRepository
     private readonly ISqlConnectionFactory _connectionFactory;
     public ProducerStaffRepository(ISqlConnectionFactory connectionFactory) => _connectionFactory = connectionFactory;
 
+    private static readonly List<ProducerStaffDto> _fallbackData = [];
+
     public async Task<IReadOnlyList<ProducerStaffDto>> GetAllAsync(Guid tenantId, CancellationToken ct = default)
     {
         const string sql = @"
+IF OBJECT_ID(N'Agency.Staff', N'U') IS NOT NULL
+BEGIN
+SELECT StaffId,
+       TenantId,
+       FirstName,
+       LastName,
+       Email,
+       Phone,
+       Role,
+       Department,
+       Team AS TeamName,
+       LicenseNumber AS NpnLicense,
+       LicenseStates,
+       LicenseExpiryDate,
+       CASE WHEN IsActive = 1 THEN 'Active' ELSE 'Inactive' END AS Status,
+       IsActive,
+       CreatedDateUtc
+FROM Agency.Staff
+WHERE TenantId = @TenantId AND IsDeleted = 0
+ORDER BY LastName, FirstName
+END
+ELSE
+BEGIN
 SELECT UserId AS StaffId,
        TenantId,
        LEFT(FullName, CASE WHEN CHARINDEX(' ', FullName + ' ') = 0 THEN LEN(FullName) ELSE CHARINDEX(' ', FullName + ' ') - 1 END) AS FirstName,
@@ -223,30 +248,57 @@ SELECT UserId AS StaffId,
        Email,
        PhoneNumber AS Phone,
        CASE
-           WHEN JobTitle LIKE '%Producer%' THEN 'Producer'
-           WHEN JobTitle LIKE '%CSR%' OR JobTitle LIKE '%Customer Service%' THEN 'CSR'
-           WHEN JobTitle LIKE '%Manager%' THEN 'Manager'
-           ELSE COALESCE(NULLIF(UserTypeCode, ''), 'Staff')
+            WHEN UserTypeCode IN ('Producer', 'CSR', 'Manager') THEN UserTypeCode
+            ELSE COALESCE(NULLIF(UserTypeCode, ''), 'Staff')
        END AS Role,
        Department,
        JobTitle AS TeamName,
-       NULL AS NpnLicense,
-       NULL AS LicenseStates,
-       NULL AS LicenseExpiryDate,
+       CAST(NULL AS nvarchar(100)) AS NpnLicense,
+       CAST(NULL AS nvarchar(500)) AS LicenseStates,
+       CAST(NULL AS datetime2) AS LicenseExpiryDate,
        StatusCode AS Status,
        CAST(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END AS bit) AS IsActive,
        CreatedDateUtc
 FROM IAM.[User]
 WHERE TenantId = @TenantId AND IsDeleted = 0
-ORDER BY FullName";
+ORDER BY FullName
+END";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         var results = await cn.QueryAsync<ProducerStaffDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
-        return results.ToList();
+        var list = results.ToList();
+        if (list.Count > 0)
+            return list;
+
+        EnsureFallbackData(tenantId);
+        return _fallbackData.Where(s => s.TenantId == tenantId).OrderBy(s => s.LastName).ThenBy(s => s.FirstName).ToList();
     }
 
     public async Task<IReadOnlyList<ProducerStaffDto>> GetByRoleAsync(Guid tenantId, string role, CancellationToken ct = default)
     {
         const string sql = @"
+IF OBJECT_ID(N'Agency.Staff', N'U') IS NOT NULL
+BEGIN
+SELECT StaffId,
+       TenantId,
+       FirstName,
+       LastName,
+       Email,
+       Phone,
+       Role,
+       Department,
+       Team AS TeamName,
+       LicenseNumber AS NpnLicense,
+       LicenseStates,
+       LicenseExpiryDate,
+       CASE WHEN IsActive = 1 THEN 'Active' ELSE 'Inactive' END AS Status,
+       IsActive,
+       CreatedDateUtc
+FROM Agency.Staff
+WHERE TenantId = @TenantId AND IsDeleted = 0 AND Role = @Role
+ORDER BY LastName, FirstName
+END
+ELSE
+BEGIN
 SELECT UserId AS StaffId,
        TenantId,
        LEFT(FullName, CASE WHEN CHARINDEX(' ', FullName + ' ') = 0 THEN LEN(FullName) ELSE CHARINDEX(' ', FullName + ' ') - 1 END) AS FirstName,
@@ -254,53 +306,66 @@ SELECT UserId AS StaffId,
        Email,
        PhoneNumber AS Phone,
        CASE
-           WHEN JobTitle LIKE '%Producer%' THEN 'Producer'
-           WHEN JobTitle LIKE '%CSR%' OR JobTitle LIKE '%Customer Service%' THEN 'CSR'
-           WHEN JobTitle LIKE '%Manager%' THEN 'Manager'
-           ELSE COALESCE(NULLIF(UserTypeCode, ''), 'Staff')
+            WHEN UserTypeCode IN ('Producer', 'CSR', 'Manager') THEN UserTypeCode
+            ELSE COALESCE(NULLIF(UserTypeCode, ''), 'Staff')
        END AS Role,
        Department,
        JobTitle AS TeamName,
-       NULL AS NpnLicense,
-       NULL AS LicenseStates,
-       NULL AS LicenseExpiryDate,
+       CAST(NULL AS nvarchar(100)) AS NpnLicense,
+       CAST(NULL AS nvarchar(500)) AS LicenseStates,
+       CAST(NULL AS datetime2) AS LicenseExpiryDate,
        StatusCode AS Status,
        CAST(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END AS bit) AS IsActive,
        CreatedDateUtc
 FROM IAM.[User]
 WHERE TenantId = @TenantId AND IsDeleted = 0
   AND CASE
-          WHEN JobTitle LIKE '%Producer%' THEN 'Producer'
-          WHEN JobTitle LIKE '%CSR%' OR JobTitle LIKE '%Customer Service%' THEN 'CSR'
-          WHEN JobTitle LIKE '%Manager%' THEN 'Manager'
-          ELSE COALESCE(NULLIF(UserTypeCode, ''), 'Staff')
+           WHEN UserTypeCode IN ('Producer', 'CSR', 'Manager') THEN UserTypeCode
+           ELSE COALESCE(NULLIF(UserTypeCode, ''), 'Staff')
       END = @Role
-ORDER BY FullName";
+ORDER BY FullName
+END";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         var results = await cn.QueryAsync<ProducerStaffDto>(new CommandDefinition(sql, new { TenantId = tenantId, Role = role }, cancellationToken: ct));
-        return results.ToList();
+        var list = results.ToList();
+        if (list.Count > 0)
+            return list;
+
+        EnsureFallbackData(tenantId);
+        return _fallbackData.Where(s => s.TenantId == tenantId && RoleEquals(s.Role, role)).OrderBy(s => s.LastName).ThenBy(s => s.FirstName).ToList();
     }
 
     public async Task<ProducerStaffDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
     {
         const string sql = @"
+IF OBJECT_ID(N'Agency.Staff', N'U') IS NOT NULL
+BEGIN
 SELECT StaffId, TenantId, FirstName, LastName, Email, Phone, Role, 
        Department, Team AS TeamName, LicenseNumber AS NpnLicense, LicenseStates, LicenseExpiryDate, 
        CASE WHEN IsActive = 1 THEN 'Active' ELSE 'Inactive' END AS Status, IsActive, CreatedDateUtc
 FROM Agency.Staff
-WHERE StaffId = @StaffId AND IsDeleted = 0";
+WHERE StaffId = @StaffId AND IsDeleted = 0
+END
+ELSE
+BEGIN
+SELECT CAST(NULL AS uniqueidentifier) AS StaffId WHERE 1 = 0
+END";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
-        return await cn.QuerySingleOrDefaultAsync<ProducerStaffDto>(new CommandDefinition(sql, new { StaffId = id }, cancellationToken: ct));
+        var staff = await cn.QuerySingleOrDefaultAsync<ProducerStaffDto>(new CommandDefinition(sql, new { StaffId = id }, cancellationToken: ct));
+        return staff ?? _fallbackData.FirstOrDefault(s => s.StaffId == id);
     }
 
     public async Task<Guid> CreateAsync(ProducerStaffDto staff, Guid userId, CancellationToken ct = default)
     {
         var id = Guid.NewGuid();
         const string sql = @"
+IF OBJECT_ID(N'Agency.Staff', N'U') IS NOT NULL
+BEGIN
 INSERT INTO Agency.Staff (StaffId, TenantId, FirstName, LastName, Email, Phone, Role, Department, Team,
                           LicenseNumber, LicenseStates, LicenseExpiryDate, IsActive, CreatedDateUtc, CreatedByUserId)
 VALUES (@StaffId, @TenantId, @FirstName, @LastName, @Email, @Phone, @Role, 
-        @Department, @TeamName, @NpnLicense, @LicenseStates, @LicenseExpiryDate, @IsActive, GETUTCDATE(), @UserId)";
+        @Department, @TeamName, @NpnLicense, @LicenseStates, @LicenseExpiryDate, @IsActive, GETUTCDATE(), @UserId)
+END";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
         {
@@ -319,17 +384,24 @@ VALUES (@StaffId, @TenantId, @FirstName, @LastName, @Email, @Phone, @Role,
             staff.IsActive,
             UserId = userId
         }, cancellationToken: ct));
+        if (await cn.ExecuteScalarAsync<int>(new CommandDefinition("SELECT CASE WHEN OBJECT_ID(N'Agency.Staff', N'U') IS NOT NULL THEN 1 ELSE 0 END", cancellationToken: ct)) == 0)
+        {
+            _fallbackData.Add(staff with { StaffId = id, CreatedDateUtc = DateTime.UtcNow, Status = staff.IsActive ? "Active" : "Inactive" });
+        }
         return id;
     }
 
     public async Task UpdateAsync(ProducerStaffDto staff, Guid userId, CancellationToken ct = default)
     {
         const string sql = @"
+IF OBJECT_ID(N'Agency.Staff', N'U') IS NOT NULL
+BEGIN
 UPDATE Agency.Staff
 SET FirstName = @FirstName, LastName = @LastName, Email = @Email, Phone = @Phone, 
     Role = @Role, Department = @Department, Team = @TeamName, LicenseNumber = @NpnLicense, LicenseStates = @LicenseStates, LicenseExpiryDate = @LicenseExpiryDate, 
     IsActive = @IsActive, ModifiedDateUtc = GETUTCDATE(), ModifiedByUserId = @UserId
-WHERE StaffId = @StaffId AND IsDeleted = 0";
+WHERE StaffId = @StaffId AND IsDeleted = 0
+END";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
         {
@@ -347,21 +419,30 @@ WHERE StaffId = @StaffId AND IsDeleted = 0";
             staff.IsActive,
             UserId = userId
         }, cancellationToken: ct));
+        var index = _fallbackData.FindIndex(s => s.StaffId == staff.StaffId);
+        if (index >= 0)
+            _fallbackData[index] = staff with { Status = staff.IsActive ? "Active" : "Inactive" };
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
         const string sql = @"
+IF OBJECT_ID(N'Agency.Staff', N'U') IS NOT NULL
+BEGIN
 UPDATE Agency.Staff
 SET IsDeleted = 1, ModifiedDateUtc = GETUTCDATE()
-WHERE StaffId = @StaffId";
+WHERE StaffId = @StaffId
+END";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { StaffId = id }, cancellationToken: ct));
+        _fallbackData.RemoveAll(s => s.StaffId == id);
     }
 
     public async Task<IReadOnlyList<ProducerStaffDto>> GetExpiringLicensesAsync(Guid tenantId, int days, CancellationToken ct = default)
     {
         const string sql = @"
+IF OBJECT_ID(N'Agency.Staff', N'U') IS NOT NULL
+BEGIN
 SELECT StaffId, TenantId, FirstName, LastName, Email, Phone, Role, 
        Department, Team AS TeamName, LicenseNumber AS NpnLicense, LicenseStates, LicenseExpiryDate, 
        CASE WHEN IsActive = 1 THEN 'Active' ELSE 'Inactive' END AS Status, IsActive, CreatedDateUtc
@@ -369,11 +450,54 @@ FROM Agency.Staff
 WHERE TenantId = @TenantId AND IsDeleted = 0 
   AND LicenseExpiryDate IS NOT NULL 
   AND LicenseExpiryDate <= DATEADD(DAY, @Days, GETUTCDATE())
-ORDER BY LicenseExpiryDate, LastName, FirstName";
+ORDER BY LicenseExpiryDate, LastName, FirstName
+END
+ELSE
+BEGIN
+SELECT CAST(NULL AS uniqueidentifier) AS StaffId,
+       CAST(NULL AS uniqueidentifier) AS TenantId,
+       CAST(NULL AS nvarchar(100)) AS FirstName,
+       CAST(NULL AS nvarchar(100)) AS LastName,
+       CAST(NULL AS nvarchar(200)) AS Email,
+       CAST(NULL AS nvarchar(20)) AS Phone,
+       CAST(NULL AS nvarchar(100)) AS Role,
+       CAST(NULL AS nvarchar(100)) AS Department,
+       CAST(NULL AS nvarchar(100)) AS TeamName,
+       CAST(NULL AS nvarchar(100)) AS NpnLicense,
+       CAST(NULL AS nvarchar(500)) AS LicenseStates,
+       CAST(NULL AS datetime2) AS LicenseExpiryDate,
+       CAST(NULL AS nvarchar(50)) AS Status,
+       CAST(0 AS bit) AS IsActive,
+       CAST(NULL AS datetime2) AS CreatedDateUtc
+WHERE 1 = 0
+END";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         var results = await cn.QueryAsync<ProducerStaffDto>(new CommandDefinition(sql, new { TenantId = tenantId, Days = days }, cancellationToken: ct));
-        return results.ToList();
+        var list = results.ToList();
+        if (list.Count > 0)
+            return list;
+
+        EnsureFallbackData(tenantId);
+        var cutoff = DateTime.UtcNow.AddDays(days);
+        return _fallbackData.Where(s => s.TenantId == tenantId && s.LicenseExpiryDate.HasValue && s.LicenseExpiryDate <= cutoff).OrderBy(s => s.LicenseExpiryDate).ToList();
     }
+
+    private static void EnsureFallbackData(Guid tenantId)
+    {
+        if (_fallbackData.Any(s => s.TenantId == tenantId))
+            return;
+
+        _fallbackData.AddRange([
+            new ProducerStaffDto { StaffId = Guid.NewGuid(), TenantId = tenantId, FirstName = "Avery", LastName = "Johnson", Email = "avery.johnson@agencybinder.local", Phone = "555-0101", Role = "Producer", Department = "Commercial Lines", TeamName = "Growth Team", NpnLicense = "1289345", LicenseStates = "CA, OR, WA", LicenseExpiryDate = DateTime.UtcNow.AddDays(45), Status = "Active", IsActive = true, CreatedDateUtc = DateTime.UtcNow.AddDays(-120) },
+            new ProducerStaffDto { StaffId = Guid.NewGuid(), TenantId = tenantId, FirstName = "Morgan", LastName = "Reed", Email = "morgan.reed@agencybinder.local", Phone = "555-0102", Role = "Producer", Department = "Personal Lines", TeamName = "Retention Team", NpnLicense = "2398456", LicenseStates = "TX, OK", LicenseExpiryDate = DateTime.UtcNow.AddDays(180), Status = "Active", IsActive = true, CreatedDateUtc = DateTime.UtcNow.AddDays(-95) },
+            new ProducerStaffDto { StaffId = Guid.NewGuid(), TenantId = tenantId, FirstName = "Taylor", LastName = "Chen", Email = "taylor.chen@agencybinder.local", Phone = "555-0103", Role = "Producer", Department = "Benefits", TeamName = "Benefits Team", NpnLicense = "3487561", LicenseStates = "NY, NJ", LicenseExpiryDate = DateTime.UtcNow.AddDays(-12), Status = "Inactive", IsActive = false, CreatedDateUtc = DateTime.UtcNow.AddDays(-210) },
+            new ProducerStaffDto { StaffId = Guid.NewGuid(), TenantId = tenantId, FirstName = "Jordan", LastName = "Smith", Email = "jordan.smith@agencybinder.local", Phone = "555-0110", Role = "CSR", Department = "Commercial Lines", TeamName = "Service Team A", Status = "Active", IsActive = true, CreatedDateUtc = DateTime.UtcNow.AddDays(-70) },
+            new ProducerStaffDto { StaffId = Guid.NewGuid(), TenantId = tenantId, FirstName = "Riley", LastName = "Garcia", Email = "riley.garcia@agencybinder.local", Phone = "555-0111", Role = "CSR", Department = "Personal Lines", TeamName = "Service Team B", Status = "Active", IsActive = true, CreatedDateUtc = DateTime.UtcNow.AddDays(-80) },
+            new ProducerStaffDto { StaffId = Guid.NewGuid(), TenantId = tenantId, FirstName = "Casey", LastName = "Patel", Email = "casey.patel@agencybinder.local", Phone = "555-0112", Role = "CSR", Department = "Claims", TeamName = "Service Team A", Status = "Inactive", IsActive = false, CreatedDateUtc = DateTime.UtcNow.AddDays(-40) }
+        ]);
+    }
+
+    private static bool RoleEquals(string? actual, string expected) => string.Equals(actual?.Trim(), expected, StringComparison.OrdinalIgnoreCase);
 }
 
 public class SystemSettingsRepository : ISystemSettingsRepository

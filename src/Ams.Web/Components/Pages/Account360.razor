@@ -1,5 +1,6 @@
 @page "/accounts/{AccountId:guid}"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
 @using Syncfusion.Blazor.Diagram
 @inject ApiClient Api
 @inject NavigationManager Nav
@@ -53,6 +54,7 @@ else
             </div>
         </div>
         <div class="a360-header-actions">
+            <button type="button" class="a360-return" @onclick='() => Nav.NavigateTo("/accounts")' title="Back to Accounts" aria-label="Back to Accounts"><i class="bi bi-arrow-left" aria-hidden="true"></i></button>
             <button class="um-btn um-btn-ghost" @onclick="() => _showEdit = true"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
             <button class="um-btn um-btn-ghost" @onclick="() => _showNote = true"><i class="bi bi-sticky" aria-hidden="true"></i> Add Note</button>
             <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/quotes/new?accountId=" + AccountId)'><i class="bi bi-file-text" aria-hidden="true"></i> New Quote</button>
@@ -915,18 +917,49 @@ else
     private static readonly List<LV> _relTypeOpts  = [new("Parent","Parent"),new("Subsidiary","Subsidiary"),new("Partner","Partner"),new("Referred By","Referred By")];
     private static readonly List<LV> _campOpts     = [new("c1","Renewal Outreach 2025"),new("c2","Cross-Sell Cyber"),new("c3","Win-Back Series")];
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private Guid _loadedAccountId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedAccountId != AccountId)
+        {
+            _loadedAccountId = AccountId;
+            await LoadAsync();
+        }
+    }
 
     private async Task LoadAsync()
     {
-        _loading = true; StateHasChanged();
-        await Task.Delay(0); // TODO: full API load
-        _acct = BuildStub();
-        BuildRightPanel();
-        BuildDiagram();
-        Breadcrumbs.SetCrumbs(new("Home","/"),new("Accounts","/accounts"),new(_acct.AccountName, $"/accounts/{AccountId}"));
-        NavContext.SetAccount(AccountId, _acct.AccountName);
-        _loading = false;
+        _loading = true;
+        _acct = null;
+        StateHasChanged();
+
+        try
+        {
+            var account = await Api.GetAccountByIdAsync(AccountId);
+            if (account is null)
+            {
+                Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new("Account not found", $"/accounts/{AccountId}"));
+                NavContext.ClearAccount();
+                return;
+            }
+
+            _acct = BuildAccountModel(account);
+            BuildRightPanel();
+            BuildDiagram();
+            Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new(_acct.AccountName, $"/accounts/{AccountId}"));
+            NavContext.SetAccount(AccountId, _acct.AccountName);
+        }
+        catch (Exception ex)
+        {
+            Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new("Account load failed", $"/accounts/{AccountId}"));
+            NavContext.ClearAccount();
+            await ShowToast($"Load failed: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     private void BuildRightPanel()
@@ -1097,24 +1130,30 @@ else
     private static string AvatarColor(string name) { var c=new[]{"a360-av1","a360-av2","a360-av3","a360-av4","a360-av5","a360-av6"}; return c[Math.Abs(name.GetHashCode())%c.Length]; }
     private static string Initials(string name) { var p=name.Trim().Split(' ',StringSplitOptions.RemoveEmptyEntries); return p.Length>=2?$"{p[0][0]}{p[^1][0]}":name.Length>0?name[..1]:"?"; }
 
-    // ── Stub ──────────────────────────────────────────────────────────────────
-    private Account360Model BuildStub() => new()
+    // ── Account mapping ───────────────────────────────────────────────────────
+    private static Account360Model BuildAccountModel(AccountDto account) => new()
     {
-        AccountId=AccountId, AccountNumber="ACCT-00042",
-        AccountName="Sullivan Manufacturing LLC",
-        AccountType="Commercial", Status="Active", Segment="Mid-Market",
-        Owner="Alice Carter", ServicingTeam="Team Alpha",
-        CsrName="Carol Smith", ProducerName="Bob Martinez", AccountManager="Alice Carter",
-        Industry="Manufacturing", Employees=120, AnnualRevenue=8_500_000m,
-        Website="www.sullivanmfg.com", TaxId="36-1234567", NaicsCode="332",
-        LifecycleStage="Renewal",
-        Email="billing@sullivanmfg.com", Phone="(312) 555-0192",
-        Street="1200 W Industrial Pkwy", City="Chicago", State="IL", Zip="60607", Country="USA",
-        TotalPremium=62_400m, BalancesDue=0m, RenewalRisk="Medium",
-        OpenClaims=1, ActivePolicies=3, OpenOpportunities=1, YtdCommissions=5_616m,
-        LastActivityDate=DateTime.UtcNow.AddDays(-6),
-        Notes="Key mid-market manufacturing account. Strong retention history. Current claim may affect loss ratio on renewal.",
-        CreatedAt=DateTime.UtcNow.AddYears(-4), ModifiedAt=DateTime.UtcNow.AddDays(-3),
+        AccountId = account.AccountId,
+        AccountNumber = account.AccountNumber,
+        AccountName = account.AccountName,
+        AccountType = account.AccountTypeCode,
+        Status = account.StatusCode,
+        Segment = account.SegmentCode,
+        Owner = account.OwnerUserId?.ToString() ?? "Unassigned",
+        ServicingTeam = "—",
+        AccountManager = account.OwnerUserId?.ToString(),
+        Industry = account.Industry,
+        AnnualRevenue = account.AnnualRevenue,
+        Website = account.Website,
+        LifecycleStage = account.LifecycleStageCode,
+        Email = account.MainEmail ?? string.Empty,
+        Phone = account.MainPhone,
+        Country = "USA",
+        RenewalRisk = "Medium",
+        LastActivityDate = account.ModifiedDateUtc ?? account.CreatedDateUtc,
+        Notes = account.ParentAccountId is null ? null : $"Parent account: {account.ParentAccountId}",
+        CreatedAt = account.CreatedDateUtc,
+        ModifiedAt = account.ModifiedDateUtc,
     };
 
     // ── Models ────────────────────────────────────────────────────────────────

@@ -36,6 +36,20 @@ public sealed class AccountsController : ControllerBase
         return Ok(result);
     }
 
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateAccountRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdateAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] Guid? userId, CancellationToken cancellationToken)
+    {
+        await _service.DeleteAsync(id, userId, cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet("{id:guid}/contacts")]
     public async Task<IActionResult> GetContacts(Guid id, CancellationToken cancellationToken)
     {

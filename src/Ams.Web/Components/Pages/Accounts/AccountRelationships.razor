@@ -1,0 +1,67 @@
+@page "/accounts/{AccountId:guid}/relationships"
+@namespace Ams.Web.Components.Pages.Accounts
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationContextService NavContext
+@using Ams.Application.Common.Dtos
+
+<PageTitle>@(_account?.AccountName ?? "Account") Relationships — Tenant Admin</PageTitle>
+
+<AppPageHeader Title="Account Relationships"
+               Subtitle="Tenant Admin relationship map for parent, child, and related account links"
+               Icon="bi-link-45deg">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo($"/accounts/{AccountId}")'><i class="bi bi-person-vcard"></i> Account 360</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </Actions>
+</AppPageHeader>
+
+<section class="ma-hero acct-hero">
+    <div><span class="ma-eyebrow">Tenant Admin · Account Intelligence</span><h2>@(_account?.AccountName ?? "Account") Relationship Map</h2><p>Review account hierarchy, related entities, and operational relationship context.</p></div>
+    <div class="ma-hero-actions"><button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo($"/accounts/{AccountId}/hierarchy")'><i class="bi bi-diagram-3"></i> Hierarchy</button></div>
+</section>
+
+<div class="pc-kpi-strip acct-kpi-strip">
+    <div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-link-45deg"></i></span><div><div class="pc-kpi-value">@_relationships.Count</div><div class="pc-kpi-label">Relationships</div></div></div>
+    <div class="pc-kpi-card @(_activeFilter == "Parent" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Parent")'><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-arrow-up-circle"></i></span><div><div class="pc-kpi-value">@_relationships.Count(x => x.RelationshipType == "Parent")</div><div class="pc-kpi-label">Parents</div></div></div>
+    <div class="pc-kpi-card @(_activeFilter == "Child" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Child")'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-arrow-down-circle"></i></span><div><div class="pc-kpi-value">@_relationships.Count(x => x.RelationshipType == "Child")</div><div class="pc-kpi-label">Children</div></div></div>
+    <div class="pc-kpi-card @(_activeFilter == "Related" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Related")'><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-intersect"></i></span><div><div class="pc-kpi-value">@_relationships.Count(x => x.RelationshipType == "Related")</div><div class="pc-kpi-label">Related</div></div></div>
+</div>
+
+<div class="ma-filter-bar acct-filter-bar"><div class="ma-search-wrap"><i class="bi bi-search"></i><input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search related account name, number, type…" /></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button><span class="ma-filter-count">@Filtered.Count() links</span></div>
+
+@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
+
+<div class="um-grid-card">
+    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading relationships…</span></div> }
+    <SfGrid TValue="AccountRelationshipItem" DataSource="@Filtered.ToList()" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="56">
+        <GridEvents TValue="AccountRelationshipItem" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="25" />
+        <GridColumns>
+            <GridColumn Field="AccountName" HeaderText="Related Account" MinWidth="240"><Template>@{ var r=(AccountRelationshipItem)context; }<div class="acct-name-cell"><div class="acct-avatar">@AccountPageConstants.Initials(r.AccountName)</div><div><strong>@r.AccountName</strong><div class="text-muted">@r.AccountNumber</div></div></div></Template></GridColumn>
+            <GridColumn Field="RelationshipType" HeaderText="Relationship" Width="140"><Template>@{ var r=(AccountRelationshipItem)context; }<span class="um-badge um-badge-info">@r.RelationshipType</span></Template></GridColumn>
+            <GridColumn Field="AccountTypeCode" HeaderText="Type" Width="130" />
+            <GridColumn Field="StatusCode" HeaderText="Status" Width="120"><Template>@{ var r=(AccountRelationshipItem)context; }<span class="@AccountPageConstants.StatusBadge(r.StatusCode)">@r.StatusCode</span></Template></GridColumn>
+            <GridColumn HeaderText="Actions" Width="90" TextAlign="TextAlign.Center"><Template>@{ var r=(AccountRelationshipItem)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/accounts/{r.AccountId}")' @onclick:stopPropagation="true"><i class="bi bi-arrow-right"></i></button></Template></GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+@code {
+    [Parameter] public Guid AccountId { get; set; }
+    AccountDto? _account;
+    List<AccountDto> _accounts = [];
+    List<AccountRelationshipItem> _relationships = [];
+    string _search = string.Empty;
+    string? _activeFilter, _loadError;
+    bool _loading;
+    IEnumerable<AccountRelationshipItem> Filtered => _relationships.Where(x => (_activeFilter is null || x.RelationshipType == _activeFilter) && (string.IsNullOrWhiteSpace(_search) || x.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.AccountNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.AccountTypeCode.Contains(_search, StringComparison.OrdinalIgnoreCase)));
+
+    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new("Relationships")); await LoadAsync(); }
+    async Task LoadAsync() { _loading = true; _loadError = null; try { _account = await Api.GetAccountByIdAsync(AccountId); var result = await Api.SearchAccountsAsync(AccountPageConstants.TenantId); _accounts = result?.Items.ToList() ?? []; if (_account is not null) { _relationships = AccountPageData.BuildRelationships(_account, _accounts); NavContext.SetAccount(AccountId, _account.AccountName); Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new(_account.AccountName, $"/accounts/{AccountId}"), new("Relationships")); } } catch (Exception ex) { _loadError = $"Failed to load relationships: {ex.Message}"; } finally { _loading = false; } }
+    void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) => _search = e.Value?.ToString() ?? string.Empty;
+    void SetFilter(string? key) => _activeFilter = key;
+    void ResetFilters() { _activeFilter = null; _search = string.Empty; }
+    void OnRowSelected(RowSelectEventArgs<AccountRelationshipItem> args) => Nav.NavigateTo($"/accounts/{args.Data.AccountId}");
+}

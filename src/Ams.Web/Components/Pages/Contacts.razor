@@ -1,597 +1,76 @@
 @page "/client/contacts"
 @namespace Ams.Web.Components.Pages.ContactPages
-@using Microsoft.AspNetCore.Components
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@using Ams.Application.Common.Dtos
+@using Ams.Web.Components.Pages.Contacts
 
-<PageTitle>Contacts</PageTitle>
+<PageTitle>Contact Directory — Tenant Admin</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Contacts"
-               Subtitle="Manage all client contacts across your agency"
-               Icon="bi-person-lines-fill">
+<AppPageHeader Title="Contact Directory"
+               Subtitle="Tenant Admin workspace for account contacts, roles, portal users, and decision makers"
+               Icon="bi-people">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "ctc-spin" : "")" aria-hidden="true"></i>
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="NewContact">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Contact
-        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/client/contacts/new")'><i class="bi bi-plus-lg"></i> New Contact</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
     </Actions>
 </AppPageHeader>
 
-<!-- KPI Strip -->
-<div class="ctc-kpi-strip">
-    <div class="ctc-kpi-card">
-        <span class="ctc-ki ctc-ki1"><i class="bi bi-people" aria-hidden="true"></i></span>
-        <div><div class="ctc-kv">@_items?.Count ?? 0</div><div class="ctc-kl">Total Contacts</div></div>
-    </div>
-    <div class="ctc-kpi-card">
-        <span class="ctc-ki ctc-ki2"><i class="bi bi-star" aria-hidden="true"></i></span>
-        <div><div class="ctc-kv">@(_items?.Count(c => c.IsKeyContact) ?? 0)</div><div class="ctc-kl">Key Contacts</div></div>
-    </div>
-    <div class="ctc-kpi-card">
-        <span class="ctc-ki ctc-ki3"><i class="bi bi-globe" aria-hidden="true"></i></span>
-        <div><div class="ctc-kv">@(_items?.Count(c => c.IsPortalUser) ?? 0)</div><div class="ctc-kl">Portal Users</div></div>
-    </div>
-    <div class="ctc-kpi-card">
-        <span class="ctc-ki ctc-ki4"><i class="bi bi-check-circle" aria-hidden="true"></i></span>
-        <div><div class="ctc-kv">@(_items?.Count(c => c.StatusCode == "Active") ?? 0)</div><div class="ctc-kl">Active</div></div>
-    </div>
+<section class="ma-hero contact-hero">
+    <div><span class="ma-eyebrow">Tenant Admin · Contacts & Relationships</span><h2>Contact Operations Workspace</h2><p>Manage account contacts, key decision makers, service/billing responsibilities, portal access, and communication preferences.</p></div>
+    <div class="ma-hero-actions"><button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/client/contacts/new")'><i class="bi bi-person-plus"></i> Create Contact</button><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/client/contacts/dm")'><i class="bi bi-star"></i> Decision Makers</button></div>
+</section>
+
+<div class="pc-kpi-strip contact-kpi-strip">
+    <div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-people"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Contacts</div></div></div>
+    <div class="pc-kpi-card @(_activeFilter == "key" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("key")'><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-star-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsKeyContact)</div><div class="pc-kpi-label">Key</div></div></div>
+    <div class="pc-kpi-card @(_activeFilter == "portal" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("portal")'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-globe"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsPortalUser)</div><div class="pc-kpi-label">Portal</div></div></div>
+    <div class="pc-kpi-card @(_activeFilter == "billing" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("billing")'><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-receipt"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsBillingContact)</div><div class="pc-kpi-label">Billing</div></div></div>
+    <div class="pc-kpi-card @(_activeFilter == "service" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("service")'><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-headset"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsServiceContact)</div><div class="pc-kpi-label">Service</div></div></div>
 </div>
 
-<!-- Filter bar -->
-<div class="ctc-filter-bar">
-    <div class="ctc-search-wrap">
-        <i class="bi bi-search ctc-si" aria-hidden="true"></i>
-        <input class="ctc-search" type="search" placeholder="Search by name, email, company…"
-               value="@_search"
-               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => UpdateSearch(e))" />
-    </div>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_typeOpts" Placeholder="All Types" ShowClearButton="true" Width="130px"
-                    Value="_filterType" ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="All Status" ShowClearButton="true" Width="120px"
-                    Value="_filterStatus" ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
+<div class="ma-filter-bar contact-filter-bar"><div class="ma-search-wrap"><i class="bi bi-search"></i><input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search name, account, email, phone, title…" /></div><div class="ma-type-pills"><button class="ma-pill @(_activeFilter is null ? "ma-pill-active" : "")" @onclick='() => SetFilter(null)'>All</button><button class="ma-pill @(_activeFilter == "key" ? "ma-pill-active" : "")" @onclick='() => SetFilter("key")'>Key</button><button class="ma-pill @(_activeFilter == "portal" ? "ma-pill-active" : "")" @onclick='() => SetFilter("portal")'>Portal</button><button class="ma-pill @(_activeFilter == "billing" ? "ma-pill-active" : "")" @onclick='() => SetFilter("billing")'>Billing</button><button class="ma-pill @(_activeFilter == "service" ? "ma-pill-active" : "")" @onclick='() => SetFilter("service")'>Service</button></div><select class="ma-filter-sel" @bind="_typeFilter" @bind:after="ApplyFilter"><option value="">All types</option>@foreach (var type in ContactPageConstants.ContactTypes) { <option value="@type">@type</option> }</select><button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button><span class="ma-filter-count">@_filtered.Count contacts</span></div>
+
+@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
+
+<div class="um-grid-card">
+    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading contacts…</span></div> }
+    <SfGrid TValue="ContactDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="56">
+        <GridEvents TValue="ContactDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" />
+        <GridColumns>
+            <GridColumn HeaderText="Contact" MinWidth="230" Field="LastName"><Template>@{ var c=(ContactDto)context; }<div class="contact-name-cell"><div class="contact-avatar">@ContactPageConstants.Initials(c.FirstName,c.LastName)</div><div><strong>@ContactPageConstants.FullName(c)</strong><div class="text-muted">@(c.JobTitle ?? "No title")</div></div></div></Template></GridColumn>
+            <GridColumn Field="AccountName" HeaderText="Account" Width="190" />
+            <GridColumn Field="Email" HeaderText="Email" Width="210"><Template>@{ var c=(ContactDto)context; }@(c.Email ?? "—")</Template></GridColumn>
+            <GridColumn Field="Phone" HeaderText="Phone" Width="135"><Template>@{ var c=(ContactDto)context; }@(c.Phone ?? "—")</Template></GridColumn>
+            <GridColumn Field="ContactTypeCode" HeaderText="Type" Width="135"><Template>@{ var c=(ContactDto)context; }<span class="um-badge um-badge-info">@c.ContactTypeCode</span></Template></GridColumn>
+            <GridColumn HeaderText="Roles" Width="145"><Template>@{ var c=(ContactDto)context; }<div class="contact-role-dots">@if(c.IsKeyContact){<span title="Key" class="contact-dot contact-dot-key"></span>}@if(c.IsBillingContact){<span title="Billing" class="contact-dot contact-dot-billing"></span>}@if(c.IsServiceContact){<span title="Service" class="contact-dot contact-dot-service"></span>}@if(c.IsPortalUser){<span title="Portal" class="contact-dot contact-dot-portal"></span>}</div></Template></GridColumn>
+            <GridColumn Field="StatusCode" HeaderText="Status" Width="110"><Template>@{ var c=(ContactDto)context; }<span class="@ContactPageConstants.StatusBadge(c.StatusCode)">@c.StatusCode</span></Template></GridColumn>
+            <GridColumn HeaderText="Actions" Width="120" TextAlign="TextAlign.Center"><Template>@{ var c=(ContactDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/client/contacts/{c.ContactId}")' @onclick:stopPropagation="true"><i class="bi bi-person-circle"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(c)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button></Template></GridColumn>
+        </GridColumns>
+    </SfGrid>
 </div>
 
-@if (_loading)
-{
-    <div class="ctc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading contacts…</span></div>
-}
-else if (_items == null || _items.Count == 0)
-{
-    <div class="ctc-empty">
-        <i class="bi bi-inbox" aria-hidden="true"></i>
-        <span>No contacts yet. <button class="um-link" @onclick="NewContact">Create one now.</button></span>
-    </div>
-}
-else if (_filtered.Count == 0)
-{
-    <div class="ctc-empty">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        <span>No contacts match your filters.</span>
-    </div>
-}
-else
-{
-    <!-- View Toggle -->
-    <div class="ctc-view-toggle">
-        <button class="ctc-view-btn @(_viewMode == "grid" ? "active" : "")" @onclick="@(() => SetViewMode("grid"))">
-            <i class="bi bi-grid-3x2-gap" aria-hidden="true"></i> Grid
-        </button>
-        <button class="ctc-view-btn @(_viewMode == "table" ? "active" : "")" @onclick="@(() => SetViewMode("table"))">
-            <i class="bi bi-list-ul" aria-hidden="true"></i> Table
-        </button>
-        <button class="ctc-view-btn @(_viewMode == "compact" ? "active" : "")" @onclick="@(() => SetViewMode("compact"))">
-            <i class="bi bi-list-check" aria-hidden="true"></i> Compact
-        </button>
-    </div>
-
-    @if (_viewMode == "grid")
-    {
-        <div class="ctc-grid">
-            @foreach (var contact in _filtered)
-            {
-                <div class="ctc-card">
-                    <div class="ctc-card-header">
-                        <div class="ctc-avatar @AvatarColor(contact.FirstName)">
-                            @Initials(contact.FirstName, contact.LastName)
-                        </div>
-                        <div class="ctc-card-info">
-                            <div class="ctc-name">@contact.FirstName @contact.LastName</div>
-                            <div class="ctc-title">@contact.JobTitle</div>
-                            <div class="ctc-company">@contact.AccountName</div>
-                        </div>
-                        <div class="ctc-badges">
-                            @if (contact.IsKeyContact)
-                            {
-                                <span class="ctc-badge ctc-badge-key"><i class="bi bi-star-fill" aria-hidden="true"></i> Key</span>
-                            }
-                            @if (contact.IsPortalUser)
-                            {
-                                <span class="ctc-badge ctc-badge-portal"><i class="bi bi-globe" aria-hidden="true"></i> Portal</span>
-                            }
-                            <span class="@StatusBadge(contact.StatusCode)">@contact.StatusCode</span>
-                        </div>
-                    </div>
-
-                    <div class="ctc-card-body">
-                        <div class="ctc-contact-item">
-                            <i class="bi bi-envelope" aria-hidden="true"></i>
-                            <a href="mailto:@contact.Email" class="ctc-link">@contact.Email</a>
-                        </div>
-                        @if (!string.IsNullOrEmpty(contact.Phone))
-                        {
-                            <div class="ctc-contact-item">
-                                <i class="bi bi-telephone" aria-hidden="true"></i>
-                                <a href="tel:@contact.Phone" class="ctc-link">@contact.Phone</a>
-                            </div>
-                        }
-                        @if (!string.IsNullOrEmpty(contact.PreferredContactMethod))
-                        {
-                            <div class="ctc-contact-item">
-                                <i class="bi bi-hand-thumbs-up" aria-hidden="true"></i>
-                                <span class="ctc-muted">Preferred: @contact.PreferredContactMethod</span>
-                            </div>
-                        }
-                    </div>
-
-                    <div class="ctc-card-footer">
-                        <div class="ctc-roles">
-                            @if (contact.IsBillingContact)
-                            {
-                                <span class="ctc-role">💳 Billing</span>
-                            }
-                            @if (contact.IsServiceContact)
-                            {
-                                <span class="ctc-role">🔧 Service</span>
-                            }
-                        </div>
-                        <div class="ctc-actions">
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => EditContact(contact)" title="Edit">
-                                <i class="bi bi-pencil" aria-hidden="true"></i>
-                            </button>
-                            <button class="um-btn um-btn-ghost um-btn-sm um-btn-danger" @onclick="() => DeleteContactAsync(contact)" title="Delete">
-                                <i class="bi bi-trash" aria-hidden="true"></i>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            }
-        </div>
-    }
-    else if (_viewMode == "table")
-    {
-        <div class="ctc-grid-card app-datagrid">
-            <SfGrid @ref="_grid" TValue="LocalContactDto" DataSource="_filtered"
-                    AllowPaging="true" AllowSorting="true" AllowFiltering="true"
-                    EnableHover="true" RowHeight="56">
-                <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-                <GridPageSettings PageSize="20" PageSizes="@(new int[]{10,20,50,100})" />
-                <GridColumns>
-                    <GridColumn HeaderText="Contact" MinWidth="200" Field="@nameof(LocalContactDto.FirstName)">
-                        <Template>
-                            @{ var c = (LocalContactDto)context; }
-                            <div class="ctc-name-cell">
-                                <div class="ctc-avatar-sm @AvatarColor(c.FirstName)">@Initials(c.FirstName, c.LastName)</div>
-                                <div>
-                                    <div class="ctc-item-name">@c.FirstName @c.LastName</div>
-                                    <div class="ctc-item-sub">@c.JobTitle</div>
-                                </div>
-                            </div>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(LocalContactDto.AccountName)" HeaderText="Account" MinWidth="160" />
-                    <GridColumn Field="@nameof(LocalContactDto.Email)" HeaderText="Email" MinWidth="200" />
-                    <GridColumn Field="@nameof(LocalContactDto.Phone)" HeaderText="Phone" Width="130" />
-                    <GridColumn Field="@nameof(LocalContactDto.ContactTypeCode)" HeaderText="Type" Width="110">
-                        <Template>
-                            @{ var c = (LocalContactDto)context; }
-                            <span class="ctc-type-badge">@c.ContactTypeCode</span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn HeaderText="Roles" Width="120">
-                        <Template>
-                            @{ var c = (LocalContactDto)context; }
-                            <div class="ctc-role-badges">
-                                @if (c.IsKeyContact) { <span class="ctc-role-dot" title="Key Contact"></span> }
-                                @if (c.IsBillingContact) { <span class="ctc-role-dot" title="Billing Contact"></span> }
-                                @if (c.IsServiceContact) { <span class="ctc-role-dot" title="Service Contact"></span> }
-                                @if (c.IsPortalUser) { <span class="ctc-role-dot" title="Portal User"></span> }
-                            </div>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(LocalContactDto.StatusCode)" HeaderText="Status" Width="100">
-                        <Template>
-                            @{ var c = (LocalContactDto)context; }
-                            <span class="@StatusBadge(c.StatusCode)">@c.StatusCode</span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                        <Template>
-                            @{ var c = (LocalContactDto)context; }
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => EditContact(c)">
-                                <i class="bi bi-pencil" aria-hidden="true"></i>
-                            </button>
-                            <button class="um-btn um-btn-ghost um-btn-sm um-btn-danger" @onclick="() => DeleteContactAsync(c)">
-                                <i class="bi bi-trash" aria-hidden="true"></i>
-                            </button>
-                        </Template>
-                    </GridColumn>
-                </GridColumns>
-            </SfGrid>
-        </div>
-    }
-    else
-    {
-        <div class="ctc-compact-list">
-            @foreach (var contact in _filtered)
-            {
-                <div class="ctc-compact-item">
-                    <div class="ctc-compact-left">
-                        <input type="checkbox" />
-                        <div class="ctc-avatar-xs @AvatarColor(contact.FirstName)">@Initials(contact.FirstName, contact.LastName)</div>
-                        <div>
-                            <div class="ctc-compact-name">@contact.FirstName @contact.LastName</div>
-                            <div class="ctc-compact-sub">@contact.JobTitle • @contact.AccountName</div>
-                        </div>
-                    </div>
-                    <div class="ctc-compact-right">
-                        <div class="ctc-compact-badges">
-                            @if (contact.IsKeyContact) { <span class="ctc-badge-xs">Key</span> }
-                            @if (contact.IsPortalUser) { <span class="ctc-badge-xs">Portal</span> }
-                        </div>
-                        <span class="@StatusBadge(contact.StatusCode)">@contact.StatusCode</span>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => EditContact(contact)">
-                            <i class="bi bi-chevron-right" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                </div>
-            }
-        </div>
-    }
-}
-
-<!-- Create/Edit Contact Modal -->
-<SfDialog @bind-Visible="_showModal" Width="600px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header>
-            <span class="ctc-dlg-hdr">
-                <i class="bi @(_editingContact.ContactId == Guid.Empty ? "bi-plus-lg" : "bi-pencil")" aria-hidden="true"></i>
-                @(_editingContact.ContactId == Guid.Empty ? "New Contact" : "Edit Contact")
-            </span>
-        </Header>
-        <Content>
-            <div class="ctc-dlg-body">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-                    <div style="grid-column:span 2">
-                        <label class="ctc-label">Account *</label>
-                        <SfDropDownList TValue="string" TItem="LV" DataSource="_accountOpts" Placeholder="Select account" Width="100%"
-                                        @bind-Value="_selectedAccountId">
-                            <DropDownListFieldSettings Value="Value" Text="Label" />
-                        </SfDropDownList>
-                    </div>
-
-                    <div>
-                        <label class="ctc-label">First Name *</label>
-                        <SfTextBox Placeholder="First name" @bind-Value="_editingContact.FirstName" Width="100%" />
-                    </div>
-                    <div>
-                        <label class="ctc-label">Last Name *</label>
-                        <SfTextBox Placeholder="Last name" @bind-Value="_editingContact.LastName" Width="100%" />
-                    </div>
-
-                    <div style="grid-column:span 2">
-                        <label class="ctc-label">Email *</label>
-                        <SfTextBox Placeholder="email@example.com" @bind-Value="_editingContact.Email" Width="100%" />
-                    </div>
-
-                    <div>
-                        <label class="ctc-label">Phone</label>
-                        <SfTextBox Placeholder="+1 (555) 000-0000" @bind-Value="_editingContact.Phone" Width="100%" />
-                    </div>
-                    <div>
-                        <label class="ctc-label">Job Title</label>
-                        <SfTextBox Placeholder="e.g., Manager" @bind-Value="_editingContact.JobTitle" Width="100%" />
-                    </div>
-
-                    <div style="grid-column:span 2">
-                        <label class="ctc-label">Contact Type</label>
-                        <SfDropDownList TValue="string" TItem="LV" DataSource="_typeOpts" Placeholder="Select type" Width="100%"
-                                        @bind-Value="_editingContact.ContactTypeCode" ShowClearButton="true">
-                            <DropDownListFieldSettings Value="Value" Text="Label" />
-                        </SfDropDownList>
-                    </div>
-
-                    <div>
-                        <label class="ctc-label">Preferred Contact Method</label>
-                        <SfDropDownList TValue="string" TItem="LV" DataSource="_methodOpts" Placeholder="Select method" Width="100%"
-                                        @bind-Value="_editingContact.PreferredContactMethod" ShowClearButton="true">
-                            <DropDownListFieldSettings Value="Value" Text="Label" />
-                        </SfDropDownList>
-                    </div>
-                    <div>
-                        <label class="ctc-label">Status</label>
-                        <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="Select status" Width="100%"
-                                        @bind-Value="_editingContact.StatusCode">
-                            <DropDownListFieldSettings Value="Value" Text="Label" />
-                        </SfDropDownList>
-                    </div>
-
-                    <div style="grid-column:span 2">
-                        <div class="ctc-checkboxes">
-                            <label class="ctc-checkbox">
-                                <input type="checkbox" @bind="_editingContact.IsKeyContact" />
-                                <span>Key Contact</span>
-                            </label>
-                            <label class="ctc-checkbox">
-                                <input type="checkbox" @bind="_editingContact.IsBillingContact" />
-                                <span>Billing Contact</span>
-                            </label>
-                            <label class="ctc-checkbox">
-                                <input type="checkbox" @bind="_editingContact.IsServiceContact" />
-                                <span>Service Contact</span>
-                            </label>
-                            <label class="ctc-checkbox">
-                                <input type="checkbox" @bind="_editingContact.IsPortalUser" />
-                                <span>Portal User</span>
-                            </label>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="ctc-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showModal = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SaveContactAsync" disabled="@(string.IsNullOrEmpty(_selectedAccountId) || string.IsNullOrEmpty(_editingContact.FirstName) || string.IsNullOrEmpty(_editingContact.Email))">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false"><DialogContent><div class="um-confirm-dialog"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div><div class="um-confirm-message"><h6>Delete Contact?</h6><p>You are about to delete <strong>@(ContactPageConstants.FullName(_deleteTarget ?? new()))</strong>.</p></div><div class="um-modal-footer w-100"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></DialogContent></SfDialog>
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
 
 @code {
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private SfToast? _toast;
-    private SfGrid<LocalContactDto>? _grid;
-    private bool _loading = false;
-    private bool _showModal = false;
-    private string _viewMode = "grid";
+    List<ContactDto> _items = [], _filtered = [];
+    string _search = string.Empty, _typeFilter = string.Empty;
+    string? _activeFilter, _loadError;
+    bool _loading, _saving, _showDelete;
+    ContactDto? _deleteTarget;
+    SfToast _toast = default!;
 
-    private string _search = string.Empty;
-    private string _filterType = string.Empty;
-    private string _filterStatus = string.Empty;
-    private string _selectedAccountId = string.Empty;
-
-    private List<LocalContactDto>? _items;
-    private List<LocalContactDto> _filtered = [];
-    private LocalContactDto _editingContact = new();
-    private List<LV> _accountOpts = [];
-
-    private static readonly List<LV> _typeOpts = [
-        new("Primary", "Primary"),
-        new("Secondary", "Secondary"),
-        new("Executive", "Executive"),
-        new("Technical", "Technical")
-    ];
-
-    private static readonly List<LV> _statusOpts = [
-        new("Active", "Active"),
-        new("Inactive", "Inactive"),
-        new("Left Company", "Left Company")
-    ];
-
-    private static readonly List<LV> _methodOpts = [
-        new("Email", "Email"),
-        new("Phone", "Phone"),
-        new("Text", "Text Message"),
-        new("LinkedIn", "LinkedIn")
-    ];
-
-    protected override async Task OnInitializedAsync()
-    {
-        Breadcrumbs.SetCrumbs(
-            new("Home", "/"),
-            new("Accounts", "/accounts"),
-            new("Contacts", "/client/contacts")
-        );
-        await LoadAsync();
-    }
-
-    private void SetViewMode(string mode)
-    {
-        _viewMode = mode;
-    }
-
-    private void UpdateSearch(Microsoft.AspNetCore.Components.ChangeEventArgs e)
-    {
-        _search = e.Value?.ToString() ?? string.Empty;
-        ApplyFilters();
-    }
-
-    private async Task LoadAsync()
-    {
-        _loading = true;
-        StateHasChanged();
-
-        try
-        {
-            var result = await Api.SearchContactsAsync(_tenantId, string.Empty);
-            _items = result?.Items?.Select(c => new LocalContactDto
-            {
-                ContactId = c.ContactId,
-                FirstName = c.FirstName ?? "",
-                LastName = c.LastName ?? "",
-                Email = c.Email ?? "",
-                Phone = c.Phone,
-                JobTitle = c.JobTitle,
-                ContactTypeCode = c.ContactTypeCode,
-                PreferredContactMethod = c.PreferredContactMethod,
-                StatusCode = c.StatusCode ?? "Active",
-                IsKeyContact = c.IsKeyContact,
-                IsBillingContact = c.IsBillingContact,
-                IsServiceContact = c.IsServiceContact,
-                IsPortalUser = c.IsPortalUser,
-                AccountName = c.AccountName ?? ""
-            }).ToList() ?? [];
-
-            var accounts = await Api.SearchAccountsAsync(_tenantId, string.Empty);
-            _accountOpts = accounts?.Items?.Select(a => new LV(a.AccountId.ToString(), a.AccountName)).ToList() ?? [];
-
-            ApplyFilters();
-        }
-        catch (Exception ex)
-        {
-            await _toast!.ShowAsync(new ToastModel { Content = $"Error loading contacts: {ex.Message}", CssClass = "e-toast-danger" });
-        }
-        finally
-        {
-            _loading = false;
-        }
-    }
-
-    private void ApplyFilters()
-    {
-        if (_items == null) { _filtered = []; return; }
-
-        _filtered = _items.Where(c =>
-            (string.IsNullOrEmpty(_filterType) || c.ContactTypeCode == _filterType) &&
-            (string.IsNullOrEmpty(_filterStatus) || c.StatusCode == _filterStatus) &&
-            (string.IsNullOrEmpty(_search) ||
-             c.FirstName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             c.LastName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             c.Email.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             c.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             (c.JobTitle?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false))
-        ).ToList();
-    }
-
-    private void NewContact()
-    {
-        _editingContact = new LocalContactDto { StatusCode = "Active" };
-        _selectedAccountId = string.Empty;
-        _showModal = true;
-    }
-
-    private void EditContact(LocalContactDto contact)
-    {
-        _editingContact = new LocalContactDto
-        {
-            ContactId = contact.ContactId,
-            FirstName = contact.FirstName,
-            LastName = contact.LastName,
-            Email = contact.Email,
-            Phone = contact.Phone,
-            JobTitle = contact.JobTitle,
-            ContactTypeCode = contact.ContactTypeCode,
-            PreferredContactMethod = contact.PreferredContactMethod,
-            StatusCode = contact.StatusCode,
-            IsKeyContact = contact.IsKeyContact,
-            IsBillingContact = contact.IsBillingContact,
-            IsServiceContact = contact.IsServiceContact,
-            IsPortalUser = contact.IsPortalUser,
-            AccountName = contact.AccountName
-        };
-        _selectedAccountId = contact.AccountName;
-        _showModal = true;
-    }
-
-    private async Task SaveContactAsync()
-    {
-        try
-        {
-            if (string.IsNullOrEmpty(_selectedAccountId) || string.IsNullOrEmpty(_editingContact.FirstName) || string.IsNullOrEmpty(_editingContact.Email))
-            {
-                await _toast!.ShowAsync(new ToastModel { Content = "Please fill in all required fields.", CssClass = "e-toast-warning" });
-                return;
-            }
-
-            // TODO: Call API to save contact
-            await Task.Delay(100);
-
-            _showModal = false;
-            _editingContact = new();
-            _selectedAccountId = string.Empty;
-            await _toast!.ShowAsync(new ToastModel { Content = "Contact saved successfully.", CssClass = "e-toast-success" });
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            await _toast!.ShowAsync(new ToastModel { Content = $"Error saving contact: {ex.Message}", CssClass = "e-toast-danger" });
-        }
-    }
-
-    private async Task DeleteContactAsync(LocalContactDto contact)
-    {
-        if (!await ConfirmDeleteAsync()) return;
-
-        try
-        {
-            // TODO: Call API to delete contact
-            await Task.Delay(100);
-
-            await _toast!.ShowAsync(new ToastModel { Content = "Contact deleted.", CssClass = "e-toast-success" });
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            await _toast!.ShowAsync(new ToastModel { Content = $"Error deleting contact: {ex.Message}", CssClass = "e-toast-danger" });
-        }
-    }
-
-    private async Task<bool> ConfirmDeleteAsync()
-    {
-        return await Task.FromResult(true);
-    }
-
-    private static string Initials(string firstName, string lastName)
-    {
-        var f = !string.IsNullOrEmpty(firstName) ? firstName[0].ToString() : "";
-        var l = !string.IsNullOrEmpty(lastName) ? lastName[0].ToString() : "";
-        return (f + l).ToUpper();
-    }
-
-    private static string AvatarColor(string name)
-    {
-        var colors = new[] { "ctc-av1", "ctc-av2", "ctc-av3", "ctc-av4", "ctc-av5", "ctc-av6" };
-        return colors[Math.Abs(name.GetHashCode()) % colors.Length];
-    }
-
-    private static string StatusBadge(string s) => s switch
-    {
-        "Active" => "ctc-status ctc-status--active",
-        "Inactive" => "ctc-status ctc-status--inactive",
-        "Left Company" => "ctc-status ctc-status--left",
-        _ => "ctc-status",
-    };
-
-    private sealed record LV(string Value, string Label);
-
-    private class LocalContactDto
-    {
-        public Guid ContactId { get; set; }
-        public string FirstName { get; set; } = string.Empty;
-        public string LastName { get; set; } = string.Empty;
-        public string Email { get; set; } = string.Empty;
-        public string? Phone { get; set; }
-        public string? JobTitle { get; set; }
-        public string? ContactTypeCode { get; set; }
-        public string? PreferredContactMethod { get; set; }
-        public string StatusCode { get; set; } = "Active";
-        public bool IsKeyContact { get; set; }
-        public bool IsBillingContact { get; set; }
-        public bool IsServiceContact { get; set; }
-        public bool IsPortalUser { get; set; }
-        public string AccountName { get; set; } = string.Empty;
-    }
+    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new("Contacts", "/client/contacts")); await LoadAsync(); }
+    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchContactsAsync(ContactPageConstants.TenantId); _items = result?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load contacts: {ex.Message}"; } finally { _loading = false; } }
+    void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
+    void ApplyFilter() { var rows = _activeFilter switch { "key" => _items.Where(x => x.IsKeyContact), "portal" => _items.Where(x => x.IsPortalUser), "billing" => _items.Where(x => x.IsBillingContact), "service" => _items.Where(x => x.IsServiceContact), _ => _items.AsEnumerable() }; _filtered = rows.Where(SearchMatches).Where(x => string.IsNullOrEmpty(_typeFilter) || x.ContactTypeCode == _typeFilter).ToList(); }
+    bool SearchMatches(ContactDto c) { if (string.IsNullOrWhiteSpace(_search)) return true; var q = _search.Trim(); return ContactPageConstants.FullName(c).Contains(q, StringComparison.OrdinalIgnoreCase) || (c.AccountName?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (c.Email?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (c.Phone?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (c.JobTitle?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false); }
+    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
+    void ResetFilters() { _activeFilter = null; _search = _typeFilter = string.Empty; ApplyFilter(); }
+    void OnRowSelected(RowSelectEventArgs<ContactDto> args) => Nav.NavigateTo($"/client/contacts/{args.Data.ContactId}");
+    void ConfirmDelete(ContactDto item) { _deleteTarget = item; _showDelete = true; }
+    async Task ExecuteDeleteAsync() { _saving = true; try { await Api.DeleteContactAsync(_deleteTarget!.ContactId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Contact deleted", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
 }

@@ -8,6 +8,8 @@
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationContextService NavContext
+@using Ams.Application.Common.Dtos
+@using Ams.Web.Components.Pages.Accounts
 
 <PageTitle>@((_data?.AccountName ?? NavContext.CurrentAccountName) is { } n ? $"{n} — Hierarchy" : "Account Hierarchy")</PageTitle>
 
@@ -234,30 +236,48 @@ else
     private async Task LoadAsync()
     {
         _loading = true;
-        await Task.Delay(0); // TODO: replace with real API call
-        _data = BuildStub();
-        NavContext.SetAccount(AccountId, _data.AccountName);
-        _loading = false;
+        try
+        {
+            var account = await Api.GetAccountByIdAsync(AccountId);
+            var result = await Api.SearchAccountsAsync(AccountPageConstants.TenantId);
+            var accounts = result?.Items.ToList() ?? [];
+            _data = account is null ? null : BuildData(account, accounts);
+            if (_data is not null)
+            {
+                NavContext.SetAccount(AccountId, _data.AccountName);
+            }
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Load failed", Content = ex.Message, CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private AccountHierarchyData BuildStub() => new()
+    private static AccountHierarchyData BuildData(AccountDto account, IReadOnlyList<AccountDto> accounts) => new()
     {
-        AccountId    = AccountId,
-        AccountName  = "Sullivan Mfg. LLC",
-        AccountNumber = "ACC-00142",
-        AccountType  = "Commercial",
-        Status       = "Active",
-        CreatedDate  = DateTime.Now.AddYears(-8),
-        ParentAccounts =
-        [
-            new() { AccountId = Guid.NewGuid(), AccountName = "Sullivan Group Holdings", AccountNumber = "ACC-00100", AccountType = "Commercial", Status = "Active" },
-        ],
-        ChildAccounts =
-        [
-            new() { AccountId = Guid.NewGuid(), AccountName = "Sullivan Realty LLC",    AccountNumber = "ACC-00143", AccountType = "Commercial", Status = "Active" },
-            new() { AccountId = Guid.NewGuid(), AccountName = "Sullivan Holdings Inc.",  AccountNumber = "ACC-00144", AccountType = "Commercial", Status = "Active" },
-            new() { AccountId = Guid.NewGuid(), AccountName = "Sullivan Tech Partners",  AccountNumber = "ACC-00145", AccountType = "Commercial", Status = "Inactive" },
-        ]
+        AccountId = account.AccountId,
+        AccountName = account.AccountName,
+        AccountNumber = account.AccountNumber,
+        AccountType = account.AccountTypeCode,
+        Status = account.StatusCode,
+        CreatedDate = account.CreatedDateUtc,
+        ParentAccounts = account.ParentAccountId.HasValue
+            ? accounts.Where(a => a.AccountId == account.ParentAccountId.Value).Select(ToNode).ToList()
+            : [],
+        ChildAccounts = accounts.Where(a => a.ParentAccountId == account.AccountId).Select(ToNode).ToList()
+    };
+
+    private static AccountHierarchyNode ToNode(AccountDto account) => new()
+    {
+        AccountId = account.AccountId,
+        AccountName = account.AccountName,
+        AccountNumber = account.AccountNumber,
+        AccountType = account.AccountTypeCode,
+        Status = account.StatusCode
     };
 
     private void Navigate(Guid accountId)
@@ -278,7 +298,6 @@ else
     private void SearchChildren(Microsoft.AspNetCore.Components.ChangeEventArgs e)
     {
         _childSearch = e.Value?.ToString() ?? string.Empty;
-        // In a real implementation, this would call an API
         _childOptions = new();
     }
 

@@ -18,24 +18,49 @@
     </Actions>
 </AppPageHeader>
 
+<section class="ma-hero as-tenant-hero">
+    <div>
+        <span class="ma-eyebrow">Tenant · Agency Structure</span>
+        <h2>Department Command Center</h2>
+        <p>Organize operational departments, managers, and team capacity across the agency structure.</p>
+    </div>
+    <div class="ma-hero-actions">
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/branches"><i class="bi bi-diagram-3" aria-hidden="true"></i> Branches</a>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/teams"><i class="bi bi-people" aria-hidden="true"></i> Teams</a>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Department</button>
+    </div>
+</section>
+
 <!-- KPI strip -->
-<div class="dep-kpi-strip">
-    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0">
-        <span class="dep-kpi-icon dep-kpi-icon--total"><i class="bi bi-building" aria-hidden="true"></i></span>
+<div class="as-kpi-strip" aria-label="Department filters">
+    <button type="button" class='as-kpi-card @KpiClass("Overview")' @onclick='() => SetKpiFilter("Overview")' title="Show all departments">
+        <span class="as-kpi-icon"><i class="bi bi-building" aria-hidden="true"></i></span>
         <div>
             <div class="dep-kpi-value">@_totalCount</div>
             <div class="dep-kpi-label">Total Departments</div>
         </div>
-        @if (_kpiActive == 1) { <span class="dep-kpi-active-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
-        <span class="dep-kpi-icon dep-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+    </button>
+    <button type="button" class='as-kpi-card @KpiClass("Active")' @onclick='() => SetKpiFilter("Active")' title="Show active departments">
+        <span class="as-kpi-icon as-kpi-icon--success"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
         <div>
             <div class="dep-kpi-value">@_activeCount</div>
             <div class="dep-kpi-label">Active</div>
         </div>
-        @if (_kpiActive == 2) { <span class="dep-kpi-active-dot" aria-hidden="true"></span> }
-    </div>
+    </button>
+    <button type="button" class='as-kpi-card @KpiClass("Inactive")' @onclick='() => SetKpiFilter("Inactive")' title="Show inactive departments">
+        <span class="as-kpi-icon as-kpi-icon--warning"><i class="bi bi-dash-circle" aria-hidden="true"></i></span>
+        <div>
+            <div class="dep-kpi-value">@(_totalCount - _activeCount)</div>
+            <div class="dep-kpi-label">Inactive</div>
+        </div>
+    </button>
+    <button type="button" class='as-kpi-card @KpiClass("Teams")' @onclick='() => SetKpiFilter("Teams")' title="Show departments with teams">
+        <span class="as-kpi-icon as-kpi-icon--violet"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+        <div>
+            <div class="dep-kpi-value">@_allEntries.Sum(e => e.TeamCount)</div>
+            <div class="dep-kpi-label">Assigned Teams</div>
+        </div>
+    </button>
 </div>
 
 <!-- Filter toolbar -->
@@ -49,6 +74,13 @@
         </label>
     </Filters>
 </AppFilterPanel>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+        @_loadError
+    </div>
+}
 
 <!-- Grid -->
 <div class="um-grid-card app-datagrid">
@@ -65,6 +97,7 @@
             AllowSorting="true"
             EnableHover="true"
             RowHeight="52">
+        <GridEvents TValue="DepartmentEntry" RowSelected="OnRowSelected" />
         <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
         <GridColumns>
             <GridColumn Field="@nameof(DepartmentEntry.DepartmentName)" HeaderText="Department Name" Width="220">
@@ -91,7 +124,7 @@
             <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
                 <Template>
                     @{ var e = (DepartmentEntry)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditDrawer(e)" title="Edit">
                         <i class="bi bi-pencil" aria-hidden="true"></i>
                     </button>
                 </Template>
@@ -138,13 +171,11 @@
 
     private string _search          = string.Empty;
     private bool   _filterActiveOnly = false;
-    private int    _kpiActive       = 0;
+    private string _activeFilter = "Overview";
+    private string? _loadError;
 
     private int _totalCount  = 0;
     private int _activeCount = 0;
-
-    private string KpiClass1 => "dep-kpi-card" + (_kpiActive == 1 ? " dep-kpi-card--active" : "");
-    private string KpiClass2 => "dep-kpi-card" + (_kpiActive == 2 ? " dep-kpi-card--active" : "");
 
     private DepartmentEntry _editModel = new();
 
@@ -164,6 +195,7 @@
         StateHasChanged();
         try
         {
+            _loadError = null;
             var departments = await Api.GetDepartmentsAsync(_tenantId);
             _allEntries = departments?.Select(d => new DepartmentEntry
             {
@@ -179,6 +211,7 @@
         }
         catch (Exception ex)
         {
+            _loadError = $"Load failed: {ex.Message}";
             await ShowToastAsync($"Error loading departments: {ex.Message}", "e-toast-danger");
         }
         finally { _loading = false; }
@@ -189,23 +222,32 @@
     private void ApplyFilters()
     {
         _entries = _allEntries.Where(e =>
+            (_activeFilter switch
+            {
+                "Active" => e.IsActive,
+                "Inactive" => !e.IsActive,
+                "Teams" => e.TeamCount > 0,
+                _ => true
+            }) &&
             (!_filterActiveOnly || e.IsActive) &&
             (string.IsNullOrEmpty(_search) ||
              e.DepartmentName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
              e.DepartmentCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
         ).ToList();
 
-        if (_kpiActive == 2) _entries = _entries.Where(e => e.IsActive).ToList();
-
         StateHasChanged();
     }
 
-    private void SetKpiFilter(int n)
+    private void SetKpiFilter(string filter)
     {
-        _kpiActive       = _kpiActive == n ? 0 : n;
-        _filterActiveOnly = _kpiActive == 2;
+        _activeFilter = _activeFilter == filter && filter != "Overview" ? "Overview" : filter;
+        _filterActiveOnly = _activeFilter == "Active";
         ApplyFilters();
     }
+
+    private string KpiClass(string filter) => _activeFilter == filter ? "as-kpi-card--active" : string.Empty;
+
+    private void OnRowSelected(RowSelectEventArgs<DepartmentEntry> args) => OpenEditDrawer(args.Data);
 
     private void ComputeKpi()
     {

@@ -32,6 +32,18 @@
     </Actions>
 </AppPageHeader>
 
+<section class="ma-hero opp-hero">
+    <div>
+        <span class="ma-eyebrow">CRM · Opportunities</span>
+        <h2>Sales Forecast</h2>
+        <p>Projected close amounts by stage, forecast category, producer, and close timeline using live opportunities.</p>
+    </div>
+    <div class="ma-hero-actions">
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities")'><i class="bi bi-trophy"></i> Opportunities</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities/pipeline")'><i class="bi bi-funnel"></i> Pipeline</button>
+    </div>
+</section>
+
 <!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
 <div class="fc-kpi-strip">
     <div class="fc-kpi-card">
@@ -295,9 +307,8 @@
         _loading = true; StateHasChanged();
         try
         {
-            // Mock data for now — replace with actual API calls
-            await Task.Delay(500);
-            BuildForecastData();
+            var result = await Api.SearchOpportunitiesAsync(_tenantId);
+            BuildForecastData((result?.Items ?? []).Select(OpportunityPageData.FromDto).ToList());
         }
         catch (Exception ex)
         {
@@ -306,52 +317,19 @@
         finally { _loading = false; }
     }
 
-    private void BuildForecastData()
+    private void BuildForecastData(List<OpportunityRow> opportunities)
     {
-        var stages = new[] { "Qualified", "Needs Analysis", "Proposal", "Negotiation" };
-        _stageData = [];
-        _maxStageAmount = 0;
-
-        foreach (var stage in stages)
-        {
-            var count = Random.Shared.Next(3, 15);
-            var amt = Random.Shared.Next(50000, 500000);
-            var winPct = Random.Shared.Next(20, 80);
-            _stageData.Add(new StageRow
-            {
-                Stage = stage,
-                Count = count,
-                Amount = amt,
-                WeightedAmount = (decimal)amt * winPct / 100,
-            });
-            _maxStageAmount = Math.Max(_maxStageAmount, amt);
-        }
-
-        _forecastData =
-        [
-            new("Best Case", 12, 850000, 680000, 80),
-            new("Commit", 8, 520000, 416000, 80),
-            new("Pipeline", 25, 1200000, 480000, 40),
-            new("Closed Won", 15, 2100000, 2100000, 100),
-        ];
-
-        _producerData =
-        [
-            new("Alice Carter", 18, 950000, 620000, 52777, 72),
-            new("Bob Martinez", 14, 720000, 480000, 51428, 67),
-            new("Carol Smith", 12, 580000, 340000, 48333, 59),
-            new("David Lee", 16, 1100000, 715000, 68750, 65),
-            new("Eva Johnson", 10, 420000, 252000, 42000, 60),
-        ];
-
         var now = DateTime.UtcNow;
+        _stageData = opportunities.GroupBy(x => x.Stage).Select(g => new StageRow { Stage = g.Key, Count = g.Count(), Amount = g.Sum(x => x.EstimatedAmount), WeightedAmount = g.Sum(x => x.WeightedAmount) }).OrderBy(x => OpportunityPageConstants.StageOrder(x.Stage)).ToList();
+        _maxStageAmount = _stageData.Count == 0 ? 0 : _stageData.Max(x => x.Amount);
+        _forecastData = opportunities.GroupBy(x => x.ForecastCategory).Select(g => new ForecastRow(g.Key, g.Count(), g.Sum(x => x.EstimatedAmount), g.Sum(x => x.WeightedAmount), g.Any() ? (int)g.Average(x => x.WinProbability) : 0)).OrderByDescending(x => x.TotalAmount).ToList();
+        _producerData = opportunities.GroupBy(x => x.OwnerUserId?.ToString() ?? "Unassigned").Select(g => new ProducerRow(g.Key, g.Count(), g.Sum(x => x.EstimatedAmount), g.Sum(x => x.WeightedAmount), g.Any() ? g.Average(x => x.EstimatedAmount) : 0, g.Any() ? (int)g.Average(x => x.WinProbability) : 0)).OrderByDescending(x => x.TotalPipeline).ToList();
         _timelineData =
         [
-            new("This Week", 3, 280000, 196000, 70),
-            new("This Month", 8, 640000, 416000, 65),
-            new("Next Month", 12, 1200000, 480000, 40),
-            new("Q4", 15, 1500000, 600000, 40),
-            new("Q1 2025", 10, 800000, 240000, 30),
+            BuildTimelineRow("This Week", opportunities.Where(x => x.CloseDate.HasValue && (x.CloseDate.Value - now).TotalDays <= 7 && x.CloseDate.Value >= now)),
+            BuildTimelineRow("This Month", opportunities.Where(x => x.CloseDate.HasValue && x.CloseDate.Value.Month == now.Month && x.CloseDate.Value.Year == now.Year)),
+            BuildTimelineRow("Next Month", opportunities.Where(x => x.CloseDate.HasValue && x.CloseDate.Value.Month == now.AddMonths(1).Month && x.CloseDate.Value.Year == now.AddMonths(1).Year)),
+            BuildTimelineRow($"Q{((now.Month - 1) / 3) + 1}", opportunities.Where(x => x.CloseDate.HasValue && ((x.CloseDate.Value.Month - 1) / 3) == ((now.Month - 1) / 3) && x.CloseDate.Value.Year == now.Year)),
         ];
 
         _kpi = new ForecastKpi
@@ -366,6 +344,12 @@
         };
 
         ApplyFilters();
+    }
+
+    private static TimelineRow BuildTimelineRow(string period, IEnumerable<OpportunityRow> rows)
+    {
+        var list = rows.ToList();
+        return new(period, list.Count, list.Sum(x => x.EstimatedAmount), list.Sum(x => x.WeightedAmount), list.Any() ? (int)list.Average(x => x.WinProbability) : 0);
     }
 
     private void ApplyFilters()

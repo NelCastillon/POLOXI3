@@ -1,5 +1,7 @@
 @page "/tenant/agency/csrs"
 @namespace Ams.Web.Components.Pages.AgencyAdmin
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Features.Iam
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 
@@ -18,18 +20,37 @@
     </Actions>
 </AppPageHeader>
 
+<section class="ma-hero as-tenant-hero">
+    <div>
+        <span class="ma-eyebrow">Tenant · Agency Staff</span>
+        <h2>CSR Command Center</h2>
+        <p>Manage service representatives, department alignment, team assignment, and active support coverage.</p>
+    </div>
+    <div class="ma-hero-actions">
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/producers"><i class="bi bi-person-badge" aria-hidden="true"></i> Producers</a>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/teams"><i class="bi bi-people" aria-hidden="true"></i> Teams</a>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add CSR</button>
+    </div>
+</section>
+
 <!-- KPI strip -->
-<div class="csr-kpi-strip">
-    <div class="@KpiClass1" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0">
-        <span class="csr-kpi-icon csr-kpi-icon--total"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
+<div class="as-kpi-strip" aria-label="CSR filters">
+    <button type="button" class='as-kpi-card @KpiClass("Overview")' @onclick='() => SetKpiFilter("Overview")' title="Show all CSRs">
+        <span class="as-kpi-icon"><i class="bi bi-people-fill" aria-hidden="true"></i></span>
         <div><div class="csr-kpi-value">@_totalCount</div><div class="csr-kpi-label">Total CSRs</div></div>
-        @if (_kpiActive == 1) { <span class="csr-kpi-active-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClass2" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0">
-        <span class="csr-kpi-icon csr-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+    </button>
+    <button type="button" class='as-kpi-card @KpiClass("Active")' @onclick='() => SetKpiFilter("Active")' title="Show active CSRs">
+        <span class="as-kpi-icon as-kpi-icon--success"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
         <div><div class="csr-kpi-value">@_activeCount</div><div class="csr-kpi-label">Active</div></div>
-        @if (_kpiActive == 2) { <span class="csr-kpi-active-dot" aria-hidden="true"></span> }
-    </div>
+    </button>
+    <button type="button" class='as-kpi-card @KpiClass("Departments")' @onclick='() => SetKpiFilter("Departments")' title="Show CSRs assigned to departments">
+        <span class="as-kpi-icon as-kpi-icon--warning"><i class="bi bi-grid" aria-hidden="true"></i></span>
+        <div><div class="csr-kpi-value">@_departmentCount</div><div class="csr-kpi-label">Departments</div></div>
+    </button>
+    <button type="button" class='as-kpi-card @KpiClass("Teams")' @onclick='() => SetKpiFilter("Teams")' title="Show CSRs assigned to teams">
+        <span class="as-kpi-icon as-kpi-icon--violet"><i class="bi bi-people" aria-hidden="true"></i></span>
+        <div><div class="csr-kpi-value">@_teamCount</div><div class="csr-kpi-label">Teams</div></div>
+    </button>
 </div>
 
 <!-- Filter toolbar -->
@@ -43,6 +64,13 @@
         </label>
     </Filters>
 </AppFilterPanel>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+        @_loadError
+    </div>
+}
 
 <!-- Grid -->
 <div class="um-grid-card app-datagrid">
@@ -59,6 +87,7 @@
             AllowSorting="true"
             EnableHover="true"
             RowHeight="52">
+        <GridEvents TValue="CsrEntry" RowSelected="OnRowSelected" />
         <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
         <GridColumns>
             <GridColumn Field="@nameof(CsrEntry.FullName)" HeaderText="Name" Width="220">
@@ -85,8 +114,11 @@
             <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
                 <Template>
                     @{ var e = (CsrEntry)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditDrawer(e)" title="Edit">
                         <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmRemoveCsrRole(e)" title="Remove CSR role">
+                        <i class="bi bi-trash3" aria-hidden="true"></i>
                     </button>
                 </Template>
             </GridColumn>
@@ -100,27 +132,73 @@
                OnConfirm="SaveAsync"
                OnClose="CloseDrawer">
     <Content>
-        <div class="csr-form">
-            <label class="csr-form-label">First Name *</label>
-            <input class="um-input" @bind="_editModel.FirstName" />
+        @if (_editContext is not null)
+        {
+            <EditForm EditContext="_editContext">
+                <DataAnnotationsValidator />
+                <div class="csr-form">
+                    <label class="csr-form-label">First Name *</label>
+                    <InputText class="um-input" @bind-Value="_editModel.FirstName" />
+                    <ValidationMessage For="() => _editModel.FirstName" class="text-danger" />
 
-            <label class="csr-form-label">Last Name *</label>
-            <input class="um-input" @bind="_editModel.LastName" />
+                    <label class="csr-form-label">Last Name *</label>
+                    <InputText class="um-input" @bind-Value="_editModel.LastName" />
+                    <ValidationMessage For="() => _editModel.LastName" class="text-danger" />
 
-            <label class="csr-form-label">Email *</label>
-            <input class="um-input" type="email" @bind="_editModel.Email" />
+                    <label class="csr-form-label">Email *</label>
+                    <InputText class="um-input" type="email" @bind-Value="_editModel.Email" />
+                    <ValidationMessage For="() => _editModel.Email" class="text-danger" />
 
-            <label class="csr-form-label">Department</label>
-            <input class="um-input" @bind="_editModel.Department" />
+                    <label class="csr-form-label">Department *</label>
+                    <SfDropDownList TValue="string" TItem="LabelValue"
+                                    DataSource="_departmentOptions"
+                                    @bind-Value="_editModel.Department"
+                                    Placeholder="Select department"
+                                    Width="100%">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                    <ValidationMessage For="() => _editModel.Department" class="text-danger" />
 
-            <label class="csr-form-label">Team</label>
-            <input class="um-input" @bind="_editModel.TeamName" />
+                    <label class="csr-form-label">Team *</label>
+                    <SfDropDownList TValue="string" TItem="LabelValue"
+                                    DataSource="_teamOptions"
+                                    @bind-Value="_editModel.TeamName"
+                                    Placeholder="Select team"
+                                    Width="100%">
+                        <DropDownListFieldSettings Value="Value" Text="Label" />
+                    </SfDropDownList>
+                    <ValidationMessage For="() => _editModel.TeamName" class="text-danger" />
 
-            <label class="csr-form-label">Active</label>
-            <SfSwitch @bind-Checked="_editModel.IsActive" />
-        </div>
+                    <label class="csr-form-label">Active</label>
+                    <SfSwitch @bind-Checked="_editModel.IsActive" />
+                </div>
+            </EditForm>
+        }
     </Content>
 </AppCrudDrawer>
+
+<SfDialog @bind-Visible="_showRemoveConfirm"
+          Width="440px"
+          IsModal="true"
+          ShowCloseIcon="false">
+    <DialogTemplates>
+        <Content>
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger">
+                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                </div>
+                <div>
+                    <h3>Remove CSR role?</h3>
+                    <p>This will remove the CSR role from <strong>@_pendingRemove?.FullName</strong>. The user account will remain active unless changed separately.</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRemoveConfirm">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteRemoveCsrRoleAsync">Remove role</button>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
 
 <SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
     <ToastPosition X="Right" Y="Bottom" />
@@ -132,19 +210,24 @@
 
     private List<CsrEntry> _allEntries = [];
     private List<CsrEntry> _entries    = [];
+    private List<LabelValue> _departmentOptions = [];
+    private List<LabelValue> _teamOptions = [];
 
     private bool _loading    = false;
     private bool _showDrawer = false;
+    private bool _showRemoveConfirm = false;
 
     private string _search          = string.Empty;
     private bool   _filterActiveOnly = false;
-    private int    _kpiActive       = 0;
+    private string _activeFilter = "Overview";
+    private string? _loadError;
+    private EditContext? _editContext;
+    private CsrEntry? _pendingRemove;
 
     private int _totalCount  = 0;
     private int _activeCount = 0;
-
-    private string KpiClass1 => "csr-kpi-card" + (_kpiActive == 1 ? " csr-kpi-card--active" : "");
-    private string KpiClass2 => "csr-kpi-card" + (_kpiActive == 2 ? " csr-kpi-card--active" : "");
+    private int _departmentCount = 0;
+    private int _teamCount = 0;
 
     private CsrEntry _editModel = new();
 
@@ -164,23 +247,27 @@
         StateHasChanged();
         try
         {
-            var staff = await Api.GetStaffAsync(_tenantId);
-            _allEntries = staff?.Where(s => s.Role == "CSR")
-                .Select(s => new CsrEntry
+            _loadError = null;
+            await LoadLookupOptionsAsync();
+            var users = await Api.SearchUsersAsync(_tenantId, pageSize: 1000);
+            var csrRoleUserIds = await GetUserIdsByRoleAsync("CSR");
+            _allEntries = users?.Items.Where(u => csrRoleUserIds.Contains(u.UserId) || HasAssignedRole(u, "CSR"))
+                .Select(u => new CsrEntry
                 {
-                    StaffId = s.StaffId,
-                    FirstName = s.FirstName,
-                    LastName = s.LastName,
-                    Email = s.Email ?? string.Empty,
-                    Department = s.Department ?? string.Empty,
-                    TeamName = s.TeamName ?? string.Empty,
-                    IsActive = s.IsActive
+                    StaffId = u.UserId,
+                    FirstName = FirstName(u.FullName),
+                    LastName = LastName(u.FullName),
+                    Email = u.Email,
+                    Department = u.Department ?? string.Empty,
+                    TeamName = u.JobTitle ?? string.Empty,
+                    IsActive = IsActiveUser(u)
                 }).ToList() ?? [];
             ComputeKpi();
             ApplyFilters();
         }
         catch (Exception ex)
         {
+            _loadError = $"Load failed: {ex.Message}";
             await ShowToastAsync($"Error loading CSRs: {ex.Message}", "e-toast-danger");
         }
         finally { _loading = false; }
@@ -191,41 +278,142 @@
     private void ApplyFilters()
     {
         _entries = _allEntries.Where(e =>
+            (_activeFilter switch
+            {
+                "Active" => e.IsActive,
+                "Departments" => !string.IsNullOrWhiteSpace(e.Department),
+                "Teams" => !string.IsNullOrWhiteSpace(e.TeamName),
+                _ => true
+            }) &&
             (!_filterActiveOnly || e.IsActive) &&
             (string.IsNullOrEmpty(_search) ||
              e.FullName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
              e.Email.Contains(_search, StringComparison.OrdinalIgnoreCase))
         ).ToList();
 
-        if (_kpiActive == 2) _entries = _entries.Where(e => e.IsActive).ToList();
-
         StateHasChanged();
     }
 
-    private void SetKpiFilter(int n)
+    private void SetKpiFilter(string filter)
     {
-        _kpiActive       = _kpiActive == n ? 0 : n;
-        _filterActiveOnly = _kpiActive == 2;
+        _activeFilter = _activeFilter == filter && filter != "Overview" ? "Overview" : filter;
+        _filterActiveOnly = _activeFilter == "Active";
         ApplyFilters();
     }
+
+    private string KpiClass(string filter) => _activeFilter == filter ? "as-kpi-card--active" : string.Empty;
+
+    private void OnRowSelected(RowSelectEventArgs<CsrEntry> args) => OpenEditDrawer(args.Data);
 
     private void ComputeKpi()
     {
         _totalCount  = _allEntries.Count;
         _activeCount = _allEntries.Count(e => e.IsActive);
+        _departmentCount = _allEntries.Select(e => e.Department).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        _teamCount = _allEntries.Select(e => e.TeamName).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
     }
 
-    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
-    private void OpenEditDrawer(CsrEntry e) { _editModel = new CsrEntry { StaffId = e.StaffId, FirstName = e.FirstName, LastName = e.LastName, Email = e.Email, Department = e.Department, TeamName = e.TeamName, IsActive = e.IsActive }; _showDrawer = true; }
+    private void OpenAddDrawer()  { _editModel = new(); _editContext = new EditContext(_editModel); _showDrawer = true; }
+    private void OpenEditDrawer(CsrEntry e) { _editModel = new CsrEntry { StaffId = e.StaffId, FirstName = e.FirstName, LastName = e.LastName, Email = e.Email, Department = e.Department, TeamName = e.TeamName, IsActive = e.IsActive }; _editContext = new EditContext(_editModel); _showDrawer = true; }
     private void CloseDrawer() => _showDrawer = false;
 
     private async Task SaveAsync()
     {
-        // TODO: Api.SaveCsrAsync
-        await Task.Delay(0);
-        _showDrawer = false;
-        await LoadAsync();
-        await ShowToastAsync("CSR saved.", "e-toast-success");
+        try
+        {
+            if (_editContext?.Validate() != true)
+            {
+                await ShowToastAsync("Please fix validation errors before saving.", "e-toast-danger");
+                return;
+            }
+
+            var fullName = $"{_editModel.FirstName} {_editModel.LastName}".Trim();
+            if (_editModel.StaffId == Guid.Empty)
+            {
+                var userId = await Api.CreateUserAsync(new CreateUserRequest
+                {
+                    TenantId = _tenantId,
+                    UserName = string.IsNullOrWhiteSpace(_editModel.Email) ? $"{_editModel.FirstName}.{_editModel.LastName}".Trim('.').ToLowerInvariant() : _editModel.Email,
+                    Email = _editModel.Email,
+                    FullName = fullName,
+                    DisplayName = fullName,
+                    UserTypeCode = "Internal",
+                    StatusCode = _editModel.IsActive ? "Active" : "Inactive",
+                    Department = _editModel.Department,
+                    JobTitle = _editModel.TeamName,
+                    TimeZoneCode = "UTC",
+                    LocaleCode = "en-US"
+                });
+                await EnsureUserRoleAsync(userId, "CSR");
+            }
+            else
+            {
+                await Api.UpdateUserAsync(_editModel.StaffId, new UpdateUserRequest
+                {
+                    UserId = _editModel.StaffId,
+                    FullName = fullName,
+                    DisplayName = fullName,
+                    Department = _editModel.Department,
+                    JobTitle = _editModel.TeamName,
+                    TimeZoneCode = "UTC",
+                    LocaleCode = "en-US"
+                });
+                await EnsureUserRoleAsync(_editModel.StaffId, "CSR");
+                await Api.SetUserActiveAsync(_editModel.StaffId, _editModel.IsActive);
+            }
+
+            _showDrawer = false;
+            await LoadAsync();
+            await ShowToastAsync("CSR saved.", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Save failed: {ex.Message}", "e-toast-danger");
+        }
+    }
+
+    private void ConfirmRemoveCsrRole(CsrEntry entry)
+    {
+        _pendingRemove = entry;
+        _showRemoveConfirm = true;
+    }
+
+    private void CloseRemoveConfirm()
+    {
+        _showRemoveConfirm = false;
+        _pendingRemove = null;
+    }
+
+    private async Task ExecuteRemoveCsrRoleAsync()
+    {
+        if (_pendingRemove is null)
+            return;
+
+        try
+        {
+            var assignment = await GetUserRoleAssignmentAsync(_pendingRemove.StaffId, "CSR");
+            if (assignment is not null)
+            {
+                await Api.RevokeUserRoleAsync(new RevokeUserRoleRequest { UserRoleId = assignment.UserRoleId, Reason = "Removed from CSR page" });
+            }
+
+            CloseRemoveConfirm();
+            await LoadAsync();
+            await ShowToastAsync("CSR role removed.", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Remove failed: {ex.Message}", "e-toast-danger");
+        }
+    }
+
+    private async Task LoadLookupOptionsAsync()
+    {
+        var departments = await Api.GetDepartmentsAsync(_tenantId);
+        _departmentOptions = departments?.Where(d => d.IsActive).OrderBy(d => d.DepartmentName).Select(d => new LabelValue(d.DepartmentName, d.DepartmentName)).ToList() ?? [];
+
+        var teams = await Api.GetTeamsAsync(_tenantId);
+        _teamOptions = teams?.Where(t => t.IsActive).OrderBy(t => t.TeamName).Select(t => new LabelValue(t.TeamName, t.TeamName)).ToList() ?? [];
     }
 
     private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
@@ -246,15 +434,77 @@
         return $"background:hsl({hue},50%,42%);color:#fff;";
     }
 
+    private async Task<HashSet<Guid>> GetUserIdsByRoleAsync(string roleName)
+    {
+        var assignments = await Api.SearchUserRolesAsync(_tenantId, isActive: true, pageSize: 5000);
+        return assignments?.Items
+            .Where(role => RoleEquals(role.RoleName, roleName) || RoleEquals(role.RoleCode, roleName))
+            .Select(role => role.UserId)
+            .ToHashSet() ?? [];
+    }
+
+    private static bool HasAssignedRole(UserDto user, string roleName) => HasRoleToken(user.AssignedRoleNames, roleName) || HasRoleToken(user.AssignedRoleCodes, roleName);
+    private static bool HasRoleToken(string? roles, string roleName) => (roles ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Any(role => RoleEquals(role, roleName));
+    private static bool RoleEquals(string? actual, string expected) => string.Equals(actual?.Trim(), expected, StringComparison.OrdinalIgnoreCase);
+    private async Task<UserRoleDto?> GetUserRoleAssignmentAsync(Guid userId, string roleName)
+    {
+        var assignments = await Api.SearchUserRolesAsync(_tenantId, userId: userId, isActive: true, pageSize: 100);
+        return assignments?.Items.FirstOrDefault(role => RoleEquals(role.RoleName, roleName) || RoleEquals(role.RoleCode, roleName));
+    }
+
+    private async Task EnsureUserRoleAsync(Guid userId, string roleName)
+    {
+        if (await GetUserRoleAssignmentAsync(userId, roleName) is not null)
+            return;
+
+        var roles = await Api.SearchRolesAsync(_tenantId, roleName);
+        var role = roles?.Items.FirstOrDefault(r => RoleEquals(r.RoleName, roleName) || RoleEquals(r.RoleCode, roleName));
+        if (role is null)
+            throw new InvalidOperationException($"The {roleName} role was not found.");
+
+        await Api.AssignUserRoleAsync(new AssignUserRoleRequest
+        {
+            TenantId = _tenantId,
+            UserId = userId,
+            RoleId = role.RoleId,
+            Source = "Agency Staff",
+            Reason = $"Assigned from {roleName} page"
+        });
+    }
+    private static bool IsActiveUser(UserDto user) => string.Equals(user.StatusCode, "Active", StringComparison.OrdinalIgnoreCase) && !user.IsLockedOut;
+    private static string FirstName(string fullName)
+    {
+        var parts = fullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 0 ? string.Empty : parts[0];
+    }
+    private static string LastName(string fullName)
+    {
+        var parts = fullName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length <= 1 ? string.Empty : string.Join(' ', parts.Skip(1));
+    }
+
     private sealed class CsrEntry
     {
         public Guid   StaffId    { get; set; } = Guid.Empty;
+        [Required]
+        [StringLength(100)]
         public string FirstName  { get; set; } = string.Empty;
+        [Required]
+        [StringLength(100)]
         public string LastName   { get; set; } = string.Empty;
         public string FullName   => $"{FirstName} {LastName}".Trim();
+        [Required]
+        [EmailAddress]
+        [StringLength(320)]
         public string Email      { get; set; } = string.Empty;
+        [Required]
+        [StringLength(100)]
         public string Department { get; set; } = string.Empty;
+        [Required]
+        [StringLength(100)]
         public string TeamName   { get; set; } = string.Empty;
         public bool   IsActive   { get; set; } = true;
     }
+
+    private sealed record LabelValue(string Value, string Label);
 }

@@ -53,7 +53,7 @@ WHERE ur.TenantId = @TenantId AND ur.IsDeleted = 0
      CreatedDateUtc, IsDeleted)
 VALUES
     (@UserRoleId, @TenantId, @UserId, @RoleId, @AssignedByUserId, GETUTCDATE(),
-     @EffectiveStartDateUtc, @EffectiveEndDateUtc, 1,
+     COALESCE(@EffectiveStartDateUtc, SYSUTCDATETIME()), @EffectiveEndDateUtc, 1,
      @Source, @Reason, @ApproverId, @ScopeTypeCode, @ScopeValue,
      GETUTCDATE(), 0);";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);

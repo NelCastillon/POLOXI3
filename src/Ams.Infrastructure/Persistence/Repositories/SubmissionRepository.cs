@@ -25,32 +25,76 @@ public sealed class SubmissionRepository : ISubmissionRepository
         const string sql = @"
 ;WITH Cte AS
 (
-    SELECT s.SubmissionId, s.TenantId, s.AccountId, a.AccountName, s.OpportunityId, o.OpportunityName,
-           s.SubmissionNumber, s.LineOfBusiness, s.Status, s.Priority,
-           s.AssignedToUserId, u.FullName AS AssignedToUserName,
-           s.EffectiveDate, s.ExpirationDate, s.TargetPremium,
-           s.MarketCount, s.QuoteCount, s.CreatedDateUtc, s.ModifiedDateUtc
-    FROM   Submissions.Submission s
-    JOIN   Core.Account           a ON a.AccountId = s.AccountId
-    JOIN   CRM.Opportunity        o ON o.OpportunityId = s.OpportunityId
-    LEFT JOIN Core.[User]         u ON u.UserId    = s.AssignedToUserId
-    WHERE  s.TenantId   = @TenantId
-      AND  s.IsDeleted  = 0
-      AND  (@SearchTerm     IS NULL OR @SearchTerm     = '' OR s.SubmissionNumber LIKE '%' + @SearchTerm     + '%' OR a.AccountName LIKE '%' + @SearchTerm     + '%')
-      AND  (@Status         IS NULL OR @Status         = '' OR s.Status           = @Status)
-      AND  (@LineOfBusiness IS NULL OR @LineOfBusiness = '' OR s.LineOfBusiness   = @LineOfBusiness)
+    SELECT o.OpportunityId AS SubmissionId,
+           o.TenantId,
+           o.AccountId,
+           a.AccountName,
+           o.OpportunityId,
+           o.OpportunityName,
+           'SUB-' + RIGHT(REPLACE(CONVERT(varchar(36), o.OpportunityId), '-', ''), 8) AS SubmissionNumber,
+           COALESCE(NULLIF(o.ForecastCategoryCode, ''), 'General Liability') AS LineOfBusiness,
+           CASE
+               WHEN o.Stage = 'Closed Won' OR o.StatusCodeId = 5 THEN 'Bound'
+               WHEN o.Stage = 'Closed Lost' OR o.StatusCodeId = 6 THEN 'Declined'
+               WHEN o.Stage IN ('Proposal', 'Negotiation') THEN 'Quoted'
+               WHEN o.Stage = 'Needs Analysis' THEN 'In Review'
+               ELSE 'New'
+           END AS Status,
+           CASE
+               WHEN o.EstimatedAmount >= 100000 THEN 'High'
+               WHEN o.EstimatedAmount >= 25000 THEN 'Normal'
+               ELSE 'Low'
+           END AS Priority,
+           o.OwnerUserId AS AssignedToUserId,
+           NULL AS AssignedToUserName,
+           CAST(COALESCE(o.CloseDate, o.EstimatedCloseDate, DATEADD(day, 30, SYSUTCDATETIME())) AS datetime2) AS EffectiveDate,
+           DATEADD(year, 1, CAST(COALESCE(o.CloseDate, o.EstimatedCloseDate, DATEADD(day, 30, SYSUTCDATETIME())) AS datetime2)) AS ExpirationDate,
+           o.EstimatedAmount AS TargetPremium,
+           0 AS MarketCount,
+           (SELECT COUNT(1) FROM CRM.Quote q WHERE q.OpportunityId = o.OpportunityId AND q.IsDeleted = 0) AS QuoteCount,
+           o.CreatedDateUtc,
+           o.ModifiedDateUtc
+    FROM   CRM.Opportunity o
+    JOIN   Client.Account a ON a.AccountId = o.AccountId
+    WHERE  o.TenantId = @TenantId
+      AND  o.IsDeleted = 0
+      AND  (@SearchTerm IS NULL OR @SearchTerm = '' OR o.OpportunityName LIKE '%' + @SearchTerm + '%' OR o.OpportunityNumber LIKE '%' + @SearchTerm + '%' OR a.AccountName LIKE '%' + @SearchTerm + '%')
+),
+Filtered AS
+(
+    SELECT *
+    FROM Cte
+    WHERE (@Status IS NULL OR @Status = '' OR Status = @Status)
+      AND (@LineOfBusiness IS NULL OR @LineOfBusiness = '' OR LineOfBusiness = @LineOfBusiness)
 )
-SELECT * FROM Cte
+SELECT * FROM Filtered
 ORDER BY CreatedDateUtc DESC
 OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
 
-SELECT COUNT(1)
-FROM   Submissions.Submission s
-WHERE  s.TenantId  = @TenantId
-  AND  s.IsDeleted = 0
-  AND  (@SearchTerm     IS NULL OR @SearchTerm     = '' OR s.SubmissionNumber LIKE '%' + @SearchTerm     + '%')
-  AND  (@Status         IS NULL OR @Status         = '' OR s.Status           = @Status)
-  AND  (@LineOfBusiness IS NULL OR @LineOfBusiness = '' OR s.LineOfBusiness   = @LineOfBusiness);";
+;WITH Cte AS
+(
+    SELECT COALESCE(NULLIF(o.ForecastCategoryCode, ''), 'General Liability') AS LineOfBusiness,
+           CASE
+               WHEN o.Stage = 'Closed Won' OR o.StatusCodeId = 5 THEN 'Bound'
+               WHEN o.Stage = 'Closed Lost' OR o.StatusCodeId = 6 THEN 'Declined'
+               WHEN o.Stage IN ('Proposal', 'Negotiation') THEN 'Quoted'
+               WHEN o.Stage = 'Needs Analysis' THEN 'In Review'
+               ELSE 'New'
+           END AS Status
+    FROM   CRM.Opportunity o
+    JOIN   Client.Account a ON a.AccountId = o.AccountId
+    WHERE  o.TenantId = @TenantId
+      AND  o.IsDeleted = 0
+      AND  (@SearchTerm IS NULL OR @SearchTerm = '' OR o.OpportunityName LIKE '%' + @SearchTerm + '%' OR o.OpportunityNumber LIKE '%' + @SearchTerm + '%' OR a.AccountName LIKE '%' + @SearchTerm + '%')
+),
+Filtered AS
+(
+    SELECT *
+    FROM Cte
+    WHERE (@Status IS NULL OR @Status = '' OR Status = @Status)
+      AND (@LineOfBusiness IS NULL OR @LineOfBusiness = '' OR LineOfBusiness = @LineOfBusiness)
+)
+SELECT COUNT(1) FROM Filtered;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new
@@ -70,16 +114,38 @@ WHERE  s.TenantId  = @TenantId
     public async Task<SubmissionDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-SELECT s.SubmissionId, s.TenantId, s.AccountId, a.AccountName, s.OpportunityId, o.OpportunityName,
-       s.SubmissionNumber, s.LineOfBusiness, s.Status, s.Priority,
-       s.AssignedToUserId, u.FullName AS AssignedToUserName,
-       s.EffectiveDate, s.ExpirationDate, s.TargetPremium,
-       s.MarketCount, s.QuoteCount, s.CreatedDateUtc, s.ModifiedDateUtc
-FROM   Submissions.Submission s
-JOIN   Core.Account           a ON a.AccountId = s.AccountId
-JOIN   CRM.Opportunity        o ON o.OpportunityId = s.OpportunityId
-LEFT JOIN Core.[User]         u ON u.UserId    = s.AssignedToUserId
-WHERE  s.SubmissionId = @Id AND s.IsDeleted = 0;";
+SELECT o.OpportunityId AS SubmissionId,
+       o.TenantId,
+       o.AccountId,
+       a.AccountName,
+       o.OpportunityId,
+       o.OpportunityName,
+       'SUB-' + RIGHT(REPLACE(CONVERT(varchar(36), o.OpportunityId), '-', ''), 8) AS SubmissionNumber,
+       COALESCE(NULLIF(o.ForecastCategoryCode, ''), 'General Liability') AS LineOfBusiness,
+       CASE
+           WHEN o.Stage = 'Closed Won' OR o.StatusCodeId = 5 THEN 'Bound'
+           WHEN o.Stage = 'Closed Lost' OR o.StatusCodeId = 6 THEN 'Declined'
+           WHEN o.Stage IN ('Proposal', 'Negotiation') THEN 'Quoted'
+           WHEN o.Stage = 'Needs Analysis' THEN 'In Review'
+           ELSE 'New'
+       END AS Status,
+       CASE
+           WHEN o.EstimatedAmount >= 100000 THEN 'High'
+           WHEN o.EstimatedAmount >= 25000 THEN 'Normal'
+           ELSE 'Low'
+       END AS Priority,
+       o.OwnerUserId AS AssignedToUserId,
+       NULL AS AssignedToUserName,
+       CAST(COALESCE(o.CloseDate, o.EstimatedCloseDate, DATEADD(day, 30, SYSUTCDATETIME())) AS datetime2) AS EffectiveDate,
+       DATEADD(year, 1, CAST(COALESCE(o.CloseDate, o.EstimatedCloseDate, DATEADD(day, 30, SYSUTCDATETIME())) AS datetime2)) AS ExpirationDate,
+       o.EstimatedAmount AS TargetPremium,
+       0 AS MarketCount,
+       (SELECT COUNT(1) FROM CRM.Quote q WHERE q.OpportunityId = o.OpportunityId AND q.IsDeleted = 0) AS QuoteCount,
+       o.CreatedDateUtc,
+       o.ModifiedDateUtc
+FROM   CRM.Opportunity o
+JOIN   Client.Account a ON a.AccountId = o.AccountId
+WHERE  o.OpportunityId = @Id AND o.IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await cn.QuerySingleOrDefaultAsync<SubmissionDto>(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }

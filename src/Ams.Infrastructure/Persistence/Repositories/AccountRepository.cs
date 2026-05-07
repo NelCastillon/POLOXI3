@@ -123,6 +123,60 @@ WHERE TenantId = @TenantId AND IsDeleted = 0
         };
     }
 
+    public async Task UpdateAsync(Guid id, UpdateAccountRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Client.Account
+SET AccountName = @AccountName,
+    AccountTypeCode = @AccountTypeCode,
+    MainEmail = @MainEmail,
+    MainPhone = @MainPhone,
+    StatusCode = @StatusCode,
+    SegmentCode = @SegmentCode,
+    OwnerUserId = @OwnerUserId,
+    ParentAccountId = @ParentAccountId,
+    LifecycleStageCode = @LifecycleStageCode,
+    Industry = @Industry,
+    Website = @Website,
+    AnnualRevenue = @AnnualRevenue,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE AccountId = @Id AND IsDeleted = 0;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            Id = id,
+            request.AccountName,
+            request.AccountTypeCode,
+            request.MainEmail,
+            request.MainPhone,
+            request.StatusCode,
+            request.SegmentCode,
+            request.OwnerUserId,
+            request.ParentAccountId,
+            request.LifecycleStageCode,
+            request.Industry,
+            request.Website,
+            request.AnnualRevenue,
+            request.ModifiedByUserId
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Client.Account
+SET IsDeleted = 1,
+    StatusCode = 'Inactive',
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @UserId
+WHERE AccountId = @Id AND IsDeleted = 0;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, UserId = userId }, cancellationToken: cancellationToken));
+    }
+
     public async Task<IReadOnlyList<ContactDto>> GetContactsByAccountIdAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         const string sql = @"

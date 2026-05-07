@@ -20,20 +20,33 @@
     </Actions>
 </AppPageHeader>
 
+<section class="ma-hero as-tenant-hero">
+    <div>
+        <span class="ma-eyebrow">Tenant · Agency Structure</span>
+        <h2>Branch Network Command Center</h2>
+        <p>Manage office locations, branch codes, and active operating sites used across users, routing, accounting, and reporting.</p>
+    </div>
+    <div class="ma-hero-actions">
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/departments"><i class="bi bi-grid" aria-hidden="true"></i> Departments</a>
+        <a class="um-btn um-btn-ghost" href="/tenant/agency/teams"><i class="bi bi-people" aria-hidden="true"></i> Teams</a>
+        <button class="um-btn um-btn-primary" @onclick="OpenAddDrawer"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Branch</button>
+    </div>
+</section>
+
 <!-- KPI strip -->
-<div class="br-kpi-strip">
-    <div class="br-kpi-card">
-        <span class="br-kpi-icon br-kpi-icon--total"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></span>
+<div class="as-kpi-strip" aria-label="Branch filters">
+    <button type="button" class='as-kpi-card @KpiClass("Overview")' @onclick='() => SetKpiFilter("Overview")' title="Show all branches">
+        <span class="as-kpi-icon"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></span>
         <div><div class="br-kpi-value">@_totalCount</div><div class="br-kpi-label">Total Branches</div></div>
-    </div>
-    <div class="br-kpi-card">
-        <span class="br-kpi-icon br-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+    </button>
+    <button type="button" class='as-kpi-card @KpiClass("Active")' @onclick='() => SetKpiFilter("Active")' title="Show active branches">
+        <span class="as-kpi-icon as-kpi-icon--success"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
         <div><div class="br-kpi-value">@_activeCount</div><div class="br-kpi-label">Active</div></div>
-    </div>
-    <div class="br-kpi-card">
-        <span class="br-kpi-icon br-kpi-icon--inactive"><i class="bi bi-dash-circle" aria-hidden="true"></i></span>
+    </button>
+    <button type="button" class='as-kpi-card @KpiClass("Inactive")' @onclick='() => SetKpiFilter("Inactive")' title="Show inactive branches">
+        <span class="as-kpi-icon as-kpi-icon--warning"><i class="bi bi-dash-circle" aria-hidden="true"></i></span>
         <div><div class="br-kpi-value">@(_totalCount - _activeCount)</div><div class="br-kpi-label">Inactive</div></div>
-    </div>
+    </button>
 </div>
 
 <!-- Filter toolbar -->
@@ -47,6 +60,13 @@
         </label>
     </Filters>
 </AppFilterPanel>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+        @_loadError
+    </div>
+}
 
 <!-- Grid -->
 <div class="um-grid-card app-datagrid">
@@ -63,6 +83,7 @@
             AllowSorting="true"
             EnableHover="true"
             RowHeight="52">
+        <GridEvents TValue="BranchEntry" RowSelected="OnRowSelected" />
         <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50 })" />
         <GridColumns>
             <GridColumn Field="@nameof(BranchEntry.BranchCode)" HeaderText="Code" Width="130">
@@ -84,7 +105,7 @@
             <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
                 <Template>
                     @{ var e = (BranchEntry)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditDrawer(e)" title="Edit">
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditDrawer(e)" title="Edit">
                         <i class="bi bi-pencil" aria-hidden="true"></i>
                     </button>
                 </Template>
@@ -139,6 +160,8 @@
     private bool _showDrawer     = false;
     private bool _filterActiveOnly = false;
     private string _search       = string.Empty;
+    private string _activeFilter = "Overview";
+    private string? _loadError;
 
     private int _totalCount  = 0;
     private int _activeCount = 0;
@@ -149,8 +172,8 @@
     {
         Breadcrumbs.SetCrumbs(
             new("Home",        "/"),
-            new("Agency Setup", "/admin/agency/branches"),
-            new("Branches",    "/admin/agency/branches"));
+            new("Agency Setup", "/tenant/agency/profile"),
+            new("Branches",    "/tenant/agency/branches"));
 
         await LoadAsync();
     }
@@ -161,6 +184,7 @@
         StateHasChanged();
         try
         {
+            _loadError = null;
             var result = await Api.SearchBranchesAsync(_tenantId, _search, pageSize: 500);
             _allEntries = result?.Items.Select(d => new BranchEntry
             {
@@ -177,6 +201,11 @@
             _activeCount = _allEntries.Count(e => e.IsActive);
             ApplyFilters();
         }
+        catch (Exception ex)
+        {
+            _loadError = $"Load failed: {ex.Message}";
+            await ShowToastAsync($"Error loading branches: {ex.Message}", "e-toast-danger");
+        }
         finally { _loading = false; }
     }
 
@@ -185,6 +214,12 @@
     private void ApplyFilters()
     {
         _entries = _allEntries.Where(e =>
+            (_activeFilter switch
+            {
+                "Active" => e.IsActive,
+                "Inactive" => !e.IsActive,
+                _ => true
+            }) &&
             (!_filterActiveOnly || e.IsActive) &&
             (string.IsNullOrEmpty(_search) ||
              e.BranchName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
@@ -192,6 +227,17 @@
         ).ToList();
         StateHasChanged();
     }
+
+    private void SetKpiFilter(string filter)
+    {
+        _activeFilter = _activeFilter == filter && filter != "Overview" ? "Overview" : filter;
+        _filterActiveOnly = _activeFilter == "Active";
+        ApplyFilters();
+    }
+
+    private string KpiClass(string filter) => _activeFilter == filter ? "as-kpi-card--active" : string.Empty;
+
+    private void OnRowSelected(RowSelectEventArgs<BranchEntry> args) => OpenEditDrawer(args.Data);
 
     private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
     private void OpenEditDrawer(BranchEntry e)
@@ -238,9 +284,9 @@
             await LoadAsync();
             await ShowToastAsync("Branch saved.", "e-toast-success");
         }
-        catch
+        catch (Exception ex)
         {
-            await ShowToastAsync("Failed to save branch.", "e-toast-danger");
+            await ShowToastAsync($"Failed to save branch: {ex.Message}", "e-toast-danger");
         }
     }
 

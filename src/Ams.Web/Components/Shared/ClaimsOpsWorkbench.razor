@@ -1,0 +1,217 @@
+@namespace Ams.Web.Components.Shared
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>@Title — AMS</PageTitle>
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4500" NewestOnTop="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
+
+<AppPageHeader Title="@Title" Subtitle="@Subtitle" Icon="@Icon">
+    <Actions>
+        <a class="um-btn um-btn-ghost" href="/claims"><i class="bi bi-exclamation-circle"></i> Register</a>
+        <a class="um-btn um-btn-ghost" href="/claims/follow-up"><i class="bi bi-list-check"></i> Follow-Up</a>
+        <a class="um-btn um-btn-ghost" href="/claims/catastrophe"><i class="bi bi-cloud-lightning"></i> CAT</a>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")"></i> Refresh</button>
+        <button class="um-btn um-btn-primary" @onclick="PrimaryActionAsync"><i class="bi @PrimaryIcon"></i> @PrimaryText</button>
+    </Actions>
+</AppPageHeader>
+
+<section class="clm-hero">
+    <div>
+        <span class="clm-eyebrow">@Eyebrow</span>
+        <h2>@HeroTitle</h2>
+        <p>@HeroText</p>
+    </div>
+    <div class="clm-hero-actions">
+        <a class="um-btn um-btn-ghost" href="/claims/new"><i class="bi bi-clipboard-plus"></i> FNOL Intake</a>
+        <button class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
+    </div>
+</section>
+
+<div class="clm-kpi-strip">
+    @Kpi("bi-stack", "Total", FilteredSource.Count().ToString(), FilteredSource.Sum(x => x.ReserveAmount).ToString("C0"), "clm-kpi-total", null)
+    @Kpi("bi-folder2-open", "Open", CountStatus("Open").ToString(), "Open claim inventory", "clm-kpi-open", "status:Open")
+    @Kpi("bi-hourglass-split", "Investigating", CountStatus("Investigating").ToString(), "Coverage and liability review", "clm-kpi-invest", "status:Investigating")
+    @Kpi("bi-list-check", "Follow-Up", FilteredSource.Count(IsFollowUpDue).ToString(), "Follow-up due or overdue", "clm-kpi-follow", "followup")
+    @Kpi("bi-cloud-lightning", "CAT", FilteredSource.Count(x => x.IsCat).ToString(), "Catastrophe-tagged claims", "clm-kpi-cat", "cat")
+    @Kpi("bi-exclamation-triangle", "High Severity", FilteredSource.Count(x => x.Severity is "High" or "Critical").ToString(), "High severity claims", "clm-kpi-risk", "severity")
+</div>
+
+<div class="clm-command-bar">
+    <div class="clm-search-wrap"><i class="bi bi-search"></i><input @bind="_search" @bind:event="oninput" placeholder="@SearchPlaceholder" /></div>
+    <select class="clm-filter-sel" @bind="_statusFilter"><option value="">All status</option>@foreach (var v in StatusValues) { <option>@v</option> }</select>
+    <select class="clm-filter-sel" @bind="_lobFilter"><option value="">All lines</option>@foreach (var v in LobValues) { <option>@v</option> }</select>
+    <select class="clm-filter-sel" @bind="_severityFilter"><option value="">All severity</option>@foreach (var v in SeverityValues) { <option>@v</option> }</select>
+    <select class="clm-filter-sel" @bind="_handlerFilter"><option value="">All handlers</option>@foreach (var v in HandlerValues) { <option>@v</option> }</select>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
+    <span class="clm-filter-count">@Filtered.Count() claim(s)</span>
+</div>
+
+@if (_loading)
+{
+    <div class="mt-loading"><div class="um-spinner"></div><span>Loading @Title.ToLowerInvariant()…</span></div>
+}
+
+<div class="clm-workbench">
+    <div class="clm-feed">
+        @foreach (var group in Groups)
+        {
+            <div class="clm-date-sep"><span>@group.Label</span></div>
+            @foreach (var row in group.Items)
+            {
+                <article class="clm-item @(_selected?.ClaimId == row.ClaimId ? "clm-item-selected" : null) @(IsRisk(row) ? "clm-item-risk" : null)" @onclick="() => Select(row)">
+                    <div class="clm-icon @IconClass(row)"><i class="bi @ItemIcon(row)"></i></div>
+                    <div class="clm-body">
+                        <div class="clm-hdr"><strong>@row.DisplayNumber</strong><span class="clm-chip clm-chip-status">@row.Status</span><span class="clm-chip clm-chip-lob">@row.Lob</span>@if (IsFollowUpDue(row)) { <span class="clm-risk">Follow-up due</span> } @if (row.IsCat) { <span class="clm-cat">CAT</span> }</div>
+                        <div class="clm-title">@row.AccountName</div>
+                        <div class="clm-meta"><span><i class="bi bi-shield"></i> @row.PolicyNumber</span><span><i class="bi bi-person"></i> @row.Handler</span><span><i class="bi bi-calendar-event"></i> Loss @row.DateOfLoss.ToString("MMM d")</span><span><i class="bi bi-safe"></i> @row.ReserveAmount.ToString("C0")</span><span><i class="bi bi-geo-alt"></i> @row.State</span></div>
+                        @if (ModeKey == "fnol") { <div class="clm-note"><i class="bi bi-clipboard-plus"></i> Guided FNOL intake preview — policy, loss, claimant, assignment, and summary.</div> }
+                        @if (ModeKey == "catastrophe") { <div class="clm-note"><i class="bi bi-cloud-lightning"></i> @row.CatEventName • @row.CatCode</div> }
+                    </div>
+                    <div class="clm-actions" @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Open(row)"><i class="bi bi-arrow-right"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => LogFollowUpAsync(row)"><i class="bi bi-list-check"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => AssignAsync(row)"><i class="bi bi-person-check"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ReserveAsync(row)"><i class="bi bi-safe"></i></button></div>
+                </article>
+            }
+        }
+        @if (!Filtered.Any()) { <div class="clm-empty"><i class="bi @Icon"></i><span>No claims match the current filters.</span></div> }
+    </div>
+    @DetailPanel()
+</div>
+
+@code {
+    [Parameter] public string Mode { get; set; } = "register";
+    [Parameter] public Guid? ClaimId { get; set; }
+
+    SfToast? _toast;
+    bool _loading;
+    string _search = string.Empty;
+    string _statusFilter = string.Empty;
+    string _lobFilter = string.Empty;
+    string _severityFilter = string.Empty;
+    string _handlerFilter = string.Empty;
+    string _activeFilter = string.Empty;
+    ClaimRow? _selected;
+    readonly List<ClaimRow> _rows = [];
+
+    string ModeKey => Mode.Trim().ToLowerInvariant();
+    IEnumerable<ClaimRow> FilteredSource => ModeKey switch
+    {
+        "follow-up" => _rows.Where(IsFollowUpDue),
+        "catastrophe" => _rows.Where(x => x.IsCat),
+        "detail" when ClaimId is not null => _rows.Where(x => x.ClaimId == ClaimId),
+        _ => _rows
+    };
+    IEnumerable<ClaimRow> Filtered => FilteredSource.Where(x => MatchesKpi(x)
+        && (string.IsNullOrEmpty(_statusFilter) || x.Status == _statusFilter)
+        && (string.IsNullOrEmpty(_lobFilter) || x.Lob == _lobFilter)
+        && (string.IsNullOrEmpty(_severityFilter) || x.Severity == _severityFilter)
+        && (string.IsNullOrEmpty(_handlerFilter) || x.Handler == _handlerFilter)
+        && (string.IsNullOrEmpty(_search) || x.ClaimNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Claimant.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Handler.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.CatEventName.Contains(_search, StringComparison.OrdinalIgnoreCase))).OrderBy(x => ModeKey == "follow-up" ? x.NextFollowUpDate : x.DateOfLoss);
+    IEnumerable<Group<ClaimRow>> Groups => (ModeKey == "catastrophe" ? Filtered.GroupBy(x => x.CatEventName) : ModeKey == "follow-up" ? Filtered.GroupBy(x => FollowUpGroup(x.NextFollowUpDate)) : Filtered.GroupBy(x => x.Status)).Select(g => new Group<ClaimRow>(g.Key, g.ToList()));
+    string[] StatusValues => FilteredSource.Select(x => x.Status).Distinct().OrderBy(StatusOrder).ToArray();
+    string[] LobValues => FilteredSource.Select(x => x.Lob).Distinct().Order().ToArray();
+    string[] SeverityValues => FilteredSource.Select(x => x.Severity).Distinct().OrderBy(SeverityOrder).ToArray();
+    string[] HandlerValues => FilteredSource.Select(x => x.Handler).Distinct().Order().ToArray();
+
+    string Title => ModeKey switch { "fnol" => "FNOL Intake", "follow-up" => "Claim Follow-Up Queue", "catastrophe" => "Catastrophe View", "detail" => "Claim Detail", _ => "Claims Register" };
+    string Subtitle => ModeKey switch { "fnol" => "Guided first notice of loss intake for new claim events", "follow-up" => "Prioritize overdue, due-today, and scheduled claim follow-up actions", "catastrophe" => "Monitor catastrophe events, affected claims, exposure, and outreach", "detail" => "Claim detail, reserves, claimant, follow-up, documents, and activity context", _ => "Track and manage claims by status, severity, handler, reserve, and line of business" };
+    string Icon => ModeKey switch { "fnol" => "bi-clipboard-plus-fill", "follow-up" => "bi-list-check", "catastrophe" => "bi-cloud-lightning-fill", "detail" => "bi-file-earmark-text", _ => "bi-exclamation-circle-fill" };
+    string Eyebrow => ModeKey == "catastrophe" ? "CAT Response" : ModeKey == "fnol" ? "First Notice of Loss" : "Claims Operations";
+    string HeroTitle => ModeKey switch { "fnol" => "Guided Claim Intake", "follow-up" => "Follow-Up Command Queue", "catastrophe" => "Catastrophe Event Desk", "detail" => "Claim 360 Detail", _ => "Claims Command Center" };
+    string HeroText => "Search, filter, triage, and action claim work by severity, status, handler, policy, claimant, reserve, and catastrophe exposure.";
+    string PrimaryText => ModeKey switch { "fnol" => "Submit FNOL", "catastrophe" => "Declare Event", "follow-up" => "Log Action", "detail" => "Add Task", _ => "Report Claim" };
+    string PrimaryIcon => ModeKey switch { "fnol" => "bi-check-lg", "catastrophe" => "bi-cloud-lightning", "follow-up" => "bi-plus-lg", "detail" => "bi-list-check", _ => "bi-plus-lg" };
+    string SearchPlaceholder => ModeKey switch { "catastrophe" => "Search event, claim, state, policy, claimant…", "follow-up" => "Search claim, account, handler, follow-up reason…", _ => "Search claim number, account, policy, claimant, handler…" };
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Claims", "/claims"), new(Title, CurrentUrl));
+        await LoadAsync();
+    }
+
+    string CurrentUrl => ModeKey switch { "fnol" => "/claims/new", "follow-up" => "/claims/follow-up", "catastrophe" => "/claims/catastrophe", "detail" => ClaimId is null ? "/claims" : $"/claims/{ClaimId}", _ => "/claims" };
+    async Task LoadAsync() { _loading = true; await Task.Delay(0); if (_rows.Count == 0) BuildStub(); _selected ??= Filtered.FirstOrDefault() ?? _rows.FirstOrDefault(); _loading = false; }
+    bool MatchesKpi(ClaimRow x) => _activeFilter switch { "followup" => IsFollowUpDue(x), "cat" => x.IsCat, "severity" => x.Severity is "High" or "Critical", _ when _activeFilter.StartsWith("status:") => x.Status == _activeFilter[7..], _ => true };
+    int CountStatus(string status) => FilteredSource.Count(x => x.Status == status);
+    void ResetFilters() { _search = _statusFilter = _lobFilter = _severityFilter = _handlerFilter = _activeFilter = string.Empty; }
+    void SetFilter(string? filter) => _activeFilter = _activeFilter == (filter ?? string.Empty) ? string.Empty : filter ?? string.Empty;
+    void Select(ClaimRow row) => _selected = row;
+    void Open(ClaimRow row) => Nav.NavigateTo($"/claims/{row.ClaimId}");
+    Task PrimaryActionAsync() => ToastAsync($"{PrimaryText} started.");
+    Task LogFollowUpAsync(ClaimRow row) => ToastAsync($"Follow-up logged for {row.ClaimNumber}.");
+    Task AssignAsync(ClaimRow row) => ToastAsync($"Assignment action queued for {row.ClaimNumber}.");
+    Task ReserveAsync(ClaimRow row) => ToastAsync($"Reserve update opened for {row.ClaimNumber}.");
+    async Task ToastAsync(string message) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Title = Title, Content = message, CssClass = "e-toast-success" }); }
+
+    bool IsFollowUpDue(ClaimRow row) => row.NextFollowUpDate.Date <= DateTime.Today.AddDays(3) && row.Status is not "Closed" and not "Denied";
+    static bool IsRisk(ClaimRow row) => row.Severity is "High" or "Critical" || row.NextFollowUpDate.Date < DateTime.Today && row.Status is not "Closed";
+    static int StatusOrder(string s) => s switch { "Open" => 1, "Investigating" => 2, "Pending Carrier" => 3, "Litigation" => 4, "Closed" => 5, "Denied" => 6, _ => 99 };
+    static int SeverityOrder(string s) => s switch { "Critical" => 1, "High" => 2, "Medium" => 3, "Low" => 4, _ => 99 };
+    static string FollowUpGroup(DateTime d) => d.Date < DateTime.Today ? "Overdue" : d.Date == DateTime.Today ? "Due Today" : d.Date <= DateTime.Today.AddDays(3) ? "Next 3 Days" : "Upcoming";
+    static string ItemIcon(ClaimRow row) => row.IsCat ? "bi-cloud-lightning-fill" : row.Status == "Closed" ? "bi-check-circle-fill" : "bi-exclamation-circle-fill";
+    static string IconClass(ClaimRow row) => row.Severity is "Critical" or "High" ? "clm-icon-danger" : row.IsCat ? "clm-icon-cat" : string.Empty;
+
+    RenderFragment Kpi(string icon, string label, string value, string title, string css, string? filter) => @<button class="clm-kpi-card @css @(_activeFilter == (filter ?? string.Empty) ? "clm-kpi-active" : "")" title="@title" @onclick="() => SetFilter(filter)"><div class="clm-kpi-val">@value</div><div class="clm-kpi-lbl"><i class="bi @icon"></i> @label</div><small>@title</small></button>;
+    RenderFragment DetailPanel() => @<text>@if (_selected is not null) { <aside class="clm-detail-panel"><div class="clm-detail-header"><span class="clm-chip clm-chip-status">@_selected.Status</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _selected = null"><i class="bi bi-x-lg"></i></button></div><h3>@_selected.ClaimNumber</h3><p>@_selected.AccountName • @_selected.Claimant</p><div class="clm-detail-grid"><div><span>Policy</span><strong>@_selected.PolicyNumber</strong></div><div><span>LOB</span><strong>@_selected.Lob</strong></div><div><span>Loss Date</span><strong>@_selected.DateOfLoss.ToString("d")</strong></div><div><span>Reported</span><strong>@_selected.DateReported.ToString("d")</strong></div><div><span>Severity</span><strong>@_selected.Severity</strong></div><div><span>Reserve</span><strong>@_selected.ReserveAmount.ToString("C0")</strong></div><div><span>Handler</span><strong>@_selected.Handler</strong></div><div><span>Next Follow-Up</span><strong>@_selected.NextFollowUpDate.ToString("d")</strong></div></div><div class="clm-detail-actions"><button class="um-btn um-btn-primary" @onclick="() => Open(_selected)"><i class="bi bi-arrow-right"></i> Open</button><button class="um-btn um-btn-ghost" @onclick="() => LogFollowUpAsync(_selected)"><i class="bi bi-list-check"></i> Follow-Up</button><button class="um-btn um-btn-ghost" @onclick="() => AssignAsync(_selected)"><i class="bi bi-person-check"></i> Assign</button><button class="um-btn um-btn-ghost" @onclick="() => ReserveAsync(_selected)"><i class="bi bi-safe"></i> Reserve</button></div></aside> }</text>;
+
+    void BuildStub()
+    {
+        var rng = new Random(91);
+        string[] accounts = ["Sullivan Mfg. LLC", "Bridgewater Hotels", "Metro Freight Co.", "PineCrest Builders", "Omega Tech Corp.", "BlueSky Aviation", "Harbor Fresh Foods"];
+        string[] lobs = ["General Liability", "Commercial Auto", "Commercial Property", "Workers Comp", "Umbrella", "Home/Dwelling", "Personal Auto"];
+        string[] statuses = ["Open", "Open", "Investigating", "Pending Carrier", "Litigation", "Closed", "Denied"];
+        string[] severities = ["Low", "Medium", "Medium", "High", "Critical"];
+        string[] handlers = ["Maria Santos", "James Patel", "Chen Li", "Aisha Williams", "Tom Reeves"];
+        string[] states = ["TX", "CA", "FL", "NY", "IL", "GA", "CO"];
+        string[] catEvents = ["Texas Spring Hailstorm", "Florida Wind Event", "Midwest Flooding", "California Wildfire Watch"];
+        for (var i = 1; i <= 70; i++)
+        {
+            var loss = DateTime.Today.AddDays(-rng.Next(1, 180));
+            var isCat = rng.Next(5) == 0;
+            _rows.Add(new ClaimRow
+            {
+                ClaimNumber = $"CLM-2025-{i:D5}",
+                AccountName = accounts[rng.Next(accounts.Length)],
+                PolicyNumber = $"POL-2025-{rng.Next(10000, 99999)}",
+                Lob = lobs[rng.Next(lobs.Length)],
+                Status = statuses[rng.Next(statuses.Length)],
+                Severity = severities[rng.Next(severities.Length)],
+                Handler = handlers[rng.Next(handlers.Length)],
+                Claimant = $"Claimant {i:D2}",
+                DateOfLoss = loss,
+                DateReported = loss.AddDays(rng.Next(0, 12)),
+                NextFollowUpDate = DateTime.Today.AddDays(rng.Next(-7, 20)),
+                ReserveAmount = rng.Next(1000, 150000),
+                PaidAmount = rng.Next(0, 80000),
+                State = states[rng.Next(states.Length)],
+                LossType = lobs[rng.Next(lobs.Length)],
+                IsCat = isCat,
+                CatEventName = isCat ? catEvents[rng.Next(catEvents.Length)] : "Non-CAT Claims",
+                CatCode = isCat ? $"CAT-2025-{rng.Next(100, 999)}" : string.Empty
+            });
+        }
+    }
+
+    sealed record Group<T>(string Label, List<T> Items);
+    sealed class ClaimRow
+    {
+        public Guid ClaimId { get; set; } = Guid.NewGuid();
+        public string DisplayNumber => ClaimNumber;
+        public string ClaimNumber { get; set; } = string.Empty;
+        public string AccountName { get; set; } = string.Empty;
+        public string PolicyNumber { get; set; } = string.Empty;
+        public string Lob { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string Severity { get; set; } = string.Empty;
+        public string Handler { get; set; } = string.Empty;
+        public string Claimant { get; set; } = string.Empty;
+        public DateTime DateOfLoss { get; set; }
+        public DateTime DateReported { get; set; }
+        public DateTime NextFollowUpDate { get; set; }
+        public decimal ReserveAmount { get; set; }
+        public decimal PaidAmount { get; set; }
+        public string State { get; set; } = string.Empty;
+        public string LossType { get; set; } = string.Empty;
+        public bool IsCat { get; set; }
+        public string CatEventName { get; set; } = string.Empty;
+        public string CatCode { get; set; } = string.Empty;
+    }
+}

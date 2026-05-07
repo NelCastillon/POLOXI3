@@ -35,32 +35,45 @@
     </Actions>
 </AppPageHeader>
 
+<section class="ma-hero opp-hero">
+    <div>
+        <span class="ma-eyebrow">CRM · Opportunities</span>
+        <h2>Opportunity Command Center</h2>
+        <p>Track revenue potential from qualification to close across pipeline, kanban, and forecast views.</p>
+    </div>
+    <div class="ma-hero-actions">
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities/pipeline")'><i class="bi bi-funnel"></i> Pipeline</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/opportunities/board")'><i class="bi bi-kanban"></i> Board</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/crm/forecast")'><i class="bi bi-graph-up-arrow"></i> Forecast</button>
+    </div>
+</section>
+
 <!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
 <div class="op-kpi-strip">
-    <div class="op-kpi-card">
+    <div class="op-kpi-card @(_activeFilter is null ? "op-kpi-card--active" : "")" @onclick='() => SetKpiFilter(null)' title="Show all opportunities">
         <span class="op-kpi-icon op-ki1"><i class="bi bi-trophy-fill" aria-hidden="true"></i></span>
         <div><div class="op-kpi-val">@_kpi.Total</div><div class="op-kpi-lbl">Total Open</div></div>
     </div>
-    <div class="op-kpi-card">
+    <div class="op-kpi-card @(_activeFilter == "pipeline" ? "op-kpi-card--active" : "")" @onclick='() => SetKpiFilter("pipeline")' title="Show open pipeline opportunities">
         <span class="op-kpi-icon op-ki2"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
         <div><div class="op-kpi-val">@_kpi.Pipeline.ToString("C0")</div><div class="op-kpi-lbl">Pipeline</div></div>
     </div>
-    <div class="op-kpi-card">
+    <div class="op-kpi-card @(_activeFilter == "weighted" ? "op-kpi-card--active" : "")" @onclick='() => SetKpiFilter("weighted")' title="Show weighted pipeline opportunities">
         <span class="op-kpi-icon op-ki3"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
         <div><div class="op-kpi-val">@_kpi.WeightedPipeline.ToString("C0")</div><div class="op-kpi-lbl">Weighted</div></div>
     </div>
-    <div class="op-kpi-card">
+    <div class="op-kpi-card @(_activeFilter == "won" ? "op-kpi-card--active" : "")" @onclick='() => SetKpiFilter("won")' title="Show won opportunities">
         <span class="op-kpi-icon op-ki4"><i class="bi bi-check2-circle" aria-hidden="true"></i></span>
         <div><div class="op-kpi-val">@_kpi.WonThisMonth.ToString("C0")</div><div class="op-kpi-lbl">Won This Month</div></div>
     </div>
-    <div class="op-kpi-card">
+    <div class="op-kpi-card @(_activeFilter == "closing" ? "op-kpi-card--active" : "")" @onclick='() => SetKpiFilter("closing")' title="Show opportunities closing this week">
         <span class="op-kpi-icon op-ki5"><i class="bi bi-calendar-x" aria-hidden="true"></i></span>
         <div>
             <div class="op-kpi-val @(_kpi.ClosingThisWeek > 0 ? "op-kpi-val--warn" : "")">@_kpi.ClosingThisWeek</div>
             <div class="op-kpi-lbl">Closing This Week</div>
         </div>
     </div>
-    <div class="op-kpi-card">
+    <div class="op-kpi-card @(_activeFilter == "highprob" ? "op-kpi-card--active" : "")" @onclick='() => SetKpiFilter("highprob")' title="Show high-probability opportunities">
         <span class="op-kpi-icon op-ki1"><i class="bi bi-percent" aria-hidden="true"></i></span>
         <div><div class="op-kpi-val">@_kpi.AvgWinRate.ToString("F0")%</div><div class="op-kpi-lbl">Avg Win Rate</div></div>
     </div>
@@ -322,6 +335,7 @@
     private string _filterStage   = string.Empty;
     private string _filterOwner   = string.Empty;
     private string _filterForecast = string.Empty;
+    private string? _activeFilter;
 
     private bool   _showAssign     = false;
     private bool   _showBulkStage  = false;
@@ -424,6 +438,15 @@
     private void ApplyFilters()
     {
         _filtered = _opps.Where(r =>
+            (_activeFilter switch
+            {
+                "pipeline" => r.Stage != "Closed Won" && r.Stage != "Closed Lost",
+                "weighted" => r.Stage != "Closed Won" && r.Stage != "Closed Lost" && r.WinPct > 0,
+                "won" => r.Stage == "Closed Won",
+                "closing" => r.Stage != "Closed Won" && r.Stage != "Closed Lost" && (r.CloseDate - DateTime.UtcNow).TotalDays <= 7,
+                "highprob" => r.WinPct >= 70,
+                _ => true
+            }) &&
             (string.IsNullOrEmpty(_filterStage)    || r.Stage == _filterStage) &&
             (string.IsNullOrEmpty(_filterOwner)    || r.Owner == _filterOwner) &&
             (string.IsNullOrEmpty(_filterForecast) || r.ForecastCategory == _filterForecast) &&
@@ -431,6 +454,12 @@
              r.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
              r.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase))
         ).ToList();
+    }
+
+    private void SetKpiFilter(string? filter)
+    {
+        _activeFilter = filter;
+        ApplyFilters();
     }
 
     private void OnRowSelected(RowSelectEventArgs<OppRow> args)   { if (!_selected.Any(x => x.OppId == args.Data.OppId)) _selected.Add(args.Data); }

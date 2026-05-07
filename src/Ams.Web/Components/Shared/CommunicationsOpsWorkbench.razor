@@ -1,0 +1,405 @@
+@namespace Ams.Web.Components.Shared
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>@Title — AMS</PageTitle>
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4500" NewestOnTop="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
+
+<AppPageHeader Title="@Title" Subtitle="@Subtitle" Icon="@Icon">
+    <Actions>
+        <a class="um-btn um-btn-ghost" href="/communications/inbox"><i class="bi bi-inbox"></i> Inbox</a>
+        <a class="um-btn um-btn-ghost" href="/communications/outreach"><i class="bi bi-telephone-outbound"></i> Outreach</a>
+        <a class="um-btn um-btn-ghost" href="/communications/templates"><i class="bi bi-layout-text-sidebar"></i> Templates</a>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")"></i> Refresh</button>
+        <button class="um-btn um-btn-primary" @onclick="PrimaryActionAsync"><i class="bi @PrimaryIcon"></i> @PrimaryText</button>
+    </Actions>
+</AppPageHeader>
+
+<section class="comw-hero">
+    <div>
+        <span class="comw-eyebrow">@Eyebrow</span>
+        <h2>@HeroTitle</h2>
+        <p>@HeroText</p>
+    </div>
+    <div class="comw-hero-actions">
+        <a class="um-btn um-btn-ghost" href="/communications/campaigns"><i class="bi bi-megaphone"></i> Campaigns</a>
+        <a class="um-btn um-btn-ghost" href="/communications/appointments"><i class="bi bi-calendar-event"></i> Appointments</a>
+        <button class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
+    </div>
+</section>
+
+<div class="comw-kpi-strip">
+    @Kpi("bi-stack", "Total", FilteredSource.Count().ToString(), DeliveryRate, "comw-kpi-total", null)
+    @Kpi("bi-envelope-open", "Unread", FilteredSource.Count(x => x.Status == "Unread").ToString(), "Unread communication queue", "comw-kpi-unread", "status:Unread")
+    @Kpi("bi-send", "Scheduled", FilteredSource.Count(x => x.Status == "Scheduled").ToString(), "Scheduled communications", "comw-kpi-scheduled", "status:Scheduled")
+    @Kpi("bi-check-circle", "Sent", FilteredSource.Count(x => x.Status == "Sent").ToString(), "Delivered or completed", "comw-kpi-sent", "status:Sent")
+    @Kpi("bi-exclamation-triangle", "Failed", FilteredSource.Count(x => x.Status == "Failed" || x.Priority == "High").ToString(), "Failed or high priority", "comw-kpi-risk", "risk")
+    @Kpi("bi-graph-up", "Response", ResponseRate, "Engagement response rate", "comw-kpi-response", "response")
+</div>
+
+<div class="comw-command-bar">
+    <div class="comw-search-wrap"><i class="bi bi-search"></i><input @bind="_search" @bind:event="oninput" placeholder="@SearchPlaceholder" /></div>
+    <select class="comw-filter-sel" @bind="_statusFilter"><option value="">All status</option>@foreach (var v in StatusValues) { <option>@v</option> }</select>
+    <select class="comw-filter-sel" @bind="_channelFilter"><option value="">All channels</option>@foreach (var v in ChannelValues) { <option>@v</option> }</select>
+    <select class="comw-filter-sel" @bind="_typeFilter"><option value="">All types</option>@foreach (var v in TypeValues) { <option>@v</option> }</select>
+    <select class="comw-filter-sel" @bind="_ownerFilter"><option value="">All owners</option>@foreach (var v in OwnerValues) { <option>@v</option> }</select>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
+    <span class="comw-filter-count">@Filtered.Count() item(s)</span>
+</div>
+
+@if (_loading)
+{
+    <div class="mt-loading"><div class="um-spinner"></div><span>Loading @Title.ToLowerInvariant()…</span></div>
+}
+
+<div class="comw-workbench">
+    <div class="comw-feed">
+        @foreach (var group in Groups)
+        {
+            <div class="comw-date-sep"><span>@group.Label</span></div>
+            @foreach (var row in group.Items)
+            {
+                <article class="comw-item @(_selected?.Id == row.Id ? "comw-item-selected" : null) @(IsRisk(row) ? "comw-item-risk" : null)" @onclick="() => Select(row)">
+                    <div class="comw-icon @IconClass(row)"><i class="bi @ItemIcon(row)"></i></div>
+                    <div class="comw-body">
+                        <div class="comw-hdr"><strong>@row.Number</strong><span class="comw-chip comw-chip-status">@row.Status</span><span class="comw-chip comw-chip-channel">@row.Channel</span>@if (IsRisk(row)) { <span class="comw-risk">Attention</span> }</div>
+                        <div class="comw-title">@row.Subject</div>
+                        <div class="comw-meta"><span><i class="bi bi-person"></i> @row.ContactName</span><span><i class="bi bi-building"></i> @row.Account</span><span><i class="bi bi-person-badge"></i> @row.Owner</span><span><i class="bi bi-calendar-event"></i> @row.ScheduledAt.ToString("MMM d, h:mm tt")</span><span><i class="bi bi-graph-up"></i> @row.ResponseScore%</span></div>
+                        @if (ModeKey == "templates") { <div class="comw-note"><i class="bi bi-layout-text-sidebar"></i> Template: @row.TemplateName • @row.Type</div> }
+                        @if (ModeKey == "appointments") { <div class="comw-note"><i class="bi bi-calendar-event"></i> Appointment with @row.ContactName at @row.ScheduledAt.ToString("h:mm tt")</div> }
+                    </div>
+                    <div class="comw-actions" @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenAsync(row)"><i class="bi bi-arrow-right"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => SendAsync(row)"><i class="bi bi-send"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ScheduleAsync(row)"><i class="bi bi-calendar-plus"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ArchiveAsync(row)"><i class="bi bi-archive"></i></button></div>
+                </article>
+            }
+        }
+        @if (!Filtered.Any()) { <div class="comw-empty"><i class="bi @Icon"></i><span>No communication records match the current filters.</span></div> }
+    </div>
+    @DetailPanel()
+</div>
+
+<SfDialog @bind-Visible="_showActionDialog" Width="640px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header">
+            <i class="bi @ActionDialogIcon"></i>
+            <span>@_actionTitle</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActionDialog"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <EditForm Model="_form" OnValidSubmit="SaveActionAsync">
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field um-field--full">
+                        <label>Subject</label>
+                        <InputText @bind-Value="_form.Subject" class="um-input" />
+                    </div>
+                    <div class="um-field">
+                        <label>Contact</label>
+                        <InputText @bind-Value="_form.ContactName" class="um-input" />
+                    </div>
+                    <div class="um-field">
+                        <label>Account</label>
+                        <InputText @bind-Value="_form.Account" class="um-input" />
+                    </div>
+                    <div class="um-field">
+                        <label>Channel</label>
+                        <InputSelect @bind-Value="_form.Channel" class="um-input">
+                            @foreach (var channel in AllChannels)
+                            {
+                                <option value="@channel">@channel</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <div class="um-field">
+                        <label>Status</label>
+                        <InputSelect @bind-Value="_form.Status" class="um-input">
+                            @foreach (var status in AllStatuses)
+                            {
+                                <option value="@status">@status</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <div class="um-field">
+                        <label>Type</label>
+                        <InputText @bind-Value="_form.Type" class="um-input" />
+                    </div>
+                    <div class="um-field">
+                        <label>Owner</label>
+                        <InputText @bind-Value="_form.Owner" class="um-input" />
+                    </div>
+                    <div class="um-field">
+                        <label>Scheduled</label>
+                        <input type="datetime-local" class="um-input" value="@_form.ScheduledAt.ToString("yyyy-MM-ddTHH:mm")" @onchange="@(e => OnScheduledAtChanged(e))" />
+                    </div>
+                    <div class="um-field">
+                        <label>Template</label>
+                        <InputText @bind-Value="_form.TemplateName" class="um-input" />
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseActionDialog">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary">@ActionSubmitText</button>
+            </div>
+        </EditForm>
+    </DialogContent>
+</SfDialog>
+
+@code {
+    [Parameter] public string Mode { get; set; } = "inbox";
+
+    SfToast? _toast;
+    bool _loading;
+    string _search = string.Empty;
+    string _statusFilter = string.Empty;
+    string _channelFilter = string.Empty;
+    string _typeFilter = string.Empty;
+    string _ownerFilter = string.Empty;
+    string _activeFilter = string.Empty;
+    CommWorkRow? _selected;
+    CommWorkRow _form = new();
+    bool _showActionDialog;
+    string _actionMode = string.Empty;
+    string _actionTitle = string.Empty;
+    readonly List<CommWorkRow> _rows = [];
+
+    static readonly string[] AllChannels = ["Email", "SMS", "Phone", "Portal", "Letter"];
+    static readonly string[] AllStatuses = ["Unread", "Scheduled", "Sent", "Failed", "Archived"];
+
+    string ModeKey => Mode.Trim().ToLowerInvariant();
+    IEnumerable<CommWorkRow> FilteredSource => _rows.Where(x => x.Mode == ModeKey);
+    IEnumerable<CommWorkRow> Filtered => FilteredSource.Where(x => MatchesKpi(x)
+        && (string.IsNullOrEmpty(_statusFilter) || x.Status == _statusFilter)
+        && (string.IsNullOrEmpty(_channelFilter) || x.Channel == _channelFilter)
+        && (string.IsNullOrEmpty(_typeFilter) || x.Type == _typeFilter)
+        && (string.IsNullOrEmpty(_ownerFilter) || x.Owner == _ownerFilter)
+        && (string.IsNullOrEmpty(_search) || x.Number.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Account.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.ContactName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.TemplateName.Contains(_search, StringComparison.OrdinalIgnoreCase))).OrderByDescending(x => x.ScheduledAt);
+    IEnumerable<Group<CommWorkRow>> Groups => (ModeKey == "appointments" ? Filtered.GroupBy(x => DateGroup(x.ScheduledAt.Date)) : Filtered.GroupBy(x => x.Status)).Select(g => new Group<CommWorkRow>(g.Key, g.ToList()));
+    string[] StatusValues => FilteredSource.Select(x => x.Status).Distinct().OrderBy(StatusOrder).ToArray();
+    string[] ChannelValues => FilteredSource.Select(x => x.Channel).Distinct().Order().ToArray();
+    string[] TypeValues => FilteredSource.Select(x => x.Type).Distinct().Order().ToArray();
+    string[] OwnerValues => FilteredSource.Select(x => x.Owner).Distinct().Order().ToArray();
+
+    string Title => ModeKey switch { "campaigns" => "Campaigns Workbench", "templates" => "Communications Templates", "appointments" => "Appointments", "outreach" => "Outreach Queue", "notifications" => "Notifications", _ => "Communications Inbox" };
+    string Subtitle => ModeKey switch { "campaigns" => "Plan, schedule, monitor, and optimize multi-channel campaigns", "templates" => "Manage reusable message templates for email, SMS, portal, and letters", "appointments" => "Coordinate client appointments, reminders, meetings, and follow-ups", "outreach" => "Prioritize calls, emails, and outbound communication touchpoints", "notifications" => "Review system, portal, user, and client notification delivery", _ => "Manage inbound and outbound communication across channels" };
+    string Icon => ModeKey switch { "campaigns" => "bi-megaphone-fill", "templates" => "bi-layout-text-sidebar", "appointments" => "bi-calendar-event-fill", "outreach" => "bi-telephone-outbound-fill", "notifications" => "bi-bell-fill", _ => "bi-inbox-fill" };
+    string Eyebrow => "Communications Operations";
+    string HeroTitle => ModeKey switch { "campaigns" => "Campaign Command Center", "templates" => "Template Library Desk", "appointments" => "Appointment Scheduler", "outreach" => "Outreach Execution Queue", "notifications" => "Notification Monitor", _ => "Omni-Channel Inbox" };
+    string HeroText => "Search, filter, triage, schedule, send, and archive communication work by channel, status, owner, audience, response, and priority.";
+    string PrimaryText => ModeKey switch { "campaigns" => "New Campaign", "templates" => "New Template", "appointments" => "New Appointment", "outreach" => "Start Outreach", "notifications" => "Send Notification", _ => "Compose" };
+    string PrimaryIcon => ModeKey switch { "appointments" => "bi-calendar-plus", "outreach" => "bi-telephone-outbound", "notifications" => "bi-send", _ => "bi-plus-lg" };
+    string SearchPlaceholder => "Search subject, contact, account, owner, template, channel…";
+    string DeliveryRate => FilteredSource.Any() ? $"{FilteredSource.Count(x => x.Status == "Sent") / (double)FilteredSource.Count():P0}" : "—";
+    string ResponseRate => FilteredSource.Any() ? $"{FilteredSource.Average(x => x.ResponseScore):F0}%" : "—";
+    string ActionDialogIcon => _actionMode == "create" ? PrimaryIcon : "bi-pencil-square";
+    string ActionSubmitText => _actionMode == "create" ? PrimaryText : "Save Changes";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Communications", "/communications/inbox"), new(Title, CurrentUrl));
+        await LoadAsync();
+    }
+
+    string CurrentUrl => ModeKey switch { "campaigns" => "/communications/campaigns", "templates" => "/communications/templates", "appointments" => "/communications/appointments", "outreach" => "/communications/outreach", "notifications" => "/communications/notifications", _ => "/communications/inbox" };
+    async Task LoadAsync() { _loading = true; await Task.Delay(0); if (_rows.Count == 0) BuildStub(); _selected ??= Filtered.FirstOrDefault(); _loading = false; }
+    bool MatchesKpi(CommWorkRow x) => _activeFilter switch { "risk" => IsRisk(x), "response" => x.ResponseScore >= 60, _ when _activeFilter.StartsWith("status:") => x.Status == _activeFilter[7..], _ => true };
+    void ResetFilters() { _search = _statusFilter = _channelFilter = _typeFilter = _ownerFilter = _activeFilter = string.Empty; }
+    void SetFilter(string? filter) => _activeFilter = _activeFilter == (filter ?? string.Empty) ? string.Empty : filter ?? string.Empty;
+    void Select(CommWorkRow row) => _selected = row;
+    Task OpenAsync(CommWorkRow row)
+    {
+        _selected = row;
+        _form = Clone(row);
+        _actionMode = "edit";
+        _actionTitle = $"Edit {row.Number}";
+        _showActionDialog = true;
+        return Task.CompletedTask;
+    }
+
+    Task PrimaryActionAsync()
+    {
+        _form = NewRow();
+        _actionMode = "create";
+        _actionTitle = PrimaryText;
+        _showActionDialog = true;
+        return Task.CompletedTask;
+    }
+
+    async Task SendAsync(CommWorkRow row)
+    {
+        row.Status = "Sent";
+        _selected = row;
+        await ToastAsync($"Sent {row.Number}.");
+    }
+
+    async Task ScheduleAsync(CommWorkRow row)
+    {
+        row.Status = "Scheduled";
+        row.ScheduledAt = row.ScheduledAt < DateTime.Now ? DateTime.Now.AddHours(1) : row.ScheduledAt;
+        _selected = row;
+        await ToastAsync($"Scheduled {row.Number}.");
+    }
+
+    async Task ArchiveAsync(CommWorkRow row)
+    {
+        row.Status = "Archived";
+        _selected = row;
+        await ToastAsync($"Archived {row.Number}.");
+    }
+
+    async Task SaveActionAsync()
+    {
+        if (_actionMode == "create")
+        {
+            _rows.Insert(0, Clone(_form));
+            _selected = _rows[0];
+            _showActionDialog = false;
+            await ToastAsync($"{PrimaryText} created.");
+            return;
+        }
+
+        if (_selected is not null)
+        {
+            ApplyForm(_selected, _form);
+            _showActionDialog = false;
+            await ToastAsync($"Saved {_selected.Number}.");
+        }
+    }
+
+    void CloseActionDialog() => _showActionDialog = false;
+
+    void OnScheduledAtChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        if (DateTime.TryParse(e.Value?.ToString(), out var scheduledAt))
+        {
+            _form.ScheduledAt = scheduledAt;
+        }
+    }
+
+    async Task ToastAsync(string message) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Title = Title, Content = message, CssClass = "e-toast-success" }); }
+
+    CommWorkRow NewRow() => new()
+    {
+        Mode = ModeKey,
+        Number = $"{ModePrefix}-NEW-{DateTime.Now:HHmmss}",
+        Subject = $"New {PrimaryText.ToLowerInvariant()}",
+        Account = "New Account",
+        ContactName = "New Contact",
+        Owner = ModeKey == "campaigns" ? "Marketing" : "CSR Team",
+        Channel = ModeKey == "outreach" ? "Phone" : "Email",
+        Type = ModeKey switch
+        {
+            "campaigns" => "Campaign",
+            "templates" => "Email Template",
+            "appointments" => "Appointment",
+            "outreach" => "Call",
+            "notifications" => "System",
+            _ => "Message"
+        },
+        Status = ModeKey == "appointments" ? "Scheduled" : "Unread",
+        Priority = "Normal",
+        ScheduledAt = DateTime.Now.AddHours(1),
+        TemplateName = "Standard",
+        ResponseScore = 0
+    };
+
+    string ModePrefix => ModeKey switch { "campaigns" => "CMP", "templates" => "TPL", "appointments" => "APT", "outreach" => "OUT", "notifications" => "NTF", _ => "INB" };
+
+    static CommWorkRow Clone(CommWorkRow row) => new()
+    {
+        Id = row.Id,
+        Mode = row.Mode,
+        Number = row.Number,
+        Subject = row.Subject,
+        Account = row.Account,
+        ContactName = row.ContactName,
+        Owner = row.Owner,
+        Channel = row.Channel,
+        Type = row.Type,
+        Status = row.Status,
+        Priority = row.Priority,
+        ScheduledAt = row.ScheduledAt,
+        TemplateName = row.TemplateName,
+        ResponseScore = row.ResponseScore
+    };
+
+    static void ApplyForm(CommWorkRow target, CommWorkRow form)
+    {
+        target.Subject = form.Subject;
+        target.Account = form.Account;
+        target.ContactName = form.ContactName;
+        target.Owner = form.Owner;
+        target.Channel = form.Channel;
+        target.Type = form.Type;
+        target.Status = form.Status;
+        target.ScheduledAt = form.ScheduledAt;
+        target.TemplateName = form.TemplateName;
+    }
+
+    static bool IsRisk(CommWorkRow row) => row.Status == "Failed" || row.Priority == "High" || row.ScheduledAt < DateTime.Now.AddDays(-1) && row.Status is "Unread" or "Scheduled";
+    static int StatusOrder(string s) => s switch { "Unread" => 1, "Scheduled" => 2, "Sent" => 3, "Failed" => 4, "Archived" => 5, _ => 99 };
+    static string DateGroup(DateTime d) => d == DateTime.Today ? "Today" : d == DateTime.Today.AddDays(1) ? "Tomorrow" : d < DateTime.Today ? "Past Due" : d.ToString("MMM d, yyyy");
+    static string ItemIcon(CommWorkRow row) => row.Channel switch { "SMS" => "bi-chat-dots-fill", "Phone" => "bi-telephone-fill", "Portal" => "bi-window", "Letter" => "bi-envelope-paper", _ => "bi-envelope-fill" };
+    static string IconClass(CommWorkRow row) => row.Status == "Failed" ? "comw-icon-danger" : row.Channel == "Phone" ? "comw-icon-phone" : row.Channel == "SMS" ? "comw-icon-sms" : string.Empty;
+
+    RenderFragment Kpi(string icon, string label, string value, string title, string css, string? filter) => @<button class="comw-kpi-card @css @(_activeFilter == (filter ?? string.Empty) ? "comw-kpi-active" : "")" title="@title" @onclick="() => SetFilter(filter)"><div class="comw-kpi-val">@value</div><div class="comw-kpi-lbl"><i class="bi @icon"></i> @label</div><small>@title</small></button>;
+    RenderFragment DetailPanel() => @<text>@if (_selected is not null) { <aside class="comw-detail-panel"><div class="comw-detail-header"><span class="comw-chip comw-chip-status">@_selected.Status</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _selected = null"><i class="bi bi-x-lg"></i></button></div><h3>@_selected.Number</h3><p>@_selected.Subject</p><div class="comw-detail-grid"><div><span>Contact</span><strong>@_selected.ContactName</strong></div><div><span>Account</span><strong>@_selected.Account</strong></div><div><span>Channel</span><strong>@_selected.Channel</strong></div><div><span>Type</span><strong>@_selected.Type</strong></div><div><span>Owner</span><strong>@_selected.Owner</strong></div><div><span>Scheduled</span><strong>@_selected.ScheduledAt.ToString("g")</strong></div><div><span>Template</span><strong>@_selected.TemplateName</strong></div><div><span>Response</span><strong>@_selected.ResponseScore%</strong></div></div><div class="comw-detail-actions"><button class="um-btn um-btn-primary" @onclick="() => OpenAsync(_selected)"><i class="bi bi-pencil-square"></i> Edit</button><button class="um-btn um-btn-ghost" @onclick="() => SendAsync(_selected)"><i class="bi bi-send"></i> Send</button><button class="um-btn um-btn-ghost" @onclick="() => ScheduleAsync(_selected)"><i class="bi bi-calendar-plus"></i> Schedule</button><button class="um-btn um-btn-ghost" @onclick="() => ArchiveAsync(_selected)"><i class="bi bi-archive"></i> Archive</button></div></aside> }</text>;
+
+    void BuildStub()
+    {
+        var rng = new Random(131);
+        string[] accounts = ["Sullivan Mfg. LLC", "Bridgewater Hotels", "Metro Freight Co.", "PineCrest Builders", "Omega Tech Corp.", "Harbor Fresh Foods"];
+        string[] contacts = ["Maria Santos", "James Patel", "Chen Li", "Aisha Williams", "Tom Reeves", "Lena Brooks"];
+        string[] owners = ["CSR Team", "Producer Team", "Marketing", "Claims", "Operations"];
+        string[] channels = ["Email", "SMS", "Phone", "Portal", "Letter"];
+        string[] statuses = ["Unread", "Scheduled", "Sent", "Failed", "Archived"];
+        AddRows("inbox", "INB", ["Inbound", "Reply", "Carrier Notice", "Client Message"]);
+        AddRows("campaigns", "CMP", ["Renewal", "Cross-Sell", "Win-Back", "Newsletter"]);
+        AddRows("templates", "TPL", ["Email Template", "SMS Template", "Portal Template", "Letter Template"]);
+        AddRows("appointments", "APT", ["Renewal Review", "Claims Review", "Coverage Meeting", "Onboarding"]);
+        AddRows("outreach", "OUT", ["Call", "Email", "SMS", "Follow-Up"]);
+        AddRows("notifications", "NTF", ["System", "Portal", "Policy", "Billing"]);
+
+        void AddRows(string mode, string prefix, string[] types)
+        {
+            for (var i = 1; i <= 42; i++)
+            {
+                var type = types[rng.Next(types.Length)];
+                var channel = channels[rng.Next(channels.Length)];
+                _rows.Add(new CommWorkRow
+                {
+                    Mode = mode,
+                    Number = $"{prefix}-2025-{i:D4}",
+                    Subject = $"{type} communication for {accounts[rng.Next(accounts.Length)]}",
+                    Account = accounts[rng.Next(accounts.Length)],
+                    ContactName = contacts[rng.Next(contacts.Length)],
+                    Owner = owners[rng.Next(owners.Length)],
+                    Channel = mode == "outreach" && type == "Call" ? "Phone" : channel,
+                    Type = type,
+                    Status = statuses[rng.Next(statuses.Length)],
+                    Priority = rng.Next(5) == 0 ? "High" : "Normal",
+                    ScheduledAt = DateTime.Today.AddDays(rng.Next(-7, 21)).AddHours(rng.Next(8, 17)),
+                    TemplateName = $"{type} Standard",
+                    ResponseScore = rng.Next(0, 100)
+                });
+            }
+        }
+    }
+
+    sealed record Group<T>(string Label, List<T> Items);
+    sealed class CommWorkRow
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public string Mode { get; set; } = string.Empty;
+        public string Number { get; set; } = string.Empty;
+        public string Subject { get; set; } = string.Empty;
+        public string Account { get; set; } = string.Empty;
+        public string ContactName { get; set; } = string.Empty;
+        public string Owner { get; set; } = string.Empty;
+        public string Channel { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string Priority { get; set; } = string.Empty;
+        public DateTime ScheduledAt { get; set; }
+        public string TemplateName { get; set; } = string.Empty;
+        public int ResponseScore { get; set; }
+    }
+}

@@ -9,6 +9,9 @@ namespace Ams.Infrastructure.Persistence.Repositories;
 public sealed class DocumentRepository : IDocumentRepository
 {
     private const string SelectColumns = "DocumentId, TenantId, DocumentTypeCode, CategoryCode, EntityName, EntityId, FileName, StoragePath, ContentType, FileSizeBytes, VersionNumber, StatusCode, RetentionDate, Description, Tags, UploadedByName, CreatedDateUtc, ModifiedDateUtc";
+    private const string DocumentVersionTable = "DMS.DocumentVersion";
+    private const string DocumentShareLinkTable = "DMS.DocumentShareLink";
+    private const string DocumentAccessLogTable = "DMS.DocumentAccessLog";
 
     private readonly ISqlConnectionFactory _connectionFactory;
     public DocumentRepository(ISqlConnectionFactory connectionFactory) => _connectionFactory = connectionFactory;
@@ -79,14 +82,19 @@ WHERE DocumentId = @DocumentId AND IsDeleted = 0;";
 
     public async Task<IReadOnlyList<DocumentVersionDto>> GetVersionsAsync(Guid documentId, CancellationToken cancellationToken = default)
     {
-        const string sql = "SELECT DocumentVersionId, TenantId, DocumentId, VersionNumber, FileName, StoragePath, ContentType, FileSizeBytes, ChangeNotes, CreatedByUserId, CreatedDateUtc FROM DMS.DocumentVersion WHERE DocumentId = @DocumentId AND IsDeleted = 0 ORDER BY VersionNumber DESC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        if (!await TableExistsAsync(cn, DocumentVersionTable, cancellationToken)) return [];
+
+        const string sql = "SELECT DocumentVersionId, TenantId, DocumentId, VersionNumber, FileName, StoragePath, ContentType, FileSizeBytes, ChangeNotes, CreatedByUserId, CreatedDateUtc FROM DMS.DocumentVersion WHERE DocumentId = @DocumentId AND IsDeleted = 0 ORDER BY VersionNumber DESC;";
         var rows = await cn.QueryAsync<DocumentVersionDto>(new CommandDefinition(sql, new { DocumentId = documentId }, cancellationToken: cancellationToken));
         return rows.AsList();
     }
 
     public async Task<Guid> CreateVersionAsync(CreateDocumentVersionRequest request, CancellationToken cancellationToken = default)
     {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        if (!await TableExistsAsync(cn, DocumentVersionTable, cancellationToken)) return Guid.Empty;
+
         const string sql = @"
 DECLARE @NextVersion INT;
 SELECT @NextVersion = ISNULL(MAX(VersionNumber), 0) + 1 FROM DMS.DocumentVersion WHERE DocumentId = @DocumentId AND IsDeleted = 0;
@@ -96,7 +104,6 @@ VALUES (@DocumentVersionId, @TenantId, @DocumentId, @NextVersion, @FileName, @St
 
 UPDATE DMS.Document SET VersionNumber = @NextVersion, FileName = @FileName, StoragePath = @StoragePath, ContentType = @ContentType, FileSizeBytes = @FileSizeBytes, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @CreatedByUserId WHERE DocumentId = @DocumentId AND IsDeleted = 0;";
         var id = Guid.NewGuid();
-        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { DocumentVersionId = id, request.TenantId, request.DocumentId, request.FileName, request.StoragePath, request.ContentType, request.FileSizeBytes, request.ChangeNotes, request.CreatedByUserId }, cancellationToken: cancellationToken));
         return id;
     }
@@ -105,29 +112,35 @@ UPDATE DMS.Document SET VersionNumber = @NextVersion, FileName = @FileName, Stor
 
     public async Task<IReadOnlyList<DocumentShareLinkDto>> GetShareLinksAsync(Guid documentId, CancellationToken cancellationToken = default)
     {
-        const string sql = "SELECT ShareLinkId, TenantId, DocumentId, Token, CreatedByUserId, ExpiresDateUtc, MaxAccessCount, AccessCount, RequiresPin, IsRevoked, CreatedDateUtc FROM DMS.DocumentShareLink WHERE DocumentId = @DocumentId AND IsDeleted = 0 ORDER BY CreatedDateUtc DESC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        if (!await TableExistsAsync(cn, DocumentShareLinkTable, cancellationToken)) return [];
+
+        const string sql = "SELECT ShareLinkId, TenantId, DocumentId, Token, CreatedByUserId, ExpiresDateUtc, MaxAccessCount, AccessCount, RequiresPin, IsRevoked, CreatedDateUtc FROM DMS.DocumentShareLink WHERE DocumentId = @DocumentId AND IsDeleted = 0 ORDER BY CreatedDateUtc DESC;";
         var rows = await cn.QueryAsync<DocumentShareLinkDto>(new CommandDefinition(sql, new { DocumentId = documentId }, cancellationToken: cancellationToken));
         return rows.AsList();
     }
 
     public async Task<Guid> CreateShareLinkAsync(CreateDocumentShareLinkRequest request, CancellationToken cancellationToken = default)
     {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        if (!await TableExistsAsync(cn, DocumentShareLinkTable, cancellationToken)) return Guid.Empty;
+
         const string sql = @"
 INSERT INTO DMS.DocumentShareLink (ShareLinkId, TenantId, DocumentId, Token, CreatedByUserId, ExpiresDateUtc, MaxAccessCount, AccessCount, RequiresPin, PinHash, IsRevoked, CreatedDateUtc, IsDeleted)
 VALUES (@ShareLinkId, @TenantId, @DocumentId, @Token, @CreatedByUserId, @ExpiresDateUtc, @MaxAccessCount, 0, @RequiresPin, @PinHash, 0, SYSUTCDATETIME(), 0);";
         var id = Guid.NewGuid();
         var token = Convert.ToBase64String(Guid.NewGuid().ToByteArray()).Replace("=", "").Replace("+", "-").Replace("/", "_");
         var pinHash = request.RequiresPin && !string.IsNullOrWhiteSpace(request.Pin) ? Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(request.Pin))) : null;
-        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { ShareLinkId = id, request.TenantId, request.DocumentId, Token = token, request.CreatedByUserId, request.ExpiresDateUtc, request.MaxAccessCount, request.RequiresPin, PinHash = pinHash }, cancellationToken: cancellationToken));
         return id;
     }
 
     public async Task RevokeShareLinkAsync(Guid shareLinkId, CancellationToken cancellationToken = default)
     {
-        const string sql = "UPDATE DMS.DocumentShareLink SET IsRevoked = 1, RevokedDateUtc = SYSUTCDATETIME() WHERE ShareLinkId = @ShareLinkId AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        if (!await TableExistsAsync(cn, DocumentShareLinkTable, cancellationToken)) return;
+
+        const string sql = "UPDATE DMS.DocumentShareLink SET IsRevoked = 1, RevokedDateUtc = SYSUTCDATETIME() WHERE ShareLinkId = @ShareLinkId AND IsDeleted = 0;";
         await cn.ExecuteAsync(new CommandDefinition(sql, new { ShareLinkId = shareLinkId }, cancellationToken: cancellationToken));
     }
 
@@ -135,18 +148,22 @@ VALUES (@ShareLinkId, @TenantId, @DocumentId, @Token, @CreatedByUserId, @Expires
 
     public async Task<IReadOnlyList<DocumentAccessLogDto>> GetAccessLogAsync(Guid documentId, int top = 50, CancellationToken cancellationToken = default)
     {
-        const string sql = "SELECT TOP(@Top) AccessLogId, TenantId, DocumentId, UserId, ShareLinkId, ActionCode, IpAddress, AccessDateUtc FROM DMS.DocumentAccessLog WHERE DocumentId = @DocumentId ORDER BY AccessDateUtc DESC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        if (!await TableExistsAsync(cn, DocumentAccessLogTable, cancellationToken)) return [];
+
+        const string sql = "SELECT TOP(@Top) AccessLogId, TenantId, DocumentId, UserId, ShareLinkId, ActionCode, IpAddress, AccessDateUtc FROM DMS.DocumentAccessLog WHERE DocumentId = @DocumentId ORDER BY AccessDateUtc DESC;";
         var rows = await cn.QueryAsync<DocumentAccessLogDto>(new CommandDefinition(sql, new { DocumentId = documentId, Top = top }, cancellationToken: cancellationToken));
         return rows.AsList();
     }
 
     public async Task LogAccessAsync(Guid tenantId, Guid documentId, Guid? userId, Guid? shareLinkId, string actionCode, string? ipAddress, CancellationToken cancellationToken = default)
     {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        if (!await TableExistsAsync(cn, DocumentAccessLogTable, cancellationToken)) return;
+
         const string sql = @"
 INSERT INTO DMS.DocumentAccessLog (AccessLogId, TenantId, DocumentId, UserId, ShareLinkId, ActionCode, IpAddress, AccessDateUtc)
 VALUES (@AccessLogId, @TenantId, @DocumentId, @UserId, @ShareLinkId, @ActionCode, @IpAddress, SYSUTCDATETIME());";
-        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { AccessLogId = Guid.NewGuid(), TenantId = tenantId, DocumentId = documentId, UserId = userId, ShareLinkId = shareLinkId, ActionCode = actionCode, IpAddress = ipAddress }, cancellationToken: cancellationToken));
     }
 
@@ -172,5 +189,11 @@ VALUES (@AccessLogId, @TenantId, @DocumentId, @UserId, @ShareLinkId, @ActionCode
         const string sql = "UPDATE DMS.Document SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @DeletedByUserId WHERE DocumentId = @DocumentId AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { request.DocumentId, request.DeletedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    private static async Task<bool> TableExistsAsync(System.Data.IDbConnection connection, string qualifiedTableName, CancellationToken cancellationToken)
+    {
+        const string sql = "SELECT CASE WHEN OBJECT_ID(@QualifiedTableName, 'U') IS NULL THEN 0 ELSE 1 END;";
+        return await connection.ExecuteScalarAsync<bool>(new CommandDefinition(sql, new { QualifiedTableName = qualifiedTableName }, cancellationToken: cancellationToken));
     }
 }

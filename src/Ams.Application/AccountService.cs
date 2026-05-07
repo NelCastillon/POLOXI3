@@ -24,6 +24,12 @@ public sealed class AccountService : IAccountService
     public Task<PagedResult<AccountDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 
+    public Task UpdateAsync(Guid id, UpdateAccountRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateAsync(id, request, cancellationToken);
+
+    public Task DeleteAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default)
+        => _repository.DeleteAsync(id, userId, cancellationToken);
+
     public Task<IReadOnlyList<ContactDto>> GetContactsByAccountIdAsync(Guid accountId, CancellationToken cancellationToken = default)
         => _repository.GetContactsByAccountIdAsync(accountId, cancellationToken);
 }

@@ -1,0 +1,284 @@
+@namespace Ams.Web.Components.Shared
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>@Title — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4500" NewestOnTop="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
+
+<AppPageHeader Title="@Title" Subtitle="@Subtitle" Icon="@Icon">
+    <Actions>
+        <a class="um-btn um-btn-ghost" href="/policies"><i class="bi bi-shield-check"></i> Policies</a>
+        <a class="um-btn um-btn-ghost" href="/policies/documents"><i class="bi bi-folder2"></i> Documents</a>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")"></i> Refresh</button>
+        <button class="um-btn um-btn-primary" @onclick="PrimaryActionAsync"><i class="bi @PrimaryIcon"></i> @PrimaryText</button>
+    </Actions>
+</AppPageHeader>
+
+<section class="polw-hero">
+    <div>
+        <span class="polw-eyebrow">@Eyebrow</span>
+        <h2>@HeroTitle</h2>
+        <p>@HeroText</p>
+    </div>
+    <div class="polw-hero-actions">
+        <a class="um-btn um-btn-ghost" href="/policies/endorsements"><i class="bi bi-pen"></i> Endorsements</a>
+        <a class="um-btn um-btn-ghost" href="/policies/cancellations"><i class="bi bi-x-circle"></i> Cancellations</a>
+        <button class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
+    </div>
+</section>
+
+<div class="polw-kpi-strip">
+    @Kpi("bi-stack", "Total", FilterSource.Count().ToString(), TotalValue, "polw-kpi-total", null)
+    @Kpi(Kpi1Icon, Kpi1Label, CountBy(Kpi1Filter).ToString(), Kpi1Title, "polw-kpi-active", Kpi1Filter)
+    @Kpi(Kpi2Icon, Kpi2Label, CountBy(Kpi2Filter).ToString(), Kpi2Title, "polw-kpi-warning", Kpi2Filter)
+    @Kpi(Kpi3Icon, Kpi3Label, CountBy(Kpi3Filter).ToString(), Kpi3Title, "polw-kpi-danger", Kpi3Filter)
+    @Kpi("bi-calendar-event", "Due Soon", FilterSource.Count(IsDueSoon).ToString(), "Requires attention", "polw-kpi-risk", "due")
+    @Kpi("bi-cash-stack", "Premium", FilterSource.Sum(x => x.Amount).ToString("C0"), "Financial impact", "polw-kpi-prem", "premium")
+</div>
+
+<div class="polw-command-bar">
+    <div class="polw-search-wrap"><i class="bi bi-search"></i><input @bind="_search" @bind:event="oninput" placeholder="@SearchPlaceholder" /></div>
+    <select class="polw-filter-sel" @bind="_statusFilter"><option value="">All status</option>@foreach (var v in StatusValues) { <option>@v</option> }</select>
+    <select class="polw-filter-sel" @bind="_typeFilter"><option value="">All types</option>@foreach (var v in TypeValues) { <option>@v</option> }</select>
+    <select class="polw-filter-sel" @bind="_ownerFilter"><option value="">All owners</option>@foreach (var v in OwnerValues) { <option>@v</option> }</select>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
+    <span class="polw-filter-count">@Filtered.Count() item(s)</span>
+</div>
+
+@if (_loading)
+{
+    <div class="mt-loading"><div class="um-spinner"></div><span>Loading @Title.ToLowerInvariant()…</span></div>
+}
+
+<div class="polw-workbench">
+    <div class="polw-feed">
+        @foreach (var group in Groups)
+        {
+            <div class="polw-date-sep"><span>@group.Label</span></div>
+            @foreach (var row in group.Items)
+            {
+                <article class="polw-item @(_selected?.Id == row.Id ? "polw-item-selected" : null) @(IsRisk(row) ? "polw-item-risk" : null)" @onclick="() => Select(row)">
+                    <div class="polw-icon @IconClass"><i class="bi @ItemIcon"></i></div>
+                    <div class="polw-body">
+                        <div class="polw-hdr">
+                            <strong>@row.Number</strong>
+                            <span class="polw-chip polw-chip-status">@row.Status</span>
+                            <span class="polw-chip polw-chip-type">@row.Type</span>
+                            @if (IsDueSoon(row)) { <span class="polw-risk">Due soon</span> }
+                        </div>
+                        <div class="polw-title">@row.Title</div>
+                        <div class="polw-meta">
+                            <span><i class="bi bi-building"></i> @row.Account</span>
+                            <span><i class="bi bi-broadcast"></i> @row.Carrier</span>
+                            <span><i class="bi bi-person"></i> @row.Owner</span>
+                            <span><i class="bi bi-calendar3"></i> @row.Date.ToString("MMM d")</span>
+                            <span><i class="bi bi-cash-stack"></i> @row.Amount.ToString("C0")</span>
+                        </div>
+                    </div>
+                    <div class="polw-actions" @onclick:stopPropagation="true">
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Open" @onclick="() => Open(row)"><i class="bi bi-arrow-right"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Review" @onclick="() => ReviewAsync(row)"><i class="bi bi-eye"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Approve" @onclick="() => ApproveAsync(row)"><i class="bi bi-check-circle"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Document" @onclick="() => DocumentAsync(row)"><i class="bi bi-folder2"></i></button>
+                    </div>
+                </article>
+            }
+        }
+        @if (!Filtered.Any())
+        {
+            <div class="polw-empty"><i class="bi @ItemIcon"></i><span>No records match the current filters.</span></div>
+        }
+    </div>
+
+    @if (_selected is not null)
+    {
+        <aside class="polw-detail-panel">
+            <div class="polw-detail-header">
+                <span class="polw-chip polw-chip-status">@_selected.Status</span>
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _selected = null"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <h3>@_selected.Number</h3>
+            <p>@_selected.Title</p>
+            <div class="polw-detail-grid">
+                <div><span>Account</span><strong>@_selected.Account</strong></div>
+                <div><span>Carrier</span><strong>@_selected.Carrier</strong></div>
+                <div><span>Type</span><strong>@_selected.Type</strong></div>
+                <div><span>Status</span><strong>@_selected.Status</strong></div>
+                <div><span>Date</span><strong>@_selected.Date.ToString("d")</strong></div>
+                <div><span>Amount</span><strong>@_selected.Amount.ToString("C0")</strong></div>
+                <div><span>Owner</span><strong>@_selected.Owner</strong></div>
+                <div><span>Branch</span><strong>@_selected.Branch</strong></div>
+            </div>
+            <div class="polw-detail-actions">
+                <button class="um-btn um-btn-primary" @onclick="() => Open(_selected)"><i class="bi bi-arrow-right"></i> Open</button>
+                <button class="um-btn um-btn-ghost" @onclick="() => ReviewAsync(_selected)"><i class="bi bi-eye"></i> Review</button>
+                <button class="um-btn um-btn-ghost" @onclick="() => ApproveAsync(_selected)"><i class="bi bi-check-circle"></i> Approve</button>
+                <button class="um-btn um-btn-ghost" @onclick="() => DocumentAsync(_selected)"><i class="bi bi-folder2"></i> Documents</button>
+            </div>
+        </aside>
+    }
+</div>
+
+@code {
+    [Parameter] public string Mode { get; set; } = "policies";
+
+    SfToast? _toast;
+    bool _loading;
+    string _search = string.Empty;
+    string _statusFilter = string.Empty;
+    string _typeFilter = string.Empty;
+    string _ownerFilter = string.Empty;
+    string _activeFilter = string.Empty;
+    PolicyWorkRow? _selected;
+    readonly List<PolicyWorkRow> _rows = [];
+
+    IEnumerable<PolicyWorkRow> FilterSource => _rows.Where(x => x.Mode == ModeKey);
+    IEnumerable<PolicyWorkRow> Filtered => FilterSource.Where(x => MatchesKpi(x)
+        && (string.IsNullOrEmpty(_statusFilter) || x.Status == _statusFilter)
+        && (string.IsNullOrEmpty(_typeFilter) || x.Type == _typeFilter)
+        && (string.IsNullOrEmpty(_ownerFilter) || x.Owner == _ownerFilter)
+        && (string.IsNullOrEmpty(_search) || x.Number.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Account.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Type.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase))).OrderBy(x => x.Date);
+    IEnumerable<Group<PolicyWorkRow>> Groups => Filtered.GroupBy(x => x.Status).OrderBy(g => StatusOrder(g.Key)).Select(g => new Group<PolicyWorkRow>(g.Key, g.ToList()));
+    string[] StatusValues => FilterSource.Select(x => x.Status).Distinct().OrderBy(StatusOrder).ToArray();
+    string[] TypeValues => FilterSource.Select(x => x.Type).Distinct().Order().ToArray();
+    string[] OwnerValues => FilterSource.Select(x => x.Owner).Distinct().Order().ToArray();
+
+    string ModeKey => Mode.Trim().ToLowerInvariant();
+    string Title => ModeKey switch { "endorsements" => "Endorsement Workbench", "cancellations" => "Cancellation Center", "policy-documents" => "Policy Documents", "compliance-policies" => "Compliance Policies", "acknowledgements" => "Policy Acknowledgements", _ => "Policies Workbench" };
+    string Subtitle => ModeKey switch { "endorsements" => "Review, approve, issue, and track policy change requests", "cancellations" => "Manage cancellations, reinstatements, return premium, and rescission", "policy-documents" => "Manage policy forms, endorsements, binders, certificates, and declarations", "compliance-policies" => "Create, publish, retire, and govern compliance policy documents", "acknowledgements" => "Track pending, overdue, and completed policy acknowledgements", _ => "Complete policy lifecycle workbench for active, expiring, renewal, and premium activity" };
+    string Icon => ModeKey switch { "endorsements" => "bi-pen-fill", "cancellations" => "bi-x-circle-fill", "policy-documents" => "bi-folder2-open", "compliance-policies" => "bi-patch-check-fill", "acknowledgements" => "bi-check2-circle", _ => "bi-shield-check-fill" };
+    string ItemIcon => ModeKey switch { "endorsements" => "bi-pen-fill", "cancellations" => "bi-x-circle-fill", "policy-documents" => "bi-folder2-open", "compliance-policies" => "bi-file-earmark-check-fill", "acknowledgements" => "bi-check2-circle", _ => "bi-shield-check-fill" };
+    string IconClass => ModeKey == "cancellations" ? "polw-icon-danger" : ModeKey == "acknowledgements" ? "polw-icon-success" : string.Empty;
+    string Eyebrow => ModeKey switch { "compliance-policies" or "acknowledgements" => "Compliance Governance", "policy-documents" => "Policy Document Control", _ => "Policy Operations" };
+    string HeroTitle => ModeKey switch { "endorsements" => "Policy Change Desk", "cancellations" => "Cancellation & Reinstatement Desk", "policy-documents" => "Policy Document Library", "compliance-policies" => "Compliance Policy Library", "acknowledgements" => "Acknowledgement Tracking Desk", _ => "Policy Lifecycle Desk" };
+    string HeroText => "Search, filter, triage, and act on policy operations using a workbench layout with KPI-driven views, operational queues, and detail context.";
+    string PrimaryText => ModeKey switch { "endorsements" => "New Endorsement", "cancellations" => "Request Cancellation", "policy-documents" => "Upload Document", "compliance-policies" => "New Policy", "acknowledgements" => "Send Reminder", _ => "New Policy" };
+    string PrimaryIcon => ModeKey switch { "cancellations" => "bi-x-circle", "policy-documents" => "bi-upload", "acknowledgements" => "bi-send", _ => "bi-plus-lg" };
+    string SearchPlaceholder => ModeKey switch { "acknowledgements" => "Search user, policy, department, acknowledgement status…", "policy-documents" => "Search document, policy number, category, uploader…", "compliance-policies" => "Search policy code, title, owner, status…", _ => "Search policy number, account, carrier, LOB, owner…" };
+    string TotalValue => ModeKey switch { "acknowledgements" => $"{FilterSource.Count(x => x.Status == "Acknowledged")} done", _ => FilterSource.Sum(x => x.Amount).ToString("C0") };
+    string Kpi1Label => ModeKey switch { "cancellations" => "Pending", "acknowledgements" => "Pending", "compliance-policies" => "Draft", _ => "Active" };
+    string Kpi1Filter => ModeKey switch { "cancellations" => "status:Pending", "acknowledgements" => "status:Pending", "compliance-policies" => "status:Draft", _ => "status:Active" };
+    string Kpi1Title => "Primary active queue";
+    string Kpi1Icon => ModeKey switch { "acknowledgements" => "bi-hourglass-split", "compliance-policies" => "bi-pencil", _ => "bi-shield-check" };
+    string Kpi2Label => ModeKey switch { "endorsements" => "Pending", "cancellations" => "Cancelled", "acknowledgements" => "Overdue", "compliance-policies" => "Published", _ => "Expiring" };
+    string Kpi2Filter => ModeKey switch { "endorsements" => "status:Pending", "cancellations" => "status:Cancelled", "acknowledgements" => "status:Overdue", "compliance-policies" => "status:Published", _ => "due" };
+    string Kpi2Title => "Attention queue";
+    string Kpi2Icon => ModeKey switch { "cancellations" => "bi-x-circle", "acknowledgements" => "bi-exclamation-circle", "compliance-policies" => "bi-check-circle", _ => "bi-clock" };
+    string Kpi3Label => ModeKey switch { "endorsements" => "Declined", "cancellations" => "Reinstated", "acknowledgements" => "Acknowledged", "compliance-policies" => "Retired", _ => "Lapsed" };
+    string Kpi3Filter => ModeKey switch { "endorsements" => "status:Declined", "cancellations" => "status:Reinstated", "acknowledgements" => "status:Acknowledged", "compliance-policies" => "status:Retired", _ => "status:Lapsed" };
+    string Kpi3Title => "Closed or exception state";
+    string Kpi3Icon => ModeKey switch { "cancellations" => "bi-arrow-counterclockwise", "acknowledgements" => "bi-check2-circle", "compliance-policies" => "bi-archive", _ => "bi-exclamation-triangle" };
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"), new(Title, CurrentUrl));
+        await LoadAsync();
+    }
+
+    string CurrentUrl => ModeKey switch { "endorsements" => "/policies/endorsements", "cancellations" => "/policies/cancellations", "policy-documents" => "/policies/documents", "compliance-policies" => "/compliance/policies", "acknowledgements" => "/compliance/acknowledgements", _ => "/policies" };
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        await Task.Delay(0);
+        if (_rows.Count == 0) BuildStub();
+        _selected ??= Filtered.FirstOrDefault();
+        _loading = false;
+    }
+
+    bool MatchesKpi(PolicyWorkRow x) => _activeFilter switch
+    {
+        "due" => IsDueSoon(x),
+        "premium" => x.Amount > 0,
+        _ when _activeFilter.StartsWith("status:") => x.Status == _activeFilter[7..],
+        _ => true
+    };
+
+    int CountBy(string filter)
+    {
+        var previous = _activeFilter;
+        _activeFilter = filter;
+        var count = FilterSource.Count(MatchesKpi);
+        _activeFilter = previous;
+        return count;
+    }
+
+    void ResetFilters() { _search = _statusFilter = _typeFilter = _ownerFilter = _activeFilter = string.Empty; }
+    void SetFilter(string? filter) => _activeFilter = _activeFilter == (filter ?? string.Empty) ? string.Empty : filter ?? string.Empty;
+    void Select(PolicyWorkRow row) => _selected = row;
+    void Open(PolicyWorkRow row) => Nav.NavigateTo(ModeKey is "policy-documents" or "compliance-policies" ? "/policies/documents" : $"/policies/{row.Id}");
+    Task PrimaryActionAsync() => ToastAsync($"{PrimaryText} started.");
+    Task ReviewAsync(PolicyWorkRow row) => ToastAsync($"Review opened: {row.Number}");
+    Task ApproveAsync(PolicyWorkRow row) => ToastAsync($"Approval action queued: {row.Number}");
+    Task DocumentAsync(PolicyWorkRow row) { Nav.NavigateTo("/policies/documents"); return Task.CompletedTask; }
+    async Task ToastAsync(string message) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Title = Title, Content = message, CssClass = "e-toast-success" }); }
+
+    bool IsDueSoon(PolicyWorkRow row) => row.Date.Date <= DateTime.Today.AddDays(30) && row.Status is not "Retired" and not "Acknowledged" and not "Cancelled";
+    static bool IsRisk(PolicyWorkRow row) => row.Date.Date < DateTime.Today && row.Status is not "Acknowledged" and not "Retired";
+    static int StatusOrder(string status) => status switch { "Active" => 1, "Pending" => 2, "Draft" => 3, "Published" => 4, "Issued" => 5, "Acknowledged" => 6, "Cancelled" => 7, "Reinstated" => 8, "Declined" => 9, "Retired" => 10, "Lapsed" => 11, "Overdue" => 12, _ => 99 };
+
+    RenderFragment Kpi(string icon, string label, string value, string title, string css, string? filter) => @<button class="polw-kpi-card @css @(_activeFilter == (filter ?? string.Empty) ? "polw-kpi-active" : "")" title="@title" @onclick="() => SetFilter(filter)"><div class="polw-kpi-val">@value</div><div class="polw-kpi-lbl"><i class="bi @icon"></i> @label</div><small>@title</small></button>;
+
+    void BuildStub()
+    {
+        var rng = new Random(41);
+        string[] accounts = ["Sullivan Mfg. LLC", "Bridgewater Hotels", "Metro Freight Co.", "PineCrest Builders", "Omega Tech Corp.", "Harbor Fresh Foods"];
+        string[] carriers = ["Travelers", "Chubb", "Zurich", "AIG", "Hartford", "CNA"];
+        string[] owners = ["Maria Santos", "James Patel", "Chen Li", "Aisha Williams", "Tom Reeves"];
+        string[] branches = ["West", "Central", "Northeast", "South"];
+        AddRows("policies", "POL", ["Active", "Active", "Active", "Lapsed"], ["General Liability", "Commercial Property", "Auto", "Workers Comp"], 55);
+        AddRows("endorsements", "END", ["Pending", "Approved", "Declined", "Issued"], ["Add Coverage", "Change Limit", "Add Insured", "Premium Adjustment"], 38);
+        AddRows("cancellations", "CAN", ["Pending", "Cancelled", "Reinstated"], ["Non-Payment", "Insured Request", "Underwriting", "Flat"], 34);
+        AddRows("policy-documents", "DOC", ["Active", "Pending", "Issued"], ["Policy", "Endorsement", "Certificate", "Declaration", "Binder"], 48);
+        AddRows("compliance-policies", "CMP", ["Draft", "Published", "Retired"], ["Security", "Operations", "Finance", "Privacy"], 32);
+        AddRows("acknowledgements", "ACK", ["Pending", "Overdue", "Acknowledged"], ["Security", "HR", "Compliance", "Privacy"], 44);
+
+        void AddRows(string mode, string prefix, string[] statuses, string[] types, int count)
+        {
+            for (var i = 1; i <= count; i++)
+            {
+                var type = types[rng.Next(types.Length)];
+                _rows.Add(new PolicyWorkRow
+                {
+                    Mode = mode,
+                    Number = $"{prefix}-2025-{i:D4}",
+                    Title = mode switch
+                    {
+                        "policy-documents" => $"{type} document package",
+                        "compliance-policies" => $"{type} compliance policy",
+                        "acknowledgements" => $"{type} policy acknowledgement",
+                        "endorsements" => $"{type} endorsement request",
+                        "cancellations" => $"{type} cancellation workflow",
+                        _ => $"{type} policy lifecycle record"
+                    },
+                    Account = accounts[rng.Next(accounts.Length)],
+                    Carrier = carriers[rng.Next(carriers.Length)],
+                    Owner = owners[rng.Next(owners.Length)],
+                    Branch = branches[rng.Next(branches.Length)],
+                    Type = type,
+                    Status = statuses[rng.Next(statuses.Length)],
+                    Date = DateTime.Today.AddDays(rng.Next(-25, 95)),
+                    Amount = mode is "acknowledgements" or "compliance-policies" ? 0 : rng.Next(1500, 75000)
+                });
+            }
+        }
+    }
+
+    sealed record Group<T>(string Label, List<T> Items);
+    sealed class PolicyWorkRow
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public string Mode { get; set; } = string.Empty;
+        public string Number { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Account { get; set; } = string.Empty;
+        public string Carrier { get; set; } = string.Empty;
+        public string Owner { get; set; } = string.Empty;
+        public string Branch { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public DateTime Date { get; set; }
+        public decimal Amount { get; set; }
+    }
+}

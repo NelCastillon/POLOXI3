@@ -161,4 +161,58 @@ SELECT COUNT(*) FROM Client.Contact WHERE AccountId = @AccountId AND IsDeleted =
             PageSize = pageSize
         };
     }
+
+    public async Task UpdateAsync(Guid id, UpdateContactRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Client.Contact
+SET FirstName = @FirstName,
+    LastName = @LastName,
+    Email = @Email,
+    Phone = @Phone,
+    JobTitle = @JobTitle,
+    ContactTypeCode = @ContactTypeCode,
+    IsBillingContact = @IsBillingContact,
+    IsPortalUser = @IsPortalUser,
+    IsKeyContact = @IsKeyContact,
+    IsServiceContact = @IsServiceContact,
+    PreferredContactMethod = @PreferredContactMethod,
+    StatusCode = @StatusCode,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE ContactId = @Id AND IsDeleted = 0;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            Id = id,
+            request.FirstName,
+            request.LastName,
+            request.Email,
+            request.Phone,
+            request.JobTitle,
+            request.ContactTypeCode,
+            request.IsBillingContact,
+            request.IsPortalUser,
+            request.IsKeyContact,
+            request.IsServiceContact,
+            request.PreferredContactMethod,
+            request.StatusCode,
+            request.ModifiedByUserId
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Client.Contact
+SET IsDeleted = 1,
+    StatusCode = 'Inactive',
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @UserId
+WHERE ContactId = @Id AND IsDeleted = 0;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, UserId = userId }, cancellationToken: cancellationToken));
+    }
 }

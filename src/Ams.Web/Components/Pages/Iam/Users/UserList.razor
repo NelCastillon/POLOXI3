@@ -332,15 +332,13 @@
                 </Template>
             </GridColumn>
 
-            <GridColumn Field="@nameof(UserDto.AssignedRoleCount)"
-                        HeaderText="Roles"
-                        Width="80"
-                        TextAlign="TextAlign.Center">
+            <GridColumn HeaderText="Roles"
+                        Width="220">
                 <Template>
                     @{
                         var u = (UserDto)context;
                     }
-                    <span class="um-count-pill">@u.AssignedRoleCount</span>
+                    <span title="@RoleNames(u)">@RoleNames(u)</span>
                 </Template>
             </GridColumn>
 
@@ -751,7 +749,9 @@
     private List<UserDto>   _users    = [];
     private List<UserDto>   _selected = [];
     private List<RoleDto>   _roles    = [];
+    private Dictionary<Guid, List<UserRoleDto>> _rolesByUser = [];
     private List<BranchDto> _branches = [];
+    private List<DepartmentDto> _departments = [];
 
     // ── Loading / saving flags ────────────────────────────────────────────────────
     private bool _loading    = false;
@@ -859,7 +859,7 @@
             new("IAM",   "/iam"),
             new("Users", "/iam/users"));
 
-        await Task.WhenAll(LoadRolesAsync(), LoadBranchesAsync());
+        await Task.WhenAll(LoadRolesAsync(), LoadBranchesAsync(), LoadDepartmentsAsync());
         await LoadAsync();
     }
 
@@ -872,15 +872,8 @@
         {
             var result = await Api.SearchUsersAsync(_tenantId, _search);
             _allUsers = result?.Items.ToList() ?? [];
+            await LoadUserRolesForListAsync();
             _selected.Clear();
-
-            _deptOptions = _allUsers
-                .Where(u => !string.IsNullOrWhiteSpace(u.Department))
-                .Select(u => u.Department!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(d => d)
-                .Select(d => new LabelValue(d, d))
-                .ToList();
 
             ComputeKpi();
             ApplyFilters();
@@ -899,10 +892,31 @@
         _roles = result?.Items.ToList() ?? [];
     }
 
+    private async Task LoadUserRolesForListAsync()
+    {
+        var result = await Api.SearchUserRolesAsync(_tenantId, isActive: true, pageSize: 5000);
+        _rolesByUser = result?.Items
+            .Where(r => r.IsActive)
+            .GroupBy(r => r.UserId)
+            .ToDictionary(g => g.Key, g => g.OrderBy(r => r.RoleName ?? r.RoleCode).ToList()) ?? [];
+    }
+
     private async Task LoadBranchesAsync()
     {
         var result = await Api.SearchBranchesAsync(_tenantId);
         _branches = result?.Items.ToList() ?? [];
+    }
+
+    private async Task LoadDepartmentsAsync()
+    {
+        var result = await Api.GetDepartmentsAsync(_tenantId);
+        _departments = result?
+            .Where(d => d.IsActive)
+            .OrderBy(d => d.DepartmentName)
+            .ToList() ?? [];
+        _deptOptions = _departments
+            .Select(d => new LabelValue(d.DepartmentName, d.DepartmentName))
+            .ToList();
     }
 
     private void ApplyFilters()
@@ -910,13 +924,27 @@
         _users = _allUsers.Where(u =>
             (string.IsNullOrEmpty(_filterStatus)     || u.StatusCode == _filterStatus) &&
             (string.IsNullOrEmpty(_filterDept)       || string.Equals(u.Department, _filterDept, StringComparison.OrdinalIgnoreCase)) &&
+            (string.IsNullOrEmpty(_filterRoleCode)   || UserHasRole(u, _filterRoleCode)) &&
             (string.IsNullOrEmpty(_filterBranchCode) || _branches.FirstOrDefault(b => b.BranchId == u.BranchId)?.BranchCode == _filterBranchCode) &&
             (string.IsNullOrEmpty(_filterMfa)        || (u.MfaEnabled ? "Enabled" : "Disabled") == _filterMfa) &&
             (!_filterLocked   || u.IsLockedOut) &&
             (!_filterInactive || u.StatusCode != "Active")
-            // Role filter requires server-side support (UserDto has no role assignment list)
         ).ToList();
         StateHasChanged();
+    }
+
+    private bool UserHasRole(UserDto user, string roleCode)
+        => _rolesByUser.TryGetValue(user.UserId, out var roles) &&
+           roles.Any(r => string.Equals(r.RoleCode, roleCode, StringComparison.OrdinalIgnoreCase));
+
+    private string RoleNames(UserDto user)
+    {
+        if (!_rolesByUser.TryGetValue(user.UserId, out var roles) || roles.Count == 0)
+            return "—";
+
+        return string.Join(", ", roles
+            .Select(r => r.RoleName ?? r.RoleCode)
+            .Where(r => !string.IsNullOrWhiteSpace(r)));
     }
 
     private void SetKpiFilter(int n)
@@ -1110,11 +1138,12 @@
         _confirming = true;
         try
         {
-            // TODO: wire to Api.AssignUserBranchAsync
-            await Task.Delay(0);
+            var branchId = _branches.FirstOrDefault(b => b.BranchCode == _assignBranchCode)?.BranchId;
+            await Api.AssignUserBranchAsync(_actionTarget.UserId, branchId);
             await ShowToastAsync($"Branch updated for {_actionTarget.FullName}.", "e-toast-success");
             _showBranchAssign = false;
             await LoadAsync();
+            StateHasChanged();
         }
         catch (Exception ex) { await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger"); }
         finally { _confirming = false; _actionTarget = null; }

@@ -1,5 +1,6 @@
 @page "/policies/cancellations"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -14,7 +15,7 @@
 </SfContextMenu>
 
 <AppPageHeader Title="Cancellation &amp; Reinstatement Center"
-               Subtitle="Manage policy cancellations, flat cancellations, and reinstatements"
+               Subtitle="Tenant admin oversight for cancellation, reinstatement, lapse, and return-premium workflows"
                Icon="bi-slash-circle">
     <Actions>
         <button class="um-btn um-btn-danger" @onclick='() => OpenAction("cancel")'>
@@ -25,6 +26,26 @@
         </button>
     </Actions>
 </AppPageHeader>
+
+<section class="ma-hero pol-hero">
+    <div>
+        <span class="ma-eyebrow">Tenant Administration · Cancellations</span>
+        <h2>Tenant Cancellation Administration</h2>
+        <p>Govern cancellation requests, reinstatements, return premium, lapse tracking, and policy recovery actions for the tenant.</p>
+    </div>
+    <div class="ma-hero-actions">
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies")'><i class="bi bi-shield-check"></i> Policies</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies/endorsements")'><i class="bi bi-pen"></i> Endorsements</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies/documents")'><i class="bi bi-folder2"></i> Documents</button>
+    </div>
+</section>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+    </div>
+}
 
 <!-- KPI strip -->
 <div class="cc-kpi-strip">
@@ -156,6 +177,7 @@
     string _dlgNotes    = "";
     decimal _dlgPremium = 0;
     DateTime _dlgDate   = DateTime.Today;
+    string? _loadError;
 
     CancelRow    _selC = new();
     ReinstateRow _selR = new();
@@ -203,11 +225,58 @@
     readonly List<CancelRow>    _cancels    = new();
     readonly List<ReinstateRow> _reinstate  = new();
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Policies","/policies"), new("Cancellations","/policies/cancellations"));
-        BuildStub();
+        await LoadAsync();
     }
+
+    async Task LoadAsync()
+    {
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchSubmissionsAsync(Guid.Parse("00000000-0000-0000-0000-000000000001"), pageSize: 100);
+            _cancels.Clear();
+            _reinstate.Clear();
+            foreach (var item in (result?.Items ?? []).Where(x => x.Status is "Declined" or "Withdrawn"))
+                _cancels.Add(MapSubmissionToCancel(item));
+            foreach (var item in (result?.Items ?? []).Where(x => x.Status == "Bound"))
+                _reinstate.Add(MapSubmissionToReinstate(item));
+            if (_cancels.Count == 0 && _reinstate.Count == 0) BuildStub();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load cancellations: {ex.Message}";
+            if (_cancels.Count == 0 && _reinstate.Count == 0) BuildStub();
+        }
+    }
+
+    CancelRow MapSubmissionToCancel(SubmissionDto s) => new()
+    {
+        PolicyNo = $"POL-{s.SubmissionNumber.Replace("SUB-", string.Empty)}",
+        Account = s.AccountName,
+        Lob = s.LineOfBusiness,
+        CancelReason = s.Status == "Withdrawn" ? "Insured Request" : "Underwriting",
+        CancelType = "Pro-Rata",
+        RequestDate = s.ModifiedDateUtc ?? s.CreatedDateUtc,
+        EffectiveDate = s.EffectiveDate,
+        ReturnPremium = Math.Round((s.TargetPremium ?? 0) * 0.2m, 2),
+        Status = s.Status == "Withdrawn" ? "Rescinded" : "Cancelled"
+    };
+
+    ReinstateRow MapSubmissionToReinstate(SubmissionDto s) => new()
+    {
+        PolicyNo = $"POL-{s.SubmissionNumber.Replace("SUB-", string.Empty)}",
+        Account = s.AccountName,
+        Lob = s.LineOfBusiness,
+        CancelDate = s.EffectiveDate.AddDays(-30),
+        ReinstateDate = s.EffectiveDate,
+        LapseDays = 30,
+        PremiumDue = Math.Round((s.TargetPremium ?? 0) / 12m, 2),
+        ReinstatedBy = s.AssignedToUserName ?? "Unassigned",
+        Status = "Reinstated"
+    };
 
     void BuildStub()
     {

@@ -14,6 +14,8 @@ public interface IUserService
     Task SetActiveAsync(Guid userId, bool isActive, Guid? modifiedByUserId, CancellationToken cancellationToken = default);
     Task LockAsync(Guid userId, DateTime? lockoutEnd, Guid? modifiedByUserId, CancellationToken cancellationToken = default);
     Task UnlockAsync(Guid userId, Guid? modifiedByUserId, CancellationToken cancellationToken = default);
+    Task SetMfaAsync(Guid userId, bool enabled, Guid? modifiedByUserId, CancellationToken cancellationToken = default);
+    Task AssignBranchAsync(Guid userId, Guid? branchId, Guid? modifiedByUserId, CancellationToken cancellationToken = default);
     Task ChangeStatusAsync(ChangeUserStatusRequest request, CancellationToken cancellationToken = default);
     Task<IEnumerable<UserPermissionDto>> GetDirectPermissionsAsync(Guid userId, CancellationToken cancellationToken = default);
     Task<IEnumerable<UserPermissionDto>> GetDirectUsersByPermissionAsync(Guid permissionId, CancellationToken cancellationToken = default);

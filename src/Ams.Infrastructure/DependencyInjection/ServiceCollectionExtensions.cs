@@ -403,6 +403,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAssignmentRuleService, AssignmentRuleService>();
         services.AddScoped<ICrmCustomFieldRepository, CrmCustomFieldRepository>();
         services.AddScoped<ICrmCustomFieldService, CrmCustomFieldService>();
+        services.AddScoped<IPricingMarketRulesRepository, PricingMarketRulesRepository>();
+        services.AddScoped<IPricingMarketRulesService, PricingMarketRulesService>();
 
         // ── Account Config repositories & services ───────────────────
         services.AddScoped<IAccountTypeRepository, AccountTypeRepository>();

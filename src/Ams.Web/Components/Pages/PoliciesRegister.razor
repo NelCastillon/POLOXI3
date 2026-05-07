@@ -17,7 +17,7 @@
 </SfContextMenu>
 
 <AppPageHeader Title="Policies Register"
-               Subtitle="Complete policy lifecycle — active, expiring, by carrier, producer, CSR, branch and LOB"
+               Subtitle="Tenant admin policy oversight across active, expiring, carrier, branch, and line-of-business views"
                Icon="bi-shield-check-fill">
     <Actions>
         <button class="um-btn um-btn-ghost" @onclick='() => _showQueryBuilder = !_showQueryBuilder'>
@@ -31,6 +31,27 @@
         </button>
     </Actions>
 </AppPageHeader>
+
+<section class="ma-hero pol-hero">
+    <div>
+        <span class="ma-eyebrow">Tenant Administration · Policy Operations</span>
+        <h2>Tenant Policy Administration</h2>
+        <p>Administer tenant-wide policy operations, lifecycle controls, exception handling, document governance, and compliance readiness.</p>
+    </div>
+    <div class="ma-hero-actions">
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies/endorsements")'><i class="bi bi-pen"></i> Endorsements</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies/cancellations")'><i class="bi bi-x-circle"></i> Cancellations</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies/documents")'><i class="bi bi-folder2"></i> Documents</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/compliance/policies")'><i class="bi bi-patch-check"></i> Compliance</button>
+    </div>
+</section>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+    </div>
+}
 
 <!-- KPI strip -->
 <div class="pr-kpi-strip">
@@ -473,6 +494,7 @@ else
     private string _confirmTitle      = string.Empty;
     private string _confirmMsg        = string.Empty;
     private string _confirmNote       = string.Empty;
+    private string? _loadError;
 
     private List<PolicyRow> _allPolicies = [];
     private List<PolicyRow> _filtered    = [];
@@ -552,8 +574,19 @@ else
     private async Task LoadAsync()
     {
         _loading = true; StateHasChanged();
-        await Task.Delay(0);
-        BuildStubData();
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchSubmissionsAsync(Guid.Parse("00000000-0000-0000-0000-000000000001"), pageSize: 100);
+            _allPolicies = (result?.Items ?? []).Select(MapSubmissionToPolicy).ToList();
+            if (_allPolicies.Count == 0)
+                BuildStubData();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load policies: {ex.Message}";
+            BuildStubData();
+        }
         ApplyFilters();
         _loading = false;
     }
@@ -798,6 +831,36 @@ else
                 Branch         = branches[i % branches.Length],
             };
         }).ToList();
+    }
+
+    private PolicyRow MapSubmissionToPolicy(SubmissionDto s)
+    {
+        var status = s.Status switch
+        {
+            "Bound" => "Active",
+            "Declined" or "Withdrawn" => "Cancelled",
+            "Quoted" => "Pending",
+            _ => s.ExpirationDate.Date < DateTime.Today ? "Expired" : "Active"
+        };
+
+        return new PolicyRow
+        {
+            Id = s.SubmissionId,
+            PolicyNumber = $"POL-{s.SubmissionNumber.Replace("SUB-", string.Empty)}",
+            Account = s.AccountName,
+            AccountType = "Commercial",
+            AccountId = s.AccountId,
+            Carrier = s.QuoteCount > 0 ? "Quoted Markets" : "Pending Carrier",
+            Lob = string.IsNullOrWhiteSpace(s.LineOfBusiness) ? "General Liability" : s.LineOfBusiness,
+            Status = status,
+            EffDate = s.EffectiveDate,
+            ExpDate = s.ExpirationDate,
+            WrittenPremium = s.TargetPremium ?? 0,
+            AnnualPremium = s.TargetPremium ?? 0,
+            Producer = s.AssignedToUserName ?? "Unassigned",
+            Csr = s.AssignedToUserName ?? "Unassigned",
+            Branch = "HQ",
+        };
     }
 
     // ── Models ───────────────────────────────────────────────────────────────

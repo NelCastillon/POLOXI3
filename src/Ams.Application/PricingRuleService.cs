@@ -23,4 +23,10 @@ public sealed class PricingRuleService : IPricingRuleService
 
     public Task<PagedResult<PricingRuleDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
+
+    public Task UpdateAsync(Guid id, UpdatePricingRuleRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateAsync(id, request, cancellationToken);
+
+    public Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
+        => _repository.DeleteAsync(id, cancellationToken);
 }

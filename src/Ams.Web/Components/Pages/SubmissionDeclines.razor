@@ -1,5 +1,6 @@
 @page "/submissions/declines"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -28,6 +29,26 @@
         </button>
     </Actions>
 </AppPageHeader>
+
+<section class="ma-hero sub-hero">
+    <div>
+        <span class="ma-eyebrow">Submissions & Quotes</span>
+        <h2>Decline Intelligence</h2>
+        <p>Analyze declined and withdrawn submissions, lost premium, and remarketing opportunities.</p>
+    </div>
+    <div class="ma-hero-actions">
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/submissions")'><i class="bi bi-file-earmark-plus"></i> Submissions</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/submissions/quotes")'><i class="bi bi-file-text"></i> Quotes</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/submissions/applications")'><i class="bi bi-clipboard"></i> Applications</button>
+    </div>
+</section>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+    </div>
+}
 
 <!-- KPI strip -->
 <div class="sd-kpi-strip">
@@ -95,25 +116,12 @@
     bool       _loading   = false;
     string     _activeTab = "all";
     string?    _kpiFilter = null;
+    string?    _loadError;
     DeclineRow _selected  = new();
 
     sealed record CtxItem(string Text, string IconCss);
 
-    sealed class DeclineRow
-    {
-        public Guid     DeclineId         { get; set; } = Guid.NewGuid();
-        public string   SubmissionNo      { get; set; } = "";
-        public Guid     SubId             { get; set; } = Guid.NewGuid();
-        public string   Account           { get; set; } = "";
-        public string   Lob               { get; set; } = "";
-        public string   Carrier           { get; set; } = "";
-        public string   DeclineType       { get; set; } = "";
-        public string   DeclineReason     { get; set; } = "";
-        public DateTime DeclineDate       { get; set; }
-        public decimal  LostPremium       { get; set; }
-        public string   RemarketingStatus { get; set; } = "";
-        public string   Producer          { get; set; } = "";
-    }
+    sealed class DeclineRow : DeclineRegisterRow { }
 
     record TabDef(string Key, string Label, string Icon);
 
@@ -179,9 +187,39 @@
     async Task LoadAsync()
     {
         _loading = true;
-        await Task.Delay(0);
-        if (_rows.Count == 0) BuildStub();
-        _loading = false;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchSubmissionsAsync(SubmissionPageConstants.TenantId, pageSize: 100);
+            _rows.Clear();
+            _rows.AddRange((result?.Items ?? [])
+                .Where(s => s.Status is "Declined" or "Withdrawn")
+                .Select(SubmissionPageData.ToDeclineRow)
+                .Select(x => new DeclineRow
+                {
+                    DeclineId = x.DeclineId,
+                    SubmissionNo = x.SubmissionNo,
+                    SubId = x.SubId,
+                    Account = x.Account,
+                    Lob = x.Lob,
+                    Carrier = x.Carrier,
+                    DeclineType = x.DeclineType,
+                    DeclineReason = x.DeclineReason,
+                    DeclineDate = x.DeclineDate,
+                    LostPremium = x.LostPremium,
+                    RemarketingStatus = x.RemarketingStatus,
+                    Producer = x.Producer
+                }));
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load declines: {ex.Message}";
+            await _toast.ShowAsync(new ToastModel { Content = $"Load failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     void BuildStub()

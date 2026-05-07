@@ -1,0 +1,50 @@
+@page "/client/contacts/new"
+@namespace Ams.Web.Components.Pages.Contacts
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Contacts
+
+<PageTitle>New Contact — Tenant Admin</PageTitle>
+
+<AppPageHeader Title="New Contact" Subtitle="Create a Tenant Admin contact record linked to an account" Icon="bi-person-plus"><Actions><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/client/contacts")'><i class="bi bi-arrow-left"></i> Contacts</button></Actions></AppPageHeader>
+
+<section class="ma-hero contact-hero"><div><span class="ma-eyebrow">Tenant Admin · Contacts</span><h2>Create Contact</h2><p>Capture identity, account link, responsibilities, portal access, and preferred communication method.</p></div><div class="ma-hero-actions"><button class="um-btn um-btn-primary" type="button" @onclick="SubmitAsync" disabled="@_saving"><i class="bi bi-check-lg"></i> Create Contact</button></div></section>
+
+@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
+
+<div class="acct-form-card">
+    <EditForm EditContext="_editContext" OnValidSubmit="SubmitAsync"><DataAnnotationsValidator />
+        <div class="um-modal-body"><div class="um-form-grid">
+            <div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountId" class="um-input"><option value="">Select account</option>@foreach (var account in _accounts) { <option value="@account.AccountId">@account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.AccountId" class="text-danger" /></div>
+            <div class="um-field"><label>First Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.FirstName" class="um-input" /><ValidationMessage For="() => _form.FirstName" class="text-danger" /></div>
+            <div class="um-field"><label>Last Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.LastName" class="um-input" /><ValidationMessage For="() => _form.LastName" class="text-danger" /></div>
+            <div class="um-field"><label>Email</label><InputText @bind-Value="_form.Email" class="um-input" /><ValidationMessage For="() => _form.Email" class="text-danger" /></div>
+            <div class="um-field"><label>Phone</label><InputText @bind-Value="_form.Phone" class="um-input" /><ValidationMessage For="() => _form.Phone" class="text-danger" /></div>
+            <div class="um-field"><label>Job Title</label><InputText @bind-Value="_form.JobTitle" class="um-input" /><ValidationMessage For="() => _form.JobTitle" class="text-danger" /></div>
+            <div class="um-field"><label>Contact Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.ContactTypeCode" class="um-input">@foreach (var type in ContactPageConstants.ContactTypes) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.ContactTypeCode" class="text-danger" /></div>
+            <div class="um-field"><label>Preferred Method</label><InputSelect @bind-Value="_form.PreferredContactMethod" class="um-input"><option value="">None</option>@foreach (var method in ContactPageConstants.Methods) { <option value="@method">@method</option> }</InputSelect><ValidationMessage For="() => _form.PreferredContactMethod" class="text-danger" /></div>
+            <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input">@foreach (var status in ContactPageConstants.Statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+            <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsKeyContact" /> Key Contact</label></div>
+            <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsBillingContact" /> Billing Contact</label></div>
+            <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsServiceContact" /> Service Contact</label></div>
+            <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsPortalUser" /> Portal User</label></div>
+        </div></div>
+        <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/client/contacts")'>Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_saving ? "Creating…" : "Create Contact")</button></div>
+    </EditForm>
+</div>
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+
+@code {
+    ContactFormModel _form = new();
+    EditContext _editContext = default!;
+    List<AccountDto> _accounts = [];
+    SfToast _toast = default!;
+    string? _loadError;
+    bool _saving;
+
+    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Contacts", "/client/contacts"), new("New Contact")); _editContext = new(_form); await LoadAccountsAsync(); }
+    async Task LoadAccountsAsync() { try { var result = await Api.SearchAccountsAsync(ContactPageConstants.TenantId); _accounts = result?.Items.ToList() ?? []; } catch (Exception ex) { _loadError = $"Failed to load accounts: {ex.Message}"; } }
+    async Task SubmitAsync() { if (!_editContext.Validate()) return; _saving = true; try { var id = await Api.CreateContactAsync(new CreateContactRequest { TenantId = ContactPageConstants.TenantId, AccountId = _form.AccountId!.Value, FirstName = _form.FirstName, LastName = _form.LastName, Email = ContactPageConstants.Normalize(_form.Email), Phone = ContactPageConstants.Normalize(_form.Phone), JobTitle = ContactPageConstants.Normalize(_form.JobTitle), ContactTypeCode = _form.ContactTypeCode, IsBillingContact = _form.IsBillingContact, IsServiceContact = _form.IsServiceContact, IsPortalUser = _form.IsPortalUser, IsKeyContact = _form.IsKeyContact, PreferredContactMethod = ContactPageConstants.Normalize(_form.PreferredContactMethod), StatusCode = _form.StatusCode }); await _toast.ShowAsync(new() { Content = "Contact created", CssClass = "e-toast-success" }); Nav.NavigateTo($"/client/contacts/{id}"); } catch (Exception ex) { _loadError = $"Create failed: {ex.Message}"; await _toast.ShowAsync(new() { Content = $"Create failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
+}

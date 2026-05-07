@@ -1,0 +1,69 @@
+@page "/accounts/{AccountId:guid}/timeline"
+@namespace Ams.Web.Components.Pages.Accounts
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationContextService NavContext
+@using Ams.Application.Common.Dtos
+
+<PageTitle>@(_account?.AccountName ?? "Account") Timeline — Tenant Admin</PageTitle>
+
+<AppPageHeader Title="Account Timeline"
+               Subtitle="Tenant Admin activity and lifecycle chronology"
+               Icon="bi-clock-history">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo($"/accounts/{AccountId}")'><i class="bi bi-person-vcard"></i> Account 360</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </Actions>
+</AppPageHeader>
+
+<section class="ma-hero acct-hero">
+    <div><span class="ma-eyebrow">Tenant Admin · Account Intelligence</span><h2>@(_account?.AccountName ?? "Account") Timeline</h2><p>Review account creation, lifecycle updates, policy events, relationship activity, and service touchpoints.</p></div>
+    <div class="ma-hero-actions"><button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo($"/accounts/{AccountId}")'><i class="bi bi-arrow-left"></i> Back to 360</button></div>
+</section>
+
+<div class="ma-filter-bar acct-filter-bar">
+    <div class="ma-search-wrap"><i class="bi bi-search"></i><input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search title, type, description…" /></div>
+    <div class="ma-type-pills">
+        <button class="ma-pill @(_activeFilter is null ? "ma-pill-active" : "")" @onclick='() => SetFilter(null)'>All</button>
+        @foreach (var type in _events.Select(x => x.Type).Distinct().Order()) { <button class="ma-pill @(_activeFilter == type ? "ma-pill-active" : "")" @onclick="() => SetFilter(type)">@type</button> }
+    </div>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
+    <span class="ma-filter-count">@Filtered.Count() events</span>
+</div>
+
+@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
+@if (_loading) { <div class="mt-loading"><div class="um-spinner"></div><span>Loading timeline…</span></div> }
+
+<div class="ma-content acct-timeline-card">
+    <div class="ma-feed">
+        @foreach (var group in Filtered.GroupBy(x => x.DateUtc.Date).OrderByDescending(g => g.Key))
+        {
+            <div class="ma-date-sep"><span>@group.Key.ToString("MMM d, yyyy")</span></div>
+            @foreach (var item in group.OrderByDescending(x => x.DateUtc))
+            {
+                <div class="ma-feed-item">
+                    <div class="ma-feed-icon acct-tone-@item.Tone"><i class="bi @item.Icon"></i></div>
+                    <div class="ma-feed-body"><div class="ma-feed-hdr"><span class="ma-feed-acct">@item.Title</span><span class="ma-type-chip acct-tone-@item.Tone">@item.Type</span></div><div class="ma-feed-notes">@item.Description</div><div class="ma-feed-meta"><span><i class="bi bi-clock"></i> @item.DateUtc.ToLocalTime().ToString("h:mm tt")</span></div></div>
+                </div>
+            }
+        }
+        @if (!Filtered.Any()) { <div class="ma-empty"><i class="bi bi-clock-history ma-empty-icon"></i><span>No timeline events match the current filters.</span></div> }
+    </div>
+</div>
+
+@code {
+    [Parameter] public Guid AccountId { get; set; }
+    AccountDto? _account;
+    List<AccountTimelineItem> _events = [];
+    string _search = string.Empty;
+    string? _activeFilter, _loadError;
+    bool _loading;
+    IEnumerable<AccountTimelineItem> Filtered => _events.Where(x => (_activeFilter is null || x.Type == _activeFilter) && (string.IsNullOrWhiteSpace(_search) || x.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Type.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Description.Contains(_search, StringComparison.OrdinalIgnoreCase)));
+
+    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new("Timeline")); await LoadAsync(); }
+    async Task LoadAsync() { _loading = true; _loadError = null; try { _account = await Api.GetAccountByIdAsync(AccountId); if (_account is not null) { _events = AccountPageData.BuildTimeline(_account); NavContext.SetAccount(AccountId, _account.AccountName); Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new(_account.AccountName, $"/accounts/{AccountId}"), new("Timeline")); } } catch (Exception ex) { _loadError = $"Failed to load timeline: {ex.Message}"; } finally { _loading = false; } }
+    void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) => _search = e.Value?.ToString() ?? string.Empty;
+    void SetFilter(string? key) => _activeFilter = key;
+    void ResetFilters() { _activeFilter = null; _search = string.Empty; }
+}

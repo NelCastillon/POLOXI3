@@ -30,4 +30,18 @@ public sealed class ContactsController : ControllerBase
     [HttpGet("by-account/{accountId:guid}")]
     public async Task<IActionResult> GetByAccount(Guid accountId, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
         => Ok(await _service.GetByAccountIdAsync(accountId, pageNumber, pageSize, cancellationToken));
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateContactRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdateAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] Guid? userId, CancellationToken cancellationToken)
+    {
+        await _service.DeleteAsync(id, userId, cancellationToken);
+        return NoContent();
+    }
 }

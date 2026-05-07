@@ -3,238 +3,298 @@
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
-@using Ams.Application.Common.Dtos
 @using Ams.Application.Features.PricingRules
 
-<PageTitle>Pricing Rules — CRM</PageTitle>
-
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+<PageTitle>Pricing Rules � CRM</PageTitle>
 
 <AppPageHeader Title="Pricing Rules"
-               Subtitle="Define discount schedules, adjusted unit prices, and segment-based pricing for your services"
+               Subtitle="Tenant admin controls for service discounts, segment pricing, approvals, and effective dates"
                Icon="bi-tags-fill">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "pr-spin" : "")" aria-hidden="true"></i>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Pricing Rule
         </button>
-        <button class="um-btn um-btn-primary" @onclick="() => _showAdd = true">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Rule
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
         </button>
     </Actions>
 </AppPageHeader>
 
-<!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
-<div class="pr-kpi-strip">
-    <div class="pr-kpi-card">
-        <span class="pr-ki pr-ki1"><i class="bi bi-tags-fill" aria-hidden="true"></i></span>
-        <div><div class="pr-kv">@_items.Count</div><div class="pr-kl">Total Rules</div></div>
+<section class="ma-hero pmr-hero">
+    <div>
+        <span class="ma-eyebrow">Pricing & Market Rules</span>
+        <h2>Pricing Rule Command Center</h2>
+        <p>Manage discount schedules, segment offers, approval gates, and effective windows from a single tenant admin workspace.</p>
     </div>
-    <div class="pr-kpi-card">
-        <span class="pr-ki pr-ki2"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div><div class="pr-kv">@_items.Count(x => x.IsActive)</div><div class="pr-kl">Active</div></div>
+    <div class="ma-hero-actions">
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Add Pricing Rule</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
     </div>
-    <div class="pr-kpi-card">
-        <span class="pr-ki pr-ki3"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span>
-        <div><div class="pr-kv">@_items.Count(x => x.RequiresApproval)</div><div class="pr-kl">Needs Approval</div></div>
+</section>
+
+<div class="ma-view-tabs pmr-view-tabs">
+    <button class="ma-view-tab ma-view-tab--active"><i class="bi bi-tags"></i> Pricing Rules</button>
+    <button class="ma-view-tab" @onclick='() => Nav.NavigateTo("/crm/pricing/classes")'><i class="bi bi-diagram-3"></i> Price by Class</button>
+    <button class="ma-view-tab" @onclick='() => Nav.NavigateTo("/crm/appetite")'><i class="bi bi-grid-3x3"></i> Market Appetite</button>
+    <button class="ma-view-tab" @onclick='() => Nav.NavigateTo("/crm/carrier-mapping")'><i class="bi bi-broadcast"></i> Carrier Mapping</button>
+</div>
+
+<div class="pc-kpi-strip">
+    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all pricing rules">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-tags-fill" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Rules</div></div>
     </div>
-    <div class="pr-kpi-card">
-        <span class="pr-ki pr-ki4"><i class="bi bi-percent" aria-hidden="true"></i></span>
-        <div><div class="pr-kv">@(_items.Count == 0 ? "—" : _items.Average(x => (double)x.DiscountPercent).ToString("F1") + "%")</div><div class="pr-kl">Avg Discount</div></div>
+    <div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("active")' title="Filter: Active rules">
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.IsActive)</div><div class="pc-kpi-label">Active</div></div>
     </div>
-    <div class="pr-kpi-card">
-        <span class="pr-ki pr-ki5"><i class="bi bi-calendar-x" aria-hidden="true"></i></span>
-        <div><div class="pr-kv">@_items.Count(x => x.EffectiveEndDate.HasValue && x.EffectiveEndDate < DateTime.Today)</div><div class="pr-kl">Expired</div></div>
+    <div class="pc-kpi-card @(_activeFilter == "approval" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("approval")' title="Filter: Requires approval">
+        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.RequiresApproval)</div><div class="pc-kpi-label">Needs Approval</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "promo" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("promo")' title="Filter: Promotional rules">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-percent" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(x => x.RuleTypeCode.Equals("PROMO", StringComparison.OrdinalIgnoreCase))</div><div class="pc-kpi-label">Promotional</div></div>
+    </div>
+    <div class="pc-kpi-card @(_activeFilter == "expired" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("expired")' title="Filter: Expired rules">
+        <span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-calendar-x" aria-hidden="true"></i></span>
+        <div><div class="pc-kpi-value">@_items.Count(IsExpired)</div><div class="pc-kpi-label">Expired</div></div>
     </div>
 </div>
 
-<!-- ── Filter bar ────────────────────────────────────────────────────────── -->
-<div class="pr-filter-bar">
-    <div class="pr-search-wrap">
-        <i class="bi bi-search pr-si" aria-hidden="true"></i>
-        <input class="pr-search" type="search" placeholder="Search rules…"
-               value="@_search"
-               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
+<div class="ma-filter-bar pmr-filter-bar">
+    <div class="ma-search-wrap">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search code, name, type, service, segment�" />
     </div>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_typeOpts" Placeholder="All Types" ShowClearButton="true" Width="140px"
-                    Value="_filterType" ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="Any Status" ShowClearButton="true" Width="130px"
-                    Value="_filterActive" ValueChanged="@((string v) => { _filterActive = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
+    <div class="ma-type-pills">
+        <button class="ma-pill @(_activeFilter is null ? "ma-pill-active" : "")" @onclick='() => SetFilter(null)'>All</button>
+        <button class="ma-pill @(_activeFilter == "active" ? "ma-pill-active" : "")" @onclick='() => SetFilter("active")'>Active</button>
+        <button class="ma-pill @(_activeFilter == "approval" ? "ma-pill-active" : "")" @onclick='() => SetFilter("approval")'>Approval</button>
+        <button class="ma-pill @(_activeFilter == "promo" ? "ma-pill-active" : "")" @onclick='() => SetFilter("promo")'>Promo</button>
+        <button class="ma-pill @(_activeFilter == "expired" ? "ma-pill-active" : "")" @onclick='() => SetFilter("expired")'>Expired</button>
+    </div>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
+    <span class="ma-filter-count">@_filtered.Count rules</span>
 </div>
 
-<!-- ── Grid ─────────────────────────────────────────────────────────────── -->
-@if (_loading)
+@if (_loadError is not null)
 {
-    <div class="pr-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading pricing rules…</span></div>
-}
-else
-{
-    <div class="app-datagrid">
-        <SfGrid TValue="PricingRuleDto"
-                DataSource="_filtered"
-                AllowPaging="true"
-                AllowSorting="true"
-                AllowFiltering="true"
-                EnableHover="true"
-                RowHeight="52">
-            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-            <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
-            <GridColumns>
-                <GridColumn Field="@nameof(PricingRuleDto.RuleCode)" HeaderText="Code" Width="120" />
-                <GridColumn Field="@nameof(PricingRuleDto.RuleName)" HeaderText="Rule Name" Width="220" />
-                <GridColumn Field="@nameof(PricingRuleDto.RuleTypeCode)" HeaderText="Type" Width="120">
-                    <Template>
-                        @{ var r = (PricingRuleDto)context; }
-                        <span class="pr-type-badge pr-type-@r.RuleTypeCode.ToLower()">@r.RuleTypeCode</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(PricingRuleDto.SegmentCode)" HeaderText="Segment" Width="120">
-                    <Template>
-                        @{ var r = (PricingRuleDto)context; }
-                        <span>@(r.SegmentCode ?? "—")</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="Discount" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                    <Template>
-                        @{ var r = (PricingRuleDto)context; }
-                        <span class="pr-mono pr-bold">@r.DiscountPercent.ToString("F1")%</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="Status" Width="110">
-                    <Template>
-                        @{ var r = (PricingRuleDto)context; }
-                        <span class="@(r.IsActive ? "pr-status-active" : "pr-status-inactive")">
-                            @(r.IsActive ? "✓ Active" : "◆ Inactive")
-                        </span>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="Approval" Width="110">
-                    <Template>
-                        @{ var r = (PricingRuleDto)context; }
-                        @if (r.RequiresApproval)
-                        {
-                            <span class="pr-approval-badge">⚠ Required</span>
-                        }
-                        else
-                        {
-                            <span class="pr-approval-none">—</span>
-                        }
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
     </div>
 }
 
-<!-- ── Add/Edit Drawer ──────────────────────────────────────────────────── -->
-<AppCrudDrawer @bind-Visible="_showAdd" 
-               Title="@(_editingId == Guid.Empty ? "Create Pricing Rule" : "Edit Pricing Rule")"
-               Icon="bi-tags"
-               OnConfirm="SaveAsync" 
-               IsBusy="_saving"
-               Width="420px">
-    <Content>
-        <div class="form-row">
-            <label class="form-label">Rule Code <span class="form-required">*</span></label>
-            <input type="text" class="form-control" placeholder="e.g., BULK-10" />
+<div class="um-grid-card">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading pricing rules�</span></div>
+    }
+    <SfGrid TValue="PricingRuleDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+        <GridEvents TValue="PricingRuleDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" />
+        <GridColumns>
+            <GridColumn Field="RuleCode" HeaderText="Code" Width="120" />
+            <GridColumn Field="RuleName" HeaderText="Rule Name" Width="230" />
+            <GridColumn Field="RuleTypeCode" HeaderText="Type" Width="120">
+                <Template>
+                    @{ var r = (PricingRuleDto)context; }
+                    <span class="um-badge um-badge-info">@r.RuleTypeCode</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="ServiceCode" HeaderText="Service" Width="120">
+                <Template>
+                    @{ var r = (PricingRuleDto)context; }
+                    <span>@(string.IsNullOrWhiteSpace(r.ServiceCode) ? "�" : r.ServiceCode)</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="SegmentCode" HeaderText="Segment" Width="130">
+                <Template>
+                    @{ var r = (PricingRuleDto)context; }
+                    <span>@(string.IsNullOrWhiteSpace(r.SegmentCode) ? "�" : r.SegmentCode)</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Discount" Width="100" TextAlign="TextAlign.Right">
+                <Template>
+                    @{ var r = (PricingRuleDto)context; }
+                    <strong>@r.DiscountPercent.ToString("0.##")%</strong>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Effective" Width="170">
+                <Template>
+                    @{ var r = (PricingRuleDto)context; }
+                    <span>@r.EffectiveStartDate.ToString("MMM d, yyyy")</span>
+                    <span class="text-muted"> � @(r.EffectiveEndDate?.ToString("MMM d, yyyy") ?? "Open")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn Field="Priority" HeaderText="Priority" Width="90" TextAlign="TextAlign.Center" />
+            <GridColumn HeaderText="Status" Width="110" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (PricingRuleDto)context; }
+                    <span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Approval" Width="115" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (PricingRuleDto)context; }
+                    <span class="um-badge @(r.RequiresApproval ? "um-badge-warning" : "um-badge-neutral")">@(r.RequiresApproval ? "Required" : "None")</span>
+                </Template>
+            </GridColumn>
+            <GridColumn HeaderText="Actions" Width="110" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (PricingRuleDto)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<SfDialog @bind-Visible="_showForm" Width="760px" IsModal="true" ShowCloseIcon="false">
+    <DialogEvents Closed="ResetForm" />
+    <DialogContent>
+        <div class="um-modal-header">
+            <i class="bi bi-tags-fill"></i>
+            <span>@(_editId.HasValue ? "Edit Pricing Rule" : "Add Pricing Rule")</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
         </div>
-        <div class="form-row">
-            <label class="form-label">Rule Name <span class="form-required">*</span></label>
-            <input type="text" class="form-control" placeholder="Descriptive name" />
+        <EditForm Model="_form" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label>Rule Code <span class="text-danger">*</span></label>
+                        <InputText @bind-Value="_form.RuleCode" class="um-input" placeholder="e.g. VOL-10" />
+                        <ValidationMessage For="() => _form.RuleCode" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Rule Name <span class="text-danger">*</span></label>
+                        <InputText @bind-Value="_form.RuleName" class="um-input" placeholder="e.g. Volume discount" />
+                        <ValidationMessage For="() => _form.RuleName" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Rule Type <span class="text-danger">*</span></label>
+                        <SfDropDownList TValue="string" TItem="string" @bind-Value="_form.RuleTypeCode" DataSource="_ruleTypes" Placeholder="Select type" />
+                        <ValidationMessage For="() => _form.RuleTypeCode" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Service Code</label>
+                        <InputText @bind-Value="_form.ServiceCode" class="um-input" placeholder="Optional service" />
+                        <ValidationMessage For="() => _form.ServiceCode" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Segment Code</label>
+                        <InputText @bind-Value="_form.SegmentCode" class="um-input" placeholder="Optional segment" />
+                        <ValidationMessage For="() => _form.SegmentCode" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Minimum Quantity</label>
+                        <InputNumber @bind-Value="_form.MinQuantity" class="um-input" />
+                        <ValidationMessage For="() => _form.MinQuantity" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Maximum Quantity</label>
+                        <InputNumber @bind-Value="_form.MaxQuantity" class="um-input" />
+                        <ValidationMessage For="() => _form.MaxQuantity" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Discount Percent <span class="text-danger">*</span></label>
+                        <InputNumber @bind-Value="_form.DiscountPercent" class="um-input" />
+                        <ValidationMessage For="() => _form.DiscountPercent" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Adjusted Unit Price</label>
+                        <InputNumber @bind-Value="_form.AdjustedUnitPrice" class="um-input" />
+                        <ValidationMessage For="() => _form.AdjustedUnitPrice" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Effective Start <span class="text-danger">*</span></label>
+                        <InputDate @bind-Value="_form.EffectiveStartDate" class="um-input" />
+                        <ValidationMessage For="() => _form.EffectiveStartDate" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Effective End</label>
+                        <InputDate @bind-Value="_form.EffectiveEndDate" class="um-input" />
+                        <ValidationMessage For="() => _form.EffectiveEndDate" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Priority <span class="text-danger">*</span></label>
+                        <InputNumber @bind-Value="_form.Priority" class="um-input" />
+                        <ValidationMessage For="() => _form.Priority" class="text-danger" />
+                    </div>
+                    <div class="um-field um-field--checkbox">
+                        <label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label>
+                    </div>
+                    <div class="um-field um-field--checkbox">
+                        <label><InputCheckbox @bind-Value="_form.RequiresApproval" /> Requires Approval</label>
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                    @if (_saving) { <span class="um-spinner-sm"></span> } @(_editId.HasValue ? "Save Changes" : "Create")
+                </button>
+            </div>
+        </EditForm>
+    </DialogContent>
+</SfDialog>
+
+<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-confirm-dialog">
+            <div class="um-confirm-icon um-confirm-icon--danger">
+                <i class="bi bi-trash3-fill"></i>
+            </div>
+            <div class="um-confirm-message">
+                <h6>Delete Pricing Rule?</h6>
+                <p>You are about to delete <strong>@_deleteTarget?.RuleName</strong>. This action cannot be undone.</p>
+            </div>
+            <div class="um-modal-footer w-100">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
         </div>
-        <div class="form-row">
-            <label class="form-label">Rule Type <span class="form-required">*</span></label>
-            <SfDropDownList TValue="string" TItem="LV" 
-                            DataSource="_typeOpts"
-                            Placeholder="Select type">
-                <DropDownListFieldSettings Value="Value" Text="Label" />
-            </SfDropDownList>
-        </div>
-        <div class="form-row">
-            <label class="form-label">Discount Percent <span class="form-required">*</span></label>
-            <input type="number" class="form-control" placeholder="0.0" step="0.1" min="0" max="100" />
-        </div>
-        <div class="form-row">
-            <label class="form-label">Segment (Optional)</label>
-            <SfDropDownList TValue="string" TItem="object"
-                            Placeholder="Select segment">
-            </SfDropDownList>
-        </div>
-        <div class="form-row">
-            <label class="form-label">Effective Start Date <span class="form-required">*</span></label>
-            <SfDatePicker TValue="DateTime"></SfDatePicker>
-        </div>
-        <div class="form-row">
-            <label class="form-label">Effective End Date (Optional)</label>
-            <SfDatePicker TValue="DateTime?"></SfDatePicker>
-        </div>
-        <div class="form-row">
-            <label class="form-check">
-                <input type="checkbox" class="form-check-input" />
-                <span>Active</span>
-            </label>
-        </div>
-        <div class="form-row">
-            <label class="form-check">
-                <input type="checkbox" class="form-check-input" />
-                <span>Requires Approval</span>
-            </label>
-        </div>
-    </Content>
-</AppCrudDrawer>
+    </DialogContent>
+</SfDialog>
+
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
 
 @code {
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private SfToast? _toast;
-    private List<PricingRuleDto> _items = [];
-    private List<PricingRuleDto> _filtered = [];
-    private List<LV> _typeOpts = [];
-    private List<LV> _statusOpts = [];
-    private string _search = string.Empty;
-    private string _filterType = string.Empty;
-    private string _filterActive = string.Empty;
-    private bool _loading = false;
-    private bool _saving = false;
-    private bool _showAdd = false;
-    private Guid _editingId = Guid.Empty;
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    readonly string[] _ruleTypes = ["VOLUME", "SEGMENT", "TIERED", "PROMO", "DISCOUNT"];
+
+    List<PricingRuleDto> _items = [], _filtered = [];
+    string? _activeFilter;
+    bool _loading, _saving;
+    string _search = string.Empty;
+    string? _loadError;
+    bool _showForm, _showDelete;
+    Guid? _editId;
+    PricingRuleDto? _deleteTarget;
+    SfToast _toast = default!;
+    PricingRuleFormModel _form = new();
 
     protected override async Task OnInitializedAsync()
     {
-        Breadcrumbs.SetCrumbs(new("CRM", "/crm"), new("Pricing Rules", "/crm/pricing-rules"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", null), new("Pricing Rules", "/crm/pricing-rules"));
         await LoadAsync();
     }
 
-    private async Task LoadAsync()
+    async Task LoadAsync()
     {
+        _loading = true;
+        _loadError = null;
         try
         {
-            _loading = true;
-            var result = await Api.SearchPricingRulesAsync(_tenantId, _search);
-            _items = result?.Items?.ToList() ?? [];
-            _filtered = _items;
-
-            _typeOpts = new()
-            {
-                new() { Label = "Volume Discount", Value = "VOLUME" },
-                new() { Label = "Segment Price", Value = "SEGMENT" },
-                new() { Label = "Tiered Pricing", Value = "TIERED" },
-                new() { Label = "Promotional", Value = "PROMO" }
-            };
-
-            _statusOpts = new()
-            {
-                new() { Label = "Active", Value = "1" },
-                new() { Label = "Inactive", Value = "0" }
-            };
+            var result = await Api.SearchPricingRulesAsync(TenantId, pageSize: 200);
+            _items = result?.Items.ToList() ?? [];
+            ApplyFilter();
         }
         catch (Exception ex)
         {
-            await _toast?.ShowAsync(new ToastModel { Title = "Error", Content = ex.Message, CssClass = "e-toast-danger" });
+            _loadError = $"Failed to load pricing rules: {ex.Message}";
         }
         finally
         {
@@ -242,28 +302,124 @@ else
         }
     }
 
-    private void ApplyFilters()
+    void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
     {
-        _filtered = _items
-            .Where(x => string.IsNullOrEmpty(_search) || x.RuleName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.RuleCode.Contains(_search, StringComparison.OrdinalIgnoreCase))
-            .Where(x => string.IsNullOrEmpty(_filterType) || x.RuleTypeCode == _filterType)
-            .Where(x => string.IsNullOrEmpty(_filterActive) || ((_filterActive == "1") == x.IsActive))
-            .ToList();
+        _search = e.Value?.ToString() ?? string.Empty;
+        ApplyFilter();
     }
 
-    private async Task SaveAsync()
+    void ApplyFilter()
     {
+        var rows = _activeFilter switch
+        {
+            "active" => _items.Where(x => x.IsActive),
+            "approval" => _items.Where(x => x.RequiresApproval),
+            "promo" => _items.Where(x => x.RuleTypeCode.Equals("PROMO", StringComparison.OrdinalIgnoreCase)),
+            "expired" => _items.Where(IsExpired),
+            _ => _items.AsEnumerable()
+        };
+
+        _filtered = rows.Where(SearchMatches).ToList();
+    }
+
+    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
+    void ResetFilters() { _activeFilter = null; _search = string.Empty; ApplyFilter(); }
+    void OnRowSelected(RowSelectEventArgs<PricingRuleDto> args) => OpenEdit(args.Data);
+    static bool IsExpired(PricingRuleDto item) => item.EffectiveEndDate.HasValue && item.EffectiveEndDate.Value.Date < DateTime.Today;
+    bool SearchMatches(PricingRuleDto item)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        var q = _search.Trim();
+        return item.RuleCode.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || item.RuleName.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || item.RuleTypeCode.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || (item.ServiceCode?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+            || (item.SegmentCode?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false);
+    }
+
+    void OpenCreate()
+    {
+        _editId = null;
+        _form = new();
+        _showForm = true;
+    }
+
+    void OpenEdit(PricingRuleDto item)
+    {
+        _editId = item.PricingRuleId;
+        _form = new()
+        {
+            RuleCode = item.RuleCode,
+            RuleName = item.RuleName,
+            RuleTypeCode = item.RuleTypeCode,
+            ServiceCode = item.ServiceCode,
+            SegmentCode = item.SegmentCode,
+            MinQuantity = item.MinQuantity,
+            MaxQuantity = item.MaxQuantity,
+            DiscountPercent = item.DiscountPercent,
+            AdjustedUnitPrice = item.AdjustedUnitPrice,
+            EffectiveStartDate = item.EffectiveStartDate.Date,
+            EffectiveEndDate = item.EffectiveEndDate?.Date,
+            RequiresApproval = item.RequiresApproval,
+            Priority = item.Priority,
+            IsActive = item.IsActive
+        };
+        _showForm = true;
+    }
+
+    async Task SaveAsync()
+    {
+        _saving = true;
         try
         {
-            _saving = true;
-            await _toast?.ShowAsync(new ToastModel { Title = "Success", Content = "Rule saved", CssClass = "e-toast-success" });
-            _showAdd = false;
-            _editingId = Guid.Empty;
+            if (_editId.HasValue)
+            {
+                await Api.UpdatePricingRuleAsync(_editId.Value, new UpdatePricingRuleRequest
+                {
+                    RuleCode = _form.RuleCode,
+                    RuleName = _form.RuleName,
+                    RuleTypeCode = _form.RuleTypeCode,
+                    ServiceCode = Normalize(_form.ServiceCode),
+                    SegmentCode = Normalize(_form.SegmentCode),
+                    MinQuantity = _form.MinQuantity,
+                    MaxQuantity = _form.MaxQuantity,
+                    DiscountPercent = _form.DiscountPercent,
+                    AdjustedUnitPrice = _form.AdjustedUnitPrice,
+                    EffectiveStartDate = _form.EffectiveStartDate,
+                    EffectiveEndDate = _form.EffectiveEndDate,
+                    RequiresApproval = _form.RequiresApproval,
+                    Priority = _form.Priority,
+                    IsActive = _form.IsActive
+                });
+            }
+            else
+            {
+                await Api.CreatePricingRuleAsync(new CreatePricingRuleRequest
+                {
+                    TenantId = TenantId,
+                    RuleCode = _form.RuleCode,
+                    RuleName = _form.RuleName,
+                    RuleTypeCode = _form.RuleTypeCode,
+                    ServiceCode = Normalize(_form.ServiceCode),
+                    SegmentCode = Normalize(_form.SegmentCode),
+                    MinQuantity = _form.MinQuantity,
+                    MaxQuantity = _form.MaxQuantity,
+                    DiscountPercent = _form.DiscountPercent,
+                    AdjustedUnitPrice = _form.AdjustedUnitPrice,
+                    EffectiveStartDate = _form.EffectiveStartDate,
+                    EffectiveEndDate = _form.EffectiveEndDate,
+                    RequiresApproval = _form.RequiresApproval,
+                    Priority = _form.Priority
+                });
+            }
+
+            _showForm = false;
+            await _toast.ShowAsync(new() { Content = "Pricing rule saved", CssClass = "e-toast-success" });
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            await _toast?.ShowAsync(new ToastModel { Title = "Error", Content = ex.Message, CssClass = "e-toast-danger" });
+            await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
         }
         finally
         {
@@ -271,9 +427,72 @@ else
         }
     }
 
-    private class LV
+    void ConfirmDelete(PricingRuleDto item) { _deleteTarget = item; _showDelete = true; }
+
+    async Task ExecuteDeleteAsync()
     {
-        public string Label { get; set; } = string.Empty;
-        public string Value { get; set; } = string.Empty;
+        _saving = true;
+        try
+        {
+            await Api.DeletePricingRuleAsync(_deleteTarget!.PricingRuleId);
+            _showDelete = false;
+            await _toast.ShowAsync(new() { Content = "Pricing rule deleted", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    void ResetForm() { _form = new(); _editId = null; }
+    static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    sealed class PricingRuleFormModel
+    {
+        [Required(ErrorMessage = "Rule Code is required.")]
+        [StringLength(80, ErrorMessage = "Rule Code cannot exceed 80 characters.")]
+        public string RuleCode { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Rule Name is required.")]
+        [StringLength(200, ErrorMessage = "Rule Name cannot exceed 200 characters.")]
+        public string RuleName { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Rule Type is required.")]
+        [StringLength(50, ErrorMessage = "Rule Type cannot exceed 50 characters.")]
+        public string RuleTypeCode { get; set; } = "VOLUME";
+
+        [StringLength(80, ErrorMessage = "Service Code cannot exceed 80 characters.")]
+        public string? ServiceCode { get; set; }
+
+        [StringLength(80, ErrorMessage = "Segment Code cannot exceed 80 characters.")]
+        public string? SegmentCode { get; set; }
+
+        [Range(0, 999999999, ErrorMessage = "Minimum Quantity must be 0 or greater.")]
+        public decimal? MinQuantity { get; set; }
+
+        [Range(0, 999999999, ErrorMessage = "Maximum Quantity must be 0 or greater.")]
+        public decimal? MaxQuantity { get; set; }
+
+        [Range(0, 100, ErrorMessage = "Discount Percent must be between 0 and 100.")]
+        public decimal DiscountPercent { get; set; }
+
+        [Range(0, 999999999, ErrorMessage = "Adjusted Unit Price must be 0 or greater.")]
+        public decimal? AdjustedUnitPrice { get; set; }
+
+        [Required(ErrorMessage = "Effective Start is required.")]
+        public DateTime EffectiveStartDate { get; set; } = DateTime.Today;
+
+        public DateTime? EffectiveEndDate { get; set; }
+        public bool RequiresApproval { get; set; }
+
+        [Range(0, int.MaxValue, ErrorMessage = "Priority must be 0 or greater.")]
+        public int Priority { get; set; } = 10;
+
+        public bool IsActive { get; set; } = true;
     }
 }

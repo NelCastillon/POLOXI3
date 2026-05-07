@@ -65,6 +65,20 @@ public sealed class UsersController : ControllerBase
         return NoContent();
     }
 
+    [HttpPatch("{id:guid}/mfa")]
+    public async Task<IActionResult> SetMfa(Guid id, [FromQuery] bool enabled, [FromQuery] Guid? modifiedByUserId, CancellationToken cancellationToken)
+    {
+        await _service.SetMfaAsync(id, enabled, modifiedByUserId, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPatch("{id:guid}/branch")]
+    public async Task<IActionResult> AssignBranch(Guid id, [FromQuery] Guid? branchId, [FromQuery] Guid? modifiedByUserId, CancellationToken cancellationToken)
+    {
+        await _service.AssignBranchAsync(id, branchId, modifiedByUserId, cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet("{id:guid}/permissions")]
     public async Task<IActionResult> GetDirectPermissions(Guid id, CancellationToken cancellationToken)
         => Ok(await _service.GetDirectPermissionsAsync(id, cancellationToken));

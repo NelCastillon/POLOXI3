@@ -19,4 +19,7 @@ public sealed class PricingRuleDto
     public int Priority { get; set; }
     public bool IsActive { get; set; }
     public DateTime CreatedDateUtc { get; set; }
+    public DateTime? ModifiedDateUtc { get; set; }
+    public Guid? CreatedByUserId { get; set; }
+    public Guid? ModifiedByUserId { get; set; }
 }

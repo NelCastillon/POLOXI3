@@ -33,10 +33,42 @@ public sealed class BranchRepository : IBranchRepository
     public async Task<Guid> CreateAsync(CreateBranchRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-INSERT INTO Core.Branch
-    (BranchId, TenantId, BranchCode, BranchName, City, StateProvince, CountryCode, IsActive, CreatedDateUtc, IsDeleted)
-VALUES
-    (@BranchId, @TenantId, @BranchCode, @BranchName, @City, @StateProvince, @CountryCode, 1, GETUTCDATE(), 0);";
+DECLARE @CompanyId UNIQUEIDENTIFIER = NULL;
+DECLARE @InsertColumns NVARCHAR(MAX) = N'BranchId, TenantId, BranchCode, BranchName, City, StateProvince, CountryCode, IsActive, CreatedDateUtc, IsDeleted';
+DECLARE @InsertValues  NVARCHAR(MAX) = N'@BranchId, @TenantId, @BranchCode, @BranchName, @City, @StateProvince, @CountryCode, 1, SYSUTCDATETIME(), 0';
+
+IF COL_LENGTH(N'Core.Branch', N'TimeZoneId') IS NOT NULL
+BEGIN
+    SET @InsertColumns += N', TimeZoneId';
+    SET @InsertValues  += N', @TimeZoneId';
+END
+
+IF COL_LENGTH(N'Core.Branch', N'CompanyId') IS NOT NULL
+BEGIN
+    IF OBJECT_ID(N'Core.Company') IS NOT NULL
+    BEGIN
+        IF COL_LENGTH(N'Core.Company', N'TenantId') IS NOT NULL
+            EXEC sp_executesql
+                N'SELECT TOP (1) @CompanyIdOut = CompanyId FROM Core.Company WHERE TenantId = @TenantId ORDER BY CompanyId;',
+                N'@TenantId UNIQUEIDENTIFIER, @CompanyIdOut UNIQUEIDENTIFIER OUTPUT',
+                @TenantId,
+                @CompanyId OUTPUT;
+
+        IF @CompanyId IS NULL
+            SELECT TOP (1) @CompanyId = CompanyId FROM Core.Company ORDER BY CompanyId;
+    END
+
+    IF @CompanyId IS NULL
+        THROW 50001, 'Cannot create branch because Core.Branch.CompanyId is required but no Core.Company record was found.', 1;
+
+    SET @InsertColumns += N', CompanyId';
+    SET @InsertValues  += N', @CompanyId';
+END
+
+DECLARE @InsertSql NVARCHAR(MAX) = N'INSERT INTO Core.Branch (' + @InsertColumns + N') VALUES (' + @InsertValues + N');';
+EXEC sp_executesql @InsertSql,
+    N'@BranchId UNIQUEIDENTIFIER, @TenantId UNIQUEIDENTIFIER, @BranchCode NVARCHAR(50), @BranchName NVARCHAR(200), @City NVARCHAR(100), @StateProvince NVARCHAR(100), @CountryCode NVARCHAR(10), @TimeZoneId NVARCHAR(100), @CompanyId UNIQUEIDENTIFIER',
+    @BranchId, @TenantId, @BranchCode, @BranchName, @City, @StateProvince, @CountryCode, @TimeZoneId, @CompanyId;";
         var id = Guid.NewGuid();
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
@@ -48,6 +80,7 @@ VALUES
             request.City,
             request.StateProvince,
             CountryCode = request.CountryCode ?? string.Empty,
+            TimeZoneId = "UTC",
         }, cancellationToken: cancellationToken));
         return id;
     }

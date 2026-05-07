@@ -135,6 +135,9 @@ public sealed class DatabaseMigrator
         new("0102_Workbench_Notifications_Full_Seed", Migration0102_WorkbenchNotificationsFullSeed),
         new("0103_Tenant_Security_Audit_Trail_Seed", Migration0103_TenantSecurityAuditTrailSeed),
         new("0104_Tenant_Security_Sessions_Seed", Migration0104_TenantSecuritySessionsSeed),
+        new("0105_CRM_PricingRules_CreateSeed", Migration0105_CrmPricingRulesCreateSeed),
+        new("0106_CRM_PricingMarketRules_CreateSeed", Migration0106_CrmPricingMarketRulesCreateSeed),
+        new("0107_AgencyProfile_CreateMissing", Migration0107_AgencyProfileCreateMissing),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -3150,5 +3153,332 @@ BEGIN
 END',
 N'@TenantId UNIQUEIDENTIFIER, @AdminUserId UNIQUEIDENTIFIER, @Now DATETIME2',
 @TenantId = @TenantId, @AdminUserId = @AdminUserId, @Now = @Now;
+";
+
+    private const string Migration0105_CrmPricingRulesCreateSeed = @"
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @AdminUserId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000002';
+
+IF SCHEMA_ID(N'CRM') IS NULL EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.PricingRule') IS NULL
+BEGIN
+    CREATE TABLE CRM.PricingRule
+    (
+        PricingRuleId       UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PricingRule PRIMARY KEY DEFAULT NEWID(),
+        TenantId            UNIQUEIDENTIFIER NOT NULL,
+        RuleCode            NVARCHAR(80)     NOT NULL,
+        RuleName            NVARCHAR(200)    NOT NULL,
+        RuleTypeCode        NVARCHAR(50)     NOT NULL,
+        ServiceCode         NVARCHAR(80)     NULL,
+        SegmentCode         NVARCHAR(80)     NULL,
+        MinQuantity         DECIMAL(18,2)    NULL,
+        MaxQuantity         DECIMAL(18,2)    NULL,
+        DiscountPercent     DECIMAL(9,2)     NOT NULL CONSTRAINT DF_PricingRule_DiscountPercent DEFAULT 0,
+        AdjustedUnitPrice   DECIMAL(18,2)    NULL,
+        EffectiveStartDate  DATETIME2        NOT NULL,
+        EffectiveEndDate    DATETIME2        NULL,
+        RequiresApproval    BIT              NOT NULL CONSTRAINT DF_PricingRule_RequiresApproval DEFAULT 0,
+        Priority            INT              NOT NULL CONSTRAINT DF_PricingRule_Priority DEFAULT 10,
+        IsActive            BIT              NOT NULL CONSTRAINT DF_PricingRule_IsActive DEFAULT 1,
+        CreatedDateUtc      DATETIME2        NOT NULL CONSTRAINT DF_PricingRule_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId     UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc     DATETIME2        NULL,
+        ModifiedByUserId    UNIQUEIDENTIFIER NULL,
+        IsDeleted           BIT              NOT NULL CONSTRAINT DF_PricingRule_IsDeleted DEFAULT 0
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'CRM.PricingRule', N'TenantId') IS NULL ALTER TABLE CRM.PricingRule ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PricingRule_TenantId_0105 DEFAULT '00000000-0000-0000-0000-000000000001';
+    IF COL_LENGTH(N'CRM.PricingRule', N'RuleCode') IS NULL ALTER TABLE CRM.PricingRule ADD RuleCode NVARCHAR(80) NOT NULL CONSTRAINT DF_PricingRule_RuleCode_0105 DEFAULT N'RULE';
+    IF COL_LENGTH(N'CRM.PricingRule', N'RuleName') IS NULL ALTER TABLE CRM.PricingRule ADD RuleName NVARCHAR(200) NOT NULL CONSTRAINT DF_PricingRule_RuleName_0105 DEFAULT N'Pricing Rule';
+    IF COL_LENGTH(N'CRM.PricingRule', N'RuleTypeCode') IS NULL ALTER TABLE CRM.PricingRule ADD RuleTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PricingRule_RuleTypeCode_0105 DEFAULT N'Discount';
+    IF COL_LENGTH(N'CRM.PricingRule', N'ServiceCode') IS NULL ALTER TABLE CRM.PricingRule ADD ServiceCode NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'CRM.PricingRule', N'SegmentCode') IS NULL ALTER TABLE CRM.PricingRule ADD SegmentCode NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'CRM.PricingRule', N'MinQuantity') IS NULL ALTER TABLE CRM.PricingRule ADD MinQuantity DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'CRM.PricingRule', N'MaxQuantity') IS NULL ALTER TABLE CRM.PricingRule ADD MaxQuantity DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'CRM.PricingRule', N'DiscountPercent') IS NULL ALTER TABLE CRM.PricingRule ADD DiscountPercent DECIMAL(9,2) NOT NULL CONSTRAINT DF_PricingRule_DiscountPercent_0105 DEFAULT 0;
+    IF COL_LENGTH(N'CRM.PricingRule', N'AdjustedUnitPrice') IS NULL ALTER TABLE CRM.PricingRule ADD AdjustedUnitPrice DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'CRM.PricingRule', N'EffectiveStartDate') IS NULL ALTER TABLE CRM.PricingRule ADD EffectiveStartDate DATETIME2 NOT NULL CONSTRAINT DF_PricingRule_EffectiveStartDate_0105 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'CRM.PricingRule', N'EffectiveEndDate') IS NULL ALTER TABLE CRM.PricingRule ADD EffectiveEndDate DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.PricingRule', N'RequiresApproval') IS NULL ALTER TABLE CRM.PricingRule ADD RequiresApproval BIT NOT NULL CONSTRAINT DF_PricingRule_RequiresApproval_0105 DEFAULT 0;
+    IF COL_LENGTH(N'CRM.PricingRule', N'Priority') IS NULL ALTER TABLE CRM.PricingRule ADD Priority INT NOT NULL CONSTRAINT DF_PricingRule_Priority_0105 DEFAULT 10;
+    IF COL_LENGTH(N'CRM.PricingRule', N'IsActive') IS NULL ALTER TABLE CRM.PricingRule ADD IsActive BIT NOT NULL CONSTRAINT DF_PricingRule_IsActive_0105 DEFAULT 1;
+    IF COL_LENGTH(N'CRM.PricingRule', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.PricingRule ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PricingRule_CreatedDateUtc_0105 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'CRM.PricingRule', N'CreatedByUserId') IS NULL ALTER TABLE CRM.PricingRule ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.PricingRule', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.PricingRule ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.PricingRule', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.PricingRule ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.PricingRule', N'IsDeleted') IS NULL ALTER TABLE CRM.PricingRule ADD IsDeleted BIT NOT NULL CONSTRAINT DF_PricingRule_IsDeleted_0105 DEFAULT 0;
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.PricingRule') AND name = N'IX_PricingRule_Tenant_Active')
+    CREATE INDEX IX_PricingRule_Tenant_Active ON CRM.PricingRule(TenantId, IsDeleted, IsActive, Priority);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.PricingRule') AND name = N'UX_PricingRule_Tenant_RuleCode')
+    CREATE UNIQUE INDEX UX_PricingRule_Tenant_RuleCode ON CRM.PricingRule(TenantId, RuleCode) WHERE IsDeleted = 0;
+
+EXEC sp_executesql N'
+IF NOT EXISTS (SELECT 1 FROM CRM.PricingRule WHERE TenantId = @TenantId AND RuleCode = N''VOL-10'')
+    INSERT INTO CRM.PricingRule (PricingRuleId, TenantId, RuleCode, RuleName, RuleTypeCode, ServiceCode, SegmentCode, MinQuantity, MaxQuantity, DiscountPercent, AdjustedUnitPrice, EffectiveStartDate, EffectiveEndDate, RequiresApproval, Priority, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), @TenantId, N''VOL-10'', N''Volume discount - 10+ policies'', N''VOLUME'', N''P&C'', N''COMMERCIAL'', 10, 49, 5.00, NULL, DATEFROMPARTS(YEAR(SYSUTCDATETIME()), 1, 1), NULL, 0, 10, 1, SYSUTCDATETIME(), @AdminUserId, 0);
+
+IF NOT EXISTS (SELECT 1 FROM CRM.PricingRule WHERE TenantId = @TenantId AND RuleCode = N''VOL-50'')
+    INSERT INTO CRM.PricingRule (PricingRuleId, TenantId, RuleCode, RuleName, RuleTypeCode, ServiceCode, SegmentCode, MinQuantity, MaxQuantity, DiscountPercent, AdjustedUnitPrice, EffectiveStartDate, EffectiveEndDate, RequiresApproval, Priority, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), @TenantId, N''VOL-50'', N''Enterprise volume discount - 50+ policies'', N''VOLUME'', N''P&C'', N''ENTERPRISE'', 50, NULL, 12.50, NULL, DATEFROMPARTS(YEAR(SYSUTCDATETIME()), 1, 1), NULL, 1, 20, 1, SYSUTCDATETIME(), @AdminUserId, 0);
+
+IF NOT EXISTS (SELECT 1 FROM CRM.PricingRule WHERE TenantId = @TenantId AND RuleCode = N''SEG-NONPROFIT'')
+    INSERT INTO CRM.PricingRule (PricingRuleId, TenantId, RuleCode, RuleName, RuleTypeCode, ServiceCode, SegmentCode, MinQuantity, MaxQuantity, DiscountPercent, AdjustedUnitPrice, EffectiveStartDate, EffectiveEndDate, RequiresApproval, Priority, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), @TenantId, N''SEG-NONPROFIT'', N''Nonprofit segment pricing'', N''SEGMENT'', N''PACKAGE'', N''NONPROFIT'', NULL, NULL, 7.50, 225.00, DATEADD(month, -3, SYSUTCDATETIME()), NULL, 0, 30, 1, SYSUTCDATETIME(), @AdminUserId, 0);
+
+IF NOT EXISTS (SELECT 1 FROM CRM.PricingRule WHERE TenantId = @TenantId AND RuleCode = N''PROMO-Q4'')
+    INSERT INTO CRM.PricingRule (PricingRuleId, TenantId, RuleCode, RuleName, RuleTypeCode, ServiceCode, SegmentCode, MinQuantity, MaxQuantity, DiscountPercent, AdjustedUnitPrice, EffectiveStartDate, EffectiveEndDate, RequiresApproval, Priority, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), @TenantId, N''PROMO-Q4'', N''Q4 new business promotion'', N''PROMO'', N''NEWBIZ'', N''SMB'', NULL, NULL, 15.00, NULL, DATEFROMPARTS(YEAR(SYSUTCDATETIME()), 10, 1), DATEFROMPARTS(YEAR(SYSUTCDATETIME()), 12, 31), 1, 40, 1, SYSUTCDATETIME(), @AdminUserId, 0);
+
+IF NOT EXISTS (SELECT 1 FROM CRM.PricingRule WHERE TenantId = @TenantId AND RuleCode = N''TIER-LEGACY'')
+    INSERT INTO CRM.PricingRule (PricingRuleId, TenantId, RuleCode, RuleName, RuleTypeCode, ServiceCode, SegmentCode, MinQuantity, MaxQuantity, DiscountPercent, AdjustedUnitPrice, EffectiveStartDate, EffectiveEndDate, RequiresApproval, Priority, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), @TenantId, N''TIER-LEGACY'', N''Legacy tiered pricing'', N''TIERED'', N''RENEWAL'', N''LEGACY'', 1, 9, 3.00, NULL, DATEADD(year, -2, SYSUTCDATETIME()), DATEADD(day, -30, SYSUTCDATETIME()), 0, 90, 0, SYSUTCDATETIME(), @AdminUserId, 0);',
+N'@TenantId UNIQUEIDENTIFIER, @AdminUserId UNIQUEIDENTIFIER',
+@TenantId = @TenantId, @AdminUserId = @AdminUserId;
+";
+
+    private const string Migration0106_CrmPricingMarketRulesCreateSeed = @"
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @AdminUserId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000002';
+
+IF SCHEMA_ID(N'CRM') IS NULL EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.PriceClass') IS NULL
+BEGIN
+    CREATE TABLE CRM.PriceClass
+    (
+        PriceClassId      UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PriceClass PRIMARY KEY DEFAULT NEWID(),
+        TenantId          UNIQUEIDENTIFIER NOT NULL,
+        ClassCode         NVARCHAR(50)     NOT NULL,
+        ClassName         NVARCHAR(200)    NOT NULL,
+        LobCode           NVARCHAR(50)     NOT NULL,
+        RiskTierCode      NVARCHAR(50)     NULL,
+        Description       NVARCHAR(500)    NULL,
+        BaseRate          DECIMAL(9,6)     NOT NULL CONSTRAINT DF_PriceClass_BaseRate DEFAULT 0,
+        MinPremium        DECIMAL(18,2)    NULL,
+        MaxPremium        DECIMAL(18,2)    NULL,
+        Priority          INT              NOT NULL CONSTRAINT DF_PriceClass_Priority DEFAULT 10,
+        IsActive          BIT              NOT NULL CONSTRAINT DF_PriceClass_IsActive DEFAULT 1,
+        CreatedDateUtc    DATETIME2        NOT NULL CONSTRAINT DF_PriceClass_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId   UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc   DATETIME2        NULL,
+        ModifiedByUserId  UNIQUEIDENTIFIER NULL,
+        IsDeleted         BIT              NOT NULL CONSTRAINT DF_PriceClass_IsDeleted DEFAULT 0
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'CRM.PriceClass', N'TenantId') IS NULL ALTER TABLE CRM.PriceClass ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PriceClass_TenantId_0106 DEFAULT '00000000-0000-0000-0000-000000000001';
+    IF COL_LENGTH(N'CRM.PriceClass', N'ClassCode') IS NULL ALTER TABLE CRM.PriceClass ADD ClassCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PriceClass_ClassCode_0106 DEFAULT N'CLASS';
+    IF COL_LENGTH(N'CRM.PriceClass', N'ClassName') IS NULL ALTER TABLE CRM.PriceClass ADD ClassName NVARCHAR(200) NOT NULL CONSTRAINT DF_PriceClass_ClassName_0106 DEFAULT N'Price Class';
+    IF COL_LENGTH(N'CRM.PriceClass', N'LobCode') IS NULL ALTER TABLE CRM.PriceClass ADD LobCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PriceClass_LobCode_0106 DEFAULT N'Commercial';
+    IF COL_LENGTH(N'CRM.PriceClass', N'RiskTierCode') IS NULL ALTER TABLE CRM.PriceClass ADD RiskTierCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'CRM.PriceClass', N'Description') IS NULL ALTER TABLE CRM.PriceClass ADD Description NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'CRM.PriceClass', N'BaseRate') IS NULL ALTER TABLE CRM.PriceClass ADD BaseRate DECIMAL(9,6) NOT NULL CONSTRAINT DF_PriceClass_BaseRate_0106 DEFAULT 0;
+    IF COL_LENGTH(N'CRM.PriceClass', N'MinPremium') IS NULL ALTER TABLE CRM.PriceClass ADD MinPremium DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'CRM.PriceClass', N'MaxPremium') IS NULL ALTER TABLE CRM.PriceClass ADD MaxPremium DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'CRM.PriceClass', N'Priority') IS NULL ALTER TABLE CRM.PriceClass ADD Priority INT NOT NULL CONSTRAINT DF_PriceClass_Priority_0106 DEFAULT 10;
+    IF COL_LENGTH(N'CRM.PriceClass', N'IsActive') IS NULL ALTER TABLE CRM.PriceClass ADD IsActive BIT NOT NULL CONSTRAINT DF_PriceClass_IsActive_0106 DEFAULT 1;
+    IF COL_LENGTH(N'CRM.PriceClass', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.PriceClass ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PriceClass_CreatedDateUtc_0106 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'CRM.PriceClass', N'CreatedByUserId') IS NULL ALTER TABLE CRM.PriceClass ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.PriceClass', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.PriceClass ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.PriceClass', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.PriceClass ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.PriceClass', N'IsDeleted') IS NULL ALTER TABLE CRM.PriceClass ADD IsDeleted BIT NOT NULL CONSTRAINT DF_PriceClass_IsDeleted_0106 DEFAULT 0;
+END
+
+IF OBJECT_ID(N'CRM.MarketAppetite') IS NULL
+BEGIN
+    CREATE TABLE CRM.MarketAppetite
+    (
+        MarketAppetiteId  UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_MarketAppetite PRIMARY KEY DEFAULT NEWID(),
+        TenantId          UNIQUEIDENTIFIER NOT NULL,
+        CarrierName       NVARCHAR(200)    NOT NULL,
+        CarrierNaic       NVARCHAR(20)     NULL,
+        LobCode           NVARCHAR(50)     NOT NULL,
+        AppetiteLevelCode NVARCHAR(50)     NOT NULL,
+        MinPremium        DECIMAL(18,2)    NULL,
+        MaxPremium        DECIMAL(18,2)    NULL,
+        StateCode         NVARCHAR(10)     NULL,
+        Notes             NVARCHAR(1000)   NULL,
+        Priority          INT              NOT NULL CONSTRAINT DF_MarketAppetite_Priority DEFAULT 10,
+        IsActive          BIT              NOT NULL CONSTRAINT DF_MarketAppetite_IsActive DEFAULT 1,
+        CreatedDateUtc    DATETIME2        NOT NULL CONSTRAINT DF_MarketAppetite_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId   UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc   DATETIME2        NULL,
+        ModifiedByUserId  UNIQUEIDENTIFIER NULL,
+        IsDeleted         BIT              NOT NULL CONSTRAINT DF_MarketAppetite_IsDeleted DEFAULT 0
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'TenantId') IS NULL ALTER TABLE CRM.MarketAppetite ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_MarketAppetite_TenantId_0106 DEFAULT '00000000-0000-0000-0000-000000000001';
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'CarrierName') IS NULL ALTER TABLE CRM.MarketAppetite ADD CarrierName NVARCHAR(200) NOT NULL CONSTRAINT DF_MarketAppetite_CarrierName_0106 DEFAULT N'Carrier';
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'CarrierNaic') IS NULL ALTER TABLE CRM.MarketAppetite ADD CarrierNaic NVARCHAR(20) NULL;
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'LobCode') IS NULL ALTER TABLE CRM.MarketAppetite ADD LobCode NVARCHAR(50) NOT NULL CONSTRAINT DF_MarketAppetite_LobCode_0106 DEFAULT N'Commercial';
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'AppetiteLevelCode') IS NULL ALTER TABLE CRM.MarketAppetite ADD AppetiteLevelCode NVARCHAR(50) NOT NULL CONSTRAINT DF_MarketAppetite_AppetiteLevelCode_0106 DEFAULT N'Acceptable';
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'MinPremium') IS NULL ALTER TABLE CRM.MarketAppetite ADD MinPremium DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'MaxPremium') IS NULL ALTER TABLE CRM.MarketAppetite ADD MaxPremium DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'StateCode') IS NULL ALTER TABLE CRM.MarketAppetite ADD StateCode NVARCHAR(10) NULL;
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'Notes') IS NULL ALTER TABLE CRM.MarketAppetite ADD Notes NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'Priority') IS NULL ALTER TABLE CRM.MarketAppetite ADD Priority INT NOT NULL CONSTRAINT DF_MarketAppetite_Priority_0106 DEFAULT 10;
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'IsActive') IS NULL ALTER TABLE CRM.MarketAppetite ADD IsActive BIT NOT NULL CONSTRAINT DF_MarketAppetite_IsActive_0106 DEFAULT 1;
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.MarketAppetite ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_MarketAppetite_CreatedDateUtc_0106 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'CreatedByUserId') IS NULL ALTER TABLE CRM.MarketAppetite ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.MarketAppetite ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.MarketAppetite ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.MarketAppetite', N'IsDeleted') IS NULL ALTER TABLE CRM.MarketAppetite ADD IsDeleted BIT NOT NULL CONSTRAINT DF_MarketAppetite_IsDeleted_0106 DEFAULT 0;
+END
+
+IF OBJECT_ID(N'CRM.CarrierMapping') IS NULL
+BEGIN
+    CREATE TABLE CRM.CarrierMapping
+    (
+        CarrierMappingId  UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CarrierMapping PRIMARY KEY DEFAULT NEWID(),
+        TenantId          UNIQUEIDENTIFIER NOT NULL,
+        CarrierName       NVARCHAR(200)    NOT NULL,
+        CarrierNaic       NVARCHAR(20)     NULL,
+        InternalCode      NVARCHAR(50)     NULL,
+        ExternalCode      NVARCHAR(100)    NULL,
+        LobCode           NVARCHAR(50)     NULL,
+        DownloadFormatCode NVARCHAR(50)    NOT NULL,
+        IntegrationKey    NVARCHAR(100)    NULL,
+        Notes             NVARCHAR(1000)   NULL,
+        IsActive          BIT              NOT NULL CONSTRAINT DF_CarrierMapping_IsActive DEFAULT 1,
+        LastTestedDateUtc DATETIME2        NULL,
+        LastTestStatusCode NVARCHAR(50)    NULL,
+        CreatedDateUtc    DATETIME2        NOT NULL CONSTRAINT DF_CarrierMapping_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId   UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc   DATETIME2        NULL,
+        ModifiedByUserId  UNIQUEIDENTIFIER NULL,
+        IsDeleted         BIT              NOT NULL CONSTRAINT DF_CarrierMapping_IsDeleted DEFAULT 0
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'TenantId') IS NULL ALTER TABLE CRM.CarrierMapping ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_CarrierMapping_TenantId_0106 DEFAULT '00000000-0000-0000-0000-000000000001';
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'CarrierName') IS NULL ALTER TABLE CRM.CarrierMapping ADD CarrierName NVARCHAR(200) NOT NULL CONSTRAINT DF_CarrierMapping_CarrierName_0106 DEFAULT N'Carrier';
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'CarrierNaic') IS NULL ALTER TABLE CRM.CarrierMapping ADD CarrierNaic NVARCHAR(20) NULL;
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'InternalCode') IS NULL ALTER TABLE CRM.CarrierMapping ADD InternalCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'ExternalCode') IS NULL ALTER TABLE CRM.CarrierMapping ADD ExternalCode NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'LobCode') IS NULL ALTER TABLE CRM.CarrierMapping ADD LobCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'DownloadFormatCode') IS NULL ALTER TABLE CRM.CarrierMapping ADD DownloadFormatCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierMapping_DownloadFormatCode_0106 DEFAULT N'IVANS';
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'IntegrationKey') IS NULL ALTER TABLE CRM.CarrierMapping ADD IntegrationKey NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'Notes') IS NULL ALTER TABLE CRM.CarrierMapping ADD Notes NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'IsActive') IS NULL ALTER TABLE CRM.CarrierMapping ADD IsActive BIT NOT NULL CONSTRAINT DF_CarrierMapping_IsActive_0106 DEFAULT 1;
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'LastTestedDateUtc') IS NULL ALTER TABLE CRM.CarrierMapping ADD LastTestedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'LastTestStatusCode') IS NULL ALTER TABLE CRM.CarrierMapping ADD LastTestStatusCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.CarrierMapping ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierMapping_CreatedDateUtc_0106 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'CreatedByUserId') IS NULL ALTER TABLE CRM.CarrierMapping ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.CarrierMapping ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.CarrierMapping ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.CarrierMapping', N'IsDeleted') IS NULL ALTER TABLE CRM.CarrierMapping ADD IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierMapping_IsDeleted_0106 DEFAULT 0;
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.PriceClass') AND name = N'IX_PriceClass_Tenant') CREATE INDEX IX_PriceClass_Tenant ON CRM.PriceClass(TenantId, IsDeleted, IsActive, Priority);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.MarketAppetite') AND name = N'IX_MarketAppetite_Tenant') CREATE INDEX IX_MarketAppetite_Tenant ON CRM.MarketAppetite(TenantId, IsDeleted, IsActive, LobCode, AppetiteLevelCode);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.CarrierMapping') AND name = N'IX_CarrierMapping_Tenant') CREATE INDEX IX_CarrierMapping_Tenant ON CRM.CarrierMapping(TenantId, IsDeleted, IsActive, CarrierName);
+
+EXEC sp_executesql N'
+IF NOT EXISTS (SELECT 1 FROM CRM.PriceClass WHERE TenantId=@TenantId AND ClassCode=N''COMM-PREF'') INSERT INTO CRM.PriceClass (PriceClassId,TenantId,ClassCode,ClassName,LobCode,RiskTierCode,Description,BaseRate,MinPremium,MaxPremium,Priority,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''COMM-PREF'',N''Preferred Commercial'',N''Commercial'',N''Preferred'',N''Best-in-class commercial risks'',0.008500,2500,NULL,10,1,SYSUTCDATETIME(),@AdminUserId,0);
+IF NOT EXISTS (SELECT 1 FROM CRM.PriceClass WHERE TenantId=@TenantId AND ClassCode=N''COMM-STD'') INSERT INTO CRM.PriceClass (PriceClassId,TenantId,ClassCode,ClassName,LobCode,RiskTierCode,Description,BaseRate,MinPremium,MaxPremium,Priority,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''COMM-STD'',N''Standard Commercial'',N''Commercial'',N''Standard'',N''Standard commercial risk band'',0.012000,1500,NULL,20,1,SYSUTCDATETIME(),@AdminUserId,0);
+IF NOT EXISTS (SELECT 1 FROM CRM.PriceClass WHERE TenantId=@TenantId AND ClassCode=N''COMM-ART'') INSERT INTO CRM.PriceClass (PriceClassId,TenantId,ClassCode,ClassName,LobCode,RiskTierCode,Description,BaseRate,MinPremium,MaxPremium,Priority,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''COMM-ART'',N''Artisan Contractor'',N''Commercial'',N''Standard'',N''Contractors and artisan accounts'',0.015500,1200,75000,30,1,SYSUTCDATETIME(),@AdminUserId,0);
+IF NOT EXISTS (SELECT 1 FROM CRM.PriceClass WHERE TenantId=@TenantId AND ClassCode=N''PERS-HOME'') INSERT INTO CRM.PriceClass (PriceClassId,TenantId,ClassCode,ClassName,LobCode,RiskTierCode,Description,BaseRate,MinPremium,MaxPremium,Priority,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''PERS-HOME'',N''Preferred Homeowners'',N''Personal'',N''Preferred'',N''Preferred personal homeowners'',0.006500,750,NULL,40,1,SYSUTCDATETIME(),@AdminUserId,0);
+IF NOT EXISTS (SELECT 1 FROM CRM.PriceClass WHERE TenantId=@TenantId AND ClassCode=N''SPEC-E&S'') INSERT INTO CRM.PriceClass (PriceClassId,TenantId,ClassCode,ClassName,LobCode,RiskTierCode,Description,BaseRate,MinPremium,MaxPremium,Priority,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''SPEC-E&S'',N''Surplus Lines'',N''Specialty'',N''NonStandard'',N''Excess and surplus specialty risks'',0.035000,5000,NULL,50,1,SYSUTCDATETIME(),@AdminUserId,0);
+
+IF NOT EXISTS (SELECT 1 FROM CRM.MarketAppetite WHERE TenantId=@TenantId AND CarrierName=N''Travelers'' AND LobCode=N''Commercial Property'') INSERT INTO CRM.MarketAppetite (MarketAppetiteId,TenantId,CarrierName,CarrierNaic,LobCode,AppetiteLevelCode,MinPremium,MaxPremium,StateCode,Notes,Priority,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''Travelers'',N''25658'',N''Commercial Property'',N''Preferred'',5000,500000,N''ALL'',N''Strong mid-market appetite'',10,1,SYSUTCDATETIME(),@AdminUserId,0);
+IF NOT EXISTS (SELECT 1 FROM CRM.MarketAppetite WHERE TenantId=@TenantId AND CarrierName=N''Chubb'' AND LobCode=N''Commercial Liability'') INSERT INTO CRM.MarketAppetite (MarketAppetiteId,TenantId,CarrierName,CarrierNaic,LobCode,AppetiteLevelCode,MinPremium,MaxPremium,StateCode,Notes,Priority,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''Chubb'',N''10052'',N''Commercial Liability'',N''Preferred'',10000,NULL,N''ALL'',N''Preferred for professional services'',20,1,SYSUTCDATETIME(),@AdminUserId,0);
+IF NOT EXISTS (SELECT 1 FROM CRM.MarketAppetite WHERE TenantId=@TenantId AND CarrierName=N''Hartford'' AND LobCode=N''Workers Comp'') INSERT INTO CRM.MarketAppetite (MarketAppetiteId,TenantId,CarrierName,CarrierNaic,LobCode,AppetiteLevelCode,MinPremium,MaxPremium,StateCode,Notes,Priority,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''Hartford'',N''19682'',N''Workers Comp'',N''Acceptable'',2500,250000,N''ALL'',NULL,30,1,SYSUTCDATETIME(),@AdminUserId,0);
+IF NOT EXISTS (SELECT 1 FROM CRM.MarketAppetite WHERE TenantId=@TenantId AND CarrierName=N''Travelers'' AND LobCode=N''Workers Comp'') INSERT INTO CRM.MarketAppetite (MarketAppetiteId,TenantId,CarrierName,CarrierNaic,LobCode,AppetiteLevelCode,MinPremium,MaxPremium,StateCode,Notes,Priority,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''Travelers'',N''25658'',N''Workers Comp'',N''Avoid'',NULL,NULL,N''ALL'',N''Capacity issues in current market'',40,1,SYSUTCDATETIME(),@AdminUserId,0);
+IF NOT EXISTS (SELECT 1 FROM CRM.MarketAppetite WHERE TenantId=@TenantId AND CarrierName=N''AIG'' AND LobCode=N''Specialty'') INSERT INTO CRM.MarketAppetite (MarketAppetiteId,TenantId,CarrierName,CarrierNaic,LobCode,AppetiteLevelCode,MinPremium,MaxPremium,StateCode,Notes,Priority,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''AIG'',N''19402'',N''Specialty'',N''Declined'',NULL,NULL,N''ALL'',N''Moratorium on new submissions'',90,1,SYSUTCDATETIME(),@AdminUserId,0);
+
+IF NOT EXISTS (SELECT 1 FROM CRM.CarrierMapping WHERE TenantId=@TenantId AND CarrierName=N''Travelers'' AND InternalCode=N''TRV'') INSERT INTO CRM.CarrierMapping (CarrierMappingId,TenantId,CarrierName,CarrierNaic,InternalCode,ExternalCode,LobCode,DownloadFormatCode,IntegrationKey,Notes,IsActive,LastTestedDateUtc,LastTestStatusCode,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''Travelers'',N''25658'',N''TRV'',N''TRV001'',N''Commercial'',N''IVANS'',N''trav-ivans-prod'',NULL,1,DATEADD(day,-2,SYSUTCDATETIME()),N''Passed'',SYSUTCDATETIME(),@AdminUserId,0);
+IF NOT EXISTS (SELECT 1 FROM CRM.CarrierMapping WHERE TenantId=@TenantId AND CarrierName=N''Chubb'' AND InternalCode=N''CHB'') INSERT INTO CRM.CarrierMapping (CarrierMappingId,TenantId,CarrierName,CarrierNaic,InternalCode,ExternalCode,LobCode,DownloadFormatCode,IntegrationKey,Notes,IsActive,LastTestedDateUtc,LastTestStatusCode,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''Chubb'',N''10052'',N''CHB'',N''CHB002'',N''Commercial'',N''IVANS'',N''chubb-ivans-prod'',NULL,1,DATEADD(day,-1,SYSUTCDATETIME()),N''Passed'',SYSUTCDATETIME(),@AdminUserId,0);
+IF NOT EXISTS (SELECT 1 FROM CRM.CarrierMapping WHERE TenantId=@TenantId AND CarrierName=N''Hartford'' AND InternalCode=N''HTF'') INSERT INTO CRM.CarrierMapping (CarrierMappingId,TenantId,CarrierName,CarrierNaic,InternalCode,ExternalCode,LobCode,DownloadFormatCode,IntegrationKey,Notes,IsActive,LastTestedDateUtc,LastTestStatusCode,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''Hartford'',N''19682'',N''HTF'',N''HTF003'',N''Workers Comp'',N''AL3'',N''hartford-al3'',N''Legacy AL3 format v2.1'',1,NULL,N''NotTested'',SYSUTCDATETIME(),@AdminUserId,0);
+IF NOT EXISTS (SELECT 1 FROM CRM.CarrierMapping WHERE TenantId=@TenantId AND CarrierName=N''Markel'' AND InternalCode=N''MKL'') INSERT INTO CRM.CarrierMapping (CarrierMappingId,TenantId,CarrierName,CarrierNaic,InternalCode,ExternalCode,LobCode,DownloadFormatCode,IntegrationKey,Notes,IsActive,LastTestedDateUtc,LastTestStatusCode,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''Markel'',N''38970'',N''MKL'',N''MKL007'',N''Specialty'',N''Custom'',N''markel-rest'',N''REST API integration'',1,NULL,N''NotTested'',SYSUTCDATETIME(),@AdminUserId,0);
+IF NOT EXISTS (SELECT 1 FROM CRM.CarrierMapping WHERE TenantId=@TenantId AND CarrierName=N''AIG'' AND InternalCode=N''AIG'') INSERT INTO CRM.CarrierMapping (CarrierMappingId,TenantId,CarrierName,CarrierNaic,InternalCode,ExternalCode,LobCode,DownloadFormatCode,IntegrationKey,Notes,IsActive,LastTestedDateUtc,LastTestStatusCode,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (NEWID(),@TenantId,N''AIG'',N''19402'',N''AIG'',N''AIG011'',N''Specialty'',N''Custom'',N''aig-manual'',N''Moratorium — disabled'',0,NULL,N''Failed'',SYSUTCDATETIME(),@AdminUserId,0);',
+N'@TenantId UNIQUEIDENTIFIER, @AdminUserId UNIQUEIDENTIFIER',
+@TenantId=@TenantId, @AdminUserId=@AdminUserId;
+";
+
+    private const string Migration0107_AgencyProfileCreateMissing = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency')
+    EXEC(N'CREATE SCHEMA Agency');
+
+IF OBJECT_ID(N'Agency.Profile', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.Profile
+    (
+        ProfileId           UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyProfile PRIMARY KEY DEFAULT NEWID(),
+        TenantId            UNIQUEIDENTIFIER NOT NULL,
+        LegalName           NVARCHAR(255)    NOT NULL,
+        DBA                 NVARCHAR(255)    NULL,
+        LegalEntityType     NVARCHAR(100)    NULL,
+        FederalTaxId        NVARCHAR(50)     NULL,
+        LicenseNumber       NVARCHAR(100)    NULL,
+        ContactFirstName    NVARCHAR(100)    NOT NULL,
+        ContactLastName     NVARCHAR(100)    NOT NULL,
+        ContactEmail        NVARCHAR(200)    NOT NULL,
+        ContactPhone        NVARCHAR(20)     NOT NULL,
+        StreetAddress       NVARCHAR(255)    NOT NULL,
+        City                NVARCHAR(100)    NOT NULL,
+        State               NVARCHAR(50)     NOT NULL,
+        ZipCode             NVARCHAR(10)     NOT NULL,
+        Country             NVARCHAR(100)    NULL CONSTRAINT DF_AgencyProfile_Country DEFAULT N'United States',
+        EoCarrier           NVARCHAR(200)    NULL,
+        EoPolicyNumber      NVARCHAR(100)    NULL,
+        EoExpiryDate        DATETIME2        NULL,
+        EoCoverageAmount    DECIMAL(18,2)    NULL,
+        LogoUrl             NVARCHAR(500)    NULL,
+        WebsiteUrl          NVARCHAR(500)    NULL,
+        PrimaryColor        NVARCHAR(7)      NULL CONSTRAINT DF_AgencyProfile_PrimaryColor DEFAULT N'#3b82f6',
+        CreatedDateUtc      DATETIME2        NOT NULL CONSTRAINT DF_AgencyProfile_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId     UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc     DATETIME2        NULL,
+        ModifiedByUserId    UNIQUEIDENTIFIER NULL,
+        IsDeleted           BIT              NOT NULL CONSTRAINT DF_AgencyProfile_IsDeleted DEFAULT 0
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.Profile') AND name = N'IX_Profile_TenantId')
+    CREATE NONCLUSTERED INDEX IX_Profile_TenantId ON Agency.Profile(TenantId, IsDeleted);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+
+IF EXISTS (SELECT 1 FROM Core.Tenant WHERE TenantId = @TenantId AND IsDeleted = 0)
+   AND NOT EXISTS (SELECT 1 FROM Agency.Profile WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Agency.Profile
+        (TenantId, LegalName, DBA, LegalEntityType, FederalTaxId, ContactFirstName, ContactLastName,
+         ContactEmail, ContactPhone, StreetAddress, City, State, ZipCode, Country, EoCarrier,
+         EoPolicyNumber, EoExpiryDate, EoCoverageAmount, WebsiteUrl, CreatedDateUtc, IsDeleted)
+    SELECT TenantId,
+           COALESCE(NULLIF(TenantName, N''), N'Agency Profile'),
+           NULL,
+           N'Corporation',
+           NULL,
+           N'Agency',
+           N'Contact',
+           N'agency@example.com',
+           N'N/A',
+           N'N/A',
+           N'N/A',
+           N'N/A',
+           N'N/A',
+           N'United States',
+           NULL,
+           NULL,
+           NULL,
+           NULL,
+           PrimaryDomain,
+           SYSUTCDATETIME(),
+           0
+    FROM Core.Tenant
+    WHERE TenantId = @TenantId AND IsDeleted = 0;
+END
 ";
 }

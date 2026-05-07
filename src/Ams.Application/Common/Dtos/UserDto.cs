@@ -25,6 +25,8 @@ public sealed class UserDto
     public DateTime? LockoutEndDateUtc { get; set; }
     public int FailedLoginAttempts { get; set; }
     public int AssignedRoleCount { get; set; }
+    public string? AssignedRoleNames { get; set; }
+    public string? AssignedRoleCodes { get; set; }
     public DateTime CreatedDateUtc { get; set; }
     public DateTime? ModifiedDateUtc { get; set; }
 }

@@ -1,0 +1,236 @@
+@namespace Ams.Web.Components.Shared
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>@Title — AMS</PageTitle>
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4500" NewestOnTop="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
+
+<AppPageHeader Title="@Title" Subtitle="@Subtitle" Icon="@Icon">
+    <Actions>
+        <a class="um-btn um-btn-ghost" href="/tasks"><i class="bi bi-kanban"></i> Task Board</a>
+        <a class="um-btn um-btn-ghost" href="/workflow"><i class="bi bi-diagram-3"></i> Workflow</a>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "ad-spin" : "")"></i> Refresh</button>
+        <button class="um-btn um-btn-primary" @onclick="PrimaryActionAsync"><i class="bi @PrimaryIcon"></i> @PrimaryText</button>
+    </Actions>
+</AppPageHeader>
+
+<section class="twf-hero">
+    <div>
+        <span class="twf-eyebrow">@Eyebrow</span>
+        <h2>@HeroTitle</h2>
+        <p>@HeroText</p>
+    </div>
+    <div class="twf-hero-actions">
+        <a class="um-btn um-btn-ghost" href="/ops/service-requests"><i class="bi bi-tools"></i> Service Requests</a>
+        <a class="um-btn um-btn-ghost" href="/ops/issues"><i class="bi bi-bug"></i> Issues</a>
+        <button class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
+    </div>
+</section>
+
+<div class="twf-kpi-strip">
+    @Kpi("bi-stack", "Total", FilteredSource.Count().ToString(), FilteredSource.Sum(x => x.Value).ToString("C0"), "twf-kpi-total", null)
+    @Kpi("bi-hourglass-split", "Open", CountStatus("Open").ToString(), "Open work queue", "twf-kpi-open", "status:Open")
+    @Kpi("bi-arrow-clockwise", "In Progress", CountStatus("In Progress").ToString(), "Active work", "twf-kpi-progress", "status:In Progress")
+    @Kpi("bi-check-circle", "Completed", CountStatus("Completed").ToString(), "Completed work", "twf-kpi-done", "status:Completed")
+    @Kpi("bi-exclamation-triangle", "Overdue", FilteredSource.Count(IsOverdue).ToString(), "Past due or breached SLA", "twf-kpi-risk", "overdue")
+    @Kpi("bi-lightning-charge", "Priority", FilteredSource.Count(x => x.Priority is "High" or "Critical").ToString(), "High priority work", "twf-kpi-priority", "priority")
+</div>
+
+<div class="twf-command-bar">
+    <div class="twf-search-wrap"><i class="bi bi-search"></i><input @bind="_search" @bind:event="oninput" placeholder="@SearchPlaceholder" /></div>
+    <select class="twf-filter-sel" @bind="_statusFilter"><option value="">All status</option>@foreach (var v in StatusValues) { <option>@v</option> }</select>
+    <select class="twf-filter-sel" @bind="_typeFilter"><option value="">All types</option>@foreach (var v in TypeValues) { <option>@v</option> }</select>
+    <select class="twf-filter-sel" @bind="_priorityFilter"><option value="">All priority</option>@foreach (var v in PriorityValues) { <option>@v</option> }</select>
+    <select class="twf-filter-sel" @bind="_ownerFilter"><option value="">All owners</option>@foreach (var v in OwnerValues) { <option>@v</option> }</select>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
+    <span class="twf-filter-count">@Filtered.Count() item(s)</span>
+</div>
+
+@if (_loading)
+{
+    <div class="mt-loading"><div class="um-spinner"></div><span>Loading @Title.ToLowerInvariant()…</span></div>
+}
+
+@if (ModeKey == "workflow")
+{
+    <div class="twf-board-layout">
+        <div class="twf-canvas">
+            @foreach (var lane in WorkflowLanes)
+            {
+                var cards = Filtered.Where(x => x.Status == lane).OrderBy(x => x.DueDate).ToList();
+                <section class="twf-lane">
+                    <div class="twf-lane-hdr"><div><span class="twf-chip twf-chip-status">@lane</span><small>@cards.Count items • @cards.Count(IsOverdue) overdue</small></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => SetStatusFilter(lane)"><i class="bi bi-funnel"></i></button></div>
+                    <div class="twf-card-list">
+                        @if (cards.Count == 0) { <div class="twf-empty-mini">No work</div> }
+                        @foreach (var row in cards)
+                        {
+                            <article class="twf-work-card @(_selected?.Id == row.Id ? "twf-work-card--selected" : null) @(IsRisk(row) ? "twf-work-card--risk" : null)" @onclick="() => Select(row)">
+                                <div class="twf-work-top"><span class="twf-chip twf-chip-type">@row.Type</span><span class="twf-priority twf-priority-@row.Priority.ToLowerInvariant()">@row.Priority</span></div>
+                                <strong>@row.Title</strong><p>@row.Number • @row.Account</p>
+                                <div class="twf-work-meta"><span><i class="bi bi-person"></i> @row.Owner</span><span><i class="bi bi-calendar3"></i> @row.DueDate.ToString("MMM d")</span></div>
+                                <div class="twf-card-actions" @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Open(row)"><i class="bi bi-arrow-right"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => AdvanceAsync(row)"><i class="bi bi-arrow-right-circle"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => AssignAsync(row)"><i class="bi bi-person-check"></i></button></div>
+                            </article>
+                        }
+                    </div>
+                </section>
+            }
+        </div>
+        @DetailPanel()
+    </div>
+}
+else
+{
+    <div class="twf-workbench">
+        <div class="twf-feed">
+            @foreach (var group in Groups)
+            {
+                <div class="twf-date-sep"><span>@group.Label</span></div>
+                @foreach (var row in group.Items)
+                {
+                    <article class="twf-item @(_selected?.Id == row.Id ? "twf-item-selected" : null) @(IsRisk(row) ? "twf-item-risk" : null)" @onclick="() => Select(row)">
+                        <div class="twf-icon @IconClass(row)"><i class="bi @ItemIcon(row)"></i></div>
+                        <div class="twf-body">
+                            <div class="twf-hdr"><strong>@row.Number</strong><span class="twf-chip twf-chip-status">@row.Status</span><span class="twf-chip twf-chip-type">@row.Type</span>@if (IsOverdue(row)) { <span class="twf-risk">Overdue</span> }</div>
+                            <div class="twf-title">@row.Title</div>
+                            <div class="twf-meta"><span><i class="bi bi-building"></i> @row.Account</span><span><i class="bi bi-person"></i> @row.Owner</span><span><i class="bi bi-calendar-event"></i> Due @row.DueDate.ToString("MMM d")</span><span><i class="bi bi-lightning-charge"></i> @row.Priority</span><span><i class="bi bi-cash-stack"></i> @row.Value.ToString("C0")</span></div>
+                            @if (ModeKey == "activities") { <div class="twf-note"><i class="bi bi-clock-history"></i> @row.ActivitySummary</div> }
+                        </div>
+                        <div class="twf-actions" @onclick:stopPropagation="true"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Open(row)"><i class="bi bi-arrow-right"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => LogActivityAsync(row)"><i class="bi bi-lightning"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => AdvanceAsync(row)"><i class="bi bi-arrow-right-circle"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => AssignAsync(row)"><i class="bi bi-person-check"></i></button></div>
+                    </article>
+                }
+            }
+            @if (!Filtered.Any()) { <div class="twf-empty"><i class="bi @Icon"></i><span>No workflow records match the current filters.</span></div> }
+        </div>
+        @DetailPanel()
+    </div>
+}
+
+@code {
+    [Parameter] public string Mode { get; set; } = "agreements";
+
+    SfToast? _toast;
+    bool _loading;
+    string _search = string.Empty;
+    string _statusFilter = string.Empty;
+    string _typeFilter = string.Empty;
+    string _priorityFilter = string.Empty;
+    string _ownerFilter = string.Empty;
+    string _activeFilter = string.Empty;
+    OpsWorkRow? _selected;
+    readonly List<OpsWorkRow> _rows = [];
+    static readonly string[] WorkflowLanes = ["Open", "In Progress", "Review", "Blocked", "Completed"];
+
+    string ModeKey => Mode.Trim().ToLowerInvariant();
+    IEnumerable<OpsWorkRow> FilteredSource => _rows.Where(x => x.Mode == ModeKey);
+    IEnumerable<OpsWorkRow> Filtered => FilteredSource.Where(x => MatchesKpi(x)
+        && (string.IsNullOrEmpty(_statusFilter) || x.Status == _statusFilter)
+        && (string.IsNullOrEmpty(_typeFilter) || x.Type == _typeFilter)
+        && (string.IsNullOrEmpty(_priorityFilter) || x.Priority == _priorityFilter)
+        && (string.IsNullOrEmpty(_ownerFilter) || x.Owner == _ownerFilter)
+        && (string.IsNullOrEmpty(_search) || x.Number.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Account.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Type.Contains(_search, StringComparison.OrdinalIgnoreCase))).OrderBy(x => x.DueDate);
+    IEnumerable<Group<OpsWorkRow>> Groups => (ModeKey == "activities" ? Filtered.GroupBy(x => x.ActivityDate.Date == DateTime.Today ? "Today" : x.ActivityDate.Date == DateTime.Today.AddDays(-1) ? "Yesterday" : x.ActivityDate.ToString("MMM d, yyyy")) : Filtered.GroupBy(x => x.Status)).Select(g => new Group<OpsWorkRow>(g.Key, g.ToList()));
+    string[] StatusValues => FilteredSource.Select(x => x.Status).Distinct().OrderBy(StatusOrder).ToArray();
+    string[] TypeValues => FilteredSource.Select(x => x.Type).Distinct().Order().ToArray();
+    string[] PriorityValues => FilteredSource.Select(x => x.Priority).Distinct().OrderBy(PriorityOrder).ToArray();
+    string[] OwnerValues => FilteredSource.Select(x => x.Owner).Distinct().Order().ToArray();
+
+    string Title => ModeKey switch { "engagements" => "Engagements Workbench", "milestones" => "Milestones Workbench", "amendments" => "Amendments Workbench", "issues" => "Issue Tracker", "service-requests" => "Service Requests", "activities" => "Activity History", "workflow" => "Workflow Canvas", _ => "Agreements Workbench" };
+    string Subtitle => ModeKey switch { "engagements" => "Manage client engagements, commitments, owners, and delivery status", "milestones" => "Track operational milestones, due dates, blockers, and completion", "amendments" => "Review agreement amendments, approvals, impact, and execution", "issues" => "Triage service issues by severity, owner, SLA, and resolution path", "service-requests" => "Coordinate service requests, assignments, status, and SLA compliance", "activities" => "Search historical operations activity, updates, and workflow touchpoints", "workflow" => "Visualize operational workflow stages, bottlenecks, and next actions", _ => "Manage agreement lifecycle, account commitments, and operational contracts" };
+    string Icon => ModeKey switch { "engagements" => "bi-briefcase-fill", "milestones" => "bi-flag-fill", "amendments" => "bi-pencil-square", "issues" => "bi-bug-fill", "service-requests" => "bi-tools", "activities" => "bi-clock-history", "workflow" => "bi-diagram-3-fill", _ => "bi-file-earmark-check-fill" };
+    string Eyebrow => ModeKey == "workflow" ? "Workflow Operations" : "Tasks & Workflows";
+    string HeroTitle => ModeKey switch { "workflow" => "Workflow Control Canvas", "activities" => "Operational Activity Timeline", "issues" => "Issue Resolution Desk", "service-requests" => "Service Request Queue", _ => "Operational Workbench" };
+    string HeroText => "Search, filter, triage, and action operational work by status, owner, priority, SLA, due date, account, and workflow stage.";
+    string PrimaryText => ModeKey switch { "workflow" => "New Workflow", "activities" => "Log Activity", "issues" => "Report Issue", "service-requests" => "New Request", "milestones" => "New Milestone", "amendments" => "New Amendment", "engagements" => "New Engagement", _ => "New Agreement" };
+    string PrimaryIcon => ModeKey == "activities" ? "bi-plus-lg" : ModeKey == "workflow" ? "bi-node-plus" : "bi-plus-lg";
+    string SearchPlaceholder => "Search number, title, account, owner, type, workflow…";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new(Title, CurrentUrl));
+        await LoadAsync();
+    }
+
+    string CurrentUrl => ModeKey switch { "engagements" => "/engagements", "milestones" => "/ops/milestones", "amendments" => "/ops/amendments", "issues" => "/ops/issues", "service-requests" => "/ops/service-requests", "activities" => "/ops/activities", "workflow" => "/workflow", _ => "/agreements" };
+    async Task LoadAsync() { _loading = true; await Task.Delay(0); if (_rows.Count == 0) BuildStub(); _selected ??= Filtered.FirstOrDefault(); _loading = false; }
+    bool MatchesKpi(OpsWorkRow x) => _activeFilter switch { "overdue" => IsOverdue(x), "priority" => x.Priority is "High" or "Critical", _ when _activeFilter.StartsWith("status:") => x.Status == _activeFilter[7..], _ => true };
+    int CountStatus(string status) => FilteredSource.Count(x => x.Status == status);
+    void ResetFilters() { _search = _statusFilter = _typeFilter = _priorityFilter = _ownerFilter = _activeFilter = string.Empty; }
+    void SetFilter(string? filter) => _activeFilter = _activeFilter == (filter ?? string.Empty) ? string.Empty : filter ?? string.Empty;
+    void SetStatusFilter(string status) => SetFilter($"status:{status}");
+    void Select(OpsWorkRow row) => _selected = row;
+    void Open(OpsWorkRow row) => ToastAsync($"Opened {row.Number}.");
+    Task PrimaryActionAsync() => ToastAsync($"{PrimaryText} started.");
+    Task LogActivityAsync(OpsWorkRow row) => ToastAsync($"Activity logged for {row.Number}.");
+    Task AssignAsync(OpsWorkRow row) => ToastAsync($"Assignment queued for {row.Number}.");
+    Task AdvanceAsync(OpsWorkRow row) { var i = Array.IndexOf(WorkflowLanes, row.Status); if (i >= 0 && i < WorkflowLanes.Length - 1) row.Status = WorkflowLanes[i + 1]; return ToastAsync($"Advanced {row.Number} to {row.Status}."); }
+    async Task ToastAsync(string message) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Title = Title, Content = message, CssClass = "e-toast-success" }); }
+
+    static bool IsOverdue(OpsWorkRow row) => row.DueDate.Date < DateTime.Today && row.Status is not "Completed" and not "Cancelled";
+    static bool IsRisk(OpsWorkRow row) => IsOverdue(row) || row.Priority is "High" or "Critical" || row.Status == "Blocked";
+    static int StatusOrder(string s) => s switch { "Open" => 1, "In Progress" => 2, "Review" => 3, "Blocked" => 4, "Completed" => 5, "Cancelled" => 6, _ => 99 };
+    static int PriorityOrder(string s) => s switch { "Critical" => 1, "High" => 2, "Medium" => 3, "Low" => 4, _ => 99 };
+    static string ItemIcon(OpsWorkRow row) => row.Mode switch { "issues" => "bi-bug-fill", "service-requests" => "bi-tools", "activities" => "bi-clock-history", "workflow" => "bi-diagram-3-fill", "milestones" => "bi-flag-fill", "amendments" => "bi-pencil-square", "engagements" => "bi-briefcase-fill", _ => "bi-file-earmark-check-fill" };
+    static string IconClass(OpsWorkRow row) => row.Priority is "Critical" or "High" ? "twf-icon-danger" : row.Mode == "workflow" ? "twf-icon-workflow" : string.Empty;
+
+    RenderFragment Kpi(string icon, string label, string value, string title, string css, string? filter) => @<button class="twf-kpi-card @css @(_activeFilter == (filter ?? string.Empty) ? "twf-kpi-active" : "")" title="@title" @onclick="() => SetFilter(filter)"><div class="twf-kpi-val">@value</div><div class="twf-kpi-lbl"><i class="bi @icon"></i> @label</div><small>@title</small></button>;
+    RenderFragment DetailPanel() => @<text>@if (_selected is not null) { <aside class="twf-detail-panel"><div class="twf-detail-header"><span class="twf-chip twf-chip-status">@_selected.Status</span><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => _selected = null"><i class="bi bi-x-lg"></i></button></div><h3>@_selected.Number</h3><p>@_selected.Title</p><div class="twf-detail-grid"><div><span>Account</span><strong>@_selected.Account</strong></div><div><span>Type</span><strong>@_selected.Type</strong></div><div><span>Owner</span><strong>@_selected.Owner</strong></div><div><span>Priority</span><strong>@_selected.Priority</strong></div><div><span>Due</span><strong>@_selected.DueDate.ToString("d")</strong></div><div><span>SLA</span><strong>@_selected.SlaHours h</strong></div><div><span>Value</span><strong>@_selected.Value.ToString("C0")</strong></div><div><span>Stage</span><strong>@_selected.Status</strong></div></div><div class="twf-detail-actions"><button class="um-btn um-btn-primary" @onclick="() => Open(_selected)"><i class="bi bi-arrow-right"></i> Open</button><button class="um-btn um-btn-ghost" @onclick="() => LogActivityAsync(_selected)"><i class="bi bi-lightning"></i> Activity</button><button class="um-btn um-btn-ghost" @onclick="() => AdvanceAsync(_selected)"><i class="bi bi-arrow-right-circle"></i> Advance</button><button class="um-btn um-btn-ghost" @onclick="() => AssignAsync(_selected)"><i class="bi bi-person-check"></i> Assign</button></div></aside> }</text>;
+
+    void BuildStub()
+    {
+        var rng = new Random(117);
+        string[] accounts = ["Sullivan Mfg. LLC", "Bridgewater Hotels", "Metro Freight Co.", "PineCrest Builders", "Omega Tech Corp.", "Harbor Fresh Foods"];
+        string[] owners = ["Maria Santos", "James Patel", "Chen Li", "Aisha Williams", "Tom Reeves"];
+        string[] priorities = ["Low", "Medium", "Medium", "High", "Critical"];
+        AddRows("agreements", "AGR", ["Master Service", "Producer", "Carrier", "Client"]);
+        AddRows("engagements", "ENG", ["Implementation", "Renewal Review", "Claims Advocacy", "Audit"]);
+        AddRows("milestones", "MIL", ["Kickoff", "Data Collection", "Review", "Delivery"]);
+        AddRows("amendments", "AMD", ["Scope Change", "Term Change", "Fee Change", "Coverage Change"]);
+        AddRows("issues", "ISS", ["Billing", "Policy", "Claims", "Portal", "Carrier"]);
+        AddRows("service-requests", "SRQ", ["Certificate", "Policy Change", "Billing Help", "ID Card", "Document Request"]);
+        AddRows("activities", "ACT", ["Call", "Email", "Meeting", "Note", "Task"]);
+        AddRows("workflow", "WFL", ["Approval", "Review", "Assignment", "Escalation", "Rework"]);
+
+        void AddRows(string mode, string prefix, string[] types)
+        {
+            for (var i = 1; i <= 40; i++)
+            {
+                var type = types[rng.Next(types.Length)];
+                _rows.Add(new OpsWorkRow
+                {
+                    Mode = mode,
+                    Number = $"{prefix}-2025-{i:D4}",
+                    Title = $"{type} {mode.Replace('-', ' ')} work item",
+                    Account = accounts[rng.Next(accounts.Length)],
+                    Owner = owners[rng.Next(owners.Length)],
+                    Type = type,
+                    Status = WorkflowLanes[rng.Next(WorkflowLanes.Length)],
+                    Priority = priorities[rng.Next(priorities.Length)],
+                    DueDate = DateTime.Today.AddDays(rng.Next(-14, 45)),
+                    ActivityDate = DateTime.Today.AddDays(-rng.Next(0, 30)).AddHours(rng.Next(8, 17)),
+                    Value = mode is "activities" or "issues" or "service-requests" ? 0 : rng.Next(1000, 90000),
+                    SlaHours = rng.Next(8, 96),
+                    ActivitySummary = $"{type} update recorded by operations"
+                });
+            }
+        }
+    }
+
+    sealed record Group<T>(string Label, List<T> Items);
+    sealed class OpsWorkRow
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public string Mode { get; set; } = string.Empty;
+        public string Number { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Account { get; set; } = string.Empty;
+        public string Owner { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string Priority { get; set; } = string.Empty;
+        public DateTime DueDate { get; set; }
+        public DateTime ActivityDate { get; set; }
+        public decimal Value { get; set; }
+        public int SlaHours { get; set; }
+        public string ActivitySummary { get; set; } = string.Empty;
+    }
+}

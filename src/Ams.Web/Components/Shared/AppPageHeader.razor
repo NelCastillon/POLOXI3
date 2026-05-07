@@ -9,6 +9,8 @@
         </AppPageHeader>
 *@
 
+@inject NavigationManager Nav
+
 <div class="page-header">
     <div class="aph-left">
         @if (Breadcrumb is not null)
@@ -31,13 +33,23 @@
             </div>
         </div>
     </div>
-    @if (Actions is not null)
+    @if (Actions is not null || TryGetReturnRoute() is not null)
     {
-        <div class="page-actions">@Actions</div>
+        <div class="page-actions">
+            @Actions
+            @if (TryGetReturnRoute() is { } returnRoute)
+            {
+                <button type="button" class="aph-return" @onclick="() => Nav.NavigateTo(returnRoute.Url)" title="@returnRoute.Label" aria-label="@returnRoute.Label">
+                    <i class="bi bi-arrow-left" aria-hidden="true"></i>
+                </button>
+            }
+        </div>
     }
 </div>
 
 @code {
+    private sealed record ReturnRoute(string Url, string Label);
+
     [Parameter] public string  Title      { get; set; } = string.Empty;
     [Parameter] public string? Subtitle   { get; set; }
 
@@ -49,4 +61,36 @@
 
     /// <summary>Optional breadcrumb row rendered above the title.</summary>
     [Parameter] public RenderFragment? Breadcrumb { get; set; }
+
+    private ReturnRoute? TryGetReturnRoute()
+    {
+        var path = "/" + Nav.ToBaseRelativePath(Nav.Uri).Split('?', '#')[0].Trim('/');
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0 || !segments.Any(IsRouteParameterValue)) return null;
+
+        var sourceSegments = segments.TakeWhile(s => !IsRouteParameterValue(s)).ToArray();
+        if (sourceSegments.Length == 0) return null;
+
+        var sourceUrl = "/" + string.Join('/', sourceSegments);
+        return sourceUrl switch
+        {
+            "/admin/users" or "/users" or "/tenant/security/users" => new("/iam/users", "Back to Users"),
+            "/roles" or "/tenant/security/roles" => new("/iam/roles", "Back to Roles"),
+            "/communications/thread" => new("/communications/inbox", "Back to Inbox"),
+            "/quotes/compare" or "/quotes/proposal" => new("/submissions", "Back to Submissions"),
+            "/platform/tenants/provision" => new("/platform/tenants", "Back to Tenants"),
+            _ => new(sourceUrl, $"Back to {BuildReturnLabel(sourceSegments)}")
+        };
+    }
+
+    private static bool IsRouteParameterValue(string segment) => Guid.TryParse(segment, out _);
+
+    private static string BuildReturnLabel(string[] sourceSegments)
+    {
+        var label = sourceSegments.LastOrDefault() ?? "List";
+        return string.Join(' ', label.Split('-', StringSplitOptions.RemoveEmptyEntries).Select(Capitalize));
+    }
+
+    private static string Capitalize(string value) =>
+        string.IsNullOrWhiteSpace(value) ? value : char.ToUpperInvariant(value[0]) + value[1..];
 }

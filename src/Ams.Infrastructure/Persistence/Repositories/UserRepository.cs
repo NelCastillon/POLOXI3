@@ -14,14 +14,34 @@ public sealed class UserRepository : IUserRepository
 
     public async Task<UserDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        const string sql = "SELECT UserId, TenantId, BranchId, UserName, Email, FullName, DisplayName, PhoneNumber, UserTypeCode, StatusCode, MfaEnabled, TimeZoneCode, LocaleCode, Department, JobTitle, PasswordChangedDateUtc, IsLockedOut, LockoutEndDateUtc, FailedLoginAttempts, LastLoginDateUtc, CreatedDateUtc, ModifiedDateUtc FROM IAM.[User] WHERE UserId = @Id AND IsDeleted = 0;";
+        const string sql = @"
+SELECT u.UserId, u.TenantId, u.BranchId, u.UserName, u.Email, u.FullName, u.DisplayName, u.PhoneNumber, u.UserTypeCode, u.StatusCode, u.MfaEnabled, u.TimeZoneCode, u.LocaleCode, u.Department, u.JobTitle, u.PasswordChangedDateUtc, u.IsLockedOut, u.LockoutEndDateUtc, u.FailedLoginAttempts, u.LastLoginDateUtc, u.CreatedDateUtc, u.ModifiedDateUtc,
+       (SELECT COUNT(1) FROM IAM.UserRole ur WHERE ur.UserId = u.UserId AND ur.IsActive = 1 AND ur.IsDeleted = 0) AS AssignedRoleCount,
+       (SELECT STRING_AGG(r.RoleName, ',') FROM IAM.UserRole ur JOIN IAM.Role r ON r.RoleId = ur.RoleId WHERE ur.UserId = u.UserId AND ur.IsActive = 1 AND ur.IsDeleted = 0) AS AssignedRoleNames,
+       (SELECT STRING_AGG(r.RoleCode, ',') FROM IAM.UserRole ur JOIN IAM.Role r ON r.RoleId = ur.RoleId WHERE ur.UserId = u.UserId AND ur.IsActive = 1 AND ur.IsDeleted = 0) AS AssignedRoleCodes
+FROM IAM.[User] u
+WHERE u.UserId = @Id AND u.IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await cn.QuerySingleOrDefaultAsync<UserDto>(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }
 
     public async Task<PagedResult<UserDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
-        var sql = RepositorySql.BuildPagedSearchSql("IAM.[User]", "UserId, TenantId, BranchId, UserName, Email, FullName, DisplayName, PhoneNumber, UserTypeCode, StatusCode, MfaEnabled, TimeZoneCode, LocaleCode, Department, JobTitle, PasswordChangedDateUtc, IsLockedOut, LockoutEndDateUtc, FailedLoginAttempts, LastLoginDateUtc, CreatedDateUtc, ModifiedDateUtc", "FullName LIKE '%' + @SearchTerm + '%' OR Email LIKE '%' + @SearchTerm + '%' OR UserName LIKE '%' + @SearchTerm + '%'", "CreatedDateUtc DESC");
+        var sql = @"
+;WITH Cte AS (
+    SELECT u.UserId, u.TenantId, u.BranchId, u.UserName, u.Email, u.FullName, u.DisplayName, u.PhoneNumber, u.UserTypeCode, u.StatusCode, u.MfaEnabled, u.TimeZoneCode, u.LocaleCode, u.Department, u.JobTitle, u.PasswordChangedDateUtc, u.IsLockedOut, u.LockoutEndDateUtc, u.FailedLoginAttempts, u.LastLoginDateUtc, u.CreatedDateUtc, u.ModifiedDateUtc,
+           (SELECT COUNT(1) FROM IAM.UserRole ur WHERE ur.UserId = u.UserId AND ur.IsActive = 1 AND ur.IsDeleted = 0) AS AssignedRoleCount,
+           (SELECT STRING_AGG(r.RoleName, ',') FROM IAM.UserRole ur JOIN IAM.Role r ON r.RoleId = ur.RoleId WHERE ur.UserId = u.UserId AND ur.IsActive = 1 AND ur.IsDeleted = 0) AS AssignedRoleNames,
+           (SELECT STRING_AGG(r.RoleCode, ',') FROM IAM.UserRole ur JOIN IAM.Role r ON r.RoleId = ur.RoleId WHERE ur.UserId = u.UserId AND ur.IsActive = 1 AND ur.IsDeleted = 0) AS AssignedRoleCodes
+    FROM IAM.[User] u
+    WHERE u.TenantId = @TenantId AND u.IsDeleted = 0
+      AND (@SearchTerm IS NULL OR @SearchTerm = '' OR u.FullName LIKE '%' + @SearchTerm + '%' OR u.Email LIKE '%' + @SearchTerm + '%' OR u.UserName LIKE '%' + @SearchTerm + '%')
+)
+SELECT * FROM Cte ORDER BY CreatedDateUtc DESC OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+SELECT COUNT(1)
+FROM IAM.[User] u
+WHERE u.TenantId = @TenantId AND u.IsDeleted = 0
+  AND (@SearchTerm IS NULL OR @SearchTerm = '' OR u.FullName LIKE '%' + @SearchTerm + '%' OR u.Email LIKE '%' + @SearchTerm + '%' OR u.UserName LIKE '%' + @SearchTerm + '%');";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm, Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: cancellationToken));
         var items = (await multi.ReadAsync<UserDto>()).AsList();
@@ -65,6 +85,20 @@ VALUES (@UserId, @TenantId, @BranchId, @UserName, @Email, @FullName, @DisplayNam
         const string sql = "UPDATE IAM.[User] SET IsLockedOut = 0, LockoutEndDateUtc = NULL, FailedLoginAttempts = 0, StatusCode = 'Active', ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = GETUTCDATE() WHERE UserId = @UserId AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { UserId = userId, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task SetMfaAsync(Guid userId, bool enabled, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        const string sql = "UPDATE IAM.[User] SET MfaEnabled = @Enabled, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = GETUTCDATE() WHERE UserId = @UserId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { UserId = userId, Enabled = enabled, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task AssignBranchAsync(Guid userId, Guid? branchId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        const string sql = "UPDATE IAM.[User] SET BranchId = @BranchId, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = GETUTCDATE() WHERE UserId = @UserId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { UserId = userId, BranchId = branchId, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
     }
 
     public async Task ChangeStatusAsync(ChangeUserStatusRequest request, CancellationToken cancellationToken = default)

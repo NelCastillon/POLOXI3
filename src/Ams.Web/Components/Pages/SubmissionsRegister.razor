@@ -31,6 +31,26 @@
     </Actions>
 </AppPageHeader>
 
+<section class="ma-hero sub-hero">
+    <div>
+        <span class="ma-eyebrow">Submissions & Quotes</span>
+        <h2>Submission Operations Center</h2>
+        <p>Track underwriting packages from intake through markets, quotes, applications, declines, and bound policies.</p>
+    </div>
+    <div class="ma-hero-actions">
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/submissions/quotes")'><i class="bi bi-file-text"></i> Quotes</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/submissions/applications")'><i class="bi bi-clipboard"></i> Applications</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/submissions/declines")'><i class="bi bi-x-circle"></i> Declines</button>
+    </div>
+</section>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+    </div>
+}
+
 <!-- KPI strip -->
 <div class="sr-kpi-strip">
     @KpiCard("bi-send",             "Total",          _rows.Count.ToString(),                                        "sr-kpi-total",   null)
@@ -128,22 +148,7 @@
 
     sealed record CtxItem(string Text, string IconCss);
 
-    sealed class SubRow
-    {
-        public string   SubmissionNo   { get; set; } = "";
-        public Guid     SubId          { get; set; } = Guid.NewGuid();
-        public string   Account        { get; set; } = "";
-        public string   Insured        { get; set; } = "";
-        public string   Lob            { get; set; } = "";
-        public string   Status         { get; set; } = "";
-        public string   Producer       { get; set; } = "";
-        public string   Csr            { get; set; } = "";
-        public DateTime SubmitDate     { get; set; }
-        public DateTime EffDate        { get; set; }
-        public DateTime DueDate        { get; set; }
-        public decimal  QuotedPremium  { get; set; }
-        public int      Markets        { get; set; }
-    }
+    private sealed class SubRow : SubmissionRegisterRow { }
 
     record TabDef(string Key, string Label, string Icon);
 
@@ -200,6 +205,7 @@
     };
 
     readonly List<SubRow> _rows = new();
+    string? _loadError;
 
     protected override async Task OnInitializedAsync()
     {
@@ -210,9 +216,40 @@
     async Task LoadAsync()
     {
         _loading = true;
-        await Task.Delay(0);
-        if (_rows.Count == 0) BuildStub();
-        _loading = false;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchSubmissionsAsync(SubmissionPageConstants.TenantId, pageSize: 100);
+            _rows.Clear();
+            _rows.AddRange((result?.Items ?? []).Select(SubmissionPageData.ToRegisterRow).Select(x => new SubRow
+            {
+                SubmissionNo = x.SubmissionNo,
+                SubId = x.SubId,
+                Account = x.Account,
+                Insured = x.Insured,
+                Lob = x.Lob,
+                Status = x.Status,
+                Producer = x.Producer,
+                Csr = x.Csr,
+                SubmitDate = x.SubmitDate,
+                EffDate = x.EffDate,
+                DueDate = x.DueDate,
+                QuotedPremium = x.QuotedPremium,
+                Markets = x.Markets,
+                QuoteCount = x.QuoteCount,
+                TargetPremium = x.TargetPremium,
+                Priority = x.Priority
+            }));
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load submissions: {ex.Message}";
+            await _toast.ShowAsync(new ToastModel { Content = $"Load failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     void ApplyFilter() { _showQb = false; }

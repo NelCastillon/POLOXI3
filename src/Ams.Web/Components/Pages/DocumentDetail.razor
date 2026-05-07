@@ -13,10 +13,24 @@
 
 @if (_doc is null)
 {
-    <div class="dd-loading">
-        <SfSpinner Visible="true" Size="40" />
-        <p>Loading document…</p>
-    </div>
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+            <div class="mt-3">
+                <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents")'>
+                    <i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Documents
+                </button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="dd-loading">
+            <SfSpinner Visible="true" Size="40" />
+            <p>Loading document…</p>
+        </div>
+    }
 }
 else
 {
@@ -46,6 +60,13 @@ else
             </button>
         </Actions>
     </AppPageHeader>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+        </div>
+    }
 
     <div class="dd-layout">
         <!-- ── LEFT — preview + AI panel ──────────────────────────── -->
@@ -342,6 +363,7 @@ else
     private List<DocumentVersionDto>? _versions;
     private List<DocumentShareLinkDto>? _shareLinks;
     private List<DocumentAccessLogDto>? _accessLog;
+    private string? _loadError;
 
     // Dialog flags
     private bool _showMeta, _showNewVer, _showShare, _showRename;
@@ -362,15 +384,45 @@ else
 
     private async Task LoadAllAsync()
     {
-        _doc = await Api.GetDocumentByIdAsync(DocumentId);
-        if (_doc is null) return;
-        var vt = Api.GetDocumentVersionsAsync(DocumentId);
-        var lt = Api.GetDocumentShareLinksAsync(DocumentId);
-        var at = Api.GetDocumentAccessLogAsync(DocumentId);
-        await Task.WhenAll(vt, lt, at);
-        _versions   = (await vt)?.ToList() ?? [];
-        _shareLinks = (await lt)?.ToList() ?? [];
-        _accessLog  = (await at)?.ToList() ?? [];
+        _loadError = null;
+        _versions = [];
+        _shareLinks = [];
+        _accessLog = [];
+
+        try
+        {
+            _doc = await Api.GetDocumentByIdAsync(DocumentId);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load document: {ex.Message}";
+            return;
+        }
+
+        if (_doc is null)
+        {
+            _loadError = "Document not found.";
+            return;
+        }
+
+        _versions = await TryLoadRelatedAsync(() => Api.GetDocumentVersionsAsync(DocumentId), "Document versions");
+        _shareLinks = await TryLoadRelatedAsync(() => Api.GetDocumentShareLinksAsync(DocumentId), "Share links");
+        _accessLog = await TryLoadRelatedAsync(() => Api.GetDocumentAccessLogAsync(DocumentId), "Access log");
+    }
+
+    private async Task<List<T>> TryLoadRelatedAsync<T>(Func<Task<IReadOnlyList<T>?>> load, string label)
+    {
+        try
+        {
+            return (await load())?.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _loadError = string.IsNullOrWhiteSpace(_loadError)
+                ? $"{label} failed to load: {ex.Message}"
+                : $"{_loadError} {label} failed to load: {ex.Message}";
+            return [];
+        }
     }
 
     private async Task ArchiveAsync()

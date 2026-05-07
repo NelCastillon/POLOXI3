@@ -3,250 +3,98 @@
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Accounts
+@using Ams.Web.Components.Pages.Accounts
 
-<PageTitle>Accounts</PageTitle>
+<PageTitle>Accounts Dashboard — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Accounts"
-               Subtitle="All client and prospect accounts"
-               Icon="bi-building">
+<AppPageHeader Title="Accounts Dashboard"
+               Subtitle="Account command center for customer, prospect, and household records"
+               Icon="bi-people">
     <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "acl-spin" : "")" aria-hidden="true"></i>
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="() => _showCreate = true">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Account
-        </button>
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/accounts/new")'><i class="bi bi-plus-lg"></i> New Account</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
     </Actions>
 </AppPageHeader>
 
-<!-- KPI strip -->
-<div class="acl-kpi-strip">
-    <div class="acl-kpi-card">
-        <span class="acl-ki acl-ki1"><i class="bi bi-building" aria-hidden="true"></i></span>
-        <div><div class="acl-kv">@_kpi.Total</div><div class="acl-kl">Total Accounts</div></div>
+<section class="ma-hero acct-hero">
+    <div>
+        <span class="ma-eyebrow">Accounts & Customers</span>
+        <h2>Account Operations Workspace</h2>
+        <p>Search, segment, and manage customer master records, lifecycle stages, hierarchy links, and account intelligence.</p>
     </div>
-    <div class="acl-kpi-card">
-        <span class="acl-ki acl-ki2"><i class="bi bi-check2-circle" aria-hidden="true"></i></span>
-        <div><div class="acl-kv">@_kpi.Active</div><div class="acl-kl">Active</div></div>
+    <div class="ma-hero-actions">
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/accounts/new")'><i class="bi bi-plus-lg"></i> Create Account</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => SetFilter("prospect")'><i class="bi bi-person-plus"></i> Prospects</button>
     </div>
-    <div class="acl-kpi-card">
-        <span class="acl-ki acl-ki3"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
-        <div><div class="acl-kv">@_kpi.TotalRevenue.ToString("C0")</div><div class="acl-kl">Total Rev.</div></div>
-    </div>
-    <div class="acl-kpi-card">
-        <span class="acl-ki acl-ki4"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span>
-        <div><div class="acl-kv">@_kpi.Renewals</div><div class="acl-kl">Renewing Soon</div></div>
-    </div>
+</section>
+
+<div class="pc-kpi-strip acct-kpi-strip">
+    <div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all accounts"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-building"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Accounts</div></div></div>
+    <div class="pc-kpi-card @(_activeFilter == "active" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("active")' title="Filter active accounts"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-check-circle-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Active")</div><div class="pc-kpi-label">Active</div></div></div>
+    <div class="pc-kpi-card @(_activeFilter == "prospect" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("prospect")' title="Filter prospects"><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-person-plus"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Prospect" || x.LifecycleStageCode == "Prospect")</div><div class="pc-kpi-label">Prospects</div></div></div>
+    <div class="pc-kpi-card @(_activeFilter == "enterprise" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("enterprise")' title="Filter enterprise accounts"><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-gem"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.SegmentCode == "Enterprise")</div><div class="pc-kpi-label">Enterprise</div></div></div>
+    <div class="pc-kpi-card @(_activeFilter == "revenue" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("revenue")' title="Filter accounts over $1M revenue"><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-cash-coin"></i></span><div><div class="pc-kpi-value">@_items.Count(x => (x.AnnualRevenue ?? 0) >= 1000000)</div><div class="pc-kpi-label">$1M+ Revenue</div></div></div>
 </div>
 
-<!-- Filter bar -->
-<div class="acl-filter-bar">
-    <div class="acl-search-wrap">
-        <i class="bi bi-search acl-si" aria-hidden="true"></i>
-        <input class="acl-search" type="search" placeholder="Search accounts…"
-               value="@_search"
-               @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); })" />
+<div class="ma-filter-bar acct-filter-bar">
+    <div class="ma-search-wrap"><i class="bi bi-search"></i><input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search account name, number, email, phone, industry…" /></div>
+    <div class="ma-type-pills">
+        <button class="ma-pill @(_activeFilter is null ? "ma-pill-active" : "")" @onclick='() => SetFilter(null)'>All</button>
+        <button class="ma-pill @(_activeFilter == "active" ? "ma-pill-active" : "")" @onclick='() => SetFilter("active")'>Active</button>
+        <button class="ma-pill @(_activeFilter == "prospect" ? "ma-pill-active" : "")" @onclick='() => SetFilter("prospect")'>Prospect</button>
+        <button class="ma-pill @(_activeFilter == "enterprise" ? "ma-pill-active" : "")" @onclick='() => SetFilter("enterprise")'>Enterprise</button>
+        <button class="ma-pill @(_activeFilter == "revenue" ? "ma-pill-active" : "")" @onclick='() => SetFilter("revenue")'>$1M+</button>
     </div>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="All Statuses" ShowClearButton="true" Width="140px"
-                    Value="_filterStatus" ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_typeOpts" Placeholder="All Types" ShowClearButton="true" Width="130px"
-                    Value="_filterType" ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_segOpts" Placeholder="All Segments" ShowClearButton="true" Width="140px"
-                    Value="_filterSeg" ValueChanged="@((string v) => { _filterSeg = v; ApplyFilters(); })">
-        <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
+    <select class="ma-filter-sel" @bind="_typeFilter" @bind:after="ApplyFilter"><option value="">All types</option>@foreach (var type in AccountPageConstants.Types) { <option value="@type">@type</option> }</select>
+    <select class="ma-filter-sel" @bind="_segmentFilter" @bind:after="ApplyFilter"><option value="">All segments</option>@foreach (var segment in AccountPageConstants.Segments) { <option value="@segment">@segment</option> }</select>
+    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button>
+    <span class="ma-filter-count">@_filtered.Count accounts</span>
 </div>
 
-@if (_loading)
+@if (_loadError is not null)
 {
-    <div class="acl-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading accounts…</span></div>
-}
-else
-{
-    <div class="acl-grid-card app-datagrid">
-        <SfGrid @ref="_grid" TValue="AccountDto" DataSource="_filtered"
-                AllowPaging="true" AllowSorting="true" AllowFiltering="true"
-                EnableHover="true" RowHeight="56">
-            <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-            <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
-            <GridColumns>
-                <GridColumn HeaderText="Account" MinWidth="220" Field="@nameof(AccountDto.AccountName)">
-                    <Template>
-                        @{ var a = (AccountDto)context; }
-                        <div class="acl-name-cell">
-                            <div class="acl-acct-icon @AvatarColor(a.AccountName)">@Initials(a.AccountName)</div>
-                            <div class="acl-name-text">
-                                <div class="acl-item-name">@a.AccountName</div>
-                                <div class="acl-item-sub">@a.AccountNumber @(a.Industry != null ? $"· {a.Industry}" : "")</div>
-                            </div>
-                        </div>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(AccountDto.AccountTypeCode)" HeaderText="Type"      Width="120">
-                    <Template>@{ var a = (AccountDto)context; }<span class="@TypeBadge(a.AccountTypeCode)">@a.AccountTypeCode</span></Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(AccountDto.StatusCode)"      HeaderText="Status"    Width="110">
-                    <Template>@{ var a = (AccountDto)context; }<span class="@StatusBadge(a.StatusCode)">@a.StatusCode</span></Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(AccountDto.SegmentCode)"     HeaderText="Segment"   Width="110">
-                    <Template>@{ var a = (AccountDto)context; }<span class="@SegBadge(a.SegmentCode)">@(a.SegmentCode ?? "—")</span></Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(AccountDto.AnnualRevenue)"   HeaderText="Ann. Rev." Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                    <Template>@{ var a = (AccountDto)context; }<span class="acl-mono acl-bold">@(a.AnnualRevenue.HasValue ? a.AnnualRevenue.Value.ToString("C0") : "—")</span></Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(AccountDto.MainEmail)"        HeaderText="Email"     Width="200" />
-                <GridColumn Field="@nameof(AccountDto.MainPhone)"        HeaderText="Phone"     Width="140" />
-                <GridColumn Field="@nameof(AccountDto.LifecycleStageCode)" HeaderText="Lifecycle" Width="120" />
-                <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                    <Template>
-                        @{ var a = (AccountDto)context; }
-                        <button class="um-btn um-btn-ghost um-btn-sm"
-                                @onclick='() => Nav.NavigateTo($"/accounts/{a.AccountId}")'>
-                            <i class="bi bi-arrow-right" aria-hidden="true"></i>
-                        </button>
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
-    </div>
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
 }
 
-<!-- Create Account dialog -->
-<SfDialog @bind-Visible="_showCreate" Width="520px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="acl-dlg-hdr"><i class="bi bi-building-add" aria-hidden="true"></i> New Account</span></Header>
-        <Content>
-            <div class="acl-dlg-body">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-                    <div style="grid-column:span 2">
-                        <SfTextBox Placeholder="Account name *" @bind-Value="_newAcct.AccountName" />
-                    </div>
-                    <SfDropDownList TValue="string" TItem="LV" DataSource="_typeOpts"   Placeholder="Type *"    Width="100%" @bind-Value="_newAcct.AccountTypeCode"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-                    <SfDropDownList TValue="string" TItem="LV" DataSource="_statusOpts" Placeholder="Status"    Width="100%" @bind-Value="_newAcct.StatusCode">      <DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-                    <SfTextBox Placeholder="Email"   @bind-Value="_newAcct.MainEmail" />
-                    <SfTextBox Placeholder="Phone"   @bind-Value="_newAcct.MainPhone" />
-                    <SfTextBox Placeholder="Industry" @bind-Value="_newAcct.Industry" />
-                    <SfTextBox Placeholder="Website" @bind-Value="_newAcct.Website" />
-                </div>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="acl-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showCreate = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitCreateAsync" disabled="@(string.IsNullOrEmpty(_newAcct.AccountName)||string.IsNullOrEmpty(_newAcct.AccountTypeCode))">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Create
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+<div class="um-grid-card">
+    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading accounts…</span></div> }
+    <SfGrid TValue="AccountDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="56">
+        <GridEvents TValue="AccountDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" />
+        <GridColumns>
+            <GridColumn HeaderText="Account" MinWidth="240" Field="AccountName"><Template>@{ var a=(AccountDto)context; }<div class="acct-name-cell"><div class="acct-avatar">@AccountPageConstants.Initials(a.AccountName)</div><div><strong>@a.AccountName</strong><div class="text-muted">@a.AccountNumber · @(a.Industry ?? "No industry")</div></div></div></Template></GridColumn>
+            <GridColumn Field="AccountTypeCode" HeaderText="Type" Width="125"><Template>@{ var a=(AccountDto)context; }<span class="um-badge um-badge-info">@a.AccountTypeCode</span></Template></GridColumn>
+            <GridColumn Field="StatusCode" HeaderText="Status" Width="115"><Template>@{ var a=(AccountDto)context; }<span class="@AccountPageConstants.StatusBadge(a.StatusCode)">@a.StatusCode</span></Template></GridColumn>
+            <GridColumn Field="SegmentCode" HeaderText="Segment" Width="130"><Template>@{ var a=(AccountDto)context; }@(a.SegmentCode ?? "—")</Template></GridColumn>
+            <GridColumn Field="AnnualRevenue" HeaderText="Revenue" Width="130" TextAlign="TextAlign.Right"><Template>@{ var a=(AccountDto)context; }@(a.AnnualRevenue?.ToString("C0") ?? "—")</Template></GridColumn>
+            <GridColumn Field="MainEmail" HeaderText="Email" Width="210"><Template>@{ var a=(AccountDto)context; }@(a.MainEmail ?? "—")</Template></GridColumn>
+            <GridColumn Field="MainPhone" HeaderText="Phone" Width="140"><Template>@{ var a=(AccountDto)context; }@(a.MainPhone ?? "—")</Template></GridColumn>
+            <GridColumn HeaderText="Actions" Width="150" TextAlign="TextAlign.Center"><Template>@{ var a=(AccountDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/accounts/{a.AccountId}")' @onclick:stopPropagation="true" title="360"><i class="bi bi-person-vcard"></i></button><button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/accounts/{a.AccountId}/hierarchy")' @onclick:stopPropagation="true" title="Hierarchy"><i class="bi bi-diagram-3"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(a)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button></Template></GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false"><DialogContent><div class="um-confirm-dialog"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div><div class="um-confirm-message"><h6>Delete Account?</h6><p>You are about to delete <strong>@_deleteTarget?.AccountName</strong>. This action cannot be undone.</p></div><div class="um-modal-footer w-100"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></DialogContent></SfDialog>
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
 
 @code {
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private SfToast?          _toast;
-    private SfGrid<AccountDto>? _grid;
-    private bool              _loading    = false;
-    private bool              _showCreate = false;
+    List<AccountDto> _items = [], _filtered = [];
+    string _search = string.Empty, _typeFilter = string.Empty, _segmentFilter = string.Empty;
+    string? _activeFilter, _loadError;
+    bool _loading, _saving, _showDelete;
+    AccountDto? _deleteTarget;
+    SfToast _toast = default!;
 
-    private string _search       = string.Empty;
-    private string _filterStatus = string.Empty;
-    private string _filterType   = string.Empty;
-    private string _filterSeg    = string.Empty;
-
-    private List<AccountDto>? _items;
-    private List<AccountDto>  _filtered = [];
-    private AccountKpi        _kpi      = new();
-    private AccountDto        _newAcct  = new();
-
-    private static readonly List<LV> _statusOpts = [new("Active","Active"),new("Inactive","Inactive"),new("Prospect","Prospect"),new("Suspended","Suspended")];
-    private static readonly List<LV> _typeOpts   = [new("Commercial","Commercial"),new("Personal","Personal"),new("Non-Profit","Non-Profit"),new("Government","Government")];
-    private static readonly List<LV> _segOpts    = [new("Enterprise","Enterprise"),new("Mid-Market","Mid-Market"),new("SMB","SMB"),new("Key Account","Key Account")];
-
-    protected override async Task OnInitializedAsync()
-    {
-        Breadcrumbs.SetCrumbs(new("Home","/"),new("Accounts","/accounts"));
-        await LoadAsync();
-    }
-
-    private async Task LoadAsync()
-    {
-        _loading = true; StateHasChanged();
-        var result = await Api.SearchAccountsAsync(_tenantId, _search);
-        _items = result?.Items.ToList() ?? [];
-        _kpi = new AccountKpi
-        {
-            Total        = _items.Count,
-            Active       = _items.Count(x => x.StatusCode == "Active"),
-            TotalRevenue = _items.Sum(x => x.AnnualRevenue ?? 0),
-            Renewals     = 0, // TODO
-        };
-        ApplyFilters();
-        _loading = false;
-    }
-
-    private void ApplyFilters()
-    {
-        if (_items is null) { _filtered = []; return; }
-        _filtered = _items.Where(a =>
-            (string.IsNullOrEmpty(_filterStatus) || a.StatusCode == _filterStatus) &&
-            (string.IsNullOrEmpty(_filterType)   || a.AccountTypeCode == _filterType) &&
-            (string.IsNullOrEmpty(_filterSeg)    || a.SegmentCode == _filterSeg) &&
-            (string.IsNullOrEmpty(_search) ||
-             a.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-             a.AccountNumber.Contains(_search, StringComparison.OrdinalIgnoreCase))
-        ).ToList();
-    }
-
-    private async Task CommitCreateAsync()
-    {
-        // TODO: Api.CreateAccountAsync(_tenantId, _newAcct)
-        await Task.Delay(0);
-        _showCreate = false; _newAcct = new();
-        await _toast!.ShowAsync(new ToastModel { Content = "Account created.", CssClass = "e-toast-success" });
-        await LoadAsync();
-    }
-
-    private static string Initials(string name)
-    {
-        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : name.Length > 0 ? name[..1] : "?";
-    }
-    private static string AvatarColor(string name)
-    {
-        var colors = new[] {"acl-av1","acl-av2","acl-av3","acl-av4","acl-av5","acl-av6"};
-        return colors[Math.Abs(name.GetHashCode()) % colors.Length];
-    }
-    private static string TypeBadge(string t) => t switch
-    {
-        "Commercial" => "acl-type acl-type--comm",
-        "Personal"   => "acl-type acl-type--pers",
-        "Non-Profit" => "acl-type acl-type--np",
-        _            => "acl-type",
-    };
-    private static string StatusBadge(string s) => s switch
-    {
-        "Active"    => "acl-status acl-status--active",
-        "Inactive"  => "acl-status acl-status--inactive",
-        "Prospect"  => "acl-status acl-status--prospect",
-        "Suspended" => "acl-status acl-status--suspended",
-        _           => "acl-status",
-    };
-    private static string SegBadge(string? s) => s switch
-    {
-        "Enterprise"  => "acl-seg acl-seg--ent",
-        "Key Account" => "acl-seg acl-seg--key",
-        _             => "acl-seg",
-    };
-
-    private sealed class AccountKpi { public int Total { get; set; } public int Active { get; set; } public decimal TotalRevenue { get; set; } public int Renewals { get; set; } }
-    private sealed record LV(string Value, string Label);
+    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts")); await LoadAsync(); }
+    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchAccountsAsync(AccountPageConstants.TenantId); _items = result?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load accounts: {ex.Message}"; } finally { _loading = false; } }
+    void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
+    void ApplyFilter() { var rows = _activeFilter switch { "active" => _items.Where(x => x.StatusCode == "Active"), "prospect" => _items.Where(x => x.StatusCode == "Prospect" || x.LifecycleStageCode == "Prospect"), "enterprise" => _items.Where(x => x.SegmentCode == "Enterprise"), "revenue" => _items.Where(x => (x.AnnualRevenue ?? 0) >= 1000000), _ => _items.AsEnumerable() }; _filtered = rows.Where(SearchMatches).Where(x => string.IsNullOrEmpty(_typeFilter) || x.AccountTypeCode == _typeFilter).Where(x => string.IsNullOrEmpty(_segmentFilter) || x.SegmentCode == _segmentFilter).ToList(); }
+    bool SearchMatches(AccountDto a) { if (string.IsNullOrWhiteSpace(_search)) return true; var q = _search.Trim(); return a.AccountName.Contains(q, StringComparison.OrdinalIgnoreCase) || a.AccountNumber.Contains(q, StringComparison.OrdinalIgnoreCase) || (a.MainEmail?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (a.MainPhone?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (a.Industry?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false); }
+    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
+    void ResetFilters() { _activeFilter = null; _search = _typeFilter = _segmentFilter = string.Empty; ApplyFilter(); }
+    void OnRowSelected(RowSelectEventArgs<AccountDto> args) => Nav.NavigateTo($"/accounts/{args.Data.AccountId}");
+    void ConfirmDelete(AccountDto item) { _deleteTarget = item; _showDelete = true; }
+    async Task ExecuteDeleteAsync() { _saving = true; try { await Api.DeleteAccountAsync(_deleteTarget!.AccountId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Account deleted", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
 }
-

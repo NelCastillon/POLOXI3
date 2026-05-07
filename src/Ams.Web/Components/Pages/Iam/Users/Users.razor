@@ -1,5 +1,6 @@
 @page "/users"
 @page "/tenant/security/users"
+@using System.ComponentModel.DataAnnotations
 @inject ApiClient Api
 @inject NavigationManager Nav
 
@@ -25,28 +26,28 @@
 
     <!-- ── KPI strip ────────────────────────────────────── -->
     <div class="um-kpi-strip">
-        <div class="kpi-card">
+        <div class="kpi-card @KpiClass(null)" @onclick="() => SetKpiFilter(null)" role="button" tabindex="0" title="Show all users">
             <div class="kpi-icon kpi-icon-blue"><i class="bi bi-people"></i></div>
             <div class="kpi-body">
                 <div class="kpi-label">Total Users</div>
                 <div class="kpi-value">@_users.Count</div>
             </div>
         </div>
-        <div class="kpi-card">
+        <div class="kpi-card @KpiClass("active")" @onclick='() => SetKpiFilter("active")' role="button" tabindex="0" title="Show active users">
             <div class="kpi-icon kpi-icon-green"><i class="bi bi-check-circle"></i></div>
             <div class="kpi-body">
                 <div class="kpi-label">Active</div>
                 <div class="kpi-value">@_users.Count(u => IsActive(u))</div>
             </div>
         </div>
-        <div class="kpi-card">
+        <div class="kpi-card @KpiClass("locked")" @onclick='() => SetKpiFilter("locked")' role="button" tabindex="0" title="Show locked users">
             <div class="kpi-icon kpi-icon-amber"><i class="bi bi-lock"></i></div>
             <div class="kpi-body">
                 <div class="kpi-label">Locked Out</div>
                 <div class="kpi-value">@_users.Count(u => u.IsLockedOut)</div>
             </div>
         </div>
-        <div class="kpi-card">
+        <div class="kpi-card @KpiClass("mfa")" @onclick='() => SetKpiFilter("mfa")' role="button" tabindex="0" title="Show MFA-enabled users">
             <div class="kpi-icon kpi-icon-purple"><i class="bi bi-shield-check"></i></div>
             <div class="kpi-body">
                 <div class="kpi-label">MFA Enabled</div>
@@ -81,11 +82,11 @@
                         <button role="menuitem" @onclick="BulkEnableAsync">
                             <i class="bi bi-check-circle" aria-hidden="true"></i> Enable Selected
                         </button>
-                        <button role="menuitem" @onclick="BulkDisableAsync">
+                        <button role="menuitem" @onclick="() => ConfirmBulkToggle(false)">
                             <i class="bi bi-slash-circle" aria-hidden="true"></i> Disable Selected
                         </button>
                         <div class="um-bulk-sep"></div>
-                        <button class="danger" role="menuitem" @onclick="BulkDeleteAsync">
+                        <button class="danger" role="menuitem" @onclick="ConfirmBulkDelete">
                             <i class="bi bi-trash" aria-hidden="true"></i> Delete Selected
                         </button>
                     </div>
@@ -104,7 +105,7 @@
             </div>
         }
         <SfGrid TValue="UserDto"
-                DataSource="@_users"
+                DataSource="@_filteredUsers"
                 @ref="_grid"
                 AllowPaging="true"
                 AllowSorting="true"
@@ -198,7 +199,7 @@
                             <button class="ra-btn" title="Edit user" @onclick="() => OpenEdit(user)">
                                 <i class="bi bi-pencil" aria-hidden="true"></i>
                             </button>
-                            <button class="ra-btn @(IsActive(user) ? "" : "ra-btn-success")" title="@(IsActive(user) ? "Deactivate" : "Activate")" @onclick="() => ToggleActiveAsync(user)">
+                            <button class="ra-btn @(IsActive(user) ? "" : "ra-btn-success")" title="@(IsActive(user) ? "Deactivate" : "Activate")" @onclick="() => ConfirmToggleActive(user)">
                                 <i class="bi @(IsActive(user) ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i>
                             </button>
                             <button class="ra-btn ra-btn-danger" title="Delete user" @onclick="() => ConfirmDelete(user)">
@@ -282,8 +283,13 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label for="f-dept">Department</label>
-                        <SfTextBox ID="f-dept" @bind-Value="_uForm.Department"
-                                   Placeholder="Engineering" />
+                        <SfDropDownList ID="f-dept" TValue="string" TItem="DepartmentDto"
+                                        DataSource="_departments"
+                                        @bind-Value="_uForm.Department"
+                                        Placeholder="Select department…"
+                                        ShowClearButton="true">
+                            <DropDownListFieldSettings Value="DepartmentName" Text="DepartmentName" />
+                        </SfDropDownList>
                     </div>
                     <div class="form-group">
                         <label>Time Zone</label>
@@ -303,6 +309,7 @@
                     </div>
                     <div class="form-group"></div>
                 </div>
+                <ValidationSummary class="text-danger" />
                 @if (!string.IsNullOrEmpty(_formError))
                 {
                     <div class="form-alert" role="alert">
@@ -320,6 +327,30 @@
                 </button>
             </div>
         </FooterTemplate>
+    </DialogTemplates>
+</SfDialog>
+
+<SfDialog @bind-Visible="_showActionConfirm"
+          Width="420px"
+          IsModal="true"
+          ShowCloseIcon="false">
+    <DialogTemplates>
+        <Content>
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></div>
+                <div>
+                    <h3>@_actionConfirmTitle</h3>
+                    <p>@_actionConfirmMessage</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseActionConfirm">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteConfirmedActionAsync" disabled="@_saving">
+                    @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
+                    Confirm
+                </button>
+            </div>
+        </Content>
     </DialogTemplates>
 </SfDialog>
 
@@ -374,9 +405,12 @@
     // ── Grid state ────────────────────────────────────────────
     private SfGrid<UserDto>? _grid;
     private List<UserDto>    _users         = [];
+    private List<UserDto>    _filteredUsers = [];
     private List<UserDto>    _selectedUsers = [];
+    private List<DepartmentDto> _departments = [];
     private bool             _loading       = true;
     private string           _searchTerm    = string.Empty;
+    private string?          _activeKpiFilter;
     private bool             _bulkMenuOpen;
     private CancellationTokenSource _cts = new();
 
@@ -391,12 +425,34 @@
     // ── Delete confirm ────────────────────────────────────────
     private bool     _showDeleteConfirm;
     private UserDto? _deleteTarget;
+    private bool _showActionConfirm;
+    private string _actionConfirmTitle = string.Empty;
+    private string _actionConfirmMessage = string.Empty;
+    private Func<Task>? _confirmedAction;
 
     // ── Toast ─────────────────────────────────────────────────
     private SfToast? _toast;
 
     // ── Lifecycle ─────────────────────────────────────────────
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDepartmentsAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadDepartmentsAsync()
+    {
+        try
+        {
+            var departments = await Api.GetDepartmentsAsync(_tenantId, _cts.Token);
+            _departments = departments?
+                .Where(d => d.IsActive)
+                .OrderBy(d => d.DepartmentName)
+                .ToList() ?? [];
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { await ShowToastAsync($"Failed to load departments: {ex.Message}", isError: true); }
+    }
 
     private async Task LoadAsync()
     {
@@ -408,6 +464,7 @@
             _cts = new CancellationTokenSource();
             var result = await Api.SearchUsersAsync(_tenantId, _searchTerm.Trim(), _cts.Token);
             _users = result?.Items.ToList() ?? [];
+            ApplyKpiFilter();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { await ShowToastAsync(ex.Message, isError: true); }
@@ -415,6 +472,26 @@
     }
 
     private Task RefreshAsync() => LoadAsync();
+
+    private void SetKpiFilter(string? filter)
+    {
+        _activeKpiFilter = _activeKpiFilter == filter ? null : filter;
+        ApplyKpiFilter();
+    }
+
+    private void ApplyKpiFilter()
+    {
+        _filteredUsers = _activeKpiFilter switch
+        {
+            "active" => _users.Where(IsActive).ToList(),
+            "locked" => _users.Where(u => u.IsLockedOut).ToList(),
+            "mfa" => _users.Where(u => u.MfaEnabled).ToList(),
+            _ => _users.ToList(),
+        };
+        StateHasChanged();
+    }
+
+    private string KpiClass(string? filter) => _activeKpiFilter == filter ? "kpi-card--active" : string.Empty;
 
     private System.Timers.Timer? _debounce;
     private async Task OnSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
@@ -541,12 +618,22 @@
     private static bool IsActive(UserDto u)
         => u.StatusCode.Equals("Active", StringComparison.OrdinalIgnoreCase);
 
+    private void ConfirmToggleActive(UserDto u)
+    {
+        var activate = !IsActive(u);
+        _actionConfirmTitle = activate ? "Activate user?" : "Deactivate user?";
+        _actionConfirmMessage = $"{(activate ? "Activate" : "Deactivate")} {u.FullName}?";
+        _confirmedAction = () => ToggleActiveAsync(u);
+        _showActionConfirm = true;
+    }
+
     private async Task ToggleActiveAsync(UserDto u)
     {
         try
         {
             var activate = !IsActive(u);
             await Api.SetUserActiveAsync(u.UserId, activate);
+            CloseActionConfirm();
             await ShowToastAsync($"User '{u.FullName}' {(activate ? "activated" : "deactivated")}.");
             await LoadAsync();
         }
@@ -575,6 +662,24 @@
     private async Task BulkEnableAsync()  => await BulkToggleAsync(true);
     private async Task BulkDisableAsync() => await BulkToggleAsync(false);
 
+    private void ConfirmBulkToggle(bool activate)
+    {
+        _bulkMenuOpen = false;
+        _actionConfirmTitle = activate ? "Enable selected users?" : "Disable selected users?";
+        _actionConfirmMessage = $"{(activate ? "Enable" : "Disable")} {_selectedUsers.Count} selected user(s)?";
+        _confirmedAction = () => BulkToggleAsync(activate);
+        _showActionConfirm = true;
+    }
+
+    private void ConfirmBulkDelete()
+    {
+        _bulkMenuOpen = false;
+        _actionConfirmTitle = "Remove selected users?";
+        _actionConfirmMessage = $"Disable and remove access for {_selectedUsers.Count} selected user(s)?";
+        _confirmedAction = BulkDeleteAsync;
+        _showActionConfirm = true;
+    }
+
     private async Task BulkToggleAsync(bool activate)
     {
         _bulkMenuOpen = false;
@@ -582,6 +687,7 @@
         foreach (var u in targets)
             try { await Api.SetUserActiveAsync(u.UserId, activate); } catch { /* continue */ }
         _selectedUsers.Clear();
+        CloseActionConfirm();
         await ShowToastAsync($"{(activate ? "Activated" : "Disabled")} {targets.Count} user(s).");
         await LoadAsync();
     }
@@ -593,8 +699,21 @@
         foreach (var u in targets)
             try { await Api.SetUserActiveAsync(u.UserId, false); } catch { /* continue */ }
         _selectedUsers.Clear();
+        CloseActionConfirm();
         await ShowToastAsync($"Removed {targets.Count} user(s).");
         await LoadAsync();
+    }
+
+    private void CloseActionConfirm()
+    {
+        _showActionConfirm = false;
+        _confirmedAction = null;
+    }
+
+    private async Task ExecuteConfirmedActionAsync()
+    {
+        if (_confirmedAction is not null)
+            await _confirmedAction.Invoke();
     }
 
     // ── Display helpers ───────────────────────────────────────
@@ -662,10 +781,16 @@
     // ── Form models ───────────────────────────────────────────
     private sealed class UForm
     {
+        [Required]
+        [StringLength(200)]
         public string  FullName     { get; set; } = string.Empty;
+        [StringLength(200)]
         public string? DisplayName  { get; set; }
+        [StringLength(50)]
         public string? PhoneNumber  { get; set; }
+        [StringLength(100)]
         public string? JobTitle     { get; set; }
+        [StringLength(100)]
         public string? Department   { get; set; }
         public string? TimeZoneCode { get; set; }
         public string? LocaleCode   { get; set; }
@@ -673,7 +798,12 @@
 
     private sealed class CForm
     {
+        [Required]
+        [StringLength(100)]
         public string UserName     { get; set; } = string.Empty;
+        [Required]
+        [EmailAddress]
+        [StringLength(320)]
         public string Email        { get; set; } = string.Empty;
         public string UserTypeCode { get; set; } = "Internal";
     }

@@ -1,4 +1,5 @@
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Common.Models;
 using Ams.Application.Features.PricingRules;
 using Microsoft.AspNetCore.Mvc;
 
@@ -19,7 +20,7 @@ public sealed class PricingRulesController : ControllerBase
     public async Task<IActionResult> Create([FromBody] CreatePricingRuleRequest request, CancellationToken cancellationToken)
     {
         var id = await _service.CreateAsync(request, cancellationToken);
-        return CreatedAtAction(nameof(GetById), new { id }, id);
+        return CreatedAtAction(nameof(GetById), new { id }, new IdResult { Id = id });
     }
 
     [HttpGet("{id:guid}")]
@@ -34,5 +35,19 @@ public sealed class PricingRulesController : ControllerBase
     {
         var result = await _service.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
         return Ok(result);
+    }
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdatePricingRuleRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdateAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
+    {
+        await _service.DeleteAsync(id, cancellationToken);
+        return NoContent();
     }
 }

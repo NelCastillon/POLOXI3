@@ -48,7 +48,6 @@ using Ams.Application.Features.Lobs;
 using Ams.Application.Features.Appetite;
 using Ams.Application.Features.Communications;
 using Ams.Application.Features.Submissions;
-using Ams.Application.Common.Dtos;
 
 namespace Ams.Web.Services;
 
@@ -413,8 +412,11 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    public Task<PagedResult<UserDto>?> SearchUsersAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<UserDto>>($"api/users?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+    public Task<PagedResult<UserDto>?> SearchUsersAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<UserDto>>($"api/users?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<PagedResult<UserDto>?> SearchUsersAsync(Guid tenantId, string? searchTerm, CancellationToken cancellationToken)
+        => SearchUsersAsync(tenantId, searchTerm, 1, 25, cancellationToken);
 
     public async Task<Guid> CreateUserAsync(CreateUserRequest request, CancellationToken cancellationToken = default)
     {
@@ -446,6 +448,18 @@ public sealed partial class ApiClient
     public async Task UnlockUserAsync(Guid userId, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PatchAsync($"api/users/{userId}/unlock?modifiedByUserId={modifiedByUserId}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SetUserMfaAsync(Guid userId, bool enabled, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/users/{userId}/mfa?enabled={enabled}&modifiedByUserId={modifiedByUserId}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task AssignUserBranchAsync(Guid userId, Guid? branchId, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsync($"api/users/{userId}/branch?branchId={branchId}&modifiedByUserId={modifiedByUserId}", null, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 
@@ -1183,8 +1197,8 @@ public sealed partial class ApiClient
         => _httpClient.GetFromJsonAsync<PagedResult<CommissionAccrualEntryDto>>($"api/commissions/accruals?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
     // -- Submissions ------------------------------------------
-    public Task<PagedResult<SubmissionDto>?> SearchSubmissionsAsync(Guid tenantId, string? searchTerm = null, string? status = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<SubmissionDto>>($"api/submissions?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+    public Task<PagedResult<SubmissionDto>?> SearchSubmissionsAsync(Guid tenantId, string? searchTerm = null, string? status = null, string? lineOfBusiness = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<SubmissionDto>>($"api/submissions?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}&lineOfBusiness={Uri.EscapeDataString(lineOfBusiness ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
     public Task<SubmissionDto?> GetSubmissionByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<SubmissionDto>($"api/submissions/{id}", cancellationToken);
@@ -1703,14 +1717,99 @@ public sealed partial class ApiClient
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
     }
 
-    public Task<PagedResult<PricingRuleDto>?> SearchPricingRulesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<PricingRuleDto>>($"api/crm/pricing-rules?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+    public Task<PagedResult<PricingRuleDto>?> SearchPricingRulesAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PricingRuleDto>>($"api/crm/pricing-rules?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
     public async Task<Guid> CreatePricingRuleAsync(CreatePricingRuleRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/crm/pricing-rules", request, cancellationToken);
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdatePricingRuleAsync(Guid id, UpdatePricingRuleRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/crm/pricing-rules/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeletePricingRuleAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/crm/pricing-rules/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<PagedResult<PriceClassDto>?> SearchPriceClassesAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 250, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<PriceClassDto>>($"api/crm/pricing-market-rules/classes?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreatePriceClassAsync(UpsertPriceClassRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/crm/pricing-market-rules/classes", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public async Task UpdatePriceClassAsync(Guid id, UpsertPriceClassRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/crm/pricing-market-rules/classes/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeletePriceClassAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/crm/pricing-market-rules/classes/{id}?userId={userId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<PagedResult<MarketAppetiteDto>?> SearchMarketAppetiteAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 250, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<MarketAppetiteDto>>($"api/crm/pricing-market-rules/appetite?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateMarketAppetiteAsync(UpsertMarketAppetiteRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/crm/pricing-market-rules/appetite", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public async Task UpdateMarketAppetiteAsync(Guid id, UpsertMarketAppetiteRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/crm/pricing-market-rules/appetite/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteMarketAppetiteAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/crm/pricing-market-rules/appetite/{id}?userId={userId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<PagedResult<CarrierMappingDto>?> SearchCarrierMappingsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 250, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<CarrierMappingDto>>($"api/crm/pricing-market-rules/carrier-mappings?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateCarrierMappingAsync(UpsertCarrierMappingRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/crm/pricing-market-rules/carrier-mappings", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public async Task UpdateCarrierMappingAsync(Guid id, UpsertCarrierMappingRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/crm/pricing-market-rules/carrier-mappings/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteCarrierMappingAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/crm/pricing-market-rules/carrier-mappings/{id}?userId={userId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task TestCarrierMappingAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/crm/pricing-market-rules/carrier-mappings/{id}/test?userId={userId}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
     }
 
     public Task<PagedResult<ForecastEntryDto>?> SearchForecastEntriesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)

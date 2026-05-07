@@ -18,6 +18,8 @@ public sealed class UserService : IUserService
     public Task SetActiveAsync(Guid userId, bool isActive, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => _repository.SetActiveAsync(userId, isActive, modifiedByUserId, cancellationToken);
     public Task LockAsync(Guid userId, DateTime? lockoutEnd, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => _repository.LockAsync(userId, lockoutEnd, modifiedByUserId, cancellationToken);
     public Task UnlockAsync(Guid userId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => _repository.UnlockAsync(userId, modifiedByUserId, cancellationToken);
+    public Task SetMfaAsync(Guid userId, bool enabled, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => _repository.SetMfaAsync(userId, enabled, modifiedByUserId, cancellationToken);
+    public Task AssignBranchAsync(Guid userId, Guid? branchId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => _repository.AssignBranchAsync(userId, branchId, modifiedByUserId, cancellationToken);
     public Task ChangeStatusAsync(ChangeUserStatusRequest request, CancellationToken cancellationToken = default) => _repository.ChangeStatusAsync(request, cancellationToken);
     public Task<IEnumerable<UserPermissionDto>> GetDirectPermissionsAsync(Guid userId, CancellationToken cancellationToken = default) => _repository.GetDirectPermissionsAsync(userId, cancellationToken);
     public Task<IEnumerable<UserPermissionDto>> GetDirectUsersByPermissionAsync(Guid permissionId, CancellationToken cancellationToken = default) => _repository.GetDirectUsersByPermissionAsync(permissionId, cancellationToken);
