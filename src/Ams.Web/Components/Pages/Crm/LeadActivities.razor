@@ -5,6 +5,7 @@
 @inject NavigationManager Nav
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.LeadActivities
+@using System.ComponentModel.DataAnnotations
 
 <PageTitle>Lead Activities — CRM</PageTitle>
 
@@ -19,7 +20,7 @@
         <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
             <i class="bi bi-arrow-clockwise @(_loading ? "la-spin" : "")" aria-hidden="true"></i>
         </button>
-        <button class="um-btn um-btn-primary" @onclick="() => _showAdd = true">
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
             <i class="bi bi-plus-lg" aria-hidden="true"></i> Log Activity
         </button>
     </Actions>
@@ -86,6 +87,7 @@ else
                 AllowFiltering="true"
                 EnableHover="true"
                 RowHeight="52">
+            <GridEvents TValue="LeadActivityDto" RowSelected="OnRowSelected" />
             <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
             <GridPageSettings PageSize="25" PageSizes="@(new int[]{10,25,50,100})" />
             <GridColumns>
@@ -99,6 +101,12 @@ else
                 </GridColumn>
                 <GridColumn Field="@nameof(LeadActivityDto.Subject)" HeaderText="Subject" Width="240" />
                 <GridColumn Field="@nameof(LeadActivityDto.LeadName)" HeaderText="Lead" Width="180" />
+                <GridColumn Field="@nameof(LeadActivityDto.ProducerName)" HeaderText="Producer" Width="170">
+                    <Template>
+                        @{ var r = (LeadActivityDto)context; }
+                        <span>@(string.IsNullOrWhiteSpace(r.ProducerName) ? "Unassigned" : r.ProducerName)</span>
+                    </Template>
+                </GridColumn>
                 <GridColumn Field="@nameof(LeadActivityDto.ActivityDate)" HeaderText="Date" Width="140" Type="ColumnType.DateTime" Format="yMd" />
                 <GridColumn Field="@nameof(LeadActivityDto.DurationMinutes)" HeaderText="Duration" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                     <Template>
@@ -114,6 +122,19 @@ else
                         </span>
                     </Template>
                 </GridColumn>
+                <GridColumn HeaderText="Actions" Width="130" AllowFiltering="false" AllowSorting="false" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
+                    <Template>
+                        @{ var r = (LeadActivityDto)context; }
+                        <div class="la-actions">
+                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit activity">
+                                <i class="bi bi-pencil" aria-hidden="true"></i>
+                            </button>
+                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete activity">
+                                <i class="bi bi-trash" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </Template>
+                </GridColumn>
             </GridColumns>
         </SfGrid>
     </div>
@@ -127,48 +148,93 @@ else
                IsBusy="_saving"
                Width="420px">
     <Content>
-        @if (_editingId == Guid.Empty)
+        @if (_formErrors.Count > 0)
         {
-            <div class="form-row">
-                <label class="form-label">Activity Type <span class="form-required">*</span></label>
-                <SfDropDownList TValue="string" TItem="LV" 
-                                DataSource="_typeOpts" 
-                                @bind-Value="_formType"
-                                Placeholder="Select type">
-                    <DropDownListFieldSettings Value="Value" Text="Label" />
-                </SfDropDownList>
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+                Please correct the validation errors below.
             </div>
         }
         <div class="form-row">
-            <label class="form-label">Lead <span class="form-required">*</span></label>
-            <SfDropDownList TValue="Guid" TItem="object"
-                            Placeholder="Select lead">
+            <label class="form-label">Activity Type <span class="form-required">*</span></label>
+            <SfDropDownList TValue="string" TItem="LV"
+                            DataSource="_typeOpts"
+                            @bind-Value="_form.ActivityTypeCode"
+                            Placeholder="Select type">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
             </SfDropDownList>
+            @FieldError(nameof(ActivityForm.ActivityTypeCode))
+        </div>
+        <div class="form-row">
+            <label class="form-label">Lead <span class="form-required">*</span></label>
+            <SfDropDownList TValue="Guid" TItem="LeadOption"
+                            DataSource="_leadOptions"
+                            @bind-Value="_form.LeadId"
+                            Placeholder="Select lead"
+                            AllowFiltering="true">
+                <DropDownListFieldSettings Value="Id" Text="Display" />
+            </SfDropDownList>
+            @FieldError(nameof(ActivityForm.LeadId))
         </div>
         <div class="form-row">
             <label class="form-label">Subject <span class="form-required">*</span></label>
-            <input type="text" class="form-control" placeholder="Activity subject" />
+            <input type="text" class="form-control" placeholder="Activity subject" @bind="_form.Subject" />
+            @FieldError(nameof(ActivityForm.Subject))
         </div>
         <div class="form-row">
             <label class="form-label">Activity Date <span class="form-required">*</span></label>
-            <SfDatePicker TValue="DateTime"></SfDatePicker>
+            <SfDatePicker TValue="DateTime" @bind-Value="_form.ActivityDate"></SfDatePicker>
+            @FieldError(nameof(ActivityForm.ActivityDate))
         </div>
         <div class="form-row">
             <label class="form-label">Duration (minutes)</label>
-            <input type="number" class="form-control" placeholder="0" />
+            <input type="number" class="form-control" placeholder="0" @bind="_form.DurationMinutes" />
+            @FieldError(nameof(ActivityForm.DurationMinutes))
+        </div>
+        <div class="form-row">
+            <label class="form-label">Outcome</label>
+            <SfDropDownList TValue="string" TItem="LV"
+                            DataSource="_outcomeOpts"
+                            @bind-Value="_form.OutcomeCode"
+                            Placeholder="Select outcome"
+                            ShowClearButton="true">
+                <DropDownListFieldSettings Value="Value" Text="Label" />
+            </SfDropDownList>
+            @FieldError(nameof(ActivityForm.OutcomeCode))
+        </div>
+        <div class="form-row la-checkbox-row">
+            <label class="la-checkbox-label">
+                <input type="checkbox" @bind="_form.IsCompleted" />
+                <span>Mark activity completed</span>
+            </label>
         </div>
         <div class="form-row">
             <label class="form-label">Notes</label>
-            <textarea class="form-control" rows="3" placeholder="Additional notes…"></textarea>
+            <textarea class="form-control" rows="3" placeholder="Additional notes…" @bind="_form.Notes"></textarea>
+            @FieldError(nameof(ActivityForm.Notes))
         </div>
     </Content>
 </AppCrudDrawer>
+
+<SfDialog @bind-Visible="_showDeleteConfirm" Width="420px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-confirm-dialog">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div>
+            <div class="um-confirm-title">Delete Activity</div>
+            <div class="um-confirm-body">Delete <strong>@_deleteTarget?.Subject</strong>?</div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDeleteConfirm = false">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync">Delete</button>
+            </div>
+        </div>
+    </DialogContent>
+</SfDialog>
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private SfToast? _toast;
     private List<LeadActivityDto> _items = [];
     private List<LeadActivityDto> _filtered = [];
+    private List<LeadOption> _leadOptions = [];
     private List<LV> _typeOpts = [];
     private List<LV> _outcomeOpts = [];
     private List<LV> _completedOpts = [];
@@ -179,8 +245,11 @@ else
     private bool _loading = false;
     private bool _saving = false;
     private bool _showAdd = false;
+    private bool _showDeleteConfirm;
     private Guid _editingId = Guid.Empty;
-    private string _formType = string.Empty;
+    private LeadActivityDto? _deleteTarget;
+    private ActivityForm _form = new();
+    private readonly Dictionary<string, string> _formErrors = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -193,9 +262,14 @@ else
         try
         {
             _loading = true;
+            var leadsResult = await Api.SearchLeadsAsync(_tenantId);
+            _leadOptions = leadsResult?.Items?
+                .Select(l => new LeadOption(l.LeadId, $"{l.FirstName} {l.LastName}".Trim(), l.AccountName ?? "—"))
+                .OrderBy(l => l.Display)
+                .ToList() ?? [];
+
             var result = await Api.SearchLeadActivitiesAsync(_tenantId) ?? new();
             _items = result.Items?.ToList() ?? [];
-            _filtered = _items;
 
             _typeOpts = new()
             {
@@ -218,6 +292,8 @@ else
                 new() { Label = "Open", Value = "0" },
                 new() { Label = "Completed", Value = "1" }
             };
+
+            ApplyFilters();
         }
         catch (Exception ex)
         {
@@ -240,12 +316,46 @@ else
 
     private async Task SaveAsync()
     {
+        if (!ValidateForm())
+            return;
+
         try
         {
             _saving = true;
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateLeadActivityAsync(new CreateLeadActivityRequest
+                {
+                    TenantId = _tenantId,
+                    LeadId = _form.LeadId,
+                    ActivityTypeCode = _form.ActivityTypeCode,
+                    Subject = _form.Subject,
+                    Notes = _form.Notes,
+                    ActivityDate = _form.ActivityDate,
+                    DurationMinutes = _form.DurationMinutes,
+                    OutcomeCode = _form.OutcomeCode,
+                });
+            }
+            else
+            {
+                await Api.UpdateLeadActivityAsync(_editingId, new UpdateLeadActivityRequest
+                {
+                    ActivityId = _editingId,
+                    LeadId = _form.LeadId,
+                    ActivityTypeCode = _form.ActivityTypeCode,
+                    Subject = _form.Subject,
+                    Notes = _form.Notes,
+                    ActivityDate = _form.ActivityDate,
+                    DurationMinutes = _form.DurationMinutes,
+                    OutcomeCode = _form.OutcomeCode,
+                    IsCompleted = _form.IsCompleted,
+                });
+            }
+
             await _toast?.ShowAsync(new ToastModel { Title = "Success", Content = "Activity saved", CssClass = "e-toast-success" });
             _showAdd = false;
             _editingId = Guid.Empty;
+            ResetForm();
             await LoadAsync();
         }
         catch (Exception ex)
@@ -267,6 +377,128 @@ else
         "Note" => "bi-sticky-fill",
         _ => "bi-lightning"
     };
+
+    private void OpenCreate()
+    {
+        _editingId = Guid.Empty;
+        ResetForm();
+        _showAdd = true;
+    }
+
+    private void OnRowSelected(RowSelectEventArgs<LeadActivityDto> args) => OpenEdit(args.Data);
+
+    private void OpenEdit(LeadActivityDto item)
+    {
+        _editingId = item.ActivityId;
+        _formErrors.Clear();
+        _form = new()
+        {
+            LeadId = item.LeadId ?? Guid.Empty,
+            ActivityTypeCode = item.ActivityTypeCode,
+            Subject = item.Subject,
+            Notes = item.Notes,
+            ActivityDate = item.ActivityDate,
+            DurationMinutes = item.DurationMinutes,
+            OutcomeCode = item.OutcomeCode,
+            IsCompleted = item.IsCompleted,
+        };
+        _showAdd = true;
+    }
+
+    private void ConfirmDelete(LeadActivityDto item)
+    {
+        _deleteTarget = item;
+        _showDeleteConfirm = true;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+
+        try
+        {
+            await Api.DeleteLeadActivityAsync(_deleteTarget.ActivityId);
+            await _toast?.ShowAsync(new ToastModel { Title = "Deleted", Content = "Activity deleted", CssClass = "e-toast-success" });
+            _deleteTarget = null;
+            _showDeleteConfirm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast?.ShowAsync(new ToastModel { Title = "Delete failed", Content = ex.Message, CssClass = "e-toast-danger" });
+        }
+    }
+
+    private void ResetForm()
+    {
+        _formErrors.Clear();
+        _form = new()
+        {
+            LeadId = Guid.Empty,
+            ActivityTypeCode = "Call",
+            ActivityDate = DateTime.Now,
+        };
+    }
+
+    private bool ValidateForm()
+    {
+        _formErrors.Clear();
+        var results = new List<ValidationResult>();
+        var context = new ValidationContext(_form);
+        Validator.TryValidateObject(_form, context, results, true);
+
+        if (_form.LeadId == Guid.Empty)
+            results.Add(new ValidationResult("Lead is required.", [nameof(ActivityForm.LeadId)]));
+
+        foreach (var result in results)
+        {
+            var member = result.MemberNames.FirstOrDefault() ?? string.Empty;
+            if (!_formErrors.ContainsKey(member))
+                _formErrors[member] = result.ErrorMessage ?? "Invalid value.";
+        }
+
+        return _formErrors.Count == 0;
+    }
+
+    private RenderFragment FieldError(string fieldName) => builder =>
+    {
+        if (!_formErrors.TryGetValue(fieldName, out var error)) return;
+
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "text-danger");
+        builder.AddContent(2, error);
+        builder.CloseElement();
+    };
+
+    private sealed record LeadOption(Guid Id, string Name, string Company)
+    {
+        public string Display => string.IsNullOrWhiteSpace(Company) || Company == "—" ? Name : $"{Name} — {Company}";
+    }
+
+    private sealed class ActivityForm
+    {
+        [Required]
+        public Guid LeadId { get; set; }
+
+        [Required, StringLength(50)]
+        public string ActivityTypeCode { get; set; } = "Call";
+
+        [Required, StringLength(200)]
+        public string Subject { get; set; } = string.Empty;
+
+        public DateTime ActivityDate { get; set; } = DateTime.Now;
+
+        [Range(0, 1440)]
+        public int? DurationMinutes { get; set; }
+
+        [StringLength(50)]
+        public string? OutcomeCode { get; set; }
+
+        [StringLength(2000)]
+        public string? Notes { get; set; }
+
+        public bool IsCompleted { get; set; }
+    }
 
     private class LV 
     { 

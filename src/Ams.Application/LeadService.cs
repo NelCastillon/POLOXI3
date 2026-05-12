@@ -24,6 +24,69 @@ public sealed class LeadService : ILeadService
     public Task<PagedResult<LeadDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 
+    public Task UpdateAsync(UpdateLeadRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateAsync(request, cancellationToken);
+
+    public Task<IReadOnlyList<LeadContactDto>> GetContactsAsync(Guid leadId, CancellationToken cancellationToken = default)
+        => _repository.GetContactsAsync(leadId, cancellationToken);
+
+    public Task<Guid> CreateContactAsync(CreateLeadContactRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateContactAsync(request, cancellationToken);
+
+    public Task UpdateContactAsync(UpdateLeadContactRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateContactAsync(request, cancellationToken);
+
+    public Task DeleteContactAsync(Guid contactId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+        => _repository.DeleteContactAsync(contactId, modifiedByUserId, cancellationToken);
+
+    public Task<IReadOnlyList<LeadInterestLineDto>> GetInterestLinesAsync(Guid leadId, CancellationToken cancellationToken = default)
+        => _repository.GetInterestLinesAsync(leadId, cancellationToken);
+
+    public Task<Guid> CreateInterestLineAsync(CreateLeadInterestLineRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateInterestLineAsync(request, cancellationToken);
+
+    public Task UpdateInterestLineAsync(UpdateLeadInterestLineRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateInterestLineAsync(request, cancellationToken);
+
+    public Task DeleteInterestLineAsync(Guid interestLineId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+        => _repository.DeleteInterestLineAsync(interestLineId, modifiedByUserId, cancellationToken);
+
+    public Task<IReadOnlyList<LeadCommunicationDto>> GetCommunicationsAsync(Guid leadId, CancellationToken cancellationToken = default)
+        => _repository.GetCommunicationsAsync(leadId, cancellationToken);
+
+    public Task<Guid> CreateCommunicationAsync(CreateLeadCommunicationRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateCommunicationAsync(request, cancellationToken);
+
+    public Task UpdateCommunicationAsync(UpdateLeadCommunicationRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateCommunicationAsync(request, cancellationToken);
+
+    public Task DeleteCommunicationAsync(Guid communicationId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+        => _repository.DeleteCommunicationAsync(communicationId, modifiedByUserId, cancellationToken);
+
+    public Task<IReadOnlyList<LeadCampaignEnrollmentDto>> GetCampaignEnrollmentsAsync(Guid leadId, CancellationToken cancellationToken = default)
+        => _repository.GetCampaignEnrollmentsAsync(leadId, cancellationToken);
+
+    public Task<Guid> CreateCampaignEnrollmentAsync(CreateLeadCampaignEnrollmentRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateCampaignEnrollmentAsync(request, cancellationToken);
+
+    public Task UpdateCampaignEnrollmentAsync(UpdateLeadCampaignEnrollmentRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateCampaignEnrollmentAsync(request, cancellationToken);
+
+    public Task DeleteCampaignEnrollmentAsync(Guid enrollmentId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+        => _repository.DeleteCampaignEnrollmentAsync(enrollmentId, modifiedByUserId, cancellationToken);
+
+    public Task<IReadOnlyList<LeadDocumentDto>> GetDocumentsAsync(Guid leadId, CancellationToken cancellationToken = default)
+        => _repository.GetDocumentsAsync(leadId, cancellationToken);
+
+    public Task<Guid> CreateDocumentAsync(CreateLeadDocumentRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateDocumentAsync(request, cancellationToken);
+
+    public Task UpdateDocumentAsync(UpdateLeadDocumentRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateDocumentAsync(request, cancellationToken);
+
+    public Task DeleteDocumentAsync(Guid documentId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+        => _repository.DeleteDocumentAsync(documentId, modifiedByUserId, cancellationToken);
+
     public Task<IReadOnlyList<LeadScoringRuleDto>> GetScoringRulesAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetScoringRulesAsync(tenantId, cancellationToken);
 }

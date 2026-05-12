@@ -24,6 +24,12 @@ public sealed class QuoteService : IQuoteService
     public Task<PagedResult<QuoteDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 
+    public Task UpdateAsync(UpdateQuoteRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateAsync(request, cancellationToken);
+
+    public Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+        => _repository.DeleteAsync(id, modifiedByUserId, cancellationToken);
+
     public Task<IReadOnlyList<QuoteLineDto>> GetLinesByQuoteIdAsync(Guid quoteId, CancellationToken cancellationToken = default)
         => _repository.GetLinesByQuoteIdAsync(quoteId, cancellationToken);
 }

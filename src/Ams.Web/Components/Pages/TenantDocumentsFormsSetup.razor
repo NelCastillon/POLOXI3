@@ -7,6 +7,7 @@
 @page "/tenant/documents/ocr2"
 @page "/tenant/documents/storage2"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -16,11 +17,14 @@
                Subtitle="Tenant admin control center for document categories, templates, ACORD forms, e-sign templates, packet templates, retention, OCR/indexing, and storage settings"
                Icon="bi-folder-gear">
     <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
         <button class="um-btn um-btn-ghost" @onclick="ResetFilters">
             <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset
         </button>
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/tenant/documents/templates")'>
-            <i class="bi bi-file-earmark-text" aria-hidden="true"></i> Document Templates
+        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/tenant/documents/categories")'>
+            <i class="bi bi-folder2" aria-hidden="true"></i> Document Categories
         </button>
     </Actions>
 </AppPageHeader>
@@ -43,11 +47,24 @@
 </section>
 
 <section class="doccfg-kpi-grid" aria-label="Documents and forms setup metrics">
-    @Kpi("Templates", "84", "Active document templates", "bi-file-earmark-text", "doccfg-tone-blue")
-    @Kpi("ACORD Forms", "312", "Mapped form library", "bi-file-earmark-medical", "doccfg-tone-green")
-    @Kpi("OCR Rules", "42", "Indexing automations", "bi-upc-scan", "doccfg-tone-violet")
-    @Kpi("Storage", "74%", "Tenant allocation used", "bi-hdd", "doccfg-tone-amber")
+    @Kpi("Categories", FilterCount("categories").ToString(), "Document classification records", "bi-folder2", "doccfg-tone-blue", "categories")
+    @Kpi("Templates", FilterCount("templates").ToString(), "Document template records", "bi-file-earmark-text", "doccfg-tone-violet", "templates")
+    @Kpi("ACORD Forms", FilterCount("forms").ToString(), "Mapped form library", "bi-file-earmark-medical", "doccfg-tone-green", "forms")
+    @Kpi("OCR Rules", FilterCount("ocr").ToString(), "Indexing automations", "bi-upc-scan", "doccfg-tone-red", "ocr")
+    @Kpi("Governance", FilterCount("govern").ToString(), "Retention and storage controls", "bi-shield-check", "doccfg-tone-amber", "govern")
 </section>
+
+@if (_loading)
+{
+    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading document configuration…</span></div>
+}
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+        <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError
+    </div>
+}
 
 <section class="doccfg-command-bar" aria-label="Documents and forms setup filters">
     <div class="doccfg-search-wrap">
@@ -61,7 +78,7 @@
         @foreach (var filter in _filters)
         {
             <button class="doccfg-pill @(_filter == filter.Key ? "doccfg-pill--active" : "")"
-                    @onclick="() => _filter = filter.Key">
+                    @onclick="() => SetFilter(filter.Key)">
                 @filter.Label
                 <span>@FilterCount(filter.Key)</span>
             </button>
@@ -151,8 +168,8 @@
                 <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selected.Url)">
                     <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Module
                 </button>
-                <button class="um-btn um-btn-ghost" @onclick="() => Advance(_selected)">
-                    <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Advance
+                <button class="um-btn um-btn-ghost" @onclick="() => OpenRecord(_selected)">
+                    <i class="bi bi-search" aria-hidden="true"></i> Find Record
                 </button>
             </div>
         }
@@ -174,10 +191,14 @@
 </section>
 
 @code {
+    private static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string _search = string.Empty;
     private string _filter = string.Empty;
     private DocumentWorkflowItem? _selected;
     private readonly List<DocumentWorkflowItem> _workflow = [];
+    private readonly List<DocumentConfigItemDto> _items = [];
+    private bool _loading;
+    private string? _loadError;
 
     private readonly Lane[] _lanes =
     [
@@ -192,7 +213,9 @@
     [
         new("", "All"),
         new("risk", "High Risk"),
+        new("categories", "Categories"),
         new("templates", "Templates"),
+        new("forms", "ACORD Forms"),
         new("ocr", "OCR"),
         new("govern", "Governance")
     ];
@@ -211,8 +234,8 @@
 
     private readonly DocumentModule[] _quickActions =
     [
+        new("Categories", "", "/tenant/documents/categories", "bi-folder2", "Categories"),
         new("Templates", "", "/tenant/documents/templates", "bi-file-earmark-text", "Templates"),
-        new("ACORD", "", "/tenant/documents/acord", "bi-file-earmark-medical", "Forms"),
         new("OCR", "", "/tenant/documents/ocr", "bi-upc-scan", "OCR"),
         new("Storage", "", "/tenant/documents/storage", "bi-hdd", "Storage")
     ];
@@ -221,7 +244,9 @@
         (string.IsNullOrWhiteSpace(_filter) || _filter switch
         {
             "risk" => item.Risk == "High",
-            "templates" => item.Domain is "Templates" or "Forms",
+            "categories" => item.Domain == "Categories",
+            "templates" => item.Domain == "Templates",
+            "forms" => item.Domain == "Forms",
             "ocr" => item.Domain == "OCR",
             "govern" => item.Domain is "Governance" or "Storage",
             _ => true
@@ -236,27 +261,40 @@
         .ThenBy(x => x.Stage)
         .ThenBy(x => x.Title);
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents & Forms Setup", "/tenant/documents/templates"));
-        BuildWorkflow();
+        await LoadAsync();
         _selected = _workflow.FirstOrDefault(x => x.Risk == "High") ?? _workflow.FirstOrDefault();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _items.Clear();
+            var result = await Api.SearchDocumentConfigItemsAsync(TenantId, pageSize: 1000);
+            _items.AddRange((result?.Items ?? []).Where(x => _moduleKinds.Any(module => module.Kind == x.Kind)));
+
+            BuildWorkflow();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Error loading document configuration: {ex.Message}";
+            _workflow.Clear();
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     private void BuildWorkflow()
     {
         _workflow.Clear();
-        _workflow.AddRange(
-        [
-            new("Category access review", "Commercial document categories require branch and role access review before rollout.", "Categories", "High", "Classify", "Diana Perez", "Today", "Category access policy", "/tenant/documents/categories"),
-            new("Renewal template versioning", "Renewal proposal template v7 has pending merge-field and approval workflow updates.", "Templates", "High", "Author", "Sarah Kim", "48h", "Template approval", "/tenant/documents/templates"),
-            new("ACORD mapping update", "ACORD 125 and 140 prefill mappings need validation against updated account fields.", "Forms", "Medium", "Author", "James Park", "This week", "Form mapping validation", "/tenant/documents/acord"),
-            new("E-sign routing exception", "Certificate holder and named insured signer roles need updated routing rules.", "Signing", "Medium", "Package", "Maria Santos", "3 days", "Signer routing policy", "/tenant/documents/esign"),
-            new("Policy packet checklist", "Commercial package policy packet needs conditional document inclusions by line of business.", "Packets", "Medium", "Package", "Lisa Chen", "5 days", "Packet assembly governance", "/tenant/documents/packets"),
-            new("OCR confidence threshold", "Low OCR confidence exceptions increased after carrier download document changes.", "OCR", "High", "Index", "Kevin Obi", "Today", "OCR exception routing", "/tenant/documents/ocr"),
-            new("Retention legal hold", "Litigation hold and purge approvals need review for archived claims documents.", "Governance", "High", "Govern", "Robert Yamamoto", "24h", "Retention and legal hold", "/tenant/documents/retention"),
-            new("Storage growth alert", "Tenant storage usage reached 74% and archive tier policy should be reviewed.", "Storage", "Medium", "Govern", "Diana Perez", "This week", "Storage quota policy", "/tenant/documents/storage")
-        ]);
+        _workflow.AddRange(_items.Select(ToWorkflowItem));
     }
 
     private void ResetFilters()
@@ -265,22 +303,14 @@
         _filter = string.Empty;
     }
 
-    private void Advance(DocumentWorkflowItem item)
-    {
-        item.Stage = item.Stage switch
-        {
-            "Classify" => "Author",
-            "Author" => "Package",
-            "Package" => "Index",
-            "Index" => "Govern",
-            _ => "Govern"
-        };
-    }
+    private void SetFilter(string key) => _filter = _filter == key ? string.Empty : key;
 
     private int FilterCount(string key) => key switch
     {
         "risk" => _workflow.Count(x => x.Risk == "High"),
-        "templates" => _workflow.Count(x => x.Domain is "Templates" or "Forms"),
+        "categories" => _workflow.Count(x => x.Domain == "Categories"),
+        "templates" => _workflow.Count(x => x.Domain == "Templates"),
+        "forms" => _workflow.Count(x => x.Domain == "Forms"),
         "ocr" => _workflow.Count(x => x.Domain == "OCR"),
         "govern" => _workflow.Count(x => x.Domain is "Governance" or "Storage"),
         _ => _workflow.Count
@@ -306,7 +336,7 @@
         _ => "doccfg-status-low"
     };
 
-    private RenderFragment Kpi(string label, string value, string meta, string icon, string tone) => @<article class="doccfg-kpi-card">
+    private RenderFragment Kpi(string label, string value, string meta, string icon, string tone, string filterKey) => @<article class="doccfg-kpi-card @(_filter == filterKey ? "doccfg-kpi-card--active" : "")" @onclick="() => SetFilter(filterKey)" role="button" tabindex="0" title="Filter by @label">
         <span class="doccfg-kpi-icon @tone"><i class="bi @icon" aria-hidden="true"></i></span>
         <div>
             <strong>@value</strong>
@@ -315,8 +345,14 @@
         </div>
     </article>;
 
+    private void OpenRecord(DocumentWorkflowItem item)
+    {
+        Nav.NavigateTo($"{item.Url}?searchTerm={Uri.EscapeDataString(item.Code)}");
+    }
+
     private sealed record Lane(string Key, string Label, string Description);
     private sealed record Filter(string Key, string Label);
+    private sealed record ModuleKind(string Kind, string Domain, string Stage, string Url, string Control);
     private sealed record DocumentModule(string Title, string Description, string Url, string Icon, string Domain)
     {
         public string Label => Title;
@@ -324,6 +360,7 @@
 
     private sealed class DocumentWorkflowItem(string title, string summary, string domain, string risk, string stage, string owner, string sla, string control, string url)
     {
+        public string Code { get; set; } = string.Empty;
         public string Title { get; set; } = title;
         public string Summary { get; set; } = summary;
         public string Domain { get; set; } = domain;
@@ -333,5 +370,32 @@
         public string Sla { get; set; } = sla;
         public string Control { get; set; } = control;
         public string Url { get; set; } = url;
+    }
+
+    private static readonly ModuleKind[] _moduleKinds =
+    [
+        new("DocumentCategory", "Categories", "Classify", "/tenant/documents/categories", "Category access policy"),
+        new("DocumentTemplate", "Templates", "Author", "/tenant/documents/templates", "Template approval"),
+        new("AcordForm", "Forms", "Author", "/tenant/documents/acord", "Form mapping validation"),
+        new("ESignTemplate", "Signing", "Package", "/tenant/documents/esign", "Signer routing policy"),
+        new("PacketTemplate", "Packets", "Package", "/tenant/documents/packets", "Packet assembly governance"),
+        new("OcrIndexingRule", "OCR", "Index", "/tenant/documents/ocr", "OCR exception routing"),
+        new("RetentionRule", "Governance", "Govern", "/tenant/documents/retention", "Retention and legal hold"),
+        new("StorageSetting", "Storage", "Govern", "/tenant/documents/storage", "Storage quota policy"),
+    ];
+
+    private static DocumentWorkflowItem ToWorkflowItem(DocumentConfigItemDto item)
+    {
+        var module = _moduleKinds.FirstOrDefault(x => x.Kind == item.Kind) ?? new(item.Kind, item.Kind, "Govern", "/tenant/documents/categories", "Document control");
+        var risk = !item.IsActive ? "High" : string.IsNullOrWhiteSpace(item.ConfigurationJson) || item.ConfigurationJson == "{}" ? "Medium" : "Low";
+        var sla = risk switch { "High" => "Today", "Medium" => "This week", _ => "Standard" };
+        var owner = string.IsNullOrWhiteSpace(item.Category) ? "Tenant Admin" : item.Category!;
+        var summary = string.IsNullOrWhiteSpace(item.Description)
+            ? $"{item.Name} is configured as {item.Kind} with code {item.Code}."
+            : item.Description!;
+        return new(item.Name, summary, module.Domain, risk, module.Stage, owner, sla, module.Control, module.Url)
+        {
+            Code = item.Code
+        };
     }
 }

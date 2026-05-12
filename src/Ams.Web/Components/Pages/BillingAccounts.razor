@@ -1,5 +1,9 @@
 @page "/billing/accounts"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.BillingAccounts
+@using System.ComponentModel.DataAnnotations
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -10,35 +14,54 @@
 </SfToast>
 
 <!-- ── CREATE BILLING ACCOUNT DIALOG ─────────────────────────────── -->
-<SfDialog @bind-Visible="_showCreate" Width="560px" ShowCloseIcon="true" IsModal="true">
+<SfDialog @bind-Visible="_showCreate" Width="560px" ShowCloseIcon="false" IsModal="true">
     <DialogTemplates>
-        <Header><div class="ba-dlg-hdr"><i class="bi bi-building-plus" aria-hidden="true"></i> Create Billing Account</div></Header>
         <Content>
+            <div class="um-modal-header">
+                <i class="bi bi-building-plus" aria-hidden="true"></i>
+                <span>@(_editingId == Guid.Empty ? "Create Billing Account" : "Edit Billing Account")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button>
+            </div>
             <div class="ba-dlg-body">
-                <div class="form-group mb-2"><label class="ba-lbl">Account Name *</label>
-                    <SfTextBox @bind-Value="_newName" Placeholder="e.g. Acme Corp — Commercial Lines"></SfTextBox>
+                @if (_formErrors.Count > 0)
+                {
+                    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">Please correct the validation errors below.</div>
+                }
+                <div class="form-group mb-2"><label class="ba-lbl">Account *</label>
+                    <SfDropDownList TValue="Guid" TItem="AccountOption" DataSource="_accountOptions" @bind-Value="_form.AccountId" Width="100%" Placeholder="Search and select account" AllowFiltering="true" Enabled="@(_editingId == Guid.Empty)">
+                        <DropDownListFieldSettings Value="Id" Text="Display" />
+                    </SfDropDownList>
+                    @FieldError(nameof(BillingAccountForm.AccountId))
                 </div>
                 <div class="form-group mb-2"><label class="ba-lbl">Billing Mode</label>
-                    <SfDropDownList TValue="string" TItem="string" DataSource="_billingModes" @bind-Value="_newMode" Width="100%"></SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_billingModes" @bind-Value="_form.BillingModeCode" Width="100%"></SfDropDownList>
+                    @FieldError(nameof(BillingAccountForm.BillingModeCode))
                 </div>
                 <div class="form-group mb-2"><label class="ba-lbl">Payment Terms</label>
-                    <SfDropDownList TValue="string" TItem="string" DataSource="_terms" @bind-Value="_newTerms" Width="100%"></SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_terms" @bind-Value="_form.PaymentTermsCode" Width="100%"></SfDropDownList>
+                    @FieldError(nameof(BillingAccountForm.PaymentTermsCode))
                 </div>
                 <div class="form-group mb-2"><label class="ba-lbl">Default Payment Method</label>
-                    <SfDropDownList TValue="string" TItem="string" DataSource="_methods" @bind-Value="_newMethod" Width="100%"></SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_methods" @bind-Value="_form.DefaultPaymentMethodCode" Width="100%"></SfDropDownList>
+                    @FieldError(nameof(BillingAccountForm.DefaultPaymentMethodCode))
                 </div>
                 <div class="form-group mb-2"><label class="ba-lbl">Credit Limit</label>
-                    <SfNumericTextBox TValue="decimal" @bind-Value="_newCreditLimit" Format="C2" Width="100%"></SfNumericTextBox>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_form.CreditLimit" Format="C2" Width="100%"></SfNumericTextBox>
+                    @FieldError(nameof(BillingAccountForm.CreditLimit))
+                </div>
+                <div class="form-group mb-2"><label class="ba-lbl">Status</label>
+                    <SfDropDownList TValue="string" TItem="string" DataSource="_statuses" @bind-Value="_form.StatusCode" Width="100%"></SfDropDownList>
+                    @FieldError(nameof(BillingAccountForm.StatusCode))
                 </div>
                 <div class="form-group mb-2">
-                    <SfCheckBox Label="Autopay Enrolled" @bind-Checked="_newAutopay"></SfCheckBox>
+                    <SfCheckBox Label="Autopay Enrolled" @bind-Checked="_form.AutopayEnrolled"></SfCheckBox>
                 </div>
             </div>
         </Content>
     </DialogTemplates>
     <DialogButtons>
-        <DialogButton Content="Create" IsPrimary="true" OnClick="CreateAccountAsync"></DialogButton>
-        <DialogButton Content="Cancel" OnClick="() => _showCreate = false"></DialogButton>
+        <DialogButton Content="@(_editingId == Guid.Empty ? "Create" : "Save")" IsPrimary="true" OnClick="SaveAccountAsync"></DialogButton>
+        <DialogButton Content="Cancel" OnClick="CloseForm"></DialogButton>
     </DialogButtons>
 </SfDialog>
 
@@ -52,7 +75,7 @@
         <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/modes")'>
             <i class="bi bi-diagram-3" aria-hidden="true"></i> Billing Modes
         </button>
-        <button class="um-btn um-btn-primary" @onclick="() => _showCreate = true">
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
             <i class="bi bi-plus-circle" aria-hidden="true"></i> New Account
         </button>
     </Actions>
@@ -60,15 +83,30 @@
 
 <!-- KPI strip -->
 <div class="ba-kpi-strip">
-    <div class="ba-kpi"><i class="bi bi-building ba-ki blue" aria-hidden="true"></i><div><div class="ba-kv">@_accounts.Count</div><div class="ba-kl">Total Accounts</div></div></div>
-    <div class="ba-kpi"><i class="bi bi-currency-dollar ba-ki blue" aria-hidden="true"></i><div><div class="ba-kv">@Fmt(_accounts.Sum(a=>a.Balance))</div><div class="ba-kl">Total AR Balance</div></div></div>
-    <div class="ba-kpi"><i class="bi bi-exclamation-triangle ba-ki red" aria-hidden="true"></i><div><div class="ba-kv">@_accounts.Count(a=>a.Status=="Delinquent")</div><div class="ba-kl">Delinquent</div></div></div>
-    <div class="ba-kpi"><i class="bi bi-arrow-repeat ba-ki green" aria-hidden="true"></i><div><div class="ba-kv">@_accounts.Count(a=>a.AutopayEnrolled)</div><div class="ba-kl">Autopay Enrolled</div></div></div>
-    <div class="ba-kpi"><i class="bi bi-diagram-3 ba-ki purple" aria-hidden="true"></i><div><div class="ba-kv">@_accounts.Count(a=>a.BillingMode=="Agency Bill")</div><div class="ba-kl">Agency Bill</div></div></div>
-    <div class="ba-kpi"><i class="bi bi-building-check ba-ki blue" aria-hidden="true"></i><div><div class="ba-kv">@_accounts.Count(a=>a.BillingMode=="Direct Bill")</div><div class="ba-kl">Direct Bill</div></div></div>
-    <div class="ba-kpi"><i class="bi bi-credit-card ba-ki amber" aria-hidden="true"></i><div><div class="ba-kv">@Fmt(_accounts.Sum(a=>a.CreditLimit))</div><div class="ba-kl">Total Credit</div></div></div>
-    <div class="ba-kpi"><i class="bi bi-shield-x ba-ki red" aria-hidden="true"></i><div><div class="ba-kv">@_accounts.Count(a=>a.Status=="Suspended")</div><div class="ba-kl">Suspended</div></div></div>
+    <button type="button" class="@KpiClass("all")" @onclick='() => SetKpiFilter("all")'><i class="bi bi-building ba-ki blue" aria-hidden="true"></i><div><div class="ba-kv">@_accounts.Count</div><div class="ba-kl">Total Accounts</div></div></button>
+    <button type="button" class="@KpiClass("balance")" @onclick='() => SetKpiFilter("balance")'><i class="bi bi-currency-dollar ba-ki blue" aria-hidden="true"></i><div><div class="ba-kv">@Fmt(_accounts.Sum(a=>a.BalanceAmount))</div><div class="ba-kl">AR Balance</div></div></button>
+    <button type="button" class="@KpiClass("delinquent")" @onclick='() => SetKpiFilter("delinquent")'><i class="bi bi-exclamation-triangle ba-ki red" aria-hidden="true"></i><div><div class="ba-kv">@_accounts.Count(a=>a.StatusCode=="Delinquent")</div><div class="ba-kl">Delinquent</div></div></button>
+    <button type="button" class="@KpiClass("autopay")" @onclick='() => SetKpiFilter("autopay")'><i class="bi bi-arrow-repeat ba-ki green" aria-hidden="true"></i><div><div class="ba-kv">@_accounts.Count(a=>a.AutopayEnrolled)</div><div class="ba-kl">Autopay</div></div></button>
+    <button type="button" class="@KpiClass("agency")" @onclick='() => SetKpiFilter("agency")'><i class="bi bi-diagram-3 ba-ki purple" aria-hidden="true"></i><div><div class="ba-kv">@_accounts.Count(a=>a.BillingModeCode=="Agency Bill")</div><div class="ba-kl">Agency Bill</div></div></button>
+    <button type="button" class="@KpiClass("direct")" @onclick='() => SetKpiFilter("direct")'><i class="bi bi-building-check ba-ki blue" aria-hidden="true"></i><div><div class="ba-kv">@_accounts.Count(a=>a.BillingModeCode=="Direct Bill")</div><div class="ba-kl">Direct Bill</div></div></button>
+    <button type="button" class="@KpiClass("credit")" @onclick='() => SetKpiFilter("credit")'><i class="bi bi-credit-card ba-ki amber" aria-hidden="true"></i><div><div class="ba-kv">@Fmt(_accounts.Sum(a=>a.CreditLimit))</div><div class="ba-kl">Total Credit</div></div></button>
+    <button type="button" class="@KpiClass("suspended")" @onclick='() => SetKpiFilter("suspended")'><i class="bi bi-shield-x ba-ki red" aria-hidden="true"></i><div><div class="ba-kv">@_accounts.Count(a=>a.StatusCode=="Suspended")</div><div class="ba-kl">Suspended</div></div></button>
 </div>
+<SfDialog @bind-Visible="_showDeleteConfirm" Width="420px" IsModal="true" ShowCloseIcon="false">
+    <DialogTemplates>
+        <Content>
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div>
+                <div class="um-confirm-title">Delete Billing Account</div>
+                <div class="um-confirm-body">Delete billing settings for <strong>@_deleteTarget?.AccountName</strong>? The client account will be closed but not physically removed.</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDeleteConfirm = false">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync">Delete</button>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
 
 <!-- Sub-nav -->
 <div class="ba-subnav">
@@ -106,60 +144,67 @@
 </div>
 
 <!-- Grid -->
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger mx-4" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+}
 <div class="ba-grid-wrap">
     <SfGrid DataSource="FilteredAccounts" AllowSorting="true" AllowPaging="true" Height="520px">
-        <GridEvents RowSelected="OnRowSelected" TValue="BillingAccountRow"></GridEvents>
+        <GridEvents RowSelected="OnRowSelected" TValue="BillingAccountDto"></GridEvents>
         <GridPageSettings PageSize="15"></GridPageSettings>
         <GridColumns>
             <GridColumn HeaderText="Account" Width="230">
                 <Template>
-                    @{ var a = (BillingAccountRow)context; }
+                    @{ var a = (BillingAccountDto)context; }
                     <div class="ba-acct-cell">
                         <i class="bi bi-building ba-acct-icon" aria-hidden="true"></i>
                         <div>
-                            <div class="ba-acct-name">@a.Name</div>
-                            <div class="ba-acct-sub">@a.PolicyCount policies · @a.DefaultMethod</div>
+                            <div class="ba-acct-name">@a.AccountName</div>
+                            <div class="ba-acct-sub">@a.PolicyCount policies · @a.DefaultPaymentMethodCode</div>
                         </div>
                     </div>
                 </Template>
             </GridColumn>
             <GridColumn HeaderText="Mode" Width="120">
                 <Template>
-                    @{ var a2 = (BillingAccountRow)context; }
-                    <span class="ba-mode-chip ba-m-@a2.BillingMode.ToLower().Replace(" ","-")">@a2.BillingMode</span>
+                    @{ var a2 = (BillingAccountDto)context; }
+                    <span class="ba-mode-chip ba-m-@a2.BillingModeCode.ToLower().Replace(" ","-")">@a2.BillingModeCode</span>
                 </Template>
             </GridColumn>
             <GridColumn HeaderText="Balance" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                 <Template>
-                    @{ var a3 = (BillingAccountRow)context; }
-                    <span class="@(a3.Balance > 0 ? "ba-bal-due" : "ba-bal-clear")">@a3.Balance.ToString("C2")</span>
+                    @{ var a3 = (BillingAccountDto)context; }
+                    <span class="@(a3.BalanceAmount > 0 ? "ba-bal-due" : "ba-bal-clear")">@a3.BalanceAmount.ToString("C2")</span>
                 </Template>
             </GridColumn>
-            <GridColumn Field="@nameof(BillingAccountRow.CreditLimit)" HeaderText="Credit Limit" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(BillingAccountRow.Terms)" HeaderText="Terms" Width="100"></GridColumn>
+            <GridColumn Field="@nameof(BillingAccountDto.CreditLimit)" HeaderText="Credit Limit" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(BillingAccountDto.PaymentTermsCode)" HeaderText="Terms" Width="100"></GridColumn>
             <GridColumn HeaderText="Autopay" Width="90" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
                 <Template>
-                    @{ var a4 = (BillingAccountRow)context; }
+                    @{ var a4 = (BillingAccountDto)context; }
                     @if (a4.AutopayEnrolled) { <span class="ba-autopay-on"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span> }
                     else                     { <span class="ba-autopay-off"><i class="bi bi-circle" aria-hidden="true"></i></span> }
                 </Template>
             </GridColumn>
             <GridColumn HeaderText="Status" Width="110">
                 <Template>
-                    @{ var a5 = (BillingAccountRow)context; }
-                    <span class="ba-status-chip ba-st-@a5.Status.ToLower()">@a5.Status</span>
+                    @{ var a5 = (BillingAccountDto)context; }
+                    <span class="ba-status-chip ba-st-@a5.StatusCode.ToLower()">@a5.StatusCode</span>
                 </Template>
             </GridColumn>
-            <GridColumn Field="@nameof(BillingAccountRow.LastPaymentDate)" HeaderText="Last Payment" Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
+            <GridColumn Field="@nameof(BillingAccountDto.LastPaymentDate)" HeaderText="Last Payment" Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
             <GridColumn HeaderText="Actions" Width="100">
                 <Template>
-                    @{ var a6 = (BillingAccountRow)context; }
+                    @{ var a6 = (BillingAccountDto)context; }
                     <div class="ba-row-acts">
-                        <button class="um-btn um-btn-primary um-btn-xs" @onclick='() => Nav.NavigateTo($"/billing/accounts/{a6.Id}")' title="Open account">
+                        <button class="um-btn um-btn-primary um-btn-xs" @onclick='() => Nav.NavigateTo($"/billing/accounts/{a6.AccountId}")' @onclick:stopPropagation="true" title="Open account">
                             <i class="bi bi-arrow-up-right-square" aria-hidden="true"></i>
                         </button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/billing/invoices")' title="View invoices">
-                            <i class="bi bi-receipt" aria-hidden="true"></i>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(a6)" @onclick:stopPropagation="true" title="Edit billing settings">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfirmDelete(a6)" @onclick:stopPropagation="true" title="Delete billing account">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
                         </button>
                     </div>
                 </Template>
@@ -170,54 +215,229 @@
 
 @code {
     private SfToast _toast = default!;
-    private string _search = "", _filterMode = "", _filterStatus = "", _filterAutopay = "";
-    private bool _showCreate;
-    private string? _newName, _newMode = "Direct Bill", _newTerms = "Net 30", _newMethod = "ACH";
-    private decimal _newCreditLimit = 10000;
-    private bool _newAutopay;
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private string _search = "", _filterMode = "", _filterStatus = "", _filterAutopay = "", _kpiFilter = "all";
+    private bool _showCreate, _showDeleteConfirm;
+    private Guid _editingId = Guid.Empty;
+    private string? _loadError;
+    private BillingAccountDto? _deleteTarget;
+    private BillingAccountForm _form = new();
+    private readonly Dictionary<string, string> _formErrors = new();
 
     private readonly List<string> _billingModes = ["Direct Bill", "Agency Bill", "EFT"];
     private readonly List<string> _terms        = ["Net 15", "Net 30", "Net 45", "Net 60", "Due on Receipt"];
     private readonly List<string> _methods      = ["ACH", "Credit Card", "Check", "Wire Transfer", "Cash"];
+    private readonly List<string> _statuses     = ["Active", "Delinquent", "Suspended", "Closed"];
 
-    private List<BillingAccountRow> _accounts =
-    [
-        new(Guid.NewGuid(), "Acme Corp",               "Direct Bill", 12850.00m, 25000m, "Net 30", "ACH",          true,  "Active",     5, DateTime.Today.AddDays(-3)),
-        new(Guid.NewGuid(), "Green Valley LLC",         "Agency Bill",  4200.00m, 15000m, "Net 45", "Check",        false, "Active",     2, DateTime.Today.AddDays(-12)),
-        new(Guid.NewGuid(), "Harbor Logistics Inc.",    "Direct Bill",     0.00m, 50000m, "Net 30", "ACH",          true,  "Active",     8, DateTime.Today.AddDays(-1)),
-        new(Guid.NewGuid(), "Westside Properties",      "Direct Bill",  7540.00m, 10000m, "Net 15", "Credit Card",  false, "Delinquent", 3, DateTime.Today.AddDays(-47)),
-        new(Guid.NewGuid(), "Summit Tech Solutions",    "Agency Bill",  1890.00m, 20000m, "Net 30", "ACH",          true,  "Active",     4, DateTime.Today.AddDays(-8)),
-        new(Guid.NewGuid(), "Coastal Restaurants LLC",  "EFT",          9300.00m, 12000m, "Due on Receipt","EFT",  true,  "Delinquent", 1, DateTime.Today.AddDays(-60)),
-        new(Guid.NewGuid(), "Pioneer Manufacturing",    "Direct Bill",     0.00m, 75000m, "Net 60", "Wire Transfer",false, "Active",    11, DateTime.Today.AddDays(-5)),
-        new(Guid.NewGuid(), "Riverdale Medical Group",  "Agency Bill",  2100.00m, 30000m, "Net 30", "Check",        false, "Suspended",  6, DateTime.Today.AddDays(-90)),
-        new(Guid.NewGuid(), "Apex Distribution Co.",   "Direct Bill",     0.00m, 40000m, "Net 45", "ACH",          true,  "Active",     9, DateTime.Today.AddDays(-2)),
-        new(Guid.NewGuid(), "Bluewater Marine LLC",    "Direct Bill",  3750.00m, 18000m, "Net 30", "Credit Card",  true,  "Active",     2, DateTime.Today.AddDays(-15)),
-    ];
+    private List<BillingAccountDto> _accounts = [];
+    private List<AccountOption> _accountOptions = [];
 
-    private IEnumerable<BillingAccountRow> FilteredAccounts => _accounts.Where(a =>
-        (string.IsNullOrEmpty(_search)        || a.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
-        (string.IsNullOrEmpty(_filterMode)    || a.BillingMode == _filterMode) &&
-        (string.IsNullOrEmpty(_filterStatus)  || a.Status == _filterStatus) &&
-        (_filterAutopay switch { "yes" => a.AutopayEnrolled, "no" => !a.AutopayEnrolled, _ => true }));
+    private IEnumerable<BillingAccountDto> FilteredAccounts => _accounts.Where(a =>
+        (string.IsNullOrEmpty(_search)        || a.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || a.AccountNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || (a.DefaultPaymentMethodCode?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)) &&
+        (string.IsNullOrEmpty(_filterMode)    || a.BillingModeCode == _filterMode) &&
+        (string.IsNullOrEmpty(_filterStatus)  || a.StatusCode == _filterStatus) &&
+        (_filterAutopay switch { "yes" => a.AutopayEnrolled, "no" => !a.AutopayEnrolled, _ => true }) &&
+        (_kpiFilter switch
+        {
+            "balance" => a.BalanceAmount > 0,
+            "delinquent" => a.StatusCode == "Delinquent",
+            "autopay" => a.AutopayEnrolled,
+            "agency" => a.BillingModeCode == "Agency Bill",
+            "direct" => a.BillingModeCode == "Direct Bill",
+            "credit" => a.CreditLimit > 0,
+            "suspended" => a.StatusCode == "Suspended",
+            _ => true
+        }));
 
-    protected override void OnInitialized() =>
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Billing", ""), new("Accounts", ""));
-
-    void OnRowSelected(RowSelectEventArgs<BillingAccountRow> a) =>
-        Nav.NavigateTo($"/billing/accounts/{a.Data.Id}");
-
-    async Task CreateAccountAsync()
+    protected override async Task OnInitializedAsync()
     {
-        if (string.IsNullOrWhiteSpace(_newName)) return;
-        _accounts.Insert(0, new(Guid.NewGuid(), _newName, _newMode!, 0, _newCreditLimit, _newTerms!, _newMethod!, _newAutopay, "Active", 0, null));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Billing", ""), new("Accounts", ""));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loadError = null;
+        try
+        {
+            await Api.EnsureBillingAccountsSeedAsync(_tenantId);
+            var accounts = await Api.SearchBillingAccountsAsync(_tenantId, null, 1, 500);
+            _accounts = accounts?.Items?.ToList() ?? [];
+
+            var clientAccounts = await Api.SearchAccountsAsync(_tenantId);
+            _accountOptions = clientAccounts?.Items?
+                .Select(a => new AccountOption(a.AccountId, a.AccountName, a.AccountNumber))
+                .OrderBy(a => a.Name)
+                .ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Billing accounts failed to load: {ex.Message}";
+            _accounts = [];
+        }
+    }
+
+    void OnRowSelected(RowSelectEventArgs<BillingAccountDto> a) => OpenEdit(a.Data);
+
+    private void OpenCreate()
+    {
+        _editingId = Guid.Empty;
+        _formErrors.Clear();
+        _form = new();
+        if (_accountOptions.Count == 0 && _accounts.Count > 0)
+        {
+            _accountOptions = _accounts
+                .Select(a => new AccountOption(a.AccountId, a.AccountName, a.AccountNumber))
+                .OrderBy(a => a.Name)
+                .ToList();
+        }
+        _showCreate = true;
+    }
+
+    private void OpenEdit(BillingAccountDto item)
+    {
+        _editingId = item.AccountId;
+        _formErrors.Clear();
+        _form = new()
+        {
+            AccountId = item.AccountId,
+            BillingModeCode = item.BillingModeCode,
+            PaymentTermsCode = item.PaymentTermsCode,
+            DefaultPaymentMethodCode = item.DefaultPaymentMethodCode,
+            CreditLimit = item.CreditLimit,
+            AutopayEnrolled = item.AutopayEnrolled,
+            StatusCode = item.StatusCode,
+        };
+        if (!_accountOptions.Any(a => a.Id == item.AccountId))
+            _accountOptions.Insert(0, new(item.AccountId, item.AccountName, item.AccountNumber));
+        _showCreate = true;
+    }
+
+    private void CloseForm()
+    {
         _showCreate = false;
-        _newName = null; _newMode = "Direct Bill"; _newTerms = "Net 30"; _newMethod = "ACH"; _newCreditLimit = 10000; _newAutopay = false;
-        await _toast.ShowAsync(new ToastModel { Content = "Billing account created.", CssClass = "e-toast-success" });
+        _editingId = Guid.Empty;
+        _formErrors.Clear();
+    }
+
+    async Task SaveAccountAsync()
+    {
+        if (!ValidateForm()) return;
+
+        try
+        {
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateBillingAccountAsync(new()
+                {
+                    TenantId = _tenantId,
+                    AccountId = _form.AccountId,
+                    BillingModeCode = _form.BillingModeCode,
+                    PaymentTermsCode = _form.PaymentTermsCode,
+                    DefaultPaymentMethodCode = _form.DefaultPaymentMethodCode,
+                    CreditLimit = _form.CreditLimit,
+                    AutopayEnrolled = _form.AutopayEnrolled,
+                    StatusCode = _form.StatusCode,
+                });
+            }
+            else
+            {
+                await Api.UpdateBillingAccountAsync(_editingId, new()
+                {
+                    BillingModeCode = _form.BillingModeCode,
+                    PaymentTermsCode = _form.PaymentTermsCode,
+                    DefaultPaymentMethodCode = _form.DefaultPaymentMethodCode,
+                    CreditLimit = _form.CreditLimit,
+                    AutopayEnrolled = _form.AutopayEnrolled,
+                    StatusCode = _form.StatusCode,
+                });
+            }
+
+            _showCreate = false;
+            _editingId = Guid.Empty;
+            await _toast.ShowAsync(new ToastModel { Content = "Billing account saved.", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private void ConfirmDelete(BillingAccountDto item)
+    {
+        _deleteTarget = item;
+        _showDeleteConfirm = true;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+
+        try
+        {
+            await Api.DeleteBillingAccountAsync(_deleteTarget.AccountId);
+            _showDeleteConfirm = false;
+            _deleteTarget = null;
+            await _toast.ShowAsync(new ToastModel { Content = "Billing account deleted.", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    private void SetKpiFilter(string filter) => _kpiFilter = _kpiFilter == filter ? "all" : filter;
+
+    private string KpiClass(string filter) => $"ba-kpi {(_kpiFilter == filter ? "ba-kpi-active" : string.Empty)}";
+
+    private bool ValidateForm()
+    {
+        _formErrors.Clear();
+        var results = new List<ValidationResult>();
+        Validator.TryValidateObject(_form, new ValidationContext(_form), results, true);
+        if (_form.AccountId == Guid.Empty)
+            results.Add(new ValidationResult("Account is required.", [nameof(BillingAccountForm.AccountId)]));
+        foreach (var result in results)
+        {
+            var member = result.MemberNames.FirstOrDefault() ?? string.Empty;
+            if (!_formErrors.ContainsKey(member))
+                _formErrors[member] = result.ErrorMessage ?? "Invalid value.";
+        }
+        return _formErrors.Count == 0;
+    }
+
+    private RenderFragment FieldError(string fieldName) => builder =>
+    {
+        if (!_formErrors.TryGetValue(fieldName, out var error)) return;
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "text-danger");
+        builder.AddContent(2, error);
+        builder.CloseElement();
+    };
+
+    sealed record AccountOption(Guid Id, string Name, string Number)
+    {
+        public string Display => $"{Name} — {Number}";
     }
 
     static string Fmt(decimal v) => v.ToString("C0");
 
-    record BillingAccountRow(Guid Id, string Name, string BillingMode, decimal Balance, decimal CreditLimit,
-                             string Terms, string DefaultMethod, bool AutopayEnrolled, string Status,
-                             int PolicyCount, DateTime? LastPaymentDate);
+    sealed class BillingAccountForm
+    {
+        [Required]
+        public Guid AccountId { get; set; }
+        [Required, StringLength(50)]
+        public string BillingModeCode { get; set; } = "Direct Bill";
+        [Required, StringLength(50)]
+        public string PaymentTermsCode { get; set; } = "Net 30";
+        [Required, StringLength(50)]
+        public string DefaultPaymentMethodCode { get; set; } = "ACH";
+        [Range(0, 999999999999)]
+        public decimal CreditLimit { get; set; } = 10000;
+        public bool AutopayEnrolled { get; set; }
+        [Required, StringLength(50)]
+        public string StatusCode { get; set; } = "Active";
+    }
 }

@@ -7,8 +7,8 @@ namespace Ams.Web.Services;
 
 public sealed partial class ApiClient
 {
-    public Task<PagedResult<DocumentConfigItemDto>?> SearchDocumentConfigItemsAsync(Guid tenantId, string kind, string? searchTerm = null, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<DocumentConfigItemDto>>($"api/document-config?tenantId={tenantId}&kind={Uri.EscapeDataString(kind)}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", ct);
+    public Task<PagedResult<DocumentConfigItemDto>?> SearchDocumentConfigItemsAsync(Guid tenantId, string? kind = null, string? searchTerm = null, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<DocumentConfigItemDto>>($"api/document-config?tenantId={tenantId}&kind={Uri.EscapeDataString(kind ?? string.Empty)}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", ct);
 
     public async Task<Guid> CreateDocumentConfigItemAsync(CreateDocumentConfigItemRequest request, CancellationToken ct = default)
     {

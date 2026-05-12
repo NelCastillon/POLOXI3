@@ -20,4 +20,5 @@ public sealed class LeadDto
     public int StatusCode { get; set; }
     public Guid? AssignedToUserId { get; set; }
     public DateTime CreatedDateUtc { get; set; }
+    public DateTime? ModifiedDateUtc { get; set; }
 }

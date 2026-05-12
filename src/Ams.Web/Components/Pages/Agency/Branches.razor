@@ -102,11 +102,14 @@
                     <AppStatusBadge Status="@(e.IsActive ? "Active" : "Inactive")" Label="@(e.IsActive ? "Active" : "Inactive")" />
                 </Template>
             </GridColumn>
-            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+            <GridColumn HeaderText="" Width="120" TextAlign="TextAlign.Right">
                 <Template>
                     @{ var e = (BranchEntry)context; }
                     <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditDrawer(e)" title="Edit">
                         <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(e)" title="Delete">
+                        <i class="bi bi-trash" aria-hidden="true"></i>
                     </button>
                 </Template>
             </GridColumn>
@@ -120,21 +123,28 @@
                OnConfirm="SaveBranchAsync"
                OnClose="CloseDrawer">
     <Content>
+        <EditForm EditContext="_editContext" OnValidSubmit="SaveBranchAsync">
+            <DataAnnotationsValidator />
         <div class="br-form">
             <label class="br-form-label">Branch Code *</label>
-            <input class="um-input br-mono" @bind="_editModel.BranchCode" placeholder="e.g. HQ, WEST-01" />
+            <InputText class="um-input br-mono" @bind-Value="_editModel.BranchCode" placeholder="e.g. HQ, WEST-01" />
+            <ValidationMessage For="() => _editModel.BranchCode" class="text-danger" />
 
             <label class="br-form-label">Branch Name *</label>
-            <input class="um-input" @bind="_editModel.BranchName" placeholder="Full branch name" />
+            <InputText class="um-input" @bind-Value="_editModel.BranchName" placeholder="Full branch name" />
+            <ValidationMessage For="() => _editModel.BranchName" class="text-danger" />
 
             <label class="br-form-label">City</label>
-            <input class="um-input" @bind="_editModel.City" />
+            <InputText class="um-input" @bind-Value="_editModel.City" />
+            <ValidationMessage For="() => _editModel.City" class="text-danger" />
 
             <label class="br-form-label">State / Province</label>
-            <input class="um-input" @bind="_editModel.StateProvince" placeholder="e.g. CA, TX" />
+            <InputText class="um-input" @bind-Value="_editModel.StateProvince" placeholder="e.g. CA, TX" />
+            <ValidationMessage For="() => _editModel.StateProvince" class="text-danger" />
 
             <label class="br-form-label">Country Code</label>
-            <input class="um-input br-mono" @bind="_editModel.CountryCode" placeholder="e.g. US" />
+            <InputText class="um-input br-mono" @bind-Value="_editModel.CountryCode" placeholder="e.g. US" />
+            <ValidationMessage For="() => _editModel.CountryCode" class="text-danger" />
 
             @if (_editModel.BranchId != Guid.Empty)
             {
@@ -142,8 +152,27 @@
                 <SfSwitch @bind-Checked="_editModel.IsActive" />
             }
         </div>
+        </EditForm>
     </Content>
 </AppCrudDrawer>
+
+<SfDialog Width="420px" IsModal="true" ShowCloseIcon="false" Visible="_showDeleteDialog" CssClass="um-confirm-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
+                <div class="um-confirm-message">
+                    <h6>Delete branch?</h6>
+                    <p>This will remove <strong>@_deleteTarget?.BranchName</strong> from the active branch list.</p>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDeleteDialog = false">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="DeleteBranchAsync">Delete</button>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
 
 <SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
     <ToastPosition X="Right" Y="Bottom" />
@@ -167,6 +196,14 @@
     private int _activeCount = 0;
 
     private BranchEntry _editModel = new();
+    private EditContext _editContext = default!;
+    private bool _showDeleteDialog;
+    private BranchEntry? _deleteTarget;
+
+    public Branches()
+    {
+        _editContext = new EditContext(_editModel);
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -239,7 +276,7 @@
 
     private void OnRowSelected(RowSelectEventArgs<BranchEntry> args) => OpenEditDrawer(args.Data);
 
-    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
+    private void OpenAddDrawer()  { _editModel = new(); _editContext = new EditContext(_editModel); _showDrawer = true; }
     private void OpenEditDrawer(BranchEntry e)
     {
         _editModel = new BranchEntry
@@ -252,6 +289,7 @@
             CountryCode   = e.CountryCode,
             IsActive      = e.IsActive,
         };
+        _editContext = new EditContext(_editModel);
         _showDrawer = true;
     }
     private void CloseDrawer() => _showDrawer = false;
@@ -290,6 +328,30 @@
         }
     }
 
+    private void ConfirmDelete(BranchEntry entry)
+    {
+        _deleteTarget = entry;
+        _showDeleteDialog = true;
+    }
+
+    private async Task DeleteBranchAsync()
+    {
+        if (_deleteTarget is null)
+            return;
+
+        try
+        {
+            await Api.DeleteBranchAsync(_deleteTarget.BranchId);
+            _showDeleteDialog = false;
+            await LoadAsync();
+            await ShowToastAsync("Branch deleted.", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Delete failed: {ex.Message}", "e-toast-danger");
+        }
+    }
+
     private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
     {
         if (_toast is not null)
@@ -299,10 +361,15 @@
     private sealed class BranchEntry
     {
         public Guid    BranchId      { get; set; } = Guid.Empty;
+        [Required, StringLength(50)]
         public string  BranchCode    { get; set; } = string.Empty;
+        [Required, StringLength(200)]
         public string  BranchName    { get; set; } = string.Empty;
+        [StringLength(100)]
         public string? City          { get; set; }
+        [StringLength(100)]
         public string? StateProvince { get; set; }
+        [StringLength(10)]
         public string? CountryCode   { get; set; }
         public bool    IsActive      { get; set; } = true;
     }

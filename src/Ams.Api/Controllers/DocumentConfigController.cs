@@ -15,7 +15,7 @@ public sealed class DocumentConfigController : ControllerBase
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct) => (await _service.GetByIdAsync(id, ct)) is { } item ? Ok(item) : NotFound();
 
     [HttpGet]
-    public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string kind, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
+    public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? kind, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
         => Ok(await _service.SearchAsync(tenantId, kind, searchTerm, pageNumber, pageSize, ct));
 
     [HttpPost]

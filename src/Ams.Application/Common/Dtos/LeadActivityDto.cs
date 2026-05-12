@@ -6,6 +6,8 @@ public sealed class LeadActivityDto
     public Guid TenantId { get; set; }
     public Guid? LeadId { get; set; }
     public string? LeadName { get; set; }
+    public Guid? ProducerUserId { get; set; }
+    public string? ProducerName { get; set; }
     public Guid? OpportunityId { get; set; }
     public string? OpportunityName { get; set; }
     public string ActivityTypeCode { get; set; } = "Note";

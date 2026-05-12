@@ -34,13 +34,51 @@ public sealed class BranchRepository : IBranchRepository
     {
         const string sql = @"
 DECLARE @CompanyId UNIQUEIDENTIFIER = NULL;
+DECLARE @ResolvedCountryCode NVARCHAR(10) = NULLIF(@CountryCode, N'');
 DECLARE @InsertColumns NVARCHAR(MAX) = N'BranchId, TenantId, BranchCode, BranchName, City, StateProvince, CountryCode, IsActive, CreatedDateUtc, IsDeleted';
-DECLARE @InsertValues  NVARCHAR(MAX) = N'@BranchId, @TenantId, @BranchCode, @BranchName, @City, @StateProvince, @CountryCode, 1, SYSUTCDATETIME(), 0';
+DECLARE @InsertValues  NVARCHAR(MAX) = N'@BranchId, @TenantId, @BranchCode, @BranchName, @City, @StateProvince, @ResolvedCountryCode, 1, SYSUTCDATETIME(), 0';
+
+IF OBJECT_ID(N'Master.Country') IS NOT NULL
+BEGIN
+    EXEC sp_executesql
+        N'SELECT TOP (1) @CountryCodeOut = CountryCode FROM Master.Country WHERE UPPER(CountryCode) = UPPER(@RequestedCountryCode) ORDER BY CountryCode;',
+        N'@RequestedCountryCode NVARCHAR(10), @CountryCodeOut NVARCHAR(10) OUTPUT',
+        @ResolvedCountryCode,
+        @ResolvedCountryCode OUTPUT;
+
+    IF @ResolvedCountryCode IS NULL AND UPPER(COALESCE(@CountryCode, N'')) IN (N'US', N'USA', N'U.S.', N'UNITED STATES', N'UNITED STATES OF AMERICA')
+        EXEC sp_executesql
+            N'SELECT TOP (1) @CountryCodeOut = CountryCode FROM Master.Country WHERE UPPER(CountryCode) IN (N''US'', N''USA'', N''UNITED STATES'') ORDER BY CASE WHEN UPPER(CountryCode) = N''US'' THEN 0 WHEN UPPER(CountryCode) = N''USA'' THEN 1 ELSE 2 END, CountryCode;',
+            N'@CountryCodeOut NVARCHAR(10) OUTPUT',
+            @ResolvedCountryCode OUTPUT;
+
+    IF @ResolvedCountryCode IS NULL
+        EXEC sp_executesql
+            N'SELECT TOP (1) @CountryCodeOut = CountryCode FROM Master.Country ORDER BY CASE WHEN UPPER(CountryCode) IN (N''US'', N''USA'', N''UNITED STATES'') THEN 0 ELSE 1 END, CountryCode;',
+            N'@CountryCodeOut NVARCHAR(10) OUTPUT',
+            @ResolvedCountryCode OUTPUT;
+END
+ELSE
+BEGIN
+    SET @ResolvedCountryCode = COALESCE(@ResolvedCountryCode, N'US');
+END
 
 IF COL_LENGTH(N'Core.Branch', N'TimeZoneId') IS NOT NULL
 BEGIN
     SET @InsertColumns += N', TimeZoneId';
-    SET @InsertValues  += N', @TimeZoneId';
+    IF EXISTS (SELECT 1 FROM sys.columns c INNER JOIN sys.types t ON t.user_type_id = c.user_type_id WHERE c.object_id = OBJECT_ID(N'Core.Branch') AND c.name = N'TimeZoneId' AND t.name IN (N'int', N'smallint', N'tinyint', N'bigint'))
+        SET @InsertValues += N', @TimeZoneIdNumber';
+    ELSE
+        SET @InsertValues += N', @TimeZoneId';
+END
+
+IF COL_LENGTH(N'Core.Branch', N'TimeZoneCode') IS NOT NULL
+BEGIN
+    SET @InsertColumns += N', TimeZoneCode';
+    IF EXISTS (SELECT 1 FROM sys.columns c INNER JOIN sys.types t ON t.user_type_id = c.user_type_id WHERE c.object_id = OBJECT_ID(N'Core.Branch') AND c.name = N'TimeZoneCode' AND t.name IN (N'int', N'smallint', N'tinyint', N'bigint'))
+        SET @InsertValues += N', @TimeZoneIdNumber';
+    ELSE
+        SET @InsertValues += N', @TimeZoneId';
 END
 
 IF COL_LENGTH(N'Core.Branch', N'CompanyId') IS NOT NULL
@@ -67,8 +105,8 @@ END
 
 DECLARE @InsertSql NVARCHAR(MAX) = N'INSERT INTO Core.Branch (' + @InsertColumns + N') VALUES (' + @InsertValues + N');';
 EXEC sp_executesql @InsertSql,
-    N'@BranchId UNIQUEIDENTIFIER, @TenantId UNIQUEIDENTIFIER, @BranchCode NVARCHAR(50), @BranchName NVARCHAR(200), @City NVARCHAR(100), @StateProvince NVARCHAR(100), @CountryCode NVARCHAR(10), @TimeZoneId NVARCHAR(100), @CompanyId UNIQUEIDENTIFIER',
-    @BranchId, @TenantId, @BranchCode, @BranchName, @City, @StateProvince, @CountryCode, @TimeZoneId, @CompanyId;";
+    N'@BranchId UNIQUEIDENTIFIER, @TenantId UNIQUEIDENTIFIER, @BranchCode NVARCHAR(50), @BranchName NVARCHAR(200), @City NVARCHAR(100), @StateProvince NVARCHAR(100), @ResolvedCountryCode NVARCHAR(10), @TimeZoneId NVARCHAR(100), @TimeZoneIdNumber INT, @CompanyId UNIQUEIDENTIFIER',
+    @BranchId, @TenantId, @BranchCode, @BranchName, @City, @StateProvince, @ResolvedCountryCode, @TimeZoneId, @TimeZoneIdNumber, @CompanyId;";
         var id = Guid.NewGuid();
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
@@ -81,6 +119,7 @@ EXEC sp_executesql @InsertSql,
             request.StateProvince,
             CountryCode = request.CountryCode ?? string.Empty,
             TimeZoneId = "UTC",
+            TimeZoneIdNumber = 1,
         }, cancellationToken: cancellationToken));
         return id;
     }
@@ -88,12 +127,39 @@ EXEC sp_executesql @InsertSql,
     public async Task UpdateAsync(Guid id, UpdateBranchRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
+DECLARE @ResolvedCountryCode NVARCHAR(10) = NULLIF(@CountryCode, N'');
+
+IF OBJECT_ID(N'Master.Country') IS NOT NULL
+BEGIN
+    EXEC sp_executesql
+        N'SELECT TOP (1) @CountryCodeOut = CountryCode FROM Master.Country WHERE UPPER(CountryCode) = UPPER(@RequestedCountryCode) ORDER BY CountryCode;',
+        N'@RequestedCountryCode NVARCHAR(10), @CountryCodeOut NVARCHAR(10) OUTPUT',
+        @ResolvedCountryCode,
+        @ResolvedCountryCode OUTPUT;
+
+    IF @ResolvedCountryCode IS NULL AND UPPER(COALESCE(@CountryCode, N'')) IN (N'US', N'USA', N'U.S.', N'UNITED STATES', N'UNITED STATES OF AMERICA')
+        EXEC sp_executesql
+            N'SELECT TOP (1) @CountryCodeOut = CountryCode FROM Master.Country WHERE UPPER(CountryCode) IN (N''US'', N''USA'', N''UNITED STATES'') ORDER BY CASE WHEN UPPER(CountryCode) = N''US'' THEN 0 WHEN UPPER(CountryCode) = N''USA'' THEN 1 ELSE 2 END, CountryCode;',
+            N'@CountryCodeOut NVARCHAR(10) OUTPUT',
+            @ResolvedCountryCode OUTPUT;
+
+    IF @ResolvedCountryCode IS NULL
+        EXEC sp_executesql
+            N'SELECT TOP (1) @CountryCodeOut = CountryCode FROM Master.Country ORDER BY CASE WHEN UPPER(CountryCode) IN (N''US'', N''USA'', N''UNITED STATES'') THEN 0 ELSE 1 END, CountryCode;',
+            N'@CountryCodeOut NVARCHAR(10) OUTPUT',
+            @ResolvedCountryCode OUTPUT;
+END
+ELSE
+BEGIN
+    SET @ResolvedCountryCode = COALESCE(@ResolvedCountryCode, N'US');
+END
+
 UPDATE Core.Branch
 SET    BranchCode      = @BranchCode,
        BranchName      = @BranchName,
        City            = @City,
        StateProvince   = @StateProvince,
-       CountryCode     = @CountryCode,
+       CountryCode     = @ResolvedCountryCode,
        IsActive        = @IsActive,
        ModifiedDateUtc = GETUTCDATE()
 WHERE  BranchId = @Id AND IsDeleted = 0;";
@@ -108,5 +174,17 @@ WHERE  BranchId = @Id AND IsDeleted = 0;";
             CountryCode = request.CountryCode ?? string.Empty,
             request.IsActive,
         }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Core.Branch
+SET    IsDeleted       = 1,
+       ModifiedDateUtc = GETUTCDATE(),
+       IsActive        = 0
+WHERE  BranchId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }
 }

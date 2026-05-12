@@ -1,5 +1,10 @@
 @page "/billing/accounts/{BillingAccountId:guid}"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.BillingAccounts
+@using Ams.Application.Features.Payments
+@using System.ComponentModel.DataAnnotations
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -9,8 +14,8 @@
     <ToastPosition X="Right" Y="Bottom" />
 </SfToast>
 
-<AppPageHeader Title="@_account.Name"
-               Subtitle="@($"{_account.BillingMode} · {_account.Terms} · {_account.DefaultMethod} · {_account.PolicyCount} policies")"
+<AppPageHeader Title="@_account.AccountName"
+               Subtitle="@($"{_account.BillingModeCode} · {_account.PaymentTermsCode} · {_account.DefaultPaymentMethodCode} · {_account.PolicyCount} policies")"
                Icon="bi-building">
     <Actions>
         <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
@@ -30,13 +35,18 @@
 
 <!-- KPI strip -->
 <div class="bad-kpi-strip">
-    <div class="bad-kpi"><i class="bi bi-currency-dollar bad-ki red" aria-hidden="true"></i><div><div class="bad-kv">@_account.Balance.ToString("C2")</div><div class="bad-kl">Current Balance</div></div></div>
-    <div class="bad-kpi"><i class="bi bi-credit-card bad-ki blue" aria-hidden="true"></i><div><div class="bad-kv">@_account.CreditLimit.ToString("C2")</div><div class="bad-kl">Credit Limit</div></div></div>
-    <div class="bad-kpi"><i class="bi bi-receipt bad-ki blue" aria-hidden="true"></i><div><div class="bad-kv">@_invoices.Count</div><div class="bad-kl">Invoices</div></div></div>
-    <div class="bad-kpi"><i class="bi bi-cash-coin bad-ki green" aria-hidden="true"></i><div><div class="bad-kv">@_payments.Count</div><div class="bad-kl">Payments</div></div></div>
-    <div class="bad-kpi"><i class="bi bi-exclamation-circle bad-ki red" aria-hidden="true"></i><div><div class="bad-kv">@_invoices.Count(x=>x.Status=="Overdue")</div><div class="bad-kl">Overdue</div></div></div>
-    <div class="bad-kpi"><i class="bi @(_account.AutopayEnrolled ? "bi-check-circle" : "bi-circle") bad-ki @(_account.AutopayEnrolled ? "green" : "gray")" aria-hidden="true"></i><div><div class="bad-kv">@(_account.AutopayEnrolled ? "Yes" : "No")</div><div class="bad-kl">Autopay</div></div></div>
+    <button type="button" class="@KpiClass("balance")" @onclick='() => SetKpiFilter("balance")'><i class="bi bi-currency-dollar bad-ki red" aria-hidden="true"></i><div><div class="bad-kv">@_account.BalanceAmount.ToString("C2")</div><div class="bad-kl">Current Balance</div></div></button>
+    <button type="button" class="@KpiClass("credit")" @onclick='() => SetKpiFilter("credit")'><i class="bi bi-credit-card bad-ki blue" aria-hidden="true"></i><div><div class="bad-kv">@_account.CreditLimit.ToString("C2")</div><div class="bad-kl">Credit Limit</div></div></button>
+    <button type="button" class="@KpiClass("invoices")" @onclick='() => SetKpiFilter("invoices")'><i class="bi bi-receipt bad-ki blue" aria-hidden="true"></i><div><div class="bad-kv">@FilteredInvoices.Count()</div><div class="bad-kl">Invoices</div></div></button>
+    <button type="button" class="@KpiClass("payments")" @onclick='() => SetKpiFilter("payments")'><i class="bi bi-cash-coin bad-ki green" aria-hidden="true"></i><div><div class="bad-kv">@FilteredPayments.Count()</div><div class="bad-kl">Payments</div></div></button>
+    <button type="button" class="@KpiClass("overdue")" @onclick='() => SetKpiFilter("overdue")'><i class="bi bi-exclamation-circle bad-ki red" aria-hidden="true"></i><div><div class="bad-kv">@_invoices.Count(x=>x.Status=="Overdue")</div><div class="bad-kl">Overdue</div></div></button>
+    <button type="button" class="@KpiClass("autopay")" @onclick='() => SetKpiFilter("autopay")'><i class="bi @(_account.AutopayEnrolled ? "bi-check-circle" : "bi-circle") bad-ki @(_account.AutopayEnrolled ? "green" : "gray")" aria-hidden="true"></i><div><div class="bad-kv">@(_account.AutopayEnrolled ? "Yes" : "No")</div><div class="bad-kl">Autopay</div></div></button>
 </div>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger mx-4" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+}
 
 <div class="bad-layout">
     <!-- Left sidebar: account info -->
@@ -44,13 +54,13 @@
         <div class="bad-info-card">
             <div class="bad-ic-title"><i class="bi bi-info-circle" aria-hidden="true"></i> Account Info</div>
             <div class="bad-field"><span class="bad-fl">Billing Mode</span>
-                <span class="bad-mode-chip bad-m-@_account.BillingMode.ToLower().Replace(" ","-")">@_account.BillingMode</span>
+                <span class="bad-mode-chip bad-m-@_account.BillingModeCode.ToLower().Replace(" ","-")">@_account.BillingModeCode</span>
             </div>
-            <div class="bad-field"><span class="bad-fl">Terms</span><span>@_account.Terms</span></div>
-            <div class="bad-field"><span class="bad-fl">Default Method</span><span>@_account.DefaultMethod</span></div>
+            <div class="bad-field"><span class="bad-fl">Terms</span><span>@_account.PaymentTermsCode</span></div>
+            <div class="bad-field"><span class="bad-fl">Default Method</span><span>@_account.DefaultPaymentMethodCode</span></div>
             <div class="bad-field"><span class="bad-fl">Credit Limit</span><span>@_account.CreditLimit.ToString("C2")</span></div>
             <div class="bad-field"><span class="bad-fl">Status</span>
-                <span class="bad-status-chip bad-st-@_account.Status.ToLower()">@_account.Status</span>
+                <span class="bad-status-chip bad-st-@_account.StatusCode.ToLower()">@_account.StatusCode</span>
             </div>
             <div class="bad-field"><span class="bad-fl">Policies</span><span>@_account.PolicyCount</span></div>
             <div class="bad-field"><span class="bad-fl">Last Payment</span>
@@ -97,7 +107,7 @@
                                 <i class="bi bi-plus-circle" aria-hidden="true"></i> New Invoice
                             </button>
                         </div>
-                        <SfGrid DataSource="_invoices" AllowSorting="true" AllowPaging="true" Height="320px">
+                        <SfGrid DataSource="FilteredInvoices" AllowSorting="true" AllowPaging="true" Height="320px">
                             <GridPageSettings PageSize="10"></GridPageSettings>
                             <GridColumns>
                                 <GridColumn Field="@nameof(AccountInvoice.InvoiceNumber)" HeaderText="Invoice #" Width="140"></GridColumn>
@@ -124,7 +134,7 @@
                                 <i class="bi bi-plus-circle" aria-hidden="true"></i> Record Payment
                             </button>
                         </div>
-                        <SfGrid DataSource="_payments" AllowSorting="true" AllowPaging="true" Height="320px">
+                        <SfGrid DataSource="FilteredPayments" AllowSorting="true" AllowPaging="true" Height="320px">
                             <GridPageSettings PageSize="10"></GridPageSettings>
                             <GridColumns>
                                 <GridColumn Field="@nameof(AccountPayment.PaymentDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
@@ -187,24 +197,38 @@
 </div>
 
 <!-- Record Payment Dialog -->
-<SfDialog Width="480px" IsModal="true" @bind-Visible="_showPayment" Header="Record Payment" ShowCloseIcon="true">
+<SfDialog Width="480px" IsModal="true" @bind-Visible="_showPayment" ShowCloseIcon="false">
     <DialogTemplates>
         <Content>
+            <div class="um-modal-header">
+                <i class="bi bi-cash-coin" aria-hidden="true"></i>
+                <span>Record Payment</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showPayment = false"><i class="bi bi-x-lg"></i></button>
+            </div>
             <div class="bad-dlg-body">
+                @if (_paymentErrors.Count > 0)
+                {
+                    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">Please correct the validation errors below.</div>
+                }
                 <div class="form-group mb-2"><label class="bad-lbl">Amount</label>
-                    <SfNumericTextBox TValue="decimal" @bind-Value="_payAmount" Format="C2" Width="100%"></SfNumericTextBox>
+                    <SfNumericTextBox TValue="decimal" @bind-Value="_paymentForm.Amount" Format="C2" Width="100%"></SfNumericTextBox>
+                    @PaymentError(nameof(PaymentForm.Amount))
                 </div>
                 <div class="form-group mb-2"><label class="bad-lbl">Method</label>
-                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"ACH","Credit Card","Check","Wire Transfer","Cash"}' @bind-Value="_payMethod" Width="100%"></SfDropDownList>
+                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"ACH","Credit Card","Check","Wire Transfer","Cash"}' @bind-Value="_paymentForm.Method" Width="100%"></SfDropDownList>
+                    @PaymentError(nameof(PaymentForm.Method))
                 </div>
                 <div class="form-group mb-2"><label class="bad-lbl">Reference #</label>
-                    <SfTextBox @bind-Value="_payRef" Placeholder="Check #, ACH trace, etc."></SfTextBox>
+                    <SfTextBox @bind-Value="_paymentForm.Reference" Placeholder="Check #, ACH trace, etc."></SfTextBox>
+                    @PaymentError(nameof(PaymentForm.Reference))
                 </div>
                 <div class="form-group mb-2"><label class="bad-lbl">Payment Date</label>
-                    <SfDatePicker TValue="DateTime" @bind-Value="_payDate" Width="100%"></SfDatePicker>
+                    <SfDatePicker TValue="DateTime" @bind-Value="_paymentForm.PaymentDate" Width="100%"></SfDatePicker>
+                    @PaymentError(nameof(PaymentForm.PaymentDate))
                 </div>
                 <div class="form-group mb-2"><label class="bad-lbl">Notes</label>
-                    <SfTextBox @bind-Value="_payNotes" Multiline="true"></SfTextBox>
+                    <SfTextBox @bind-Value="_paymentForm.Notes" Multiline="true"></SfTextBox>
+                    @PaymentError(nameof(PaymentForm.Notes))
                 </div>
             </div>
         </Content>
@@ -219,16 +243,16 @@
     [Parameter] public Guid BillingAccountId { get; set; }
 
     private SfToast _toast = default!;
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private bool _showPayment, _showEdit;
-    private string? _payMethod = "ACH", _payRef, _payNotes;
-    private decimal _payAmount;
-    private DateTime _payDate = DateTime.Today;
+    private string _activeFilter = "all";
+    private string? _loadError;
+    private PaymentForm _paymentForm = new();
+    private readonly Dictionary<string, string> _paymentErrors = new();
 
-    // Seed account (in production, load by BillingAccountId)
-    private BillingAccountInfo _account = new(
-        "Acme Corp", "Direct Bill", 12850m, 25000m, "Net 30", "ACH", true, "Active", 5, DateTime.Today.AddDays(-3));
+    private BillingAccountDto _account = new() { AccountName = "Billing Account" };
 
-    private readonly List<AccountInvoice> _invoices =
+    private List<AccountInvoice> _invoices =
     [
         new("INV-2025-0041", 4500m, 4500m, "Overdue",  DateOnly.FromDateTime(DateTime.Today.AddDays(-15))),
         new("INV-2025-0038", 3200m, 3200m, "Overdue",  DateOnly.FromDateTime(DateTime.Today.AddDays(-45))),
@@ -237,20 +261,15 @@
         new("INV-2025-0044", 1000m, 1000m, "Open",     DateOnly.FromDateTime(DateTime.Today.AddDays(10))),
     ];
 
-    private readonly List<AccountPayment> _payments =
-    [
-        new(DateTime.Today.AddDays(-30), 5150m, "ACH",   "ACH-20250115-8842", "Cleared"),
-        new(DateTime.Today.AddDays(-60), 2800m, "Check", "CHK-10047",         "Cleared"),
-        new(DateTime.Today.AddDays(-5),  1500m, "ACH",   "ACH-20250210-5521", "Pending"),
-    ];
+    private List<AccountPayment> _payments = [];
 
-    private readonly List<AccountCredit> _credits =
+    private List<AccountCredit> _credits =
     [
         new(DateTime.Today.AddDays(-20), 250m,  "Premium Refund",  "Endorsed mid-term reduction",   "Applied"),
         new(DateTime.Today.AddDays(-90), 500m,  "Cancellation Ret.","90-day cancellation refund",   "Applied"),
     ];
 
-    private readonly List<ActivityEvent> _activity =
+    private List<ActivityEvent> _activity =
     [
         new("payment",  "Payment of $5,150 recorded via ACH",           DateTime.Now.AddDays(-30), "Lisa M."),
         new("invoice",  "Invoice INV-2025-0041 issued for $4,500",       DateTime.Now.AddDays(-20), "System"),
@@ -259,7 +278,7 @@
         new("autopay",  "Autopay enrollment confirmed via portal",        DateTime.Now.AddDays(-120), "Sarah C."),
     ];
 
-    private readonly List<(string Bucket, decimal Amount)> _aging =
+    private List<(string Bucket, decimal Amount)> _aging =
     [
         ("Current",    1000m),
         ("1–30 days",  4500m),
@@ -268,26 +287,141 @@
         ("90+ days",      0m),
     ];
 
-    protected override void OnInitialized() =>
+    private IEnumerable<AccountInvoice> FilteredInvoices => _activeFilter switch
+    {
+        "overdue" => _invoices.Where(i => i.Status == "Overdue"),
+        "balance" => _invoices.Where(i => i.Balance > 0),
+        "invoices" => _invoices,
+        _ => _invoices
+    };
+
+    private IEnumerable<AccountPayment> FilteredPayments => _activeFilter switch
+    {
+        "payments" => _payments,
+        _ => _payments
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Billing","/billing/accounts"), new("Account Detail",""));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loadError = null;
+        try
+        {
+            var accounts = await Api.SearchBillingAccountsAsync(_tenantId, null, 1, 500);
+            var account = accounts?.Items?.FirstOrDefault(a => a.AccountId == BillingAccountId);
+            if (account is not null)
+            {
+                _account = account;
+            }
+
+            var payments = await Api.SearchPaymentsAsync(_tenantId);
+            _payments = payments?.Items?
+                .Where(p => p.AccountId == BillingAccountId)
+                .OrderByDescending(p => p.PaymentDate)
+                .Select(p => new AccountPayment(p.PaymentDate, p.Amount, p.PaymentMethodCode, p.ReferenceNumber ?? "—", p.StatusCode))
+                .ToList() ?? [];
+
+            if (_payments.Count == 0)
+            {
+                _payments =
+                [
+                    new(DateTime.Today.AddDays(-30), 5150m, "ACH",   "ACH-20250115-8842", "Cleared"),
+                    new(DateTime.Today.AddDays(-60), 2800m, "Check", "CHK-10047",         "Cleared"),
+                    new(DateTime.Today.AddDays(-5),  1500m, "ACH",   "ACH-20250210-5521", "Pending"),
+                ];
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Billing account detail failed to load: {ex.Message}";
+        }
+    }
 
     async Task ToggleAutopay()
     {
-        _account = _account with { AutopayEnrolled = !_account.AutopayEnrolled };
-        await _toast.ShowAsync(new ToastModel
+        try
         {
-            Content   = _account.AutopayEnrolled ? "Autopay enrolled." : "Autopay removed.",
-            CssClass  = "e-toast-success"
-        });
+            await Api.UpdateBillingAccountAsync(BillingAccountId, new()
+            {
+                BillingModeCode = _account.BillingModeCode,
+                PaymentTermsCode = _account.PaymentTermsCode,
+                DefaultPaymentMethodCode = _account.DefaultPaymentMethodCode,
+                CreditLimit = _account.CreditLimit,
+                AutopayEnrolled = !_account.AutopayEnrolled,
+                StatusCode = _account.StatusCode,
+            });
+            _account.AutopayEnrolled = !_account.AutopayEnrolled;
+            await _toast.ShowAsync(new ToastModel
+            {
+                Content   = _account.AutopayEnrolled ? "Autopay enrolled." : "Autopay removed.",
+                CssClass  = "e-toast-success"
+            });
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = $"Autopay update failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
     }
 
     async Task RecordPaymentAsync()
     {
-        _payments.Insert(0, new(_payDate, _payAmount, _payMethod ?? "ACH", _payRef ?? "—", "Pending"));
-        _showPayment = false;
-        _payAmount   = 0; _payRef = _payNotes = null; _payDate = DateTime.Today;
-        await _toast.ShowAsync(new ToastModel { Content = "Payment recorded.", CssClass = "e-toast-success" });
+        if (!ValidatePayment()) return;
+
+        try
+        {
+            await Api.CreatePaymentAsync(new()
+            {
+                TenantId = _tenantId,
+                AccountId = BillingAccountId,
+                PaymentDate = _paymentForm.PaymentDate,
+                Amount = _paymentForm.Amount,
+                PaymentMethodCode = _paymentForm.Method,
+                ReferenceNumber = _paymentForm.Reference,
+                StatusCode = "Pending",
+                Notes = _paymentForm.Notes,
+            });
+            _showPayment = false;
+            _paymentForm = new();
+            await _toast.ShowAsync(new ToastModel { Content = "Payment recorded.", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = $"Record payment failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
     }
+
+    private void SetKpiFilter(string filter) => _activeFilter = _activeFilter == filter ? "all" : filter;
+
+    private string KpiClass(string filter) => $"bad-kpi {(_activeFilter == filter ? "bad-kpi-active" : string.Empty)}";
+
+    private bool ValidatePayment()
+    {
+        _paymentErrors.Clear();
+        var results = new List<ValidationResult>();
+        Validator.TryValidateObject(_paymentForm, new ValidationContext(_paymentForm), results, true);
+        foreach (var result in results)
+        {
+            var member = result.MemberNames.FirstOrDefault() ?? string.Empty;
+            if (!_paymentErrors.ContainsKey(member))
+                _paymentErrors[member] = result.ErrorMessage ?? "Invalid value.";
+        }
+        return _paymentErrors.Count == 0;
+    }
+
+    private RenderFragment PaymentError(string fieldName) => builder =>
+    {
+        if (!_paymentErrors.TryGetValue(fieldName, out var error)) return;
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "text-danger");
+        builder.AddContent(2, error);
+        builder.CloseElement();
+    };
 
     static double AgingPct(decimal amt)
     {
@@ -305,11 +439,17 @@
         _            => "#94a3b8"
     };
 
-    record BillingAccountInfo(string Name, string BillingMode, decimal Balance, decimal CreditLimit,
-                              string Terms, string DefaultMethod, bool AutopayEnrolled, string Status,
-                              int PolicyCount, DateTime? LastPaymentDate)
+    sealed class PaymentForm
     {
-        public bool AutopayEnrolled { get; set; } = AutopayEnrolled;
+        [Range(0.01, 999999999999)]
+        public decimal Amount { get; set; }
+        [Required, StringLength(50)]
+        public string Method { get; set; } = "ACH";
+        [StringLength(100)]
+        public string? Reference { get; set; }
+        public DateTime PaymentDate { get; set; } = DateTime.Today;
+        [StringLength(500)]
+        public string? Notes { get; set; }
     }
     record AccountInvoice(string InvoiceNumber, decimal Total, decimal Balance, string Status, DateOnly DueDate);
     record AccountPayment(DateTime PaymentDate, decimal Amount, string Method, string Reference, string Status);

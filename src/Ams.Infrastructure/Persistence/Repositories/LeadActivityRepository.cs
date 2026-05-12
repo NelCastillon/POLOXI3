@@ -17,6 +17,21 @@ public sealed class LeadActivityRepository : ILeadActivityRepository
 
     public async Task<Guid> CreateAsync(CreateLeadActivityRequest request, CancellationToken cancellationToken = default)
     {
+        if (!request.LeadId.HasValue && !request.OpportunityId.HasValue)
+        {
+            throw new InvalidOperationException("A lead or opportunity is required to log an activity.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ActivityTypeCode))
+        {
+            throw new InvalidOperationException("Activity type is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Subject))
+        {
+            throw new InvalidOperationException("Activity subject is required.");
+        }
+
         const string sql = @"
 INSERT INTO CRM.LeadActivity
 (
@@ -39,9 +54,9 @@ VALUES
             request.TenantId,
             request.LeadId,
             request.OpportunityId,
-            request.ActivityTypeCode,
-            request.Subject,
-            request.Notes,
+            ActivityTypeCode = request.ActivityTypeCode.Trim(),
+            Subject = request.Subject.Trim(),
+            Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
             request.ActivityDate,
             request.DurationMinutes,
             request.OutcomeCode,
@@ -51,16 +66,103 @@ VALUES
         return id;
     }
 
-    public async Task<LeadActivityDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    public async Task UpdateAsync(UpdateLeadActivityRequest request, CancellationToken cancellationToken = default)
+    {
+        if (!request.LeadId.HasValue && !request.OpportunityId.HasValue)
+        {
+            throw new InvalidOperationException("A lead or opportunity is required to update an activity.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ActivityTypeCode))
+        {
+            throw new InvalidOperationException("Activity type is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Subject))
+        {
+            throw new InvalidOperationException("Activity subject is required.");
+        }
+
+        const string sql = @"
+UPDATE CRM.LeadActivity
+SET LeadId = @LeadId,
+    OpportunityId = @OpportunityId,
+    ActivityTypeCode = @ActivityTypeCode,
+    Subject = @Subject,
+    Notes = @Notes,
+    ActivityDate = @ActivityDate,
+    DurationMinutes = @DurationMinutes,
+    OutcomeCode = @OutcomeCode,
+    IsCompleted = @IsCompleted,
+    ModifiedByUserId = @ModifiedByUserId,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE ActivityId = @ActivityId AND IsDeleted = 0;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            request.ActivityId,
+            request.LeadId,
+            request.OpportunityId,
+            ActivityTypeCode = request.ActivityTypeCode.Trim(),
+            Subject = request.Subject.Trim(),
+            Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
+            request.ActivityDate,
+            request.DurationMinutes,
+            request.OutcomeCode,
+            request.IsCompleted,
+            request.ModifiedByUserId
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE CRM.LeadActivity
+SET IsDeleted = 1,
+    ModifiedByUserId = @ModifiedByUserId,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE ActivityId = @Id AND IsDeleted = 0;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<LeadActivityDto>> GetByLeadIdAsync(Guid leadId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
 SELECT a.ActivityId, a.TenantId, a.LeadId,
        ISNULL(l.FirstName + ' ' + l.LastName, '') AS LeadName,
+       l.AssignedToUserId AS ProducerUserId,
+       COALESCE(u.DisplayName, u.FullName, u.Email, CONVERT(NVARCHAR(36), l.AssignedToUserId)) AS ProducerName,
        a.OpportunityId, o.OpportunityName,
        a.ActivityTypeCode, a.Subject, a.Notes, a.ActivityDate,
        a.DurationMinutes, a.OutcomeCode, a.IsCompleted, a.CreatedDateUtc
 FROM CRM.LeadActivity a
 LEFT JOIN CRM.Lead l ON l.LeadId = a.LeadId
+LEFT JOIN IAM.[User] u ON u.UserId = l.AssignedToUserId
+LEFT JOIN CRM.Opportunity o ON o.OpportunityId = a.OpportunityId
+WHERE a.LeadId = @LeadId AND a.IsDeleted = 0
+ORDER BY a.ActivityDate DESC, a.CreatedDateUtc DESC;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var items = await cn.QueryAsync<LeadActivityDto>(new CommandDefinition(sql, new { LeadId = leadId }, cancellationToken: cancellationToken));
+        return items.AsList();
+    }
+
+    public async Task<LeadActivityDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT a.ActivityId, a.TenantId, a.LeadId,
+       ISNULL(l.FirstName + ' ' + l.LastName, '') AS LeadName,
+       l.AssignedToUserId AS ProducerUserId,
+       COALESCE(u.DisplayName, u.FullName, u.Email, CONVERT(NVARCHAR(36), l.AssignedToUserId)) AS ProducerName,
+       a.OpportunityId, o.OpportunityName,
+       a.ActivityTypeCode, a.Subject, a.Notes, a.ActivityDate,
+       a.DurationMinutes, a.OutcomeCode, a.IsCompleted, a.CreatedDateUtc
+FROM CRM.LeadActivity a
+LEFT JOIN CRM.Lead l ON l.LeadId = a.LeadId
+LEFT JOIN IAM.[User] u ON u.UserId = l.AssignedToUserId
 LEFT JOIN CRM.Opportunity o ON o.OpportunityId = a.OpportunityId
 WHERE a.ActivityId = @Id AND a.IsDeleted = 0;";
 
@@ -75,11 +177,14 @@ WHERE a.ActivityId = @Id AND a.IsDeleted = 0;";
 ;WITH Paged AS (
     SELECT a.ActivityId, a.TenantId, a.LeadId,
            ISNULL(l.FirstName + ' ' + l.LastName, '') AS LeadName,
+           l.AssignedToUserId AS ProducerUserId,
+           COALESCE(u.DisplayName, u.FullName, u.Email, CONVERT(NVARCHAR(36), l.AssignedToUserId)) AS ProducerName,
            a.OpportunityId, o.OpportunityName,
            a.ActivityTypeCode, a.Subject, a.Notes, a.ActivityDate,
            a.DurationMinutes, a.OutcomeCode, a.IsCompleted, a.CreatedDateUtc
     FROM CRM.LeadActivity a
     LEFT JOIN CRM.Lead l ON l.LeadId = a.LeadId
+    LEFT JOIN IAM.[User] u ON u.UserId = l.AssignedToUserId
     LEFT JOIN CRM.Opportunity o ON o.OpportunityId = a.OpportunityId
     WHERE a.TenantId = @TenantId AND a.IsDeleted = 0
       AND (

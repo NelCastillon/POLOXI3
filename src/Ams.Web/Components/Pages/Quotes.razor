@@ -1,48 +1,334 @@
-﻿@page "/crm/quotes"
+@page "/crm/quotes"
+@page "/quotes/new"
+@page "/quotes/{QuoteId:guid}"
+@using Ams.Application.Features.Quotes
 @inject ApiClient Api
+@inject NavigationManager Nav
 
 <PageTitle>Quotes</PageTitle>
 
-<AppPageHeader Title="Quotes" Icon="bi-grid" />
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Quotes" Subtitle="Create, edit, and manage account quotes" Icon="bi-file-text">
+    <Actions>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Quote
+        </button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+    </Actions>
+</AppPageHeader>
 
 <div class="toolbar">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+    <SfTextBox Placeholder="Search quotes..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
+    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
 </div>
 
-@if (_items is null)
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+        @_loadError
+    </div>
+}
+
+@if (_loading && _items is null)
 {
     <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
 }
 else
 {
-    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridPageSettings PageSize="10"></GridPageSettings>
-        <GridColumns>
-            <GridColumn Field="@nameof(QuoteDto.QuoteNumber)" HeaderText="Quote #" Width="140"></GridColumn>
-            <GridColumn Field="@nameof(QuoteDto.AccountName)" HeaderText="Account" Width="200"></GridColumn>
-            <GridColumn Field="@nameof(QuoteDto.OpportunityName)" HeaderText="Opportunity" Width="200"></GridColumn>
-            <GridColumn Field="@nameof(QuoteDto.TotalAmount)" HeaderText="Total Amount" Format="C2" Width="140"></GridColumn>
-            <GridColumn Field="@nameof(QuoteDto.ValidUntilDate)" HeaderText="Valid Until" Type="ColumnType.DateTime" Format="d" Width="140"></GridColumn>
-            <GridColumn Field="@nameof(QuoteDto.StatusCode)" HeaderText="Status" Width="120"></GridColumn>
-            <GridColumn Field="@nameof(QuoteDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
-        </GridColumns>
-    </SfGrid>
+    <div class="app-datagrid">
+        <SfGrid TValue="QuoteDto" DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px" EnableHover="true">
+            <GridPageSettings PageSize="10"></GridPageSettings>
+            <GridColumns>
+                <GridColumn Field="@nameof(QuoteDto.QuoteNumber)" HeaderText="Quote #" Width="140"></GridColumn>
+                <GridColumn Field="@nameof(QuoteDto.AccountName)" HeaderText="Account" Width="200"></GridColumn>
+                <GridColumn Field="@nameof(QuoteDto.OpportunityName)" HeaderText="Opportunity" Width="200"></GridColumn>
+                <GridColumn Field="@nameof(QuoteDto.TotalAmount)" HeaderText="Total Amount" Format="C2" Width="140" TextAlign="TextAlign.Right"></GridColumn>
+                <GridColumn Field="@nameof(QuoteDto.ValidUntilDate)" HeaderText="Valid Until" Type="ColumnType.DateTime" Format="d" Width="140"></GridColumn>
+                <GridColumn Field="@nameof(QuoteDto.StatusCode)" HeaderText="Status" Width="120"></GridColumn>
+                <GridColumn Field="@nameof(QuoteDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
+                <GridColumn HeaderText="Actions" Width="140" TextAlign="TextAlign.Right">
+                    <Template>
+                        @{ var quote = (QuoteDto)context; }
+                        <button class="um-btn um-btn-ghost um-btn-sm" title="Edit" @onclick="() => OpenEdit(quote)">
+                            <i class="bi bi-pencil" aria-hidden="true"></i>
+                        </button>
+                        <button class="um-btn um-btn-ghost um-btn-sm" title="Delete" @onclick="() => ConfirmDelete(quote)">
+                            <i class="bi bi-trash" aria-hidden="true"></i>
+                        </button>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
 }
 
+<SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false">
+    <DialogTemplates>
+        <Content>
+            <div class="um-modal-header">
+                <i class="bi bi-file-text" aria-hidden="true"></i>
+                <span>@(_editingId == Guid.Empty ? "Create Quote" : "Edit Quote")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div>
+                            <label class="form-label">Quote Number</label>
+                            <InputText class="form-control" @bind-Value="_form.QuoteNumber" />
+                            <ValidationMessage For="() => _form.QuoteNumber" class="text-danger" />
+                        </div>
+                        <div>
+                            <label class="form-label">Account</label>
+                            <SfDropDownList TValue="Guid" TItem="AccountOption" DataSource="_accountOptions" @bind-Value="_form.AccountId" Placeholder="Select account" Width="100%">
+                                <DropDownListFieldSettings Value="AccountId" Text="AccountName" />
+                            </SfDropDownList>
+                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
+                        </div>
+                        <div>
+                            <label class="form-label">Opportunity</label>
+                            <SfDropDownList TValue="Guid?" TItem="OpportunityOption" DataSource="_opportunityOptions" @bind-Value="_form.OpportunityId" Placeholder="Optional" ShowClearButton="true" Width="100%">
+                                <DropDownListFieldSettings Value="OpportunityId" Text="OpportunityName" />
+                            </SfDropDownList>
+                            <ValidationMessage For="() => _form.OpportunityId" class="text-danger" />
+                        </div>
+                        <div>
+                            <label class="form-label">Status</label>
+                            <SfDropDownList TValue="string" TItem="LabelValue" DataSource="_statusOptions" @bind-Value="_form.StatusCode" Width="100%">
+                                <DropDownListFieldSettings Value="Value" Text="Label" />
+                            </SfDropDownList>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div>
+                            <label class="form-label">Total Amount</label>
+                            <SfNumericTextBox TValue="decimal" @bind-Value="_form.TotalAmount" Format="C2" Min="0" Width="100%" />
+                            <ValidationMessage For="() => _form.TotalAmount" class="text-danger" />
+                        </div>
+                        <div>
+                            <label class="form-label">Valid Until</label>
+                            <SfDatePicker TValue="DateTime?" @bind-Value="_form.ValidUntilDate" Width="100%" />
+                            <ValidationMessage For="() => _form.ValidUntilDate" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        <i class="bi bi-check-lg" aria-hidden="true"></i> Save
+                    </button>
+                </div>
+            </EditForm>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
+<SfDialog @bind-Visible="_showDelete" Width="420px" IsModal="true" ShowCloseIcon="false">
+    <DialogTemplates>
+        <Content>
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></div>
+                <h3>Delete quote?</h3>
+                <p>Delete quote <strong>@_deleteTarget?.QuoteNumber</strong>? This action cannot be undone.</p>
+                <div class="um-modal-footer">
+                    <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
+                    <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
 @code {
+    [Parameter] public Guid? QuoteId { get; set; }
+    [SupplyParameterFromQuery] public Guid? LeadId { get; set; }
+
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
     private string? _searchTerm;
+    private string? _loadError;
     private List<QuoteDto>? _items;
+    private List<AccountOption> _accountOptions = [];
+    private List<OpportunityOption> _opportunityOptions = [];
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private bool _showDelete;
+    private Guid _editingId = Guid.Empty;
+    private QuoteDto? _deleteTarget;
+    private QuoteForm _form = new();
+
+    private static readonly List<LabelValue> _statusOptions =
+    [
+        new("Draft", "Draft"),
+        new("Presented", "Presented"),
+        new("Accepted", "Accepted"),
+        new("Declined", "Declined"),
+        new("Expired", "Expired"),
+    ];
 
     protected override async Task OnInitializedAsync()
     {
         await LoadAsync();
+        if (QuoteId.HasValue)
+        {
+            var quote = await Api.GetQuoteByIdAsync(QuoteId.Value);
+            if (quote is not null)
+            {
+                OpenEdit(quote);
+            }
+        }
+        else if (Nav.Uri.Contains("/quotes/new", StringComparison.OrdinalIgnoreCase))
+        {
+            OpenCreate();
+        }
     }
 
     private async Task LoadAsync()
     {
-        var result = await Api.SearchQuotesAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? new List<QuoteDto>();
+        _loading = true;
+        try
+        {
+            _loadError = null;
+            var accounts = await Api.SearchAccountsAsync(_tenantId);
+            _accountOptions = (accounts?.Items ?? []).OrderBy(a => a.AccountName).Select(a => new AccountOption(a.AccountId, a.AccountName)).ToList();
+
+            var opportunities = await Api.SearchOpportunitiesAsync(_tenantId);
+            _opportunityOptions = (opportunities?.Items ?? []).OrderBy(o => o.OpportunityName).Select(o => new OpportunityOption(o.OpportunityId, o.OpportunityName)).ToList();
+
+            var result = await Api.SearchQuotesAsync(_tenantId, _searchTerm);
+            _items = result?.Items.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Error loading quotes: {ex.Message}";
+            await Toast(_loadError, "e-toast-danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
+
+    private void OpenCreate()
+    {
+        _editingId = Guid.Empty;
+        _form = new QuoteForm { QuoteNumber = $"QT-{DateTime.UtcNow:yyyyMMddHHmmss}", StatusCode = "Draft", ValidUntilDate = DateTime.UtcNow.AddDays(30) };
+        if (_accountOptions.Count == 1)
+        {
+            _form.AccountId = _accountOptions[0].AccountId;
+        }
+        _showForm = true;
+    }
+
+    private void OpenEdit(QuoteDto quote)
+    {
+        _editingId = quote.QuoteId;
+        _form = new QuoteForm
+        {
+            QuoteNumber = quote.QuoteNumber,
+            AccountId = quote.AccountId,
+            OpportunityId = quote.OpportunityId,
+            TotalAmount = quote.TotalAmount,
+            ValidUntilDate = quote.ValidUntilDate,
+            StatusCode = quote.StatusCode,
+        };
+        _showForm = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_form.AccountId == Guid.Empty)
+        {
+            await Toast("Account is required.", "e-toast-danger");
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateQuoteAsync(new CreateQuoteRequest { TenantId = _tenantId, QuoteNumber = _form.QuoteNumber, AccountId = _form.AccountId, OpportunityId = _form.OpportunityId, TotalAmount = _form.TotalAmount, ValidUntilDate = _form.ValidUntilDate, StatusCode = _form.StatusCode });
+                await Toast("Quote created.", "e-toast-success");
+            }
+            else
+            {
+                await Api.UpdateQuoteAsync(_editingId, new UpdateQuoteRequest { QuoteId = _editingId, TenantId = _tenantId, QuoteNumber = _form.QuoteNumber, AccountId = _form.AccountId, OpportunityId = _form.OpportunityId, TotalAmount = _form.TotalAmount, ValidUntilDate = _form.ValidUntilDate, StatusCode = _form.StatusCode });
+                await Toast("Quote updated.", "e-toast-success");
+            }
+
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await Toast($"Save failed: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDelete(QuoteDto quote)
+    {
+        _deleteTarget = quote;
+        _showDelete = true;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteQuoteAsync(_deleteTarget.QuoteId);
+            _showDelete = false;
+            await Toast("Quote deleted.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await Toast($"Delete failed: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task Toast(string msg, string css = "e-toast-info")
+    {
+        if (_toast is not null)
+            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = css });
+    }
+
+    private sealed class QuoteForm
+    {
+        [Required, StringLength(50)]
+        public string QuoteNumber { get; set; } = string.Empty;
+
+        [Required]
+        public Guid AccountId { get; set; }
+
+        public Guid? OpportunityId { get; set; }
+
+        [Range(0, 999999999999)]
+        public decimal TotalAmount { get; set; }
+
+        public DateTime? ValidUntilDate { get; set; }
+
+        [Required, StringLength(50)]
+        public string StatusCode { get; set; } = "Draft";
+    }
+
+    private sealed record AccountOption(Guid AccountId, string AccountName);
+    private sealed record OpportunityOption(Guid OpportunityId, string OpportunityName);
+    private sealed record LabelValue(string Value, string Label);
 }

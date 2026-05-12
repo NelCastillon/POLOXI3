@@ -13,4 +13,5 @@ public sealed class QuoteDto
     public DateTime? ValidUntilDate { get; set; }
     public string StatusCode { get; set; } = "Draft";
     public DateTime CreatedDateUtc { get; set; }
+    public DateTime? ModifiedDateUtc { get; set; }
 }

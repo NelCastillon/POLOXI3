@@ -10,4 +10,5 @@ public interface IBranchService
     Task<PagedResult<BranchDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
     Task<Guid> CreateAsync(CreateBranchRequest request, CancellationToken cancellationToken = default);
     Task UpdateAsync(Guid id, UpdateBranchRequest request, CancellationToken cancellationToken = default);
+    Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
 }

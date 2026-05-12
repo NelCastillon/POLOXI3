@@ -133,11 +133,14 @@
                                     Label="@(e.IsActive ? "Active" : "Inactive")" />
                 </Template>
             </GridColumn>
-            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+            <GridColumn HeaderText="" Width="120" TextAlign="TextAlign.Right">
                 <Template>
                     @{ var e = (TeamEntry)context; }
                     <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditDrawer(e)" title="Edit">
                         <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(e)" title="Delete">
+                        <i class="bi bi-trash" aria-hidden="true"></i>
                     </button>
                 </Template>
             </GridColumn>
@@ -151,24 +154,63 @@
                OnConfirm="SaveTeamAsync"
                OnClose="CloseDrawer">
     <Content>
+        <EditForm EditContext="_editContext" OnValidSubmit="SaveTeamAsync">
+            <DataAnnotationsValidator />
         <div class="dt-form">
             <label class="dt-form-label">Team Name *</label>
-            <input class="um-input" @bind="_editModel.TeamName" placeholder="Team name" />
+            <InputText class="um-input" @bind-Value="_editModel.TeamName" placeholder="Team name" />
+            <ValidationMessage For="() => _editModel.TeamName" class="text-danger" />
 
             <label class="dt-form-label">Team Code</label>
-            <input class="um-input dt-mono" @bind="_editModel.TeamCode" placeholder="Short code" />
+            <InputText class="um-input dt-mono" @bind-Value="_editModel.TeamCode" placeholder="Short code" />
+            <ValidationMessage For="() => _editModel.TeamCode" class="text-danger" />
 
             <label class="dt-form-label">Department</label>
-            <input class="um-input" @bind="_editModel.Department" placeholder="Department name" />
+            <SfDropDownList TValue="Guid?" TItem="DepartmentOption"
+                            DataSource="_departmentOptions"
+                            Placeholder="Select department"
+                            ShowClearButton="true"
+                            @bind-Value="_editModel.DepartmentId">
+                <DropDownListFieldSettings Value="DepartmentId" Text="DepartmentName" />
+            </SfDropDownList>
+            <ValidationMessage For="() => _editModel.DepartmentId" class="text-danger" />
+
+            <label class="dt-form-label">Description</label>
+            <InputTextArea class="um-input" @bind-Value="_editModel.Description" placeholder="Optional description" />
+            <ValidationMessage For="() => _editModel.Description" class="text-danger" />
 
             <label class="dt-form-label">Team Lead</label>
-            <input class="um-input" @bind="_editModel.TeamLead" placeholder="Full name" />
+            <InputText class="um-input" @bind-Value="_editModel.TeamLead" placeholder="Full name" />
+            <ValidationMessage For="() => _editModel.TeamLead" class="text-danger" />
+
+            <label class="dt-form-label">Team Type</label>
+            <InputText class="um-input" @bind-Value="_editModel.TeamType" placeholder="e.g. Service, Sales" />
+            <ValidationMessage For="() => _editModel.TeamType" class="text-danger" />
 
             <label class="dt-form-label">Active</label>
             <SfSwitch @bind-Checked="_editModel.IsActive" />
         </div>
+        </EditForm>
     </Content>
 </AppCrudDrawer>
+
+<SfDialog Width="420px" IsModal="true" ShowCloseIcon="false" Visible="_showDeleteDialog" CssClass="um-confirm-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
+                <div class="um-confirm-message">
+                    <h6>Delete team?</h6>
+                    <p>This will remove <strong>@_deleteTarget?.TeamName</strong> from the agency team list.</p>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDeleteDialog = false">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="DeleteTeamAsync">Delete</button>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
 
 <SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
     <ToastPosition X="Right" Y="Bottom" />
@@ -196,8 +238,17 @@
     private int _deptCount   = 0;
 
     private readonly List<LabelValue> _deptOptions = [];
+    private readonly List<DepartmentOption> _departmentOptions = [];
 
     private TeamEntry _editModel = new();
+    private EditContext _editContext = default!;
+    private bool _showDeleteDialog;
+    private TeamEntry? _deleteTarget;
+
+    public DepartmentsTeams()
+    {
+        _editContext = new EditContext(_editModel);
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -216,14 +267,24 @@
         try
         {
             _loadError = null;
+            var departments = await Api.GetDepartmentsAsync(_tenantId);
+            _departmentOptions.Clear();
+            _departmentOptions.AddRange((departments ?? [])
+                .Where(d => d.IsActive)
+                .OrderBy(d => d.DepartmentName)
+                .Select(d => new DepartmentOption(d.DepartmentId, d.DepartmentName)));
+
             var teams = await Api.GetTeamsAsync(_tenantId);
             _allEntries = teams?.Select(t => new TeamEntry
             {
                 TeamId = t.TeamId,
+                DepartmentId = t.DepartmentId,
                 TeamCode = t.TeamCode ?? string.Empty,
                 TeamName = t.TeamName,
+                Description = t.Description,
                 Department = t.DepartmentName ?? string.Empty,
                 TeamLead = t.ManagerName ?? string.Empty,
+                TeamType = string.Empty,
                 MemberCount = t.MemberCount,
                 IsActive = t.IsActive
             }).ToList() ?? [];
@@ -276,7 +337,7 @@
         _totalCount  = _allEntries.Count;
         _activeCount = _allEntries.Count(e => e.IsActive);
         _memberCount = _allEntries.Sum(e => e.MemberCount);
-        _deptCount   = _allEntries.Select(e => e.Department).Distinct().Count();
+        _deptCount   = _allEntries.Where(e => !string.IsNullOrWhiteSpace(e.Department)).Select(e => e.Department).Distinct().Count();
         _deptOptions.Clear();
         _deptOptions.AddRange(_allEntries
             .Where(e => !string.IsNullOrWhiteSpace(e.Department))
@@ -286,17 +347,67 @@
             .Select(x => new LabelValue(x, x)));
     }
 
-    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
-    private void OpenEditDrawer(TeamEntry e) { _editModel = new TeamEntry { TeamId = e.TeamId, TeamCode = e.TeamCode, TeamName = e.TeamName, Department = e.Department, TeamLead = e.TeamLead, MemberCount = e.MemberCount, IsActive = e.IsActive }; _showDrawer = true; }
+    private void OpenAddDrawer()  { _editModel = new(); _editContext = new EditContext(_editModel); _showDrawer = true; }
+    private void OpenEditDrawer(TeamEntry e) { _editModel = new TeamEntry { TeamId = e.TeamId, DepartmentId = e.DepartmentId, TeamCode = e.TeamCode, TeamName = e.TeamName, Description = e.Description, Department = e.Department, TeamLead = e.TeamLead, TeamType = e.TeamType, MemberCount = e.MemberCount, IsActive = e.IsActive }; _editContext = new EditContext(_editModel); _showDrawer = true; }
     private void CloseDrawer() => _showDrawer = false;
 
     private async Task SaveTeamAsync()
     {
-        // TODO: Api.SaveTeamAsync
-        await Task.Delay(0);
-        _showDrawer = false;
-        await LoadAsync();
-        await ShowToastAsync("Team saved.", "e-toast-success");
+        try
+        {
+            var departmentName = _departmentOptions.FirstOrDefault(d => d.DepartmentId == _editModel.DepartmentId)?.DepartmentName ?? _editModel.Department;
+            var team = new DepartmentTeamDto
+            {
+                TeamId = _editModel.TeamId,
+                TenantId = _tenantId,
+                TeamName = _editModel.TeamName,
+                TeamCode = _editModel.TeamCode,
+                Description = _editModel.Description,
+                DepartmentId = _editModel.DepartmentId,
+                DepartmentName = departmentName,
+                ManagerName = _editModel.TeamLead,
+                MemberCount = _editModel.MemberCount,
+                IsActive = _editModel.IsActive,
+                Status = _editModel.IsActive ? "Active" : "Inactive"
+            };
+
+            if (_editModel.TeamId == Guid.Empty)
+                await Api.CreateTeamAsync(team, _tenantId);
+            else
+                await Api.UpdateTeamAsync(_editModel.TeamId, team);
+
+            _showDrawer = false;
+            await LoadAsync();
+            await ShowToastAsync("Team saved.", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Save failed: {ex.Message}", "e-toast-danger");
+        }
+    }
+
+    private void ConfirmDelete(TeamEntry entry)
+    {
+        _deleteTarget = entry;
+        _showDeleteDialog = true;
+    }
+
+    private async Task DeleteTeamAsync()
+    {
+        if (_deleteTarget is null)
+            return;
+
+        try
+        {
+            await Api.DeleteTeamAsync(_deleteTarget.TeamId);
+            _showDeleteDialog = false;
+            await LoadAsync();
+            await ShowToastAsync("Team deleted.", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Delete failed: {ex.Message}", "e-toast-danger");
+        }
     }
 
     private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
@@ -306,14 +417,23 @@
     }
 
     private sealed record LabelValue(string Value, string Label);
+    private sealed record DepartmentOption(Guid DepartmentId, string DepartmentName);
 
     private sealed class TeamEntry
     {
-        public Guid   TeamId      { get; set; } = Guid.NewGuid();
+        public Guid   TeamId      { get; set; } = Guid.Empty;
+        public Guid?  DepartmentId { get; set; }
+        [StringLength(50)]
         public string TeamCode    { get; set; } = string.Empty;
+        [Required, StringLength(200)]
         public string TeamName    { get; set; } = string.Empty;
+        [StringLength(1000)]
+        public string? Description { get; set; }
         public string Department  { get; set; } = string.Empty;
+        [StringLength(200)]
         public string TeamLead    { get; set; } = string.Empty;
+        [StringLength(100)]
+        public string? TeamType    { get; set; }
         public int    MemberCount { get; set; }
         public bool   IsActive    { get; set; } = true;
     }

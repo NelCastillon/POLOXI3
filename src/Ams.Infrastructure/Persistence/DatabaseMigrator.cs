@@ -138,6 +138,9 @@ public sealed class DatabaseMigrator
         new("0105_CRM_PricingRules_CreateSeed", Migration0105_CrmPricingRulesCreateSeed),
         new("0106_CRM_PricingMarketRules_CreateSeed", Migration0106_CrmPricingMarketRulesCreateSeed),
         new("0107_AgencyProfile_CreateMissing", Migration0107_AgencyProfileCreateMissing),
+        new("0108_CRM_LeadDetailTabs_CreateSeed", Migration0108_CrmLeadDetailTabsCreateSeed),
+        new("0109_CRM_LeadActivity_SchemaSync", Migration0109_CrmLeadActivitySchemaSync),
+        new("0110_DocumentConfig_CreateSeed", Migration0110_DocumentConfigCreateSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -3405,6 +3408,122 @@ N'@TenantId UNIQUEIDENTIFIER, @AdminUserId UNIQUEIDENTIFIER',
 @TenantId=@TenantId, @AdminUserId=@AdminUserId;
 ";
 
+    private const string Migration0109_CrmLeadActivitySchemaSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.LeadActivity') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadActivity (
+        ActivityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadActivity PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LeadId UNIQUEIDENTIFIER NULL,
+        OpportunityId UNIQUEIDENTIFIER NULL,
+        ActivityTypeCode NVARCHAR(50) NOT NULL,
+        Subject NVARCHAR(200) NOT NULL,
+        Notes NVARCHAR(2000) NULL,
+        ActivityDate DATETIME2 NOT NULL CONSTRAINT DF_LeadActivity_ActivityDate DEFAULT SYSUTCDATETIME(),
+        DurationMinutes INT NULL,
+        OutcomeCode NVARCHAR(50) NULL,
+        IsCompleted BIT NOT NULL CONSTRAINT DF_LeadActivity_IsCompleted DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadActivity_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadActivity_IsDeleted DEFAULT 0
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'CRM.LeadActivity', N'TenantId') IS NULL ALTER TABLE CRM.LeadActivity ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_LeadActivity_TenantId_0109 DEFAULT '00000000-0000-0000-0000-000000000001';
+    IF COL_LENGTH(N'CRM.LeadActivity', N'LeadId') IS NULL ALTER TABLE CRM.LeadActivity ADD LeadId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.LeadActivity', N'OpportunityId') IS NULL ALTER TABLE CRM.LeadActivity ADD OpportunityId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.LeadActivity', N'ActivityTypeCode') IS NULL ALTER TABLE CRM.LeadActivity ADD ActivityTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadActivity_Type_0109 DEFAULT N'Note';
+    IF COL_LENGTH(N'CRM.LeadActivity', N'Subject') IS NULL ALTER TABLE CRM.LeadActivity ADD Subject NVARCHAR(200) NOT NULL CONSTRAINT DF_LeadActivity_Subject_0109 DEFAULT N'Activity';
+    IF COL_LENGTH(N'CRM.LeadActivity', N'Notes') IS NULL ALTER TABLE CRM.LeadActivity ADD Notes NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'CRM.LeadActivity', N'ActivityDate') IS NULL ALTER TABLE CRM.LeadActivity ADD ActivityDate DATETIME2 NOT NULL CONSTRAINT DF_LeadActivity_Date_0109 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'CRM.LeadActivity', N'DurationMinutes') IS NULL ALTER TABLE CRM.LeadActivity ADD DurationMinutes INT NULL;
+    IF COL_LENGTH(N'CRM.LeadActivity', N'OutcomeCode') IS NULL ALTER TABLE CRM.LeadActivity ADD OutcomeCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'CRM.LeadActivity', N'IsCompleted') IS NULL ALTER TABLE CRM.LeadActivity ADD IsCompleted BIT NOT NULL CONSTRAINT DF_LeadActivity_IsCompleted_0109 DEFAULT 0;
+    IF COL_LENGTH(N'CRM.LeadActivity', N'CreatedByUserId') IS NULL ALTER TABLE CRM.LeadActivity ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.LeadActivity', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.LeadActivity ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadActivity_CreatedDateUtc_0109 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'CRM.LeadActivity', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.LeadActivity ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'CRM.LeadActivity', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.LeadActivity ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.LeadActivity', N'IsDeleted') IS NULL ALTER TABLE CRM.LeadActivity ADD IsDeleted BIT NOT NULL CONSTRAINT DF_LeadActivity_IsDeleted_0109 DEFAULT 0;
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadActivity') AND name = N'IX_LeadActivity_Lead')
+    CREATE INDEX IX_LeadActivity_Lead ON CRM.LeadActivity(LeadId, IsDeleted, ActivityDate DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadActivity') AND name = N'IX_LeadActivity_Tenant')
+    CREATE INDEX IX_LeadActivity_Tenant ON CRM.LeadActivity(TenantId, IsDeleted, CreatedDateUtc DESC);
+";
+
+    private const string Migration0110_DocumentConfigCreateSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Documents') EXEC(N'CREATE SCHEMA Documents');
+
+IF OBJECT_ID(N'Documents.DocumentConfigItem') IS NULL
+BEGIN
+    CREATE TABLE Documents.DocumentConfigItem
+    (
+        DocumentConfigItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DocumentConfigItem PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        Kind NVARCHAR(80) NOT NULL,
+        Code NVARCHAR(80) NOT NULL,
+        Name NVARCHAR(200) NOT NULL,
+        Category NVARCHAR(120) NULL,
+        Description NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(4000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_DocumentConfigItem_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_DocumentConfigItem_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentConfigItem_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentConfigItem_IsDeleted DEFAULT 0
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'TenantId') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_DocumentConfigItem_TenantId_0110 DEFAULT '00000000-0000-0000-0000-000000000001';
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'Kind') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD Kind NVARCHAR(80) NOT NULL CONSTRAINT DF_DocumentConfigItem_Kind_0110 DEFAULT N'DocumentCategory';
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'Code') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD Code NVARCHAR(80) NOT NULL CONSTRAINT DF_DocumentConfigItem_Code_0110 DEFAULT N'DOC';
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'Name') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD Name NVARCHAR(200) NOT NULL CONSTRAINT DF_DocumentConfigItem_Name_0110 DEFAULT N'Document Config';
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'Category') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD Category NVARCHAR(120) NULL;
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'Description') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD Description NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'ConfigurationJson') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD ConfigurationJson NVARCHAR(4000) NULL;
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'IsActive') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD IsActive BIT NOT NULL CONSTRAINT DF_DocumentConfigItem_IsActive_0110 DEFAULT 1;
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'SortOrder') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD SortOrder INT NOT NULL CONSTRAINT DF_DocumentConfigItem_SortOrder_0110 DEFAULT 0;
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'CreatedDateUtc') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentConfigItem_CreatedDateUtc_0110 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'ModifiedDateUtc') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'CreatedByUserId') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'ModifiedByUserId') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Documents.DocumentConfigItem', N'IsDeleted') IS NULL ALTER TABLE Documents.DocumentConfigItem ADD IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentConfigItem_IsDeleted_0110 DEFAULT 0;
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Documents.DocumentConfigItem') AND name = N'IX_DocumentConfigItem_TenantKind')
+    CREATE INDEX IX_DocumentConfigItem_TenantKind ON Documents.DocumentConfigItem(TenantId, Kind, IsDeleted, SortOrder, Name);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+
+IF NOT EXISTS (SELECT 1 FROM Documents.DocumentConfigItem WHERE TenantId=@TenantId AND IsDeleted=0)
+BEGIN
+    INSERT INTO Documents.DocumentConfigItem (DocumentConfigItemId,TenantId,Kind,Code,Name,Category,Description,ConfigurationJson,IsActive,SortOrder,CreatedDateUtc,IsDeleted)
+    VALUES
+    (NEWID(),@TenantId,N'DocumentCategory',N'COMMERCIAL',N'Commercial Lines',N'Operations',N'Commercial policy, quote, submission, and renewal documents.',N'{""requiresIndexing"":true,""access"":""Producer,CSR""}',1,10,SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'DocumentCategory',N'CLAIMS',N'Claims Documents',N'Claims',N'Loss notices, adjuster correspondence, photos, and claim forms.',N'{""legalHoldEligible"":true}',1,20,SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'DocumentCategory',N'COMPLIANCE',N'Compliance Records',N'Governance',N'Compliance acknowledgements, audit evidence, and regulatory materials.',N'{""retentionYears"":7}',1,30,SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'DocumentTemplate',N'RENEWAL_PROP',N'Renewal Proposal',N'Templates',N'Renewal proposal template with account and policy merge fields.',N'{""version"":""7"",""approvalRequired"":true}',1,10,SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'DocumentTemplate',N'CERT_COVER',N'Certificate Cover Letter',N'Templates',N'Certificate delivery cover letter template.',N'{""version"":""2""}',1,20,SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'AcordForm',N'ACORD_125',N'ACORD 125 Commercial Application',N'Forms',N'Commercial insurance application with account prefill mapping.',N'{""mapped"":true,""prefill"":""Account""}',1,10,SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'AcordForm',N'ACORD_140',N'ACORD 140 Property Section',N'Forms',N'Property section mapped to location and building schedules.',N'{""mapped"":true,""prefill"":""Locations""}',1,20,SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'ESignTemplate',N'BOR_ESIGN',N'Broker of Record E-Sign',N'Signing',N'Signer routing for broker-of-record letters.',N'{""roles"":[""NamedInsured"",""Producer""]}',1,10,SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'PacketTemplate',N'POLICY_PACKET',N'Commercial Policy Packet',N'Packets',N'Policy packet assembled by line of business and required notices.',N'{""conditionalInclusions"":true}',1,10,SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'OcrIndexingRule',N'CARRIER_DEC',N'Carrier Declaration OCR',N'OCR',N'Extract carrier, policy number, dates, premium, and named insured.',N'{""confidenceThreshold"":0.86}',1,10,SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'RetentionRule',N'CLAIMS_7YR',N'Claims Seven Year Retention',N'Governance',N'Retain claim documents for seven years after closure unless on legal hold.',N'{""years"":7,""legalHold"":true}',1,10,SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'StorageSetting',N'PRIMARY_STORE',N'Primary Document Storage',N'Storage',N'Primary encrypted document storage configuration.',N'{""provider"":""AzureBlob"",""usagePercent"":74}',1,10,SYSUTCDATETIME(),0);
+END
+";
+
     private const string Migration0107_AgencyProfileCreateMissing = @"
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency')
     EXEC(N'CREATE SCHEMA Agency');
@@ -3480,5 +3599,156 @@ BEGIN
     FROM Core.Tenant
     WHERE TenantId = @TenantId AND IsDeleted = 0;
 END
+";
+
+    private const string Migration0108_CrmLeadDetailTabsCreateSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF COL_LENGTH(N'CRM.Lead', N'SourceCode') IS NULL ALTER TABLE CRM.Lead ADD SourceCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'CRM.Lead', N'NurturingStageCode') IS NULL ALTER TABLE CRM.Lead ADD NurturingStageCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'CRM.Lead', N'QualifiedDate') IS NULL ALTER TABLE CRM.Lead ADD QualifiedDate DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.Lead', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.Lead ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.Lead', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.Lead ADD ModifiedDateUtc DATETIME2 NULL;
+
+IF OBJECT_ID(N'CRM.LeadContact') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadContact (
+        ContactId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadContact PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LeadId UNIQUEIDENTIFIER NOT NULL,
+        FirstName NVARCHAR(150) NOT NULL,
+        LastName NVARCHAR(150) NOT NULL,
+        Title NVARCHAR(200) NULL,
+        Email NVARCHAR(300) NULL,
+        Phone NVARCHAR(50) NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_LeadContact_IsPrimary DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadContact_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadContact_IsDeleted DEFAULT 0
+    );
+END
+
+IF OBJECT_ID(N'CRM.LeadInterestLine') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadInterestLine (
+        InterestLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadInterestLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LeadId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        Carrier NVARCHAR(200) NULL,
+        CurrentCarrier NVARCHAR(200) NULL,
+        EstPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_LeadInterestLine_EstPremium DEFAULT 0,
+        ExpiryDate DATETIME2 NULL,
+        Priority NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadInterestLine_Priority DEFAULT N'Medium',
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadInterestLine_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadInterestLine_IsDeleted DEFAULT 0
+    );
+END
+
+IF OBJECT_ID(N'CRM.LeadCommunication') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadCommunication (
+        CommunicationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadCommunication PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LeadId UNIQUEIDENTIFIER NOT NULL,
+        Channel NVARCHAR(50) NOT NULL,
+        Subject NVARCHAR(200) NOT NULL,
+        Preview NVARCHAR(2000) NOT NULL,
+        SentByUserId UNIQUEIDENTIFIER NULL,
+        SentAt DATETIME2 NOT NULL CONSTRAINT DF_LeadCommunication_SentAt DEFAULT SYSUTCDATETIME(),
+        Opened BIT NOT NULL CONSTRAINT DF_LeadCommunication_Opened DEFAULT 0,
+        Clicked BIT NOT NULL CONSTRAINT DF_LeadCommunication_Clicked DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadCommunication_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadCommunication_IsDeleted DEFAULT 0
+    );
+END
+
+IF OBJECT_ID(N'CRM.LeadCampaignEnrollment') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadCampaignEnrollment (
+        EnrollmentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadCampaignEnrollment PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LeadId UNIQUEIDENTIFIER NOT NULL,
+        CampaignName NVARCHAR(200) NOT NULL,
+        Status NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_Status DEFAULT N'Active',
+        EnrolledAt DATETIME2 NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_EnrolledAt DEFAULT SYSUTCDATETIME(),
+        EmailsSent INT NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_EmailsSent DEFAULT 0,
+        EmailsOpen INT NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_EmailsOpen DEFAULT 0,
+        Clicks INT NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_Clicks DEFAULT 0,
+        LastTouch DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadCampaignEnrollment_IsDeleted DEFAULT 0
+    );
+END
+
+IF OBJECT_ID(N'CRM.LeadDocument') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadDocument (
+        DocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadDocument PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LeadId UNIQUEIDENTIFIER NOT NULL,
+        FileName NVARCHAR(260) NOT NULL,
+        Extension NVARCHAR(20) NOT NULL,
+        Category NVARCHAR(100) NOT NULL,
+        SizeKb INT NOT NULL CONSTRAINT DF_LeadDocument_SizeKb DEFAULT 0,
+        UploadedByUserId UNIQUEIDENTIFIER NULL,
+        UploadedAt DATETIME2 NOT NULL CONSTRAINT DF_LeadDocument_UploadedAt DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadDocument_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadDocument_IsDeleted DEFAULT 0
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadContact') AND name = N'IX_LeadContact_Lead') CREATE INDEX IX_LeadContact_Lead ON CRM.LeadContact(LeadId, IsDeleted);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadInterestLine') AND name = N'IX_LeadInterestLine_Lead') CREATE INDEX IX_LeadInterestLine_Lead ON CRM.LeadInterestLine(LeadId, IsDeleted);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadCommunication') AND name = N'IX_LeadCommunication_Lead') CREATE INDEX IX_LeadCommunication_Lead ON CRM.LeadCommunication(LeadId, IsDeleted, SentAt DESC);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadCampaignEnrollment') AND name = N'IX_LeadCampaignEnrollment_Lead') CREATE INDEX IX_LeadCampaignEnrollment_Lead ON CRM.LeadCampaignEnrollment(LeadId, IsDeleted);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadDocument') AND name = N'IX_LeadDocument_Lead') CREATE INDEX IX_LeadDocument_Lead ON CRM.LeadDocument(LeadId, IsDeleted, UploadedAt DESC);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @AdminUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc);
+DECLARE @LeadId UNIQUEIDENTIFIER = 'c1000000-0000-0000-0000-000000000002';
+
+IF NOT EXISTS (SELECT 1 FROM CRM.Lead WHERE LeadId = @LeadId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO CRM.Lead (LeadId,TenantId,LeadNumber,AccountName,FirstName,LastName,Email,Phone,InterestedService,Score,PriorityCode,SourceCode,NurturingStageCode,AssignedToUserId,StatusCodeId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+    VALUES (@LeadId,@TenantId,N'LD-DETAIL-002',N'Contoso Insurance Prospect',N'Tenant Admin',N'User',N'tenant.admin@example.com',N'(555) 010-0002',N'Commercial Package',82,N'High',N'Referral',N'Qualified',@AdminUserId,3,SYSUTCDATETIME(),@AdminUserId,0);
+END
+
+UPDATE CRM.Lead
+SET SourceCode = COALESCE(SourceCode, N'Referral'),
+    NurturingStageCode = COALESCE(NurturingStageCode, N'Qualified'),
+    AssignedToUserId = COALESCE(AssignedToUserId, @AdminUserId),
+    ModifiedDateUtc = COALESCE(ModifiedDateUtc, SYSUTCDATETIME())
+WHERE LeadId = @LeadId AND IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM CRM.LeadContact WHERE LeadId = @LeadId AND IsDeleted = 0)
+    INSERT INTO CRM.LeadContact (TenantId,LeadId,FirstName,LastName,Title,Email,Phone,IsPrimary,CreatedByUserId) VALUES (@TenantId,@LeadId,N'Tenant',N'Admin',N'Administrator',N'tenant.admin@example.com',N'(555) 010-0002',1,@AdminUserId);
+
+IF NOT EXISTS (SELECT 1 FROM CRM.LeadInterestLine WHERE LeadId = @LeadId AND IsDeleted = 0)
+    INSERT INTO CRM.LeadInterestLine (TenantId,LeadId,LineOfBusiness,Carrier,CurrentCarrier,EstPremium,ExpiryDate,Priority,Notes,CreatedByUserId) VALUES (@TenantId,@LeadId,N'Commercial Property',N'Travelers',N'Current Market',25000,DATEADD(day,45,SYSUTCDATETIME()),N'High',N'Synced from existing lead interest.',@AdminUserId);
+
+IF NOT EXISTS (SELECT 1 FROM CRM.LeadCommunication WHERE LeadId = @LeadId AND IsDeleted = 0)
+    INSERT INTO CRM.LeadCommunication (TenantId,LeadId,Channel,Subject,Preview,SentByUserId,SentAt,Opened,Clicked,CreatedByUserId) VALUES (@TenantId,@LeadId,N'Email',N'Initial qualification follow-up',N'Confirmed coverage needs and requested supporting documents.',@AdminUserId,DATEADD(day,-2,SYSUTCDATETIME()),1,0,@AdminUserId);
+
+IF NOT EXISTS (SELECT 1 FROM CRM.LeadCampaignEnrollment WHERE LeadId = @LeadId AND IsDeleted = 0)
+    INSERT INTO CRM.LeadCampaignEnrollment (TenantId,LeadId,CampaignName,Status,EnrolledAt,EmailsSent,EmailsOpen,Clicks,LastTouch,CreatedByUserId) VALUES (@TenantId,@LeadId,N'New Business Referral Series',N'Active',DATEADD(day,-5,SYSUTCDATETIME()),2,1,0,DATEADD(day,-2,SYSUTCDATETIME()),@AdminUserId);
+
+IF NOT EXISTS (SELECT 1 FROM CRM.LeadDocument WHERE LeadId = @LeadId AND IsDeleted = 0)
+    INSERT INTO CRM.LeadDocument (TenantId,LeadId,FileName,Extension,Category,SizeKb,UploadedByUserId,UploadedAt,CreatedByUserId) VALUES (@TenantId,@LeadId,N'intake-summary.pdf',N'.pdf',N'Application',128,@AdminUserId,DATEADD(day,-1,SYSUTCDATETIME()),@AdminUserId);
 ";
 }

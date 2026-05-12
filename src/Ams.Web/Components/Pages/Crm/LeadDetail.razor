@@ -825,7 +825,7 @@ else
             <div class="ldd-dlg-footer">
                 <button class="um-btn um-btn-ghost" @onclick="() => _showAddContact = false">Cancel</button>
                 <button class="um-btn um-btn-primary" @onclick="CommitAddContactAsync"
-                        disabled="@(string.IsNullOrEmpty(_newContact.FirstName))">
+                        disabled="@(string.IsNullOrWhiteSpace(_newContact.FirstName) || string.IsNullOrWhiteSpace(_newContact.LastName))">
                     <i class="bi bi-check-lg" aria-hidden="true"></i> Add
                 </button>
             </div>
@@ -977,12 +977,7 @@ else
     private CommRow _newComm = new();
 
     // ── Static options ────────────────────────────────────────────────────────
-    private static readonly List<LabelValue> _ownerOptions =
-    [
-        new("Alice Carter","Alice Carter"), new("Bob Martinez","Bob Martinez"),
-        new("Carol Smith","Carol Smith"),   new("David Lee","David Lee"),
-        new("Eva Johnson","Eva Johnson"),
-    ];
+    private List<LabelValue> _ownerOptions = [];
     private static readonly List<LabelValue> _campaignOptions =
     [
         new("c1","Q3 Commercial BOP Drip"),
@@ -1035,16 +1030,18 @@ else
                 return;
             }
 
-            var owner = await ResolveOwnerNameAsync(dto.TenantId, dto.AssignedToUserId);
-            _lead = MapToLeadDetail(dto, owner);
+            var users = await Api.SearchUsersAsync(dto.TenantId, pageSize: 250);
+            _ownerOptions = (users?.Items ?? [])
+                .Where(u => string.Equals(u.StatusCode, "Active", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(u => string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName)
+                .Select(u => new LabelValue(u.UserId.ToString(), string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName))
+                .ToList();
 
-            _contacts      = [];
-            _interestLines = [];
-            _activities    = [];
-            _quotes        = [];
-            _documents     = [];
-            _comms         = [];
-            _campaigns     = [];
+            var owner = ResolveOwnerName(dto.AssignedToUserId);
+            _lead = MapToLeadDetail(dto, owner);
+            _assignTarget = dto.AssignedToUserId?.ToString() ?? string.Empty;
+
+            await LoadTabDataAsync(dto.TenantId);
 
             BuildRightPanel();
             await LoadNbaAsync();
@@ -1064,18 +1061,33 @@ else
         finally { _loading = false; }
     }
 
-    private async Task<string> ResolveOwnerNameAsync(Guid tenantId, Guid? assignedToUserId)
+    private string ResolveOwnerName(Guid? assignedToUserId)
     {
         if (!assignedToUserId.HasValue)
         {
             return "Unassigned";
         }
 
-        var users = await Api.SearchUsersAsync(tenantId);
-        var user = users?.Items.FirstOrDefault(u => u.UserId == assignedToUserId.Value);
-        return user is null
-            ? "Unassigned"
-            : string.IsNullOrWhiteSpace(user.DisplayName) ? user.FullName : user.DisplayName;
+        return _ownerOptions.FirstOrDefault(o => o.Value == assignedToUserId.Value.ToString())?.Label ?? "Unassigned";
+    }
+
+    private async Task LoadTabDataAsync(Guid tenantId)
+    {
+        var contacts = await Api.GetLeadContactsAsync(LeadId);
+        var interests = await Api.GetLeadInterestLinesAsync(LeadId);
+        var activities = await Api.GetLeadActivitiesByLeadIdAsync(LeadId);
+        var quotes = await Api.SearchQuotesAsync(tenantId);
+        var documents = await Api.GetLeadDocumentsAsync(LeadId);
+        var comms = await Api.GetLeadCommunicationsAsync(LeadId);
+        var campaigns = await Api.GetLeadCampaignsAsync(LeadId);
+
+        _contacts = (contacts ?? []).Select(ContactRow.FromDto).ToList();
+        _interestLines = (interests ?? []).Select(InterestLine.FromDto).ToList();
+        _activities = (activities ?? []).Select(ActivityRow.FromDto).ToList();
+        _quotes = (quotes?.Items ?? []).Where(q => q.OpportunityId.HasValue || q.AccountName == _lead?.CompanyName).Select(QuoteRow.FromDto).ToList();
+        _documents = (documents ?? []).Select(DocRow.FromDto).ToList();
+        _comms = (comms ?? []).Select(CommRow.FromDto).ToList();
+        _campaigns = (campaigns ?? []).Select(CampaignEnrollment.FromDto).ToList();
     }
 
     private static LeadDetailModel MapToLeadDetail(LeadDto dto, string owner)
@@ -1099,6 +1111,7 @@ else
             Score = score,
             EstPremium = 0,
             CreatedAt = dto.CreatedDateUtc,
+            ModifiedAt = dto.ModifiedDateUtc,
             LastTouch = source,
             Notes = dto.InterestedService,
         };
@@ -1182,11 +1195,38 @@ else
     // ── Action handlers ───────────────────────────────────────────────────────
     private async Task CommitAssignAsync()
     {
-        // TODO: Api.AssignLeadAsync(LeadId, _assignTarget, _assignNotify)
-        await Task.Delay(0);
-        if (_lead is not null) _lead.Owner = _assignTarget;
-        _showAssign = false;
-        await Toast($"Lead assigned to {_assignTarget}.", "e-toast-success");
+        if (_lead is null || !Guid.TryParse(_assignTarget, out var assignedToUserId))
+        {
+            await Toast("Select a valid owner from the user table.", "e-toast-danger");
+            return;
+        }
+
+        try
+        {
+            await Api.UpdateLeadAsync(LeadId, new UpdateLeadRequest
+            {
+                AccountName = _lead.CompanyName,
+                FirstName = _lead.FirstName,
+                LastName = _lead.LastName,
+                Email = _lead.Email,
+                Phone = _lead.Phone,
+                InterestedService = _lead.InterestedService,
+                Score = _lead.Score,
+                PriorityCode = _lead.Rating,
+                SourceCode = _lead.Source,
+                NurturingStageCode = _lead.Stage,
+                StatusCode = StageToStatusCode(_lead.Stage),
+                AssignedToUserId = assignedToUserId,
+            });
+
+            _lead.Owner = ResolveOwnerName(assignedToUserId);
+            _showAssign = false;
+            await Toast($"Lead assigned to {_lead.Owner}.", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await Toast($"Assignment failed: {ex.Message}", "e-toast-danger");
+        }
     }
 
     private async Task CommitConvertAsync()
@@ -1200,52 +1240,134 @@ else
 
     private async Task CommitCampaignAsync()
     {
-        // TODO: Api.EnrollLeadInCampaignAsync(LeadId, _campaignTarget, _campaignSendNow)
-        await Task.Delay(0);
-        _showCampaign   = false;
-        _campaignTarget = string.Empty;
-        await Toast("Lead enrolled in campaign.", "e-toast-success");
-        await LoadAsync();
+        if (_lead is null) return;
+        try
+        {
+            var campaignName = _campaignOptions.FirstOrDefault(c => c.Value == _campaignTarget)?.Label ?? _campaignTarget;
+            await Api.CreateLeadCampaignAsync(LeadId, new CreateLeadCampaignEnrollmentRequest { TenantId = _lead.TenantId, LeadId = LeadId, CampaignName = campaignName, Status = "Active", EnrolledAt = DateTime.UtcNow, EmailsSent = _campaignSendNow ? 1 : 0, CreatedByUserId = CurrentUserId });
+            _showCampaign = false;
+            _campaignTarget = string.Empty;
+            await Toast("Lead enrolled in campaign.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await Toast($"Campaign enrollment failed: {ex.Message}", "e-toast-danger");
+        }
     }
 
     private async Task CommitActivityAsync()
     {
-        _newActivity.By = "Me"; // TODO: current user
-        var copy = new ActivityRow { Type = _newActivity.Type, Subject = _newActivity.Subject, Notes = _newActivity.Notes, By = _newActivity.By, OccurredAt = _newActivity.OccurredAt, NextFollowUp = _newActivity.NextFollowUp };
-        _activities.Insert(0, copy);
-        _newActivity       = new();
-        _showLogActivity   = false;
-        await Toast("Activity logged.", "e-toast-success");
+        if (_lead is null) return;
+
+        if (string.IsNullOrWhiteSpace(_newActivity.Type) || string.IsNullOrWhiteSpace(_newActivity.Subject))
+        {
+            await Toast("Activity type and subject are required.", "e-toast-danger");
+            return;
+        }
+
+        try
+        {
+            await Api.CreateLeadActivityAsync(new Ams.Application.Features.LeadActivities.CreateLeadActivityRequest { TenantId = _lead.TenantId, LeadId = LeadId, ActivityTypeCode = _newActivity.Type.Trim(), Subject = _newActivity.Subject.Trim(), Notes = NullIfWhiteSpace(_newActivity.Notes), ActivityDate = _newActivity.OccurredAt == default ? DateTime.UtcNow : _newActivity.OccurredAt, CreatedByUserId = CurrentUserId });
+            _newActivity = new();
+            _showLogActivity = false;
+            await Toast("Activity logged.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await Toast($"Activity save failed: {ex.Message}", "e-toast-danger");
+        }
     }
 
     private async Task CommitAddContactAsync()
     {
-        var copy = new ContactRow { FirstName = _newContact.FirstName, LastName = _newContact.LastName, Title = _newContact.Title, Email = _newContact.Email, Phone = _newContact.Phone, IsPrimary = _newContact.IsPrimary };
-        _contacts.Add(copy);
-        _newContact        = new();
-        _showAddContact    = false;
-        await Toast("Contact added.", "e-toast-success");
+        if (_lead is null) return;
+
+        var emailValidation = ValidateEmail(_newContact.Email);
+        if (emailValidation is not null)
+        {
+            await Toast(emailValidation, "e-toast-danger");
+            return;
+        }
+
+        var phoneValidation = ValidatePhone(_newContact.Phone);
+        if (phoneValidation is not null)
+        {
+            await Toast(phoneValidation, "e-toast-danger");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_newContact.FirstName) || string.IsNullOrWhiteSpace(_newContact.LastName))
+        {
+            await Toast("Contact first name and last name are required.", "e-toast-danger");
+            return;
+        }
+
+        try
+        {
+            await Api.CreateLeadContactAsync(LeadId, new CreateLeadContactRequest { TenantId = _lead.TenantId, LeadId = LeadId, FirstName = _newContact.FirstName.Trim(), LastName = _newContact.LastName.Trim(), Title = NullIfWhiteSpace(_newContact.Title), Email = NullIfWhiteSpace(_newContact.Email), Phone = NullIfWhiteSpace(_newContact.Phone), IsPrimary = _newContact.IsPrimary, CreatedByUserId = CurrentUserId });
+            _newContact = new();
+            _showAddContact = false;
+            await Toast("Contact added.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await Toast($"Contact save failed: {ex.Message}", "e-toast-danger");
+        }
     }
+
+    private static string? NullIfWhiteSpace(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? ValidateEmail(string? email) => new AmsEmailAddressAttribute().IsValid(email) ? null : "Enter a valid email address.";
+
+    private static string? ValidatePhone(string? phone) => new AmsPhoneAttribute().IsValid(phone) ? null : "Enter a valid phone number.";
 
     private async Task CommitAddInterestAsync()
     {
-        var copy = new InterestLine { LineOfBusiness = _newInterest.LineOfBusiness, Carrier = _newInterest.Carrier, CurrentCarrier = _newInterest.CurrentCarrier, EstPremium = _newInterest.EstPremium, ExpiryDate = _newInterest.ExpiryDate, Priority = _newInterest.Priority, Notes = _newInterest.Notes };
-        _interestLines.Add(copy);
-        _newInterest       = new();
-        _showAddInterest   = false;
-        await Toast("Interest line added.", "e-toast-success");
+        if (_lead is null) return;
+        try
+        {
+            await Api.CreateLeadInterestLineAsync(LeadId, new CreateLeadInterestLineRequest { TenantId = _lead.TenantId, LeadId = LeadId, LineOfBusiness = _newInterest.LineOfBusiness, Carrier = _newInterest.Carrier, CurrentCarrier = _newInterest.CurrentCarrier, EstPremium = _newInterest.EstPremium, ExpiryDate = _newInterest.ExpiryDate, Priority = _newInterest.Priority, Notes = _newInterest.Notes, CreatedByUserId = CurrentUserId });
+            _newInterest = new();
+            _showAddInterest = false;
+            await Toast("Interest line added.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await Toast($"Interest line save failed: {ex.Message}", "e-toast-danger");
+        }
     }
 
     private async Task CommitComposeAsync()
     {
-        _newComm.SentAt = DateTime.UtcNow;
-        _newComm.SentBy = "Me"; // TODO: current user
-        var copy = new CommRow { Channel = _newComm.Channel, Subject = _newComm.Subject, Preview = _newComm.Preview, SentBy = _newComm.SentBy, SentAt = _newComm.SentAt };
-        _comms.Insert(0, copy);
-        _newComm    = new();
-        _showCompose = false;
-        await Toast("Communication logged.", "e-toast-success");
+        if (_lead is null) return;
+        try
+        {
+            await Api.CreateLeadCommunicationAsync(LeadId, new CreateLeadCommunicationRequest { TenantId = _lead.TenantId, LeadId = LeadId, Channel = _newComm.Channel, Subject = _newComm.Subject, Preview = _newComm.Preview, SentByUserId = CurrentUserId, SentAt = DateTime.UtcNow });
+            _newComm = new();
+            _showCompose = false;
+            await Toast("Communication logged.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await Toast($"Communication save failed: {ex.Message}", "e-toast-danger");
+        }
     }
+
+    private Guid? CurrentUserId => Guid.TryParse(_assignTarget, out var id) ? id : null;
+
+    private static int StageToStatusCode(string stage) => stage switch
+    {
+        "Contacted" => 2,
+        "Qualified" => 3,
+        "Converted" => 4,
+        "Lost" => 5,
+        _ => 1,
+    };
 
     private async Task Toast(string msg, string css = "e-toast-info")
     {
@@ -1435,6 +1557,7 @@ else
     private sealed class LeadDetailModel
     {
         public Guid     LeadId        { get; set; }
+        public Guid     TenantId      { get; set; }
         public string   FirstName     { get; set; } = string.Empty;
         public string   LastName      { get; set; } = string.Empty;
         public string   FullName      => $"{FirstName} {LastName}".Trim();
@@ -1471,6 +1594,7 @@ else
 
     private sealed class ContactRow
     {
+        public Guid ContactId { get; set; }
         public string FirstName { get; set; } = string.Empty;
         public string LastName  { get; set; } = string.Empty;
         public string FullName  => $"{FirstName} {LastName}".Trim();
@@ -1478,10 +1602,22 @@ else
         public string?  Email   { get; set; }
         public string?  Phone   { get; set; }
         public bool   IsPrimary { get; set; }
+
+        public static ContactRow FromDto(LeadContactDto dto) => new()
+        {
+            ContactId = dto.ContactId,
+            FirstName = dto.FirstName,
+            LastName = dto.LastName,
+            Title = dto.Title,
+            Email = dto.Email,
+            Phone = dto.Phone,
+            IsPrimary = dto.IsPrimary,
+        };
     }
 
     private sealed class InterestLine
     {
+        public Guid     InterestLineId { get; set; }
         public string   LineOfBusiness  { get; set; } = string.Empty;
         public string?  Carrier         { get; set; }
         public string?  CurrentCarrier  { get; set; }
@@ -1489,16 +1625,39 @@ else
         public DateTime? ExpiryDate     { get; set; }
         public string   Priority        { get; set; } = "Medium";
         public string?  Notes           { get; set; }
+
+        public static InterestLine FromDto(LeadInterestLineDto dto) => new()
+        {
+            InterestLineId = dto.InterestLineId,
+            LineOfBusiness = dto.LineOfBusiness,
+            Carrier = dto.Carrier,
+            CurrentCarrier = dto.CurrentCarrier,
+            EstPremium = dto.EstPremium,
+            ExpiryDate = dto.ExpiryDate,
+            Priority = dto.Priority,
+            Notes = dto.Notes,
+        };
     }
 
     private sealed class ActivityRow
     {
+        public Guid     ActivityId  { get; set; }
         public string   Type        { get; set; } = string.Empty;
         public string   Subject     { get; set; } = string.Empty;
         public string?  Notes       { get; set; }
         public string   By          { get; set; } = string.Empty;
         public DateTime OccurredAt  { get; set; } = DateTime.UtcNow;
         public DateTime? NextFollowUp { get; set; }
+
+        public static ActivityRow FromDto(LeadActivityDto dto) => new()
+        {
+            ActivityId = dto.ActivityId,
+            Type = dto.ActivityTypeCode,
+            Subject = dto.Subject,
+            Notes = dto.Notes,
+            By = string.IsNullOrWhiteSpace(dto.LeadName) ? "User" : dto.LeadName,
+            OccurredAt = dto.ActivityDate,
+        };
     }
 
     private sealed class QuoteRow
@@ -1511,20 +1670,45 @@ else
         public string   Status          { get; set; } = "Pending";
         public DateTime CreatedAt       { get; set; } = DateTime.UtcNow;
         public DateTime ExpiresAt       { get; set; } = DateTime.UtcNow.AddDays(30);
+
+        public static QuoteRow FromDto(QuoteDto dto) => new()
+        {
+            QuoteId = dto.QuoteId,
+            QuoteNumber = dto.QuoteNumber,
+            LineOfBusiness = dto.OpportunityName ?? "Quote",
+            Carrier = dto.AccountName ?? string.Empty,
+            Premium = dto.TotalAmount,
+            Status = dto.StatusCode,
+            CreatedAt = dto.CreatedDateUtc,
+            ExpiresAt = dto.ValidUntilDate ?? dto.CreatedDateUtc.AddDays(30),
+        };
     }
 
     private sealed class DocRow
     {
+        public Guid     DocumentId  { get; set; }
         public string   FileName    { get; set; } = string.Empty;
         public string   Extension   { get; set; } = string.Empty;
         public string   Category    { get; set; } = string.Empty;
         public int      SizeKb      { get; set; }
         public string   UploadedBy  { get; set; } = string.Empty;
         public DateTime UploadedAt  { get; set; } = DateTime.UtcNow;
+
+        public static DocRow FromDto(LeadDocumentDto dto) => new()
+        {
+            DocumentId = dto.DocumentId,
+            FileName = dto.FileName,
+            Extension = dto.Extension,
+            Category = dto.Category,
+            SizeKb = dto.SizeKb,
+            UploadedBy = dto.UploadedByName ?? "User",
+            UploadedAt = dto.UploadedAt,
+        };
     }
 
     private sealed class CommRow
     {
+        public Guid     CommunicationId { get; set; }
         public string   Channel  { get; set; } = string.Empty;
         public string   Subject  { get; set; } = string.Empty;
         public string   Preview  { get; set; } = string.Empty;
@@ -1532,10 +1716,23 @@ else
         public DateTime SentAt   { get; set; } = DateTime.UtcNow;
         public bool     Opened   { get; set; }
         public bool     Clicked  { get; set; }
+
+        public static CommRow FromDto(LeadCommunicationDto dto) => new()
+        {
+            CommunicationId = dto.CommunicationId,
+            Channel = dto.Channel,
+            Subject = dto.Subject,
+            Preview = dto.Preview,
+            SentBy = dto.SentByName ?? "User",
+            SentAt = dto.SentAt,
+            Opened = dto.Opened,
+            Clicked = dto.Clicked,
+        };
     }
 
     private sealed class CampaignEnrollment
     {
+        public Guid      EnrollmentId { get; set; }
         public string    CampaignName { get; set; } = string.Empty;
         public string    Status       { get; set; } = "Active";
         public DateTime  EnrolledAt   { get; set; } = DateTime.UtcNow;
@@ -1543,6 +1740,18 @@ else
         public int       EmailsOpen   { get; set; }
         public int       Clicks       { get; set; }
         public DateTime? LastTouch    { get; set; }
+
+        public static CampaignEnrollment FromDto(LeadCampaignEnrollmentDto dto) => new()
+        {
+            EnrollmentId = dto.EnrollmentId,
+            CampaignName = dto.CampaignName,
+            Status = dto.Status,
+            EnrolledAt = dto.EnrolledAt,
+            EmailsSent = dto.EmailsSent,
+            EmailsOpen = dto.EmailsOpen,
+            Clicks = dto.Clicks,
+            LastTouch = dto.LastTouch,
+        };
     }
 
     private sealed class ScoreFactor

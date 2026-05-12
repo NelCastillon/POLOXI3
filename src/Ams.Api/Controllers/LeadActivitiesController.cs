@@ -22,11 +22,33 @@ public sealed class LeadActivitiesController : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id }, id);
     }
 
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateLeadActivityRequest request, CancellationToken cancellationToken)
+    {
+        request.ActivityId = id;
+        await _service.UpdateAsync(request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] Guid? modifiedByUserId, CancellationToken cancellationToken)
+    {
+        await _service.DeleteAsync(id, modifiedByUserId, cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
     {
         var item = await _service.GetByIdAsync(id, cancellationToken);
         return item is null ? NotFound() : Ok(item);
+    }
+
+    [HttpGet("by-lead/{leadId:guid}")]
+    public async Task<IActionResult> GetByLeadId(Guid leadId, CancellationToken cancellationToken)
+    {
+        var items = await _service.GetByLeadIdAsync(leadId, cancellationToken);
+        return Ok(items);
     }
 
     [HttpGet]

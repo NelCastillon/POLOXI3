@@ -24,22 +24,44 @@ public class DepartmentTeamRepository : IDepartmentTeamRepository
     public async Task<IReadOnlyList<DepartmentTeamDto>> GetAllAsync(Guid tenantId, CancellationToken ct = default)
     {
         const string sql = @"
-SELECT MIN(UserId) AS TeamId,
-       TenantId,
-       COALESCE(NULLIF(JobTitle, ''), COALESCE(NULLIF(Department, ''), 'General') + ' Team') AS TeamName,
-       UPPER(REPLACE(COALESCE(NULLIF(JobTitle, ''), COALESCE(NULLIF(Department, ''), 'General') + ' Team'), ' ', '-')) AS TeamCode,
-       NULL AS Description,
-       NULL AS DepartmentId,
-       COALESCE(NULLIF(Department, ''), 'Unassigned') AS DepartmentName,
-       MAX(CASE WHEN JobTitle LIKE '%Manager%' THEN FullName END) AS ManagerName,
-       COUNT(1) AS MemberCount,
-       CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 'Active' ELSE 'Inactive' END AS Status,
-       CAST(CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS bit) AS IsActive,
-       MIN(CreatedDateUtc) AS CreatedDateUtc
-FROM IAM.[User]
-WHERE TenantId = @TenantId AND IsDeleted = 0
-GROUP BY TenantId, COALESCE(NULLIF(Department, ''), 'Unassigned'), COALESCE(NULLIF(JobTitle, ''), COALESCE(NULLIF(Department, ''), 'General') + ' Team')
-ORDER BY DepartmentName, TeamName";
+IF OBJECT_ID(N'Agency.Team', N'U') IS NOT NULL
+BEGIN
+    SELECT t.TeamId,
+           t.TenantId,
+           t.TeamName,
+           t.TeamCode,
+           t.Description,
+           t.DepartmentId,
+           d.DepartmentName,
+           t.ManagerName,
+           t.MemberCount,
+           CASE WHEN t.IsActive = 1 THEN 'Active' ELSE 'Inactive' END AS Status,
+           t.IsActive,
+           t.CreatedDateUtc
+    FROM Agency.Team t
+    LEFT JOIN Agency.Department d ON d.DepartmentId = t.DepartmentId AND d.IsDeleted = 0
+    WHERE t.TenantId = @TenantId AND t.IsDeleted = 0
+    ORDER BY d.DepartmentName, t.TeamName;
+END
+ELSE
+BEGIN
+    SELECT MIN(UserId) AS TeamId,
+           TenantId,
+           COALESCE(NULLIF(JobTitle, ''), COALESCE(NULLIF(Department, ''), 'General') + ' Team') AS TeamName,
+           UPPER(REPLACE(COALESCE(NULLIF(JobTitle, ''), COALESCE(NULLIF(Department, ''), 'General') + ' Team'), ' ', '-')) AS TeamCode,
+           NULL AS Description,
+           NULL AS DepartmentId,
+           COALESCE(NULLIF(Department, ''), 'Unassigned') AS DepartmentName,
+           MAX(CASE WHEN JobTitle LIKE '%Manager%' THEN FullName END) AS ManagerName,
+           COUNT(1) AS MemberCount,
+           CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 'Active' ELSE 'Inactive' END AS Status,
+           CAST(CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS bit) AS IsActive,
+           MIN(CreatedDateUtc) AS CreatedDateUtc
+    FROM IAM.[User]
+    WHERE TenantId = @TenantId AND IsDeleted = 0
+    GROUP BY TenantId, COALESCE(NULLIF(Department, ''), 'Unassigned'), COALESCE(NULLIF(JobTitle, ''), COALESCE(NULLIF(Department, ''), 'General') + ' Team')
+    ORDER BY DepartmentName, TeamName;
+END";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         var results = await cn.QueryAsync<DepartmentTeamDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
         return results.ToList();
@@ -63,6 +85,14 @@ WHERE TeamId = @TeamId AND IsDeleted = 0";
     {
         var id = Guid.NewGuid();
         const string sql = @"
+DECLARE @DepartmentId UNIQUEIDENTIFIER = @RequestedDepartmentId;
+
+IF @DepartmentId IS NULL AND NULLIF(@DepartmentName, N'') IS NOT NULL
+    SELECT TOP (1) @DepartmentId = DepartmentId
+    FROM Agency.Department
+    WHERE TenantId = @TenantId AND IsDeleted = 0 AND DepartmentName = @DepartmentName
+    ORDER BY DepartmentName;
+
 INSERT INTO Agency.Team (TeamId, TenantId, TeamName, TeamCode, Description, DepartmentId, ManagerName, MemberCount, IsActive, CreatedDateUtc, CreatedByUserId)
 VALUES (@TeamId, @TenantId, @TeamName, @TeamCode, @Description, @DepartmentId, @ManagerName, @MemberCount, @IsActive, GETUTCDATE(), @UserId)";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
@@ -73,7 +103,8 @@ VALUES (@TeamId, @TenantId, @TeamName, @TeamCode, @Description, @DepartmentId, @
             team.TeamName,
             team.TeamCode,
             team.Description,
-            team.DepartmentId,
+            RequestedDepartmentId = team.DepartmentId,
+            team.DepartmentName,
             team.ManagerName,
             MemberCount = team.MemberCount,
             team.IsActive,
@@ -85,6 +116,14 @@ VALUES (@TeamId, @TenantId, @TeamName, @TeamCode, @Description, @DepartmentId, @
     public async Task UpdateAsync(DepartmentTeamDto team, Guid userId, CancellationToken ct = default)
     {
         const string sql = @"
+DECLARE @DepartmentId UNIQUEIDENTIFIER = @RequestedDepartmentId;
+
+IF @DepartmentId IS NULL AND NULLIF(@DepartmentName, N'') IS NOT NULL
+    SELECT TOP (1) @DepartmentId = DepartmentId
+    FROM Agency.Department
+    WHERE TenantId = @TenantId AND IsDeleted = 0 AND DepartmentName = @DepartmentName
+    ORDER BY DepartmentName;
+
 UPDATE Agency.Team
 SET TeamName = @TeamName, TeamCode = @TeamCode, Description = @Description, DepartmentId = @DepartmentId, 
     ManagerName = @ManagerName, MemberCount = @MemberCount, IsActive = @IsActive, ModifiedDateUtc = GETUTCDATE()
@@ -93,10 +132,12 @@ WHERE TeamId = @TeamId AND IsDeleted = 0";
         await cn.ExecuteAsync(new CommandDefinition(sql, new
         {
             team.TeamId,
+            team.TenantId,
             team.TeamName,
             team.TeamCode,
             team.Description,
-            team.DepartmentId,
+            RequestedDepartmentId = team.DepartmentId,
+            team.DepartmentName,
             team.ManagerName,
             team.MemberCount,
             team.IsActive,
@@ -123,20 +164,39 @@ public class DepartmentRepository : IDepartmentRepository
     public async Task<IReadOnlyList<DepartmentDto>> GetAllAsync(Guid tenantId, CancellationToken ct = default)
     {
         const string sql = @"
-SELECT MIN(UserId) AS DepartmentId,
-       TenantId,
-       COALESCE(NULLIF(Department, ''), 'Unassigned') AS DepartmentName,
-       UPPER(REPLACE(COALESCE(NULLIF(Department, ''), 'Unassigned'), ' ', '-')) AS DepartmentCode,
-       NULL AS Description,
-       MAX(CASE WHEN JobTitle LIKE '%Manager%' THEN FullName END) AS ManagerName,
-       COUNT(DISTINCT COALESCE(NULLIF(JobTitle, ''), 'General')) AS TeamCount,
-       CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 'Active' ELSE 'Inactive' END AS Status,
-       CAST(CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS bit) AS IsActive,
-       MIN(CreatedDateUtc) AS CreatedDateUtc
-FROM IAM.[User]
-WHERE TenantId = @TenantId AND IsDeleted = 0
-GROUP BY TenantId, COALESCE(NULLIF(Department, ''), 'Unassigned')
-ORDER BY DepartmentName";
+IF OBJECT_ID(N'Agency.Department', N'U') IS NOT NULL
+BEGIN
+    SELECT d.DepartmentId,
+           d.TenantId,
+           d.DepartmentName,
+           d.DepartmentCode,
+           d.Description,
+           d.ManagerName,
+           (SELECT COUNT(1) FROM Agency.Team t WHERE t.DepartmentId = d.DepartmentId AND t.IsDeleted = 0) AS TeamCount,
+           CASE WHEN d.IsActive = 1 THEN 'Active' ELSE 'Inactive' END AS Status,
+           d.IsActive,
+           d.CreatedDateUtc
+    FROM Agency.Department d
+    WHERE d.TenantId = @TenantId AND d.IsDeleted = 0
+    ORDER BY d.DepartmentName;
+END
+ELSE
+BEGIN
+    SELECT MIN(UserId) AS DepartmentId,
+           TenantId,
+           COALESCE(NULLIF(Department, ''), 'Unassigned') AS DepartmentName,
+           UPPER(REPLACE(COALESCE(NULLIF(Department, ''), 'Unassigned'), ' ', '-')) AS DepartmentCode,
+           NULL AS Description,
+           MAX(CASE WHEN JobTitle LIKE '%Manager%' THEN FullName END) AS ManagerName,
+           COUNT(DISTINCT COALESCE(NULLIF(JobTitle, ''), 'General')) AS TeamCount,
+           CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 'Active' ELSE 'Inactive' END AS Status,
+           CAST(CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS bit) AS IsActive,
+           MIN(CreatedDateUtc) AS CreatedDateUtc
+    FROM IAM.[User]
+    WHERE TenantId = @TenantId AND IsDeleted = 0
+    GROUP BY TenantId, COALESCE(NULLIF(Department, ''), 'Unassigned')
+    ORDER BY DepartmentName;
+END";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         var results = await cn.QueryAsync<DepartmentDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
         return results.ToList();
@@ -160,6 +220,13 @@ WHERE d.DepartmentId = @DepartmentId AND d.IsDeleted = 0";
         var id = Guid.NewGuid();
         const string sql = @"
 DECLARE @BranchId UNIQUEIDENTIFIER = (SELECT TOP 1 BranchId FROM Agency.Branch WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc);
+
+IF @BranchId IS NULL
+BEGIN
+    SET @BranchId = NEWID();
+    INSERT INTO Agency.Branch (BranchId, TenantId, BranchName, BranchCode, StreetAddress, City, State, ZipCode, Country, IsActive, IsHeadquarters, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (@BranchId, @TenantId, N'Headquarters', N'HQ', N'N/A', N'N/A', N'N/A', N'N/A', N'United States', 1, 1, GETUTCDATE(), @UserId, 0);
+END
 
 INSERT INTO Agency.Department (DepartmentId, TenantId, BranchId, DepartmentName, DepartmentCode, Description, ManagerName, IsActive, CreatedDateUtc, CreatedByUserId)
 VALUES (@DepartmentId, @TenantId, @BranchId, @DepartmentName, @DepartmentCode, @Description, @ManagerName, @IsActive, GETUTCDATE(), @UserId)";

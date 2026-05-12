@@ -17,22 +17,22 @@
 
 <!-- Summary strip -->
 <div class="ldup-summary-strip">
-    <div class="ldup-summary-card ldup-s1">
+    <button type="button" class="@SummaryClass("groups", "ldup-s1")" @onclick='() => SetFilter("groups")' title="Show all unresolved duplicate groups">
         <div class="ldup-summary-val">@_groups.Count</div>
         <div class="ldup-summary-lbl">Duplicate Groups</div>
-    </div>
-    <div class="ldup-summary-card ldup-s2">
-        <div class="ldup-summary-val">@_groups.Sum(g => g.Leads.Count)</div>
-        <div class="ldup-summary-lbl">Duplicate Leads</div>
-    </div>
-    <div class="ldup-summary-card ldup-s3">
+    </button>
+    <button type="button" class="@SummaryClass("leads", "ldup-s2")" @onclick='() => SetFilter("leads")' title="Show duplicate groups with the most lead records">
+        <div class="ldup-summary-val">@MultiLeadGroups.Count</div>
+        <div class="ldup-summary-lbl">Multi-Lead Groups</div>
+    </button>
+    <button type="button" class="@SummaryClass("high", "ldup-s3")" @onclick='() => SetFilter("high")' title="Show high-confidence duplicate groups">
         <div class="ldup-summary-val">@_groups.Count(g => g.Confidence >= 90)</div>
         <div class="ldup-summary-lbl">High Confidence</div>
-    </div>
-    <div class="ldup-summary-card ldup-s4">
+    </button>
+    <button type="button" class="@SummaryClass("resolved", "ldup-s4")" @onclick='() => SetFilter("resolved")' title="Show duplicate groups resolved today">
         <div class="ldup-summary-val">@_resolved</div>
         <div class="ldup-summary-lbl">Resolved Today</div>
-    </div>
+    </button>
 </div>
 
 @if (_loading)
@@ -46,7 +46,7 @@ else if (!string.IsNullOrWhiteSpace(_loadError))
 {
     <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
 }
-else if (!_groups.Any())
+else if (!_groups.Any() && !_resolvedGroups.Any())
 {
     <div class="ldup-empty-state">
         <i class="bi bi-check-circle-fill ldup-empty-icon"></i>
@@ -57,8 +57,17 @@ else if (!_groups.Any())
 }
 else
 {
+    @if (!FilteredGroups.Any())
+    {
+        <div class="ldup-empty-state">
+            <i class="bi bi-funnel ldup-empty-icon"></i>
+            <div class="ldup-empty-title">No Matches for @ActiveFilterLabel</div>
+            <div class="ldup-empty-sub">Choose another KPI filter or refresh the duplicate scan.</div>
+            <button class="um-btn um-btn-ghost" @onclick='() => SetFilter("groups")'>Show All Duplicates</button>
+        </div>
+    }
     <div class="ldup-groups">
-        @foreach (var grp in _groups)
+        @foreach (var grp in FilteredGroups)
         {
             <div class="ldup-group-card">
                 <div class="ldup-group-header">
@@ -114,7 +123,27 @@ else
     bool _loading = true;
     int _resolved;
     string? _loadError;
+    string _activeFilter = "groups";
     List<DupGroup> _groups = [];
+    List<DupGroup> _resolvedGroups = [];
+
+    List<DupGroup> MultiLeadGroups => _groups.Where(g => g.Leads.Count > 2).ToList();
+
+    IEnumerable<DupGroup> FilteredGroups => _activeFilter switch
+    {
+        "leads" => MultiLeadGroups,
+        "high" => _groups.Where(g => g.Confidence >= 90),
+        "resolved" => _resolvedGroups,
+        _ => _groups
+    };
+
+    string ActiveFilterLabel => _activeFilter switch
+    {
+        "leads" => "Multi-Lead Groups",
+        "high" => "High Confidence",
+        "resolved" => "Resolved Today",
+        _ => "Duplicate Groups"
+    };
 
     protected override async Task OnInitializedAsync()
     {
@@ -147,6 +176,7 @@ else
     {
         await Task.Delay(0);
         _groups.Remove(grp);
+        _resolvedGroups.Insert(0, grp);
         _resolved++;
     }
 
@@ -154,6 +184,8 @@ else
     {
         await Task.Delay(0);
         _groups.Remove(grp);
+        _resolvedGroups.Insert(0, grp);
+        _resolved++;
     }
 
     void SetPrimary(DupGroup grp, DupLead lead)
@@ -163,6 +195,10 @@ else
     }
 
     static string ConfClass(int c) => c >= 90 ? "high" : c >= 70 ? "med" : "low";
+
+    void SetFilter(string filter) => _activeFilter = filter;
+
+    string SummaryClass(string filter, string tone) => $"ldup-summary-card {tone} {(_activeFilter == filter ? "ldup-summary-card--active" : string.Empty)}";
 
     static List<DupGroup> BuildDuplicateGroups(IEnumerable<LeadDto> leads)
     {

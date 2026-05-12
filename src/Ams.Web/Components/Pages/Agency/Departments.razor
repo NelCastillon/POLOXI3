@@ -121,11 +121,14 @@
                                     Label="@(e.IsActive ? "Active" : "Inactive")" />
                 </Template>
             </GridColumn>
-            <GridColumn HeaderText="" Width="80" TextAlign="TextAlign.Right">
+            <GridColumn HeaderText="" Width="120" TextAlign="TextAlign.Right">
                 <Template>
                     @{ var e = (DepartmentEntry)context; }
                     <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditDrawer(e)" title="Edit">
                         <i class="bi bi-pencil" aria-hidden="true"></i>
+                    </button>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(e)" title="Delete">
+                        <i class="bi bi-trash" aria-hidden="true"></i>
                     </button>
                 </Template>
             </GridColumn>
@@ -139,21 +142,49 @@
                OnConfirm="SaveAsync"
                OnClose="CloseDrawer">
     <Content>
+        <EditForm EditContext="_editContext" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
         <div class="dep-form">
             <label class="dep-form-label">Department Name *</label>
-            <input class="um-input" @bind="_editModel.DepartmentName" placeholder="Department name" />
+            <InputText class="um-input" @bind-Value="_editModel.DepartmentName" placeholder="Department name" />
+            <ValidationMessage For="() => _editModel.DepartmentName" class="text-danger" />
 
             <label class="dep-form-label">Department Code</label>
-            <input class="um-input dep-mono" @bind="_editModel.DepartmentCode" placeholder="Short code" />
+            <InputText class="um-input dep-mono" @bind-Value="_editModel.DepartmentCode" placeholder="Short code" />
+            <ValidationMessage For="() => _editModel.DepartmentCode" class="text-danger" />
+
+            <label class="dep-form-label">Description</label>
+            <InputTextArea class="um-input" @bind-Value="_editModel.Description" placeholder="Optional description" />
+            <ValidationMessage For="() => _editModel.Description" class="text-danger" />
 
             <label class="dep-form-label">Manager</label>
-            <input class="um-input" @bind="_editModel.Manager" placeholder="Full name" />
+            <InputText class="um-input" @bind-Value="_editModel.Manager" placeholder="Full name" />
+            <ValidationMessage For="() => _editModel.Manager" class="text-danger" />
 
             <label class="dep-form-label">Active</label>
             <SfSwitch @bind-Checked="_editModel.IsActive" />
         </div>
+        </EditForm>
     </Content>
 </AppCrudDrawer>
+
+<SfDialog Width="420px" IsModal="true" ShowCloseIcon="false" Visible="_showDeleteDialog" CssClass="um-confirm-dialog">
+    <DialogTemplates>
+        <Content>
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
+                <div class="um-confirm-message">
+                    <h6>Delete department?</h6>
+                    <p>This will remove <strong>@_deleteTarget?.DepartmentName</strong>. Related teams may become unassigned.</p>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDeleteDialog = false">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="DeleteAsync">Delete</button>
+                </div>
+            </div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
 
 <SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
     <ToastPosition X="Right" Y="Bottom" />
@@ -178,6 +209,14 @@
     private int _activeCount = 0;
 
     private DepartmentEntry _editModel = new();
+    private EditContext _editContext = default!;
+    private bool _showDeleteDialog;
+    private DepartmentEntry? _deleteTarget;
+
+    public Departments()
+    {
+        _editContext = new EditContext(_editModel);
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -255,8 +294,8 @@
         _activeCount = _allEntries.Count(e => e.IsActive);
     }
 
-    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
-    private void OpenEditDrawer(DepartmentEntry e) { _editModel = new DepartmentEntry { DepartmentId = e.DepartmentId, DepartmentCode = e.DepartmentCode, DepartmentName = e.DepartmentName, Manager = e.Manager, TeamCount = e.TeamCount, IsActive = e.IsActive }; _showDrawer = true; }
+    private void OpenAddDrawer()  { _editModel = new(); _editContext = new EditContext(_editModel); _showDrawer = true; }
+    private void OpenEditDrawer(DepartmentEntry e) { _editModel = new DepartmentEntry { DepartmentId = e.DepartmentId, DepartmentCode = e.DepartmentCode, DepartmentName = e.DepartmentName, Description = e.Description, Manager = e.Manager, TeamCount = e.TeamCount, IsActive = e.IsActive }; _editContext = new EditContext(_editModel); _showDrawer = true; }
     private void CloseDrawer() => _showDrawer = false;
 
     private async Task SaveAsync()
@@ -269,6 +308,7 @@
                 TenantId = _tenantId,
                 DepartmentName = _editModel.DepartmentName,
                 DepartmentCode = _editModel.DepartmentCode,
+                Description = _editModel.Description,
                 ManagerName = _editModel.Manager,
                 TeamCount = _editModel.TeamCount,
                 IsActive = _editModel.IsActive
@@ -289,6 +329,30 @@
         }
     }
 
+    private void ConfirmDelete(DepartmentEntry entry)
+    {
+        _deleteTarget = entry;
+        _showDeleteDialog = true;
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_deleteTarget is null)
+            return;
+
+        try
+        {
+            await Api.DeleteDepartmentAsync(_deleteTarget.DepartmentId);
+            _showDeleteDialog = false;
+            await LoadAsync();
+            await ShowToastAsync("Department deleted.", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Delete failed: {ex.Message}", "e-toast-danger");
+        }
+    }
+
     private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
     {
         if (_toast is not null)
@@ -298,8 +362,13 @@
     private sealed class DepartmentEntry
     {
         public Guid   DepartmentId   { get; set; } = Guid.Empty;
+        [StringLength(50)]
         public string DepartmentCode { get; set; } = string.Empty;
+        [Required, StringLength(200)]
         public string DepartmentName { get; set; } = string.Empty;
+        [StringLength(1000)]
+        public string? Description   { get; set; }
+        [StringLength(200)]
         public string Manager        { get; set; } = string.Empty;
         public int    TeamCount      { get; set; }
         public bool   IsActive       { get; set; } = true;

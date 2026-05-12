@@ -1,4 +1,5 @@
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Features.Payments;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
@@ -9,6 +10,10 @@ public sealed class PaymentsController : ControllerBase
 {
     private readonly IPaymentService _service;
     public PaymentsController(IPaymentService service) => _service = service;
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreatePaymentRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.CreateAsync(request, cancellationToken));
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)

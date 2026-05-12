@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using Ams.Application.Common.Dtos;
+using Ams.Application.Common.Validation;
 
 namespace Ams.Web.Components.Pages.Accounts;
 
@@ -42,10 +43,11 @@ internal sealed class AccountFormModel
     [StringLength(50, ErrorMessage = "Account Type cannot exceed 50 characters.")]
     public string AccountTypeCode { get; set; } = "Commercial";
 
-    [EmailAddress(ErrorMessage = "Enter a valid email address.")]
+    [AmsEmailAddress]
     [StringLength(200, ErrorMessage = "Email cannot exceed 200 characters.")]
     public string? MainEmail { get; set; }
 
+    [AmsPhone]
     [StringLength(50, ErrorMessage = "Phone cannot exceed 50 characters.")]
     public string? MainPhone { get; set; }
 

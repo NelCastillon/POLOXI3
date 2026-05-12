@@ -14,4 +14,5 @@ public sealed class BranchService : IBranchService
     public Task<PagedResult<BranchDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
     public Task<Guid> CreateAsync(CreateBranchRequest request, CancellationToken cancellationToken = default) => _repository.CreateAsync(request, cancellationToken);
     public Task UpdateAsync(Guid id, UpdateBranchRequest request, CancellationToken cancellationToken = default) => _repository.UpdateAsync(id, request, cancellationToken);
+    public Task DeleteAsync(Guid id, CancellationToken cancellationToken = default) => _repository.DeleteAsync(id, cancellationToken);
 }

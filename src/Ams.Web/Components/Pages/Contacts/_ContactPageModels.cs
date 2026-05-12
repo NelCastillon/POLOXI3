@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using Ams.Application.Common.Dtos;
+using Ams.Application.Common.Validation;
 
 namespace Ams.Web.Components.Pages.Contacts;
 
@@ -35,10 +36,11 @@ internal sealed class ContactFormModel
     [StringLength(100, ErrorMessage = "Last Name cannot exceed 100 characters.")]
     public string LastName { get; set; } = string.Empty;
 
-    [EmailAddress(ErrorMessage = "Enter a valid email address.")]
+    [AmsEmailAddress]
     [StringLength(200, ErrorMessage = "Email cannot exceed 200 characters.")]
     public string? Email { get; set; }
 
+    [AmsPhone]
     [StringLength(50, ErrorMessage = "Phone cannot exceed 50 characters.")]
     public string? Phone { get; set; }
 

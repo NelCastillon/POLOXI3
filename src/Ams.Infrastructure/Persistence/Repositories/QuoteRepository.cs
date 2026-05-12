@@ -17,6 +17,21 @@ public sealed class QuoteRepository : IQuoteRepository
 
     public async Task<Guid> CreateAsync(CreateQuoteRequest request, CancellationToken cancellationToken = default)
     {
+        if (request.TenantId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Tenant is required.");
+        }
+
+        if (request.AccountId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Account is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.QuoteNumber))
+        {
+            request.QuoteNumber = $"QT-{DateTime.UtcNow:yyyyMMddHHmmss}";
+        }
+
         const string sql = @"
 INSERT INTO CRM.Quote
 (
@@ -26,7 +41,7 @@ INSERT INTO CRM.Quote
 VALUES
 (
     @QuoteId, @TenantId, @QuoteNumber, @OpportunityId, @AccountId,
-    @ValidUntilDate, 0, 'Draft', SYSUTCDATETIME(), @CreatedByUserId, 0
+    @ValidUntilDate, @TotalAmount, @StatusCode, SYSUTCDATETIME(), @CreatedByUserId, 0
 );";
 
         var id = Guid.NewGuid();
@@ -35,10 +50,12 @@ VALUES
         {
             QuoteId = id,
             request.TenantId,
-            request.QuoteNumber,
+            QuoteNumber = request.QuoteNumber.Trim(),
             request.OpportunityId,
             request.AccountId,
             request.ValidUntilDate,
+            request.TotalAmount,
+            StatusCode = string.IsNullOrWhiteSpace(request.StatusCode) ? "Draft" : request.StatusCode.Trim(),
             request.CreatedByUserId
         }, cancellationToken: cancellationToken));
 
@@ -51,7 +68,7 @@ VALUES
 SELECT q.QuoteId, q.TenantId, q.QuoteNumber, q.OpportunityId,
        o.OpportunityName, q.AccountId,
        a.AccountName, q.TotalAmount, q.ValidUntilDate,
-       q.StatusCode, q.CreatedDateUtc
+       q.StatusCode, q.CreatedDateUtc, q.ModifiedDateUtc
 FROM CRM.Quote q
 LEFT JOIN Client.Account a ON a.AccountId = q.AccountId
 LEFT JOIN CRM.Opportunity o ON o.OpportunityId = q.OpportunityId
@@ -68,8 +85,8 @@ WHERE q.QuoteId = @Id AND q.IsDeleted = 0;";
 ;WITH Paged AS (
     SELECT q.QuoteId, q.TenantId, q.QuoteNumber, q.OpportunityId,
            o.OpportunityName, q.AccountId,
-           a.AccountName, q.TotalAmount, q.ValidUntilDate,
-           q.StatusCode, q.CreatedDateUtc
+            a.AccountName, q.TotalAmount, q.ValidUntilDate,
+            q.StatusCode, q.CreatedDateUtc, q.ModifiedDateUtc
     FROM CRM.Quote q
     LEFT JOIN Client.Account a ON a.AccountId = q.AccountId
     LEFT JOIN CRM.Opportunity o ON o.OpportunityId = q.OpportunityId
@@ -105,6 +122,59 @@ SELECT COUNT(*) FROM CRM.Quote WHERE TenantId = @TenantId AND IsDeleted = 0
             PageNumber = pageNumber,
             PageSize = pageSize
         };
+    }
+
+    public async Task UpdateAsync(UpdateQuoteRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.QuoteId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Quote is required.");
+        }
+
+        if (request.AccountId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Account is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.QuoteNumber))
+        {
+            throw new InvalidOperationException("Quote number is required.");
+        }
+
+        const string sql = @"
+UPDATE CRM.Quote
+SET QuoteNumber = @QuoteNumber,
+    OpportunityId = @OpportunityId,
+    AccountId = @AccountId,
+    ValidUntilDate = @ValidUntilDate,
+    TotalAmount = @TotalAmount,
+    StatusCode = @StatusCode,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE QuoteId = @QuoteId AND IsDeleted = 0;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            request.QuoteId,
+            QuoteNumber = request.QuoteNumber.Trim(),
+            request.OpportunityId,
+            request.AccountId,
+            request.ValidUntilDate,
+            request.TotalAmount,
+            StatusCode = string.IsNullOrWhiteSpace(request.StatusCode) ? "Draft" : request.StatusCode.Trim(),
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE CRM.Quote
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE QuoteId = @Id AND IsDeleted = 0;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
     }
 
     public async Task<IReadOnlyList<QuoteLineDto>> GetLinesByQuoteIdAsync(Guid quoteId, CancellationToken cancellationToken = default)

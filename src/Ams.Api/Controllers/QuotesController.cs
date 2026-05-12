@@ -36,6 +36,21 @@ public sealed class QuotesController : ControllerBase
         return Ok(result);
     }
 
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateQuoteRequest request, CancellationToken cancellationToken)
+    {
+        request.QuoteId = id;
+        await _service.UpdateAsync(request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] Guid? modifiedByUserId, CancellationToken cancellationToken)
+    {
+        await _service.DeleteAsync(id, modifiedByUserId, cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet("{id:guid}/lines")]
     public async Task<IActionResult> GetLines(Guid id, CancellationToken cancellationToken)
     {

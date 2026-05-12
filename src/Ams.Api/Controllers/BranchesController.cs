@@ -35,4 +35,11 @@ public sealed class BranchesController : ControllerBase
         await _service.UpdateAsync(id, request, cancellationToken);
         return NoContent();
     }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
+    {
+        await _service.DeleteAsync(id, cancellationToken);
+        return NoContent();
+    }
 }

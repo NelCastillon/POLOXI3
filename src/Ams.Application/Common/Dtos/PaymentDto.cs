@@ -6,7 +6,7 @@ public sealed class PaymentDto
     public Guid TenantId { get; set; }
     public Guid AccountId { get; set; }
     public Guid? InvoiceId { get; set; }
-    public DateOnly PaymentDate { get; set; }
+    public DateTime PaymentDate { get; set; }
     public decimal Amount { get; set; }
     public string PaymentMethodCode { get; set; } = string.Empty;
     public string? ReferenceNumber { get; set; }

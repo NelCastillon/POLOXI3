@@ -19,22 +19,22 @@ public sealed class DocumentConfigRepository : IDocumentConfigRepository
         return await cn.QuerySingleOrDefaultAsync<DocumentConfigItemDto>(new CommandDefinition($"SELECT {Cols} FROM Documents.DocumentConfigItem WHERE DocumentConfigItemId=@Id AND IsDeleted=0;", new { Id = id }, cancellationToken: ct));
     }
 
-    public async Task<PagedResult<DocumentConfigItemDto>> SearchAsync(Guid tenantId, string kind, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
+    public async Task<PagedResult<DocumentConfigItemDto>> SearchAsync(Guid tenantId, string? kind, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
     {
         const string sql = @"
 SELECT DocumentConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc
 FROM Documents.DocumentConfigItem
-WHERE TenantId=@TenantId AND Kind=@Kind AND IsDeleted=0
+WHERE TenantId=@TenantId AND (@Kind='' OR Kind=@Kind) AND IsDeleted=0
   AND (@SearchTerm='' OR Name LIKE '%'+@SearchTerm+'%' OR Code LIKE '%'+@SearchTerm+'%' OR Category LIKE '%'+@SearchTerm+'%')
-ORDER BY SortOrder ASC, Name ASC
+ORDER BY Kind ASC, SortOrder ASC, Name ASC
 OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
 
 SELECT COUNT(1)
 FROM Documents.DocumentConfigItem
-WHERE TenantId=@TenantId AND Kind=@Kind AND IsDeleted=0
+WHERE TenantId=@TenantId AND (@Kind='' OR Kind=@Kind) AND IsDeleted=0
   AND (@SearchTerm='' OR Name LIKE '%'+@SearchTerm+'%' OR Code LIKE '%'+@SearchTerm+'%' OR Category LIKE '%'+@SearchTerm+'%');";
         using var cn = await _cf.CreateOpenConnectionAsync(ct);
-        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, Kind = kind, SearchTerm = searchTerm ?? string.Empty, Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: ct));
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, Kind = kind ?? string.Empty, SearchTerm = searchTerm ?? string.Empty, Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: ct));
         return new() { Items = (await multi.ReadAsync<DocumentConfigItemDto>()).AsList(), TotalCount = await multi.ReadSingleAsync<int>(), PageNumber = pageNumber, PageSize = pageSize };
     }
 

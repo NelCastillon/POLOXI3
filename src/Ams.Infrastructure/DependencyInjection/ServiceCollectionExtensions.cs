@@ -47,6 +47,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEngagementRepository, EngagementRepository>();
         services.AddScoped<ITimeEntryRepository, TimeEntryRepository>();
         services.AddScoped<IExpenseRepository, ExpenseRepository>();
+        services.AddScoped<IBillingAccountRepository, BillingAccountRepository>();
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddScoped<IGLAccountRepository, GLAccountRepository>();
         services.AddScoped<IJournalEntryRepository, JournalEntryRepository>();
@@ -88,6 +89,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEngagementService, EngagementService>();
         services.AddScoped<ITimeEntryService, TimeEntryService>();
         services.AddScoped<IExpenseService, ExpenseService>();
+        services.AddScoped<IBillingAccountService, BillingAccountService>();
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IFinanceService, FinanceService>();
         services.AddScoped<ICommissionService, CommissionService>();
