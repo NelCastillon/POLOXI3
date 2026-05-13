@@ -12,7 +12,7 @@
         <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
             <i class="bi bi-arrow-clockwise @(_loading ? "fa-spin" : "")" aria-hidden="true"></i> Refresh
         </button>
-        <button class="um-btn um-btn-primary">
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
             <i class="bi bi-plus-lg" aria-hidden="true"></i> New Vendor
         </button>
     </Actions>
@@ -116,7 +116,8 @@ else if (_items?.Count == 0)
 else
 {
     <div class="fin-grid-container">
-        <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="600px">
+        <SfGrid TValue="VendorDto" DataSource="_items" AllowPaging="true" AllowSorting="true" Height="600px">
+            <GridEvents TValue="VendorDto" RowSelected="OnRowSelected" />
             <GridPageSettings PageSize="12"></GridPageSettings>
             <GridColumns>
                 <GridColumn Field="@nameof(VendorDto.VendorCode)" HeaderText="Code" Width="100" AllowSorting="true"></GridColumn>
@@ -157,10 +158,41 @@ else
                         </span>
                     </Template>
                 </GridColumn>
+                <GridColumn HeaderText="Actions" Width="90">
+                    <Template>
+                        @{ var vendor = (VendorDto)context; }
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(vendor)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                    </Template>
+                </GridColumn>
             </GridColumns>
         </SfGrid>
     </div>
 }
+
+<SfDialog @bind-Visible="_showForm" Width="680px" IsModal="true" ShowCloseIcon="false">
+    <DialogTemplates>
+        <Content>
+            <div class="um-modal-header"><i class="bi bi-truck" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Vendor" : "Edit Vendor")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm EditContext="_editContext">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Vendor Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.VendorCode" class="um-input" /><ValidationMessage For="() => _form.VendorCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Vendor Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.VendorName" class="um-input" /><ValidationMessage For="() => _form.VendorName" class="text-danger" /></div>
+                    <div class="um-field"><label>Vendor Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.VendorTypeCode" class="um-input">@foreach (var type in _vendorTypes) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.VendorTypeCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option value="Active">Active</option><option value="Inactive">Inactive</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Payment Terms <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.PaymentTermsCode" class="um-input">@foreach (var terms in _paymentTerms) { <option value="@terms">@terms</option> }</InputSelect><ValidationMessage For="() => _form.PaymentTermsCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Currency <span class="text-danger">*</span></label><InputText @bind-Value="_form.CurrencyCode" class="um-input" /><ValidationMessage For="() => _form.CurrencyCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Contact Name</label><InputText @bind-Value="_form.ContactName" class="um-input" /><ValidationMessage For="() => _form.ContactName" class="text-danger" /></div>
+                    <div class="um-field"><label>Email</label><InputText @bind-Value="_form.Email" class="um-input" /><ValidationMessage For="() => _form.Email" class="text-danger" /></div>
+                    <div class="um-field"><label>Phone</label><InputText @bind-Value="_form.Phone" class="um-input" /><ValidationMessage For="() => _form.Phone" class="text-danger" /></div>
+                    <div class="um-field"><label>Tax ID</label><InputText @bind-Value="_form.TaxId" class="um-input" /><ValidationMessage For="() => _form.TaxId" class="text-danger" /></div>
+                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
+                </div></div>
+            </EditForm>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Vendor")</button></div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
@@ -169,8 +201,16 @@ else
     private string _filterStatus = "";
     private bool _filterActive = false;
     private bool _loading = false;
+    private bool _showForm;
+    private bool _saving;
     private List<VendorDto>? _items;
     private string? _error;
+    private string? _formError;
+    private Guid _editingId = Guid.Empty;
+    private VendorForm _form = new();
+    private EditContext _editContext = default!;
+    private readonly List<string> _vendorTypes = ["Supplier", "Service Provider", "Contractor", "Carrier", "Other"];
+    private readonly List<string> _paymentTerms = ["DueOnReceipt", "Net15", "Net30", "Net45", "Net60"];
 
     private class Stats
     {
@@ -187,6 +227,7 @@ else
             new("Home", "/"),
             new("Finance", "/finance"),
             new("Vendors", "/finance/vendors"));
+        _editContext = new(_form);
         await LoadAsync();
     }
 
@@ -226,5 +267,51 @@ else
         {
             _loading = false;
         }
+    }
+
+    private void OnRowSelected(RowSelectEventArgs<VendorDto> args) => OpenEdit(args.Data);
+    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
+    private void OpenEdit(VendorDto vendor)
+    {
+        _editingId = vendor.VendorId;
+        _form = new VendorForm { VendorCode = vendor.VendorCode, VendorName = vendor.VendorName, ContactName = vendor.ContactName, Email = vendor.Email, Phone = vendor.Phone, PaymentTermsCode = vendor.PaymentTermsCode, CurrencyCode = vendor.CurrencyCode, TaxId = vendor.TaxId, VendorTypeCode = vendor.VendorTypeCode, StatusCode = vendor.StatusCode };
+        _editContext = new(_form);
+        _formError = null;
+        _showForm = true;
+    }
+    private void CloseForm() => _showForm = false;
+
+    private async Task SaveAsync()
+    {
+        if (!_editContext.Validate()) return;
+        _saving = true;
+        try
+        {
+            if (_editingId == Guid.Empty)
+                await Api.CreateVendorAsync(new CreateVendorRequest { TenantId = _tenantId, VendorCode = _form.VendorCode, VendorName = _form.VendorName, ContactName = _form.ContactName, Email = _form.Email, Phone = _form.Phone, PaymentTermsCode = _form.PaymentTermsCode, CurrencyCode = _form.CurrencyCode, TaxId = _form.TaxId, VendorTypeCode = _form.VendorTypeCode, StatusCode = _form.StatusCode });
+            else
+                await Api.UpdateVendorAsync(_editingId, new UpdateVendorRequest { TenantId = _tenantId, VendorId = _editingId, VendorCode = _form.VendorCode, VendorName = _form.VendorName, ContactName = _form.ContactName, Email = _form.Email, Phone = _form.Phone, PaymentTermsCode = _form.PaymentTermsCode, CurrencyCode = _form.CurrencyCode, TaxId = _form.TaxId, VendorTypeCode = _form.VendorTypeCode, StatusCode = _form.StatusCode });
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+        }
+        finally { _saving = false; }
+    }
+
+    private sealed class VendorForm
+    {
+        [Required, StringLength(50)] public string VendorCode { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string VendorName { get; set; } = string.Empty;
+        [StringLength(150)] public string? ContactName { get; set; }
+        [EmailAddress, StringLength(254)] public string? Email { get; set; }
+        [Phone, StringLength(50)] public string? Phone { get; set; }
+        [Required, StringLength(50)] public string PaymentTermsCode { get; set; } = "Net30";
+        [Required, StringLength(3)] public string CurrencyCode { get; set; } = "USD";
+        [StringLength(50)] public string? TaxId { get; set; }
+        [Required, StringLength(80)] public string VendorTypeCode { get; set; } = "Supplier";
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Active";
     }
 }

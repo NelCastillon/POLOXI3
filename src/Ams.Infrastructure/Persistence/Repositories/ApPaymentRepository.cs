@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Finance;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -35,5 +36,35 @@ WHERE ApPaymentId = @Id AND IsDeleted = 0";
         var items = (await multi.ReadAsync<ApPaymentDto>()).AsList();
         var total = await multi.ReadSingleAsync<int>();
         return new PagedResult<ApPaymentDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateApPaymentRequest request, CancellationToken cancellationToken = default)
+    {
+        var id = Guid.NewGuid();
+        const string sql = @"
+INSERT INTO Finance.ApPayment (ApPaymentId, TenantId, VendorId, ApInvoiceId, PaymentDate, Amount, PaymentMethodCode, ReferenceNumber, Notes, StatusCode, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+VALUES (@Id, @TenantId, @VendorId, @ApInvoiceId, @PaymentDate, @Amount, @PaymentMethodCode, @ReferenceNumber, @Notes, @StatusCode, SYSUTCDATETIME(), @CreatedByUserId, NULL, NULL, 0);";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.VendorId, request.ApInvoiceId, request.PaymentDate, request.Amount, request.PaymentMethodCode, request.ReferenceNumber, request.Notes, request.StatusCode, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateApPaymentRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Finance.ApPayment
+SET VendorId = @VendorId,
+    ApInvoiceId = @ApInvoiceId,
+    PaymentDate = @PaymentDate,
+    Amount = @Amount,
+    PaymentMethodCode = @PaymentMethodCode,
+    ReferenceNumber = @ReferenceNumber,
+    Notes = @Notes,
+    StatusCode = @StatusCode,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE ApPaymentId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.VendorId, request.ApInvoiceId, request.PaymentDate, request.Amount, request.PaymentMethodCode, request.ReferenceNumber, request.Notes, request.StatusCode, request.ModifiedByUserId }, cancellationToken: cancellationToken));
     }
 }

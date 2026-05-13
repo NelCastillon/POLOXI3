@@ -1,5 +1,6 @@
 @page "/marketing/cross-sell"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 @inject ConfirmationDialogService Confirmations
@@ -18,6 +19,11 @@
         </button>
     </Actions>
 </AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+}
 
 <!-- KPI -->
 <div class="mkx-kpi-strip">
@@ -41,6 +47,7 @@
 
 <!-- Opportunity table -->
 <div class="mkx-grid-card app-datagrid">
+    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading cross-sell opportunities…</span></div> }
     <SfGrid CssClass="marketing-grid" TValue="XsellOpp" DataSource="_opportunities" AllowPaging="true" AllowSorting="true" AllowFiltering="true"
             AllowTextWrap="true" EnableHover="true" RowHeight="64">
         <GridTextWrapSettings WrapMode="WrapMode.Content" />
@@ -94,22 +101,27 @@
 </div>
 
 @code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private bool _loading;
+    private string? _loadError;
     private List<XsellOpp> _opportunities = [];
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Cross-Sell",""));
-        _opportunities =
-        [
-            new("Riverside Construction LLC", "Commercial", "Beth Nguyen", "Missing Umbrella",           94, 4_200m, "Payroll > $500k, no umbrella",              new DateTime(2025,3,1)),
-            new("Harmon Family",              "Personal",   "Jake Park",   "Home + Auto Bundle",          88, 1_800m, "2 separate carriers, bundling discount",   new DateTime(2025,2,15)),
-            new("Summit Roofing Inc",         "Commercial", "Beth Nguyen", "Workers Comp Expansion",      85, 6_400m, "Added 4 employees, no WC update",          new DateTime(2025,3,10)),
-            new("Delgado Household",          "Personal",   "Sara Kim",    "Teen Driver Add-On",          81, 950m,   "Driver DOB 2007, not listed",              new DateTime(2025,2,28)),
-            new("BlueSky Café Group",         "Commercial", "Jake Park",   "Business Package Expansion",  79, 3_100m, "No BOP, liquor liability gap",             new DateTime(2025,1,20)),
-            new("Tanaka Medical Group",       "Commercial", "Sara Kim",    "Benefits Upsell",             76, 12_000m,"Enrolled 22 employees, no dental/vision",  new DateTime(2025,3,5)),
-            new("Chen Family Trust",          "Personal",   "Beth Nguyen", "Home + Auto Bundle",          72, 1_400m, "Auto renewing, no HO cross-sell offer",    new DateTime(2025,2,10)),
-            new("Apex Distribution Inc",      "Commercial", "Jake Park",   "Workers Comp Expansion",      68, 8_900m, "Revenue grew 35%, WC audit pending",       new DateTime(2025,3,12)),
-        ];
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; _loadError = null;
+        try
+        {
+            var result = await Api.SearchMarketingCrossSellAsync(_tenantId);
+            _opportunities = result?.Items.Select(x => new XsellOpp(x.OpportunityId, x.AccountName, x.AccountType, x.Producer, x.OpportunityType, x.Score, x.EstimatedPremium, x.TriggerSignal, x.LastContactDate)).ToList() ?? [];
+        }
+        catch (Exception ex) { _loadError = $"Failed to load cross-sell opportunities: {ex.Message}"; _opportunities = []; }
+        finally { _loading = false; }
     }
 
     private static string Initials(string n) { var p = n.Trim().Split(' '); return p.Length >= 2 ? $"{p[0][0]}{p[^1][0]}" : n.Length > 0 ? n[..1] : "?"; }
@@ -128,9 +140,10 @@
     private async Task DismissOpportunityAsync(XsellOpp opportunity)
     {
         if (!await Confirmations.ConfirmAsync("Dismiss opportunity", $"Dismiss the {opportunity.OpportunityType} opportunity for {opportunity.AccountName}?", "Dismiss")) return;
-        _opportunities.Remove(opportunity);
+        await Api.DismissMarketingCrossSellAsync(opportunity.Id);
+        await LoadAsync();
     }
 
-    private sealed record XsellOpp(string AccountName, string AccountType, string Producer, string OpportunityType,
+    private sealed record XsellOpp(Guid Id, string AccountName, string AccountType, string Producer, string OpportunityType,
         int Score, decimal EstimatedPremium, string Trigger, DateTime LastContact);
 }

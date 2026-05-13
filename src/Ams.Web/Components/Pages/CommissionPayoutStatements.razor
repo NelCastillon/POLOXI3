@@ -22,6 +22,11 @@
     </Actions>
 </AppPageHeader>
 
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+}
+
 <!-- KPI strip -->
 <div class="cs-kpi-strip">
     <div class="cs-kpi-card cs-ki-blue"><i class="bi bi-file-earmark-text cs-kpi-icon" aria-hidden="true"></i><div><div class="cs-kpi-val">@(_items?.Count ?? 0)</div><div class="cs-kpi-lbl">Statements</div></div></div>
@@ -114,26 +119,23 @@ else
 }
 
 <!-- Generate Statements Dialog -->
-<SfDialog Width="480px" IsModal="true" @bind-Visible="_showGenerate" Header="Generate Commission Statements" ShowCloseIcon="true">
+<SfDialog Width="560px" IsModal="true" @bind-Visible="_showGenerate" ShowCloseIcon="false">
     <DialogTemplates>
         <Content>
-            <div class="cs-dlg-body">
-                <div class="form-group mb-2"><label class="cs-lbl">Pay Period</label>
-                    <SfDateRangePicker TValue="DateTime?" @bind-StartDate="_genFrom" @bind-EndDate="_genTo" Width="100%"></SfDateRangePicker>
-                </div>
-                <div class="form-group mb-2"><label class="cs-lbl">Payee Filter (optional)</label>
-                    <SfTextBox @bind-Value="_genPayee" Placeholder="Leave blank for all payees…"></SfTextBox>
-                </div>
-                <div class="form-group mb-2"><label class="cs-lbl">Include Clawbacks</label>
-                    <SfCheckBox Label="Apply pending clawbacks" @bind-Checked="_genClawbacks"></SfCheckBox>
-                </div>
-            </div>
+            <div class="um-modal-header"><i class="bi bi-file-earmark-plus" aria-hidden="true"></i><span>Generate Commission Statements</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseGenerate"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm EditContext="_generateEditContext">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Pay Period Start <span class="text-danger">*</span></label><InputDate @bind-Value="_generateForm.PayPeriodStart" class="um-input" /><ValidationMessage For="() => _generateForm.PayPeriodStart" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Pay Period End <span class="text-danger">*</span></label><InputDate @bind-Value="_generateForm.PayPeriodEnd" class="um-input" /><ValidationMessage For="() => _generateForm.PayPeriodEnd" class="validation-message text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Payee Filter</label><InputText @bind-Value="_generateForm.PayeeFilter" class="um-input" placeholder="Leave blank for all payees…" /><ValidationMessage For="() => _generateForm.PayeeFilter" class="validation-message text-danger" /></div>
+                    <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_generateForm.IncludeClawbacks" /> Apply pending clawbacks</label></div>
+                    @if (!string.IsNullOrWhiteSpace(_generateFormError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_generateFormError</div> }
+                </div></div>
+            </EditForm>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseGenerate">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="GenerateStatements">Generate</button></div>
         </Content>
     </DialogTemplates>
-    <DialogButtons>
-        <DialogButton Content="Generate" IsPrimary="true" OnClick="() => _showGenerate = false"></DialogButton>
-        <DialogButton Content="Cancel" OnClick="() => _showGenerate = false"></DialogButton>
-    </DialogButtons>
 </SfDialog>
 
 @code {
@@ -142,9 +144,10 @@ else
     private string _filterStatus = "";
     private DateTime? _filterFrom, _filterTo;
     private bool _showGenerate;
-    private string? _genPayee;
-    private DateTime? _genFrom, _genTo;
-    private bool _genClawbacks = true;
+    private GenerateStatementsForm _generateForm = new();
+    private EditContext _generateEditContext = default!;
+    private string? _generateFormError;
+    private string? _loadError;
     private List<CommissionPayoutStatementDto>? _items;
 
     private IEnumerable<CommissionPayoutStatementDto> FilteredItems => (_items ?? []).Where(x =>
@@ -154,28 +157,37 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        _generateEditContext = new(_generateForm);
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Statements",""));
         await LoadAsync();
+    }
+
+    private void CloseGenerate() => _showGenerate = false;
+
+    private void GenerateStatements()
+    {
+        _generateFormError = null;
+        if (!_generateEditContext.Validate()) return;
+        if (_generateForm.PayPeriodEnd < _generateForm.PayPeriodStart)
+        {
+            _generateFormError = "Pay Period End must be on or after Pay Period Start.";
+            return;
+        }
+        _showGenerate = false;
     }
 
     private async Task LoadAsync()
     {
         try
         {
+            _loadError = null;
             var result = await Api.SearchCommissionPayoutStatementsAsync(_tenantId, _searchTerm);
             _items = result?.Items.ToList() ?? [];
         }
-        catch (HttpRequestException ex)
-        {
-            // API error - show empty list with message
-            _items = [];
-            Console.Error.WriteLine($"Failed to load commission payout statements: {ex.Message}");
-        }
         catch (Exception ex)
         {
-            // Unexpected error
+            _loadError = ex.Message;
             _items = [];
-            Console.Error.WriteLine($"Unexpected error loading commission payout statements: {ex.Message}");
         }
     }
 
@@ -183,4 +195,12 @@ else
 
     void NavToDetail(CommissionPayoutStatementDto s) =>
         Nav.NavigateTo("/commissions/statements/" + s.StatementId);
+
+    private sealed class GenerateStatementsForm
+    {
+        [Required] public DateTime PayPeriodStart { get; set; } = DateTime.Today.AddDays(-14);
+        [Required] public DateTime PayPeriodEnd { get; set; } = DateTime.Today;
+        [StringLength(200)] public string? PayeeFilter { get; set; }
+        public bool IncludeClawbacks { get; set; } = true;
+    }
 }

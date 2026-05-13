@@ -1,48 +1,215 @@
 ﻿@page "/commissions/payout-batches"
 @inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Commission Payout Batches</PageTitle>
+<PageTitle>Commission Payout Batches — AMS</PageTitle>
 
-<AppPageHeader Title="Commission Payout Batches" Icon="bi-grid" />
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
 
-<div class="toolbar">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+<AppPageHeader Title="Commission Payout Batches"
+               Subtitle="Create, review, approve, and process producer payout batches by pay period"
+               Icon="bi-box-seam">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Batch</button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    @BatchKpi("all", "bi-box-seam", "Total Batches", _items.Count.ToString(), "pc-kpi-icon--total")
+    @BatchKpi("Draft", "bi-pencil-square", "Draft", _items.Count(x => x.StatusCode == "Draft").ToString(), "pc-kpi-icon--inactive")
+    @BatchKpi("Pending", "bi-hourglass", "Pending", _items.Count(x => x.StatusCode == "Pending").ToString(), "pc-kpi-icon--inactive")
+    @BatchKpi("Processed", "bi-check-circle", "Processed", _items.Count(x => x.StatusCode == "Processed").ToString(), "pc-kpi-icon--active")
+    @BatchKpi("Paid", "bi-cash-stack", "Paid", _items.Count(x => x.StatusCode == "Paid").ToString(), "pc-kpi-icon--active")
+    @BatchKpi("amount", "bi-currency-dollar", "Total Amount", _items.Sum(x => x.TotalAmount).ToString("C0"), "pc-kpi-icon--total")
 </div>
 
-@if (_items is null)
+<div class="commission-subnav">
+    <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions")'><i class="bi bi-clipboard-check"></i> Plans</button>
+    <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text"></i> Statements</button>
+    <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><i class="bi bi-journal-text"></i> Producer Ledger</button>
+    <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/clawbacks")'><i class="bi bi-arrow-counterclockwise"></i> Clawbacks</button>
+    <button class="um-btn um-btn-primary um-btn-sm"><i class="bi bi-box-seam"></i> Payout Batches</button>
+</div>
+
+<div class="enterprise-toolbar">
+    <SfTextBox Placeholder="Search batch reference or status…" @bind-Value="_searchTerm" Width="320px"></SfTextBox>
+    <select class="e-input" @bind="_filterStatus">
+        <option value="">All Statuses</option>
+        <option value="Draft">Draft</option>
+        <option value="Pending">Pending</option>
+        <option value="Processed">Processed</option>
+        <option value="Paid">Paid</option>
+    </select>
+    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-search"></i> Apply</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
 {
-    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+}
+
+@if (_loading)
+{
+    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading payout batches…</span></div>
 }
 else
 {
-    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridPageSettings PageSize="10"></GridPageSettings>
-        <GridColumns>
-            <GridColumn Field="@nameof(CommissionPayoutBatchDto.BatchReference)" HeaderText="Batch Reference" Width="200"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPayoutBatchDto.PayPeriodStart)" HeaderText="Period Start" Type="ColumnType.Date" Format="d" Width="140"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPayoutBatchDto.PayPeriodEnd)" HeaderText="Period End" Type="ColumnType.Date" Format="d" Width="140"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPayoutBatchDto.TotalAmount)" HeaderText="Total Amount" Format="C2" Width="150"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPayoutBatchDto.PayoutCount)" HeaderText="Count" Width="100"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPayoutBatchDto.StatusCode)" HeaderText="Status" Width="120"></GridColumn>
-            <GridColumn Field="@nameof(CommissionPayoutBatchDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="180"></GridColumn>
-        </GridColumns>
-    </SfGrid>
+    <div class="enterprise-grid-card">
+        <SfGrid TValue="CommissionPayoutBatchDto" DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="520px">
+            <GridEvents TValue="CommissionPayoutBatchDto" RowSelected="OnRowSelected" />
+            <GridPageSettings PageSize="12"></GridPageSettings>
+            <GridColumns>
+                <GridColumn HeaderText="Batch" Width="230">
+                    <Template>
+                        @{ var item = (CommissionPayoutBatchDto)context; }
+                        <div class="entity-cell"><i class="bi bi-box-seam entity-icon" aria-hidden="true"></i><div><strong>@item.BatchReference</strong><small>@item.CreatedDateUtc.ToLocalTime().ToString("g")</small></div></div>
+                    </Template>
+                </GridColumn>
+                <GridColumn Field="@nameof(CommissionPayoutBatchDto.PayPeriodStart)" HeaderText="Period Start" Type="ColumnType.Date" Format="d" Width="130"></GridColumn>
+                <GridColumn Field="@nameof(CommissionPayoutBatchDto.PayPeriodEnd)" HeaderText="Period End" Type="ColumnType.Date" Format="d" Width="130"></GridColumn>
+                <GridColumn Field="@nameof(CommissionPayoutBatchDto.TotalAmount)" HeaderText="Total Amount" Format="C2" Width="150" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
+                <GridColumn Field="@nameof(CommissionPayoutBatchDto.PayoutCount)" HeaderText="Payouts" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center"></GridColumn>
+                <GridColumn HeaderText="Status" Width="130">
+                    <Template>
+                        @{ var item = (CommissionPayoutBatchDto)context; }
+                        <span class="status-chip status-@item.StatusCode.ToLowerInvariant()">@item.StatusCode</span>
+                    </Template>
+                </GridColumn>
+                <GridColumn HeaderText="Actions" Width="120">
+                    <Template>
+                        @{ var item = (CommissionPayoutBatchDto)context; }
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit batch"><i class="bi bi-pencil"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick='() => Nav.NavigateTo("/commissions/statements")' title="Statements"><i class="bi bi-file-earmark-text"></i></button>
+                    </Template>
+                </GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
 }
+
+<SfDialog @bind-Visible="_showForm" Width="680px" IsModal="true" ShowCloseIcon="false">
+    <DialogTemplates>
+        <Content>
+            <div class="um-modal-header"><i class="bi bi-box-seam" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Payout Batch" : "Edit Payout Batch")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm EditContext="_editContext">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Batch Reference <span class="text-danger">*</span></label><InputText @bind-Value="_form.BatchReference" class="um-input" /><ValidationMessage For="() => _form.BatchReference" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option>Draft</option><option>Pending</option><option>Processed</option><option>Paid</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Pay Period Start <span class="text-danger">*</span></label><InputDate @bind-Value="_form.PayPeriodStart" class="um-input" /><ValidationMessage For="() => _form.PayPeriodStart" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Pay Period End <span class="text-danger">*</span></label><InputDate @bind-Value="_form.PayPeriodEnd" class="um-input" /><ValidationMessage For="() => _form.PayPeriodEnd" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Total Amount</label><InputNumber @bind-Value="_form.TotalAmount" class="um-input" /><ValidationMessage For="() => _form.TotalAmount" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Payout Count</label><InputNumber @bind-Value="_form.PayoutCount" class="um-input" /><ValidationMessage For="() => _form.PayoutCount" class="validation-message text-danger" /></div>
+                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
+                </div></div>
+            </EditForm>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Batch")</button></div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private string? _searchTerm;
-    private List<CommissionPayoutBatchDto>? _items;
+    private string? _searchTerm, _loadError, _formError;
+    private string _filterStatus = string.Empty;
+    private bool _loading, _showForm, _saving;
+    private Guid _editingId = Guid.Empty;
+    private List<CommissionPayoutBatchDto> _items = [];
+    private PayoutBatchForm _form = new();
+    private EditContext _editContext = default!;
+    private SfToast _toast = default!;
+
+    private IEnumerable<CommissionPayoutBatchDto> FilteredItems => _items.Where(x =>
+        (string.IsNullOrWhiteSpace(_filterStatus) || x.StatusCode == _filterStatus) &&
+        (string.IsNullOrWhiteSpace(_searchTerm) || x.BatchReference.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase) || x.StatusCode.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase)));
 
     protected override async Task OnInitializedAsync()
     {
+        _editContext = new(_form);
+        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Payout Batches",""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        var result = await Api.SearchCommissionPayoutBatchesAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? new List<CommissionPayoutBatchDto>();
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchCommissionPayoutBatchesAsync(_tenantId, _searchTerm);
+            _items = result?.Items.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            _items = [];
+            await _toast.ShowAsync(new ToastModel { Content = $"Load failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally { _loading = false; }
+    }
+
+    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
+    private void OpenEdit(CommissionPayoutBatchDto item) { _editingId = item.PayoutBatchId; _form = new PayoutBatchForm { BatchReference = item.BatchReference, PayPeriodStart = item.PayPeriodStart.ToDateTime(TimeOnly.MinValue), PayPeriodEnd = item.PayPeriodEnd.ToDateTime(TimeOnly.MinValue), TotalAmount = item.TotalAmount, PayoutCount = item.PayoutCount, StatusCode = item.StatusCode }; _editContext = new(_form); _formError = null; _showForm = true; }
+    private void OnRowSelected(RowSelectEventArgs<CommissionPayoutBatchDto> args) => OpenEdit(args.Data);
+    private void CloseForm() => _showForm = false;
+
+    private async Task SaveAsync()
+    {
+        if (!_editContext.Validate()) return;
+        if (_form.PayPeriodEnd < _form.PayPeriodStart) { _formError = "Pay Period End must be on or after Pay Period Start."; return; }
+        _saving = true;
+        _formError = null;
+        try
+        {
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateCommissionPayoutBatchAsync(ToCreateRequest());
+                await _toast.ShowAsync(new ToastModel { Content = "Payout batch created.", CssClass = "e-toast-success" });
+            }
+            else
+            {
+                await Api.UpdateCommissionPayoutBatchAsync(_editingId, ToUpdateRequest());
+                await _toast.ShowAsync(new ToastModel { Content = "Payout batch updated.", CssClass = "e-toast-success" });
+            }
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            await _toast.ShowAsync(new ToastModel { Content = _formError, CssClass = "e-toast-danger" });
+        }
+        finally { _saving = false; }
+    }
+
+    private CreateCommissionPayoutBatchRequest ToCreateRequest() => new() { TenantId = _tenantId, BatchReference = _form.BatchReference, PayPeriodStart = DateOnly.FromDateTime(_form.PayPeriodStart), PayPeriodEnd = DateOnly.FromDateTime(_form.PayPeriodEnd), TotalAmount = _form.TotalAmount, PayoutCount = _form.PayoutCount, StatusCode = _form.StatusCode, ProcessedDateUtc = _form.StatusCode is "Processed" or "Paid" ? DateTime.UtcNow : null };
+    private UpdateCommissionPayoutBatchRequest ToUpdateRequest() => new() { TenantId = _tenantId, PayoutBatchId = _editingId, BatchReference = _form.BatchReference, PayPeriodStart = DateOnly.FromDateTime(_form.PayPeriodStart), PayPeriodEnd = DateOnly.FromDateTime(_form.PayPeriodEnd), TotalAmount = _form.TotalAmount, PayoutCount = _form.PayoutCount, StatusCode = _form.StatusCode, ProcessedDateUtc = _form.StatusCode is "Processed" or "Paid" ? DateTime.UtcNow : null };
+
+    private string GetBatchKpiClass(string filter) =>
+        $"pc-kpi-card {((_filterStatus == filter || (filter == "all" && string.IsNullOrEmpty(_filterStatus))) ? "pc-kpi-card--active" : string.Empty)}";
+
+    private void SetBatchFilter(string filter) =>
+        _filterStatus = filter == "all" || filter == "amount" ? string.Empty : filter;
+
+    RenderFragment BatchKpi(string filter, string icon, string label, string value, string iconClass) => __builder =>
+    {
+        <button type="button" class="@GetBatchKpiClass(filter)" title="Filter by @label" @onclick="() => SetBatchFilter(filter)">
+            <span class="pc-kpi-icon @iconClass"><i class="bi @icon"></i></span><span><span class="pc-kpi-value">@value</span><span class="pc-kpi-label">@label</span></span>
+        </button>
+    };
+
+    private sealed class PayoutBatchForm
+    {
+        [Required, StringLength(80)] public string BatchReference { get; set; } = $"PAY-{DateTime.UtcNow:yyyyMM}-001";
+        [Required] public DateTime PayPeriodStart { get; set; } = DateTime.Today.AddDays(-14);
+        [Required] public DateTime PayPeriodEnd { get; set; } = DateTime.Today;
+        [Range(0, 100000000)] public decimal TotalAmount { get; set; }
+        [Range(0, 1000000)] public int PayoutCount { get; set; }
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft";
     }
 }

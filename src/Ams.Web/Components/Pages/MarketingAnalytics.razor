@@ -1,5 +1,6 @@
 @page "/marketing/analytics"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -20,6 +21,11 @@
         </button>
     </Actions>
 </AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+}
 
 <!-- KPI strip -->
 <div class="mka-kpi-strip">
@@ -53,6 +59,7 @@
 <div class="mka-row">
     <div class="mka-card mka-card-lg">
         <div class="mka-card-hdr">Performance by Campaign</div>
+        @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading analytics…</span></div> }
         <SfGrid TValue="CampPerfRow" DataSource="_rows" AllowSorting="true" EnableHover="true" RowHeight="50">
             <GridColumns>
                 <GridColumn Field="@nameof(CampPerfRow.Name)" HeaderText="Campaign" MinWidth="200" />
@@ -114,7 +121,10 @@
 </div>
 
 @code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string _period = "90";
+    private bool _loading;
+    private string? _loadError;
 
     private List<CampPerfRow> _rows = [];
     private decimal _totalReached, _avgOpenRate, _totalConversions, _totalRevenue, _totalSpend;
@@ -137,24 +147,32 @@
         ("Win-Back Recovery",      231,  115_500m),
     ];
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Analytics",""));
-        _rows =
-        [
-            new("Home+Auto Bundle Push",         "Email",         11_200, 28.9m, 6.2m, 412, 206_000m, 8_000m),
-            new("Q2 Cross-Sell — Umbrella",      "Multi-Channel",  4_820, 31.4m, 9.1m, 187,  94_000m, 5_000m),
-            new("Workers Comp Expansion — SMB",  "Email",          3_400, 22.1m, 5.8m,  95,  57_000m, 3_200m),
-            new("Benefits Upsell — Employers",   "Multi-Channel",  1_900, 19.8m, 4.2m,  44,  88_000m, 6_500m),
-            new("Lapsed Policy Win-Back",         "Email",          6_300, 24.6m, 5.5m, 231, 115_500m, 4_000m),
-            new("Google Review Request — NPS 9+","SMS",            2_100, 41.2m,18.4m, 680,      0m, 1_200m),
-        ];
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; _loadError = null;
+        try
+        {
+            var campaigns = await Api.SearchCommunicationCampaignsAsync(_tenantId);
+            _rows = campaigns?.Items.Select(c => new CampPerfRow(c.Name, c.Type, c.Reached, c.OpenRate, EstimateClickRate(c.OpenRate), c.Conversions, c.Revenue, EstimateSpend(c.Type, c.Reached))).ToList() ?? [];
+        }
+        catch (Exception ex) { _loadError = $"Failed to load analytics: {ex.Message}"; _rows = []; }
+
         _totalReached    = _rows.Sum(r => r.Reached);
-        _avgOpenRate     = _rows.Average(r => r.OpenRate);
+        _avgOpenRate     = _rows.Any() ? _rows.Average(r => r.OpenRate) : 0;
         _totalConversions= _rows.Sum(r => r.Conversions);
         _totalRevenue    = _rows.Sum(r => r.Revenue);
         _totalSpend      = _rows.Sum(r => r.Spend);
+        _loading = false;
     }
+
+    private static decimal EstimateClickRate(decimal openRate) => Math.Round(openRate * 0.22m, 1);
+    private static decimal EstimateSpend(string type, int reached) => Math.Max(500m, reached * (type == "Direct Mail" ? 1.15m : type == "SMS" ? 0.18m : 0.42m));
 
     private sealed record CampPerfRow(string Name, string Type, int Reached, decimal OpenRate, decimal ClickRate, int Conversions, decimal Revenue, decimal Spend)
     {

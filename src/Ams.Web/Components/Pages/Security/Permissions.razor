@@ -128,7 +128,25 @@
                     <span class="@(e.IsBuiltIn ? "um-badge um-badge-warning" : "um-badge um-badge-neutral")">@(e.IsBuiltIn ? "Yes" : "No")</span>
                 </Template>
             </GridColumn>
-            <GridColumn Field="@nameof(PermEntry.RoleCount)" HeaderText="Roles" Width="90" TextAlign="TextAlign.Center" />
+            <GridColumn Field="@nameof(PermEntry.RoleNames)" HeaderText="Roles" Width="190" AllowSorting="false">
+                <Template>
+                    @{ var e = (PermEntry)context; }
+                    <div class="um-role-list" title="@RoleTitle(e)">
+                        @foreach (var roleName in RoleNames(e).Take(2))
+                        {
+                            <span class="badge badge-blue">@roleName</span>
+                        }
+                        @if (RoleNames(e).Count > 2)
+                        {
+                            <span class="um-count-pill">+@(RoleNames(e).Count - 2)</span>
+                        }
+                        @if (RoleNames(e).Count == 0)
+                        {
+                            <span class="text-muted">None</span>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
             <GridColumn HeaderText="" Width="90" TextAlign="TextAlign.Right">
                 <Template>
                     @{ var e = (PermEntry)context; }
@@ -147,32 +165,73 @@
                OnConfirm="SaveAsync"
                OnClose="CloseDrawer">
     <Content>
-        <div class="sp-form">
-            <label class="sp-form-label">User *</label>
-            <input class="um-input" @bind="_editModel.UserFullName" placeholder="Search user…" />
+        @if (_editContext is not null)
+        {
+            <EditForm EditContext="_editContext">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+            @if (!string.IsNullOrWhiteSpace(_formError))
+            {
+                <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_formError
+                </div>
+            }
 
-            <label class="sp-form-label">Permission Code *</label>
-            <input class="um-input sp-mono" @bind="_editModel.PermissionCode" placeholder="e.g. Policy.Write" />
+            <div class="um-field">
+            <label>User <span class="text-danger">*</span></label>
+            <SfDropDownList TValue="Guid" TItem="UserDto"
+                            DataSource="_users"
+                            @bind-Value="_editModel.UserId"
+                            Placeholder="Select user"
+                            AllowFiltering="true"
+                            Width="100%">
+                <DropDownListFieldSettings Value="UserId" Text="FullName" />
+            </SfDropDownList>
+            <ValidationMessage For="() => _editModel.UserId" class="text-danger" />
+            </div>
 
-            <label class="sp-form-label">Type</label>
+            <div class="um-field">
+            <label>Permission <span class="text-danger">*</span></label>
+            <SfDropDownList TValue="Guid" TItem="PermEntry"
+                            DataSource="_allEntries"
+                            @bind-Value="_editModel.PermissionId"
+                            Placeholder="Select permission"
+                            AllowFiltering="true"
+                            Width="100%">
+                <DropDownListFieldSettings Value="PermissionId" Text="PermissionDisplayText" />
+            </SfDropDownList>
+            <ValidationMessage For="() => _editModel.PermissionValidationId" class="text-danger" />
+            </div>
+
+            <div class="um-field">
+            <label>Type</label>
             <SfDropDownList TValue="string" TItem="LabelValue"
                             DataSource="_typeOptions"
                             @bind-Value="_editModel.PermissionType"
                             Width="100%">
                 <DropDownListFieldSettings Value="Value" Text="Label" />
             </SfDropDownList>
+            <ValidationMessage For="() => _editModel.PermissionType" class="text-danger" />
+            </div>
 
-            <label class="sp-form-label">Action</label>
+            <div class="um-field">
+            <label>Action</label>
             <SfDropDownList TValue="bool" TItem="LabelValue<bool>"
                             DataSource="_actionOptions"
                             @bind-Value="_editModel.IsGranted"
                             Width="100%">
                 <DropDownListFieldSettings Value="Value" Text="Label" />
             </SfDropDownList>
+            </div>
 
-            <label class="sp-form-label">Expires</label>
-            <input class="um-input" type="date" @bind="_editModel.ExpiresDate" />
-        </div>
+            <div class="um-field">
+            <label>Expires</label>
+            <InputDate class="um-input" @bind-Value="_editModel.ExpiresDate" />
+            <ValidationMessage For="() => _editModel.ExpiresDate" class="text-danger" />
+            </div>
+                </div></div>
+            </EditForm>
+        }
     </Content>
 </AppCrudDrawer>
 
@@ -186,9 +245,13 @@
 
     private List<PermEntry> _allEntries = [];
     private List<PermEntry> _entries    = [];
+    private List<UserDto>   _users      = [];
 
     private bool _loading    = false;
     private bool _showDrawer = false;
+    private bool _saving     = false;
+    private string _formError = string.Empty;
+    private EditContext? _editContext;
 
     private string _search       = string.Empty;
     private string _filterType   = string.Empty;
@@ -233,7 +296,20 @@
             new("Users & Security",  "/tenant/security/users"),
             new("Permissions",       "/tenant/security/perms"));
 
-        await LoadAsync();
+        await Task.WhenAll(LoadUsersAsync(), LoadAsync());
+    }
+
+    private async Task LoadUsersAsync()
+    {
+        try
+        {
+            var result = await Api.SearchUsersAsync(_tenantId, pageSize: 2000);
+            _users = result?.Items.OrderBy(u => u.FullName).ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Users failed to load: {ex.Message}", "e-toast-danger");
+        }
     }
 
     private async Task LoadAsync()
@@ -244,6 +320,7 @@
         {
             var result = await Api.SearchPermissionsAsync(_tenantId, _search, pageSize: 2000);
             _allEntries = result?.Items.Select(MapPermission).ToList() ?? [];
+            await LoadRoleNamesAsync();
             ComputeKpi();
             ApplyFilters();
         }
@@ -252,6 +329,31 @@
             await ShowToastAsync($"Load failed: {ex.Message}", "e-toast-danger");
         }
         finally { _loading = false; StateHasChanged(); }
+    }
+
+    private async Task LoadRoleNamesAsync()
+    {
+        var entriesWithRoles = _allEntries.Where(e => e.RoleCount > 0).ToList();
+        if (entriesWithRoles.Count == 0) return;
+
+        await Task.WhenAll(entriesWithRoles.Select(async entry =>
+        {
+            try
+            {
+                var roles = await Api.GetPermissionRolesAsync(entry.PermissionId);
+                entry.RoleNames = roles is null
+                    ? string.Empty
+                    : string.Join(", ", roles
+                    .Select(r => r.RoleName)
+                    .Where(roleName => !string.IsNullOrWhiteSpace(roleName))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(roleName => roleName));
+            }
+            catch
+            {
+                entry.RoleNames = string.Empty;
+            }
+        }));
     }
 
     private async Task OnSearchAsync(string _) => await LoadAsync();
@@ -291,9 +393,9 @@
         _builtInCount = _allEntries.Count(e => e.IsBuiltIn);
     }
 
-    private void OpenAddDrawer()  { _editModel = new(); _showDrawer = true; }
-    private void OpenEditDrawer(PermEntry e) { _editModel = new PermEntry { PermissionId = e.PermissionId, UserFullName = e.UserFullName, UserEmail = e.UserEmail, PermissionCode = e.PermissionCode, PermissionType = e.PermissionType, IsGranted = e.IsGranted, ExpiresDate = e.ExpiresDate, GrantedByName = e.GrantedByName }; _showDrawer = true; }
-    private void CloseDrawer() => _showDrawer = false;
+    private void OpenAddDrawer()  { _editModel = new(); _editContext = new(_editModel); _formError = string.Empty; _showDrawer = true; }
+    private void OpenEditDrawer(PermEntry e) { _editModel = new PermEntry { PermissionId = e.PermissionId, UserId = e.UserId, UserFullName = e.UserFullName, UserEmail = e.UserEmail, PermissionCode = e.PermissionCode, PermissionType = e.PermissionType, IsGranted = e.IsGranted, ExpiresDate = e.ExpiresDate, GrantedByName = e.GrantedByName }; _editContext = new(_editModel); _showDrawer = true; }
+    private void CloseDrawer() { _showDrawer = false; _formError = string.Empty; }
     private void OpenDetail(PermEntry e) => Nav.NavigateTo($"/iam/permissions/{e.PermissionId}");
 
     private static PermEntry MapPermission(PermissionDto p) => new()
@@ -319,11 +421,52 @@
 
     private async Task SaveAsync()
     {
-        // TODO: Api.SavePermissionAsync
-        await Task.Delay(0);
-        _showDrawer = false;
-        await LoadAsync();
-        await ShowToastAsync("Permission saved.", "e-toast-success");
+        _formError = ValidateGrant();
+        if (!string.IsNullOrWhiteSpace(_formError))
+        {
+            await ShowToastAsync(_formError, "e-toast-danger");
+            return;
+        }
+
+        if (_editContext?.Validate() != true) return;
+
+        _saving = true;
+        try
+        {
+            await Api.GrantPermissionOverrideAsync(new GrantUserPermissionRequest
+            {
+                TenantId       = _tenantId,
+                UserId         = _editModel.UserId,
+                PermissionId   = _editModel.PermissionId,
+                IsGranted      = _editModel.IsGranted,
+                ExpiresDateUtc = _editModel.ExpiresDate?.Date,
+            });
+
+            _showDrawer = false;
+            await ShowToastAsync($"Permission {(_editModel.IsGranted ? "granted" : "denied")} successfully.", "e-toast-success");
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            await ShowToastAsync(_formError, "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private string ValidateGrant()
+    {
+        if (_saving)
+            return "Save is already in progress.";
+        if (_editModel.UserId == Guid.Empty)
+            return "User is required.";
+        if (_editModel.PermissionId == Guid.Empty)
+            return "Permission is required.";
+        if (_editModel.ExpiresDate.HasValue && _editModel.ExpiresDate.Value.Date <= DateTime.Today)
+            return "Expires must be a future date.";
+        return string.Empty;
     }
 
     private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
@@ -360,12 +503,28 @@
         return "sp-expiry";
     }
 
+    private static IReadOnlyList<string> RoleNames(PermEntry entry)
+        => string.IsNullOrWhiteSpace(entry.RoleNames)
+            ? []
+            : entry.RoleNames
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(roleName => !string.IsNullOrWhiteSpace(roleName))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+    private static string RoleTitle(PermEntry entry)
+        => RoleNames(entry).Count == 0 ? "No assigned roles" : string.Join(", ", RoleNames(entry));
+
     private sealed record LabelValue(string Value, string Label);
     private sealed record LabelValue<T>(T Value, string Label);
 
     private sealed class PermEntry
     {
         public Guid      PermissionId    { get; set; } = Guid.Empty;
+        [RequiredGuid(ErrorMessage = "Permission is required.")]
+        public Guid      PermissionValidationId { get => PermissionId; set => PermissionId = value; }
+        [RequiredGuid(ErrorMessage = "User is required.")]
+        public Guid      UserId          { get; set; } = Guid.Empty;
         public string    UserFullName    { get; set; } = string.Empty;
         public string    UserEmail       { get; set; } = string.Empty;
         public string    PermissionName  { get; set; } = string.Empty;
@@ -373,12 +532,20 @@
         public string    ResourceCode    { get; set; } = string.Empty;
         public string    ActionCode      { get; set; } = string.Empty;
         public string    Description     { get; set; } = string.Empty;
+        [Required]
         public string    PermissionType  { get; set; } = "Feature";
         public bool      IsGranted       { get; set; } = true;
         public bool      IsActive        { get; set; } = true;
         public bool      IsBuiltIn       { get; set; }
         public int       RoleCount       { get; set; }
+        public string    RoleNames       { get; set; } = string.Empty;
         public DateTime? ExpiresDate     { get; set; }
         public string    GrantedByName   { get; set; } = string.Empty;
+        public string    PermissionDisplayText => $"{PermissionName} ({PermissionCode})";
+    }
+
+    private sealed class RequiredGuidAttribute : ValidationAttribute
+    {
+        public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty;
     }
 }

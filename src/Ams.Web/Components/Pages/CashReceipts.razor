@@ -1,42 +1,107 @@
 @page "/finance/cash-receipts"
 @inject ApiClient Api
-@using Ams.Application.Common.Dtos
-@using Ams.Web.Services
-@using Syncfusion.Blazor.Grids
-@using Syncfusion.Blazor.Inputs
-@using Syncfusion.Blazor.Buttons
+@inject NavigationManager Nav
 
-<h3>Cash Receipts</h3>
+<PageTitle>Cash Receipts — AMS</PageTitle>
 
-<div class="mb-3 d-flex gap-2">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="300px" />
-    <SfButton OnClick="LoadAsync">Search</SfButton>
+<AppPageHeader Title="Cash Receipts"
+               Subtitle="Tenant Admin cash receipt register for posted and pending receipt entries"
+               Icon="bi-currency-dollar">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/payments")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Billing Payments</button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Receipt</button>
+    </Actions>
+</AppPageHeader>
+
+<div class="fin-kpi-strip">
+    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-currency-dollar"></i></div><div><div class="fin-kpi-value">@Fmt(_items.Sum(x => x.Amount))</div><div class="fin-kpi-label">Total Receipts</div></div></div>
+    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-check-circle"></i></div><div><div class="fin-kpi-value">@_items.Count(x => x.StatusCode == "Posted")</div><div class="fin-kpi-label">Posted</div></div></div>
+    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-hourglass"></i></div><div><div class="fin-kpi-value">@_items.Count(x => x.StatusCode != "Posted")</div><div class="fin-kpi-label">Pending</div></div></div>
+    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-credit-card"></i></div><div><div class="fin-kpi-value">@_items.Select(x => x.PaymentMethodCode).Distinct().Count()</div><div class="fin-kpi-label">Methods</div></div></div>
 </div>
 
-<SfGrid DataSource="_items" AllowPaging="true">
-    <GridPageSettings PageSize="10" />
-    <GridColumns>
-        <GridColumn Field="@nameof(CashReceiptEntryDto.CashReceiptEntryId)" HeaderText="ID" Width="220" />
-        <GridColumn Field="@nameof(CashReceiptEntryDto.AccountId)" HeaderText="Account ID" Width="220" />
-        <GridColumn Field="@nameof(CashReceiptEntryDto.ReceiptDate)" HeaderText="Receipt Date" Width="140" />
-        <GridColumn Field="@nameof(CashReceiptEntryDto.Amount)" HeaderText="Amount" Format="C2" Width="120" />
-        <GridColumn Field="@nameof(CashReceiptEntryDto.PaymentMethodCode)" HeaderText="Payment Method" Width="150" />
-        <GridColumn Field="@nameof(CashReceiptEntryDto.ReferenceNumber)" HeaderText="Reference #" Width="140" />
-        <GridColumn Field="@nameof(CashReceiptEntryDto.StatusCode)" HeaderText="Status" Width="120" />
-        <GridColumn Field="@nameof(CashReceiptEntryDto.CreatedDateUtc)" HeaderText="Created" Width="160" />
-    </GridColumns>
-</SfGrid>
+<div class="fin-toolbar">
+    <div class="fin-search-box"><i class="bi bi-search fin-search-icon" aria-hidden="true"></i><input class="e-input fin-search-input" placeholder="Search reference, method, account…" @bind="_searchTerm" @bind:event="oninput" @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" /></div>
+    <select class="um-input" @bind="_statusFilter"><option value="">All Statuses</option><option value="Posted">Posted</option><option value="Pending">Pending</option><option value="Void">Void</option></select>
+    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="fin-alert"><div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill"></i></div><div><div class="fin-alert-title">Cash receipts failed to load</div><div>@_error</div></div></div>
+}
+else if (_loading)
+{
+    <div class="fin-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading cash receipts…</span></div>
+}
+else
+{
+    <div class="fin-grid-container">
+        <SfGrid TValue="CashReceiptEntryDto" DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="600px">
+            <GridEvents TValue="CashReceiptEntryDto" RowSelected="OnRowSelected" />
+            <GridPageSettings PageSize="15" />
+            <GridColumns>
+                <GridColumn Field="@nameof(CashReceiptEntryDto.ReceiptDate)" HeaderText="Receipt Date" Type="ColumnType.Date" Format="d" Width="130" />
+                <GridColumn Field="@nameof(CashReceiptEntryDto.AccountId)" HeaderText="Account" Width="220" />
+                <GridColumn Field="@nameof(CashReceiptEntryDto.Amount)" HeaderText="Amount" Format="C2" Width="130" TextAlign="TextAlign.Right" />
+                <GridColumn Field="@nameof(CashReceiptEntryDto.PaymentMethodCode)" HeaderText="Method" Width="140"><Template>@{ var item = (CashReceiptEntryDto)context; }<span class="fin-chip fin-chip-info">@item.PaymentMethodCode</span></Template></GridColumn>
+                <GridColumn Field="@nameof(CashReceiptEntryDto.ReferenceNumber)" HeaderText="Reference #" Width="150" />
+                <GridColumn Field="@nameof(CashReceiptEntryDto.StatusCode)" HeaderText="Status" Width="120"><Template>@{ var item = (CashReceiptEntryDto)context; }<span class="fin-chip @StatusClass(item.StatusCode)">@item.StatusCode</span></Template></GridColumn>
+                <GridColumn Field="@nameof(CashReceiptEntryDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="130" />
+                <GridColumn HeaderText="Actions" Width="90"><Template>@{ var item = (CashReceiptEntryDto)context; }<button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button></Template></GridColumn>
+            </GridColumns>
+        </SfGrid>
+    </div>
+}
+
+<SfDialog @bind-Visible="_showForm" Width="720px" IsModal="true" ShowCloseIcon="false">
+    <DialogTemplates>
+        <Content>
+            <div class="um-modal-header"><i class="bi bi-currency-dollar" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Cash Receipt" : "Edit Cash Receipt")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm EditContext="_editContext">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountId" class="um-input"><option value="@Guid.Empty">Select account…</option>@foreach (var account in _accounts) { <option value="@account.AccountId">@account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.AccountId" class="text-danger" /></div>
+                    <div class="um-field"><label>Invoice</label><InputSelect @bind-Value="_form.InvoiceId" class="um-input"><option value="">None</option>@foreach (var invoice in _invoices) { <option value="@invoice.InvoiceId">@invoice.InvoiceNumber</option> }</InputSelect><ValidationMessage For="() => _form.InvoiceId" class="text-danger" /></div>
+                    <div class="um-field"><label>Receipt Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.ReceiptDate" class="um-input" /><ValidationMessage For="() => _form.ReceiptDate" class="text-danger" /></div>
+                    <div class="um-field"><label>Amount <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.Amount" class="um-input" /><ValidationMessage For="() => _form.Amount" class="text-danger" /></div>
+                    <div class="um-field"><label>Payment Method <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.PaymentMethodCode" class="um-input"><option value="ACH">ACH</option><option value="Check">Check</option><option value="Wire">Wire</option><option value="Credit Card">Credit Card</option><option value="Cash">Cash</option></InputSelect><ValidationMessage For="() => _form.PaymentMethodCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option value="Pending">Pending</option><option value="Posted">Posted</option><option value="Void">Void</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Reference #</label><InputText @bind-Value="_form.ReferenceNumber" class="um-input" /><ValidationMessage For="() => _form.ReferenceNumber" class="text-danger" /></div>
+                    <div class="um-field"><label>Bank Account Code</label><InputText @bind-Value="_form.BankAccountCode" class="um-input" /><ValidationMessage For="() => _form.BankAccountCode" class="text-danger" /></div>
+                    <div class="um-field"><label>GL Account</label><InputSelect @bind-Value="_form.GLAccountId" class="um-input"><option value="">None</option>@foreach (var account in _glAccounts) { <option value="@account.GLAccountId">@account.AccountCode - @account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.GLAccountId" class="text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_form.Notes" class="um-input" rows="3" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div>
+                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
+                </div></div>
+            </EditForm>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Receipt")</button></div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
 
 @code {
-    private List<CashReceiptEntryDto>? _items;
-    private string? _searchTerm;
+    private List<CashReceiptEntryDto> _items = [];
+    private List<BillingAccountDto> _accounts = [];
+    private List<InvoiceDto> _invoices = [];
+    private List<GLAccountDto> _glAccounts = [];
+    private string? _searchTerm, _error;
+    private string? _formError;
+    private string _statusFilter = string.Empty;
+    private bool _loading, _showForm, _saving;
+    private Guid _editingId = Guid.Empty;
+    private CashReceiptForm _form = new();
+    private EditContext _editContext = default!;
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-
-    protected override async Task OnInitializedAsync() => await LoadAsync();
-
-    private async Task LoadAsync()
-    {
-        var result = await Api.SearchCashReceiptEntriesAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
-    }
+    private IEnumerable<CashReceiptEntryDto> FilteredItems => _items.Where(x => string.IsNullOrWhiteSpace(_statusFilter) || x.StatusCode == _statusFilter);
+    protected override async Task OnInitializedAsync() { _editContext = new(_form); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _error = null; try { var result = await Api.SearchCashReceiptEntriesAsync(_tenantId, _searchTerm); var accounts = await Api.SearchBillingAccountsAsync(_tenantId); var invoices = await Api.SearchInvoicesAsync(_tenantId); var gl = await Api.SearchGLAccountsAsync(_tenantId, pageSize: 500); _items = result?.Items.ToList() ?? []; _accounts = accounts?.Items.ToList() ?? []; _invoices = invoices?.Items.ToList() ?? []; _glAccounts = gl?.Items.ToList() ?? []; } catch (Exception ex) { _error = ex.Message; _items = []; } finally { _loading = false; } }
+    private void OnRowSelected(RowSelectEventArgs<CashReceiptEntryDto> args) => OpenEdit(args.Data);
+    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
+    private void OpenEdit(CashReceiptEntryDto item) { _editingId = item.CashReceiptEntryId; _form = new CashReceiptForm { AccountId = item.AccountId, InvoiceId = item.InvoiceId, ReceiptDate = item.ReceiptDate.ToDateTime(TimeOnly.MinValue), Amount = item.Amount, PaymentMethodCode = item.PaymentMethodCode, ReferenceNumber = item.ReferenceNumber, GLAccountId = item.GLAccountId, BankAccountCode = item.BankAccountCode, Notes = item.Notes, StatusCode = item.StatusCode }; _editContext = new(_form); _formError = null; _showForm = true; }
+    private void CloseForm() => _showForm = false;
+    private async Task SaveAsync() { if (!_editContext.Validate()) return; _saving = true; try { if (_editingId == Guid.Empty) await Api.CreateCashReceiptEntryAsync(new CreateCashReceiptEntryRequest { TenantId = _tenantId, AccountId = _form.AccountId, InvoiceId = _form.InvoiceId, ReceiptDate = DateOnly.FromDateTime(_form.ReceiptDate), Amount = _form.Amount, PaymentMethodCode = _form.PaymentMethodCode, ReferenceNumber = _form.ReferenceNumber, GLAccountId = _form.GLAccountId, BankAccountCode = _form.BankAccountCode, Notes = _form.Notes, StatusCode = _form.StatusCode }); else await Api.UpdateCashReceiptEntryAsync(_editingId, new UpdateCashReceiptEntryRequest { TenantId = _tenantId, CashReceiptEntryId = _editingId, AccountId = _form.AccountId, InvoiceId = _form.InvoiceId, ReceiptDate = DateOnly.FromDateTime(_form.ReceiptDate), Amount = _form.Amount, PaymentMethodCode = _form.PaymentMethodCode, ReferenceNumber = _form.ReferenceNumber, GLAccountId = _form.GLAccountId, BankAccountCode = _form.BankAccountCode, Notes = _form.Notes, StatusCode = _form.StatusCode }); _showForm = false; await LoadAsync(); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; } finally { _saving = false; } }
+    private static string Fmt(decimal value) => value.ToString("C0");
+    private static string StatusClass(string status) => status switch { "Posted" => "fin-chip-success", "Pending" => "fin-chip-warning", "Void" => "fin-chip-neutral", _ => "fin-chip-info" };
+    private sealed class CashReceiptForm { [RequiredGuid(ErrorMessage = "Account is required.")] public Guid AccountId { get; set; } public Guid? InvoiceId { get; set; } [Required] public DateTime ReceiptDate { get; set; } = DateTime.Today; [Range(0.01, 100000000)] public decimal Amount { get; set; } [Required, StringLength(50)] public string PaymentMethodCode { get; set; } = "ACH"; [StringLength(100)] public string? ReferenceNumber { get; set; } public Guid? GLAccountId { get; set; } [StringLength(80)] public string? BankAccountCode { get; set; } [StringLength(1000)] public string? Notes { get; set; } [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending"; }
 }

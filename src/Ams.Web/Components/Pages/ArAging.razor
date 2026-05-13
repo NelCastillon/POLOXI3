@@ -1,35 +1,109 @@
-﻿@page "/billing/ar-aging"
+@page "/billing/ar-aging"
 @inject ApiClient Api
+@inject NavigationManager Nav
 
-<PageTitle>AR Aging</PageTitle>
-<AppPageHeader Title="AR Aging Snapshots" Icon="bi-graph-down" />
-<div class="toolbar">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+<PageTitle>AR Aging — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
+
+<AppPageHeader Title="AR Aging"
+               Subtitle="Tenant Admin receivables aging synchronized from Billing invoices and Accounting balances"
+               Icon="bi-hourglass">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" @onclick="SyncAsync" disabled="@_syncing"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> @(_syncing ? "Syncing…" : "Sync From Billing")</button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Snapshot</button>
+    </Actions>
+</AppPageHeader>
+
+<div class="bill-kpi-strip">
+    <button type="button" class="bill-kpi-card @KpiClass("")" @onclick='() => SetFilter("")'><i class="bi bi-wallet2 bill-kpi-icon blue"></i><div><div class="bill-kpi-value">@Fmt(_items.Sum(x => x.TotalOutstanding))</div><div class="bill-kpi-label">Outstanding AR</div></div></button>
+    <button type="button" class="bill-kpi-card @KpiClass("Current")" @onclick='() => SetFilter("Current")'><i class="bi bi-check-circle bill-kpi-icon green"></i><div><div class="bill-kpi-value">@Fmt(_items.Sum(x => x.CurrentAmount))</div><div class="bill-kpi-label">Current</div></div></button>
+    <button type="button" class="bill-kpi-card @KpiClass("30")" @onclick='() => SetFilter("30")'><i class="bi bi-calendar2-week bill-kpi-icon amber"></i><div><div class="bill-kpi-value">@Fmt(_items.Sum(x => x.Days30Amount))</div><div class="bill-kpi-label">1–30 Days</div></div></button>
+    <button type="button" class="bill-kpi-card @KpiClass("60")" @onclick='() => SetFilter("60")'><i class="bi bi-calendar2-minus bill-kpi-icon amber"></i><div><div class="bill-kpi-value">@Fmt(_items.Sum(x => x.Days60Amount))</div><div class="bill-kpi-label">31–60 Days</div></div></button>
+    <button type="button" class="bill-kpi-card @KpiClass("90")" @onclick='() => SetFilter("90")'><i class="bi bi-exclamation-circle bill-kpi-icon red"></i><div><div class="bill-kpi-value">@Fmt(_items.Sum(x => x.Days90Amount))</div><div class="bill-kpi-label">61–90 Days</div></div></button>
+    <button type="button" class="bill-kpi-card @KpiClass("90+")" @onclick='() => SetFilter("90+")'><i class="bi bi-exclamation-triangle bill-kpi-icon red"></i><div><div class="bill-kpi-value">@Fmt(_items.Sum(x => x.Days90PlusAmount))</div><div class="bill-kpi-label">90+ Days</div></div></button>
 </div>
-@if (_items is null) { <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div> }
-else {
-<SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="10"></GridPageSettings>
-    <GridColumns>
-        <GridColumn Field="@nameof(ArAgingSnapshotDto.SnapshotDate)"    HeaderText="Date"      Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
-        <GridColumn Field="@nameof(ArAgingSnapshotDto.CurrentAmount)"   HeaderText="Current"   Width="120" Format="C2"></GridColumn>
-        <GridColumn Field="@nameof(ArAgingSnapshotDto.Days30Amount)"    HeaderText="1â€“30 Days" Width="120" Format="C2"></GridColumn>
-        <GridColumn Field="@nameof(ArAgingSnapshotDto.Days60Amount)"    HeaderText="31â€“60 Days" Width="120" Format="C2"></GridColumn>
-        <GridColumn Field="@nameof(ArAgingSnapshotDto.Days90Amount)"    HeaderText="61â€“90 Days" Width="120" Format="C2"></GridColumn>
-        <GridColumn Field="@nameof(ArAgingSnapshotDto.Days90PlusAmount)" HeaderText="90+ Days" Width="120" Format="C2"></GridColumn>
-        <GridColumn Field="@nameof(ArAgingSnapshotDto.TotalOutstanding)" HeaderText="Total"    Width="130" Format="C2"></GridColumn>
-    </GridColumns>
-</SfGrid>
+
+<div class="bill-toolbar">
+    <SfTextBox Placeholder="Search account id…" @bind-Value="_searchTerm" Width="320px"></SfTextBox>
+    <SfDatePicker TValue="DateTime" @bind-Value="_snapshotDate" Width="160px"></SfDatePicker>
+    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
 }
+
+<div class="bill-grid-wrap">
+    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading AR aging…</span></div> }
+    <SfGrid TValue="ArAgingSnapshotDto" DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="520px">
+        <GridEvents TValue="ArAgingSnapshotDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="15"></GridPageSettings>
+        <GridColumns>
+            <GridColumn Field="@nameof(ArAgingSnapshotDto.SnapshotDate)" HeaderText="Snapshot" Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
+            <GridColumn Field="@nameof(ArAgingSnapshotDto.AccountId)" HeaderText="Account" Width="230"></GridColumn>
+            <GridColumn Field="@nameof(ArAgingSnapshotDto.CurrentAmount)" HeaderText="Current" Width="120" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(ArAgingSnapshotDto.Days30Amount)" HeaderText="1–30" Width="120" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(ArAgingSnapshotDto.Days60Amount)" HeaderText="31–60" Width="120" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(ArAgingSnapshotDto.Days90Amount)" HeaderText="61–90" Width="120" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(ArAgingSnapshotDto.Days90PlusAmount)" HeaderText="90+" Width="120" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(ArAgingSnapshotDto.TotalOutstanding)" HeaderText="Total" Width="130" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
+            <GridColumn HeaderText="Risk" Width="110"><Template>@{ var item = (ArAgingSnapshotDto)context; }<span class="bill-chip @RiskClass(item)">@RiskLabel(item)</span></Template></GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<SfDialog @bind-Visible="_showForm" Width="680px" IsModal="true" ShowCloseIcon="false">
+    <DialogTemplates><Content>
+        <div class="um-modal-header"><i class="bi bi-hourglass" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New AR Snapshot" : "Edit AR Snapshot")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm EditContext="_editContext"><DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountId" class="um-input"><option value="@Guid.Empty">Select account…</option>@foreach (var account in _accounts) { <option value="@account.AccountId">@account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.AccountId" class="text-danger" /></div>
+                <div class="um-field"><label>Snapshot Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.SnapshotDate" class="um-input" /><ValidationMessage For="() => _form.SnapshotDate" class="text-danger" /></div>
+                <div class="um-field"><label>Current</label><InputNumber @bind-Value="_form.CurrentAmount" class="um-input" /><ValidationMessage For="() => _form.CurrentAmount" class="text-danger" /></div>
+                <div class="um-field"><label>1–30 Days</label><InputNumber @bind-Value="_form.Days30Amount" class="um-input" /><ValidationMessage For="() => _form.Days30Amount" class="text-danger" /></div>
+                <div class="um-field"><label>31–60 Days</label><InputNumber @bind-Value="_form.Days60Amount" class="um-input" /><ValidationMessage For="() => _form.Days60Amount" class="text-danger" /></div>
+                <div class="um-field"><label>61–90 Days</label><InputNumber @bind-Value="_form.Days90Amount" class="um-input" /><ValidationMessage For="() => _form.Days90Amount" class="text-danger" /></div>
+                <div class="um-field"><label>90+ Days</label><InputNumber @bind-Value="_form.Days90PlusAmount" class="um-input" /><ValidationMessage For="() => _form.Days90PlusAmount" class="text-danger" /></div>
+                <div class="um-field"><label>Total</label><input class="um-input" value="@Fmt(_form.Total)" disabled /></div>
+                @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
+            </div></div>
+        </EditForm>
+        <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Snapshot")</button></div>
+    </Content></DialogTemplates>
+</SfDialog>
+
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private string? _searchTerm;
-    private List<ArAgingSnapshotDto>? _items;
-    protected override async Task OnInitializedAsync() => await LoadAsync();
-    private async Task LoadAsync()
-    {
-        var result = await Api.SearchArAgingSnapshotsAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
-    }
+    private SfToast _toast = default!;
+    private List<ArAgingSnapshotDto> _items = [];
+    private List<BillingAccountDto> _accounts = [];
+    private string? _searchTerm, _loadError, _formError;
+    private string _activeFilter = string.Empty;
+    private DateTime _snapshotDate = DateTime.Today;
+    private bool _loading, _syncing, _showForm, _saving;
+    private Guid _editingId = Guid.Empty;
+    private ArForm _form = new();
+    private EditContext _editContext = default!;
+
+    private IEnumerable<ArAgingSnapshotDto> FilteredItems => _items.Where(x => _activeFilter switch { "Current" => x.CurrentAmount > 0, "30" => x.Days30Amount > 0, "60" => x.Days60Amount > 0, "90" => x.Days90Amount > 0, "90+" => x.Days90PlusAmount > 0, _ => true });
+    protected override async Task OnInitializedAsync() { _editContext = new(_form); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { var ar = await Api.SearchArAgingSnapshotsAsync(_tenantId, _searchTerm); var accounts = await Api.SearchBillingAccountsAsync(_tenantId, pageSize: 500); _items = ar?.Items.ToList() ?? []; _accounts = accounts?.Items.ToList() ?? []; } catch (Exception ex) { _loadError = $"AR Aging failed to load: {ex.Message}"; await ToastAsync(_loadError, true); } finally { _loading = false; } }
+    private async Task SyncAsync() { _syncing = true; try { await Api.SyncArAgingFromInvoicesAsync(_tenantId, DateOnly.FromDateTime(_snapshotDate)); await ToastAsync("AR aging synchronized from Billing invoices."); await LoadAsync(); } catch (Exception ex) { await ToastAsync($"Sync failed: {ex.Message}", true); } finally { _syncing = false; } }
+    private void SetFilter(string filter) => _activeFilter = filter;
+    private string KpiClass(string filter) => _activeFilter == filter ? "bill-kpi-active" : string.Empty;
+    private void OnRowSelected(RowSelectEventArgs<ArAgingSnapshotDto> args) => OpenEdit(args.Data);
+    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
+    private void OpenEdit(ArAgingSnapshotDto item) { _editingId = item.SnapshotId; _form = new ArForm { AccountId = item.AccountId, SnapshotDate = item.SnapshotDate.ToDateTime(TimeOnly.MinValue), CurrentAmount = item.CurrentAmount, Days30Amount = item.Days30Amount, Days60Amount = item.Days60Amount, Days90Amount = item.Days90Amount, Days90PlusAmount = item.Days90PlusAmount }; _editContext = new(_form); _formError = null; _showForm = true; }
+    private void CloseForm() => _showForm = false;
+    private async Task SaveAsync() { if (!_editContext.Validate()) return; _saving = true; try { if (_editingId == Guid.Empty) await Api.CreateArAgingSnapshotAsync(new CreateArAgingSnapshotRequest { TenantId = _tenantId, AccountId = _form.AccountId, SnapshotDate = DateOnly.FromDateTime(_form.SnapshotDate), CurrentAmount = _form.CurrentAmount, Days30Amount = _form.Days30Amount, Days60Amount = _form.Days60Amount, Days90Amount = _form.Days90Amount, Days90PlusAmount = _form.Days90PlusAmount }); else await Api.UpdateArAgingSnapshotAsync(_editingId, new UpdateArAgingSnapshotRequest { SnapshotId = _editingId, AccountId = _form.AccountId, SnapshotDate = DateOnly.FromDateTime(_form.SnapshotDate), CurrentAmount = _form.CurrentAmount, Days30Amount = _form.Days30Amount, Days60Amount = _form.Days60Amount, Days90Amount = _form.Days90Amount, Days90PlusAmount = _form.Days90PlusAmount }); await ToastAsync("AR snapshot saved."); _showForm = false; await LoadAsync(); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; await ToastAsync(_formError, true); } finally { _saving = false; } }
+    private async Task ToastAsync(string message, bool error = false) => await _toast.ShowAsync(new ToastModel { Content = message, CssClass = error ? "e-toast-danger" : "e-toast-success" });
+    private static string Fmt(decimal value) => value.ToString("C0");
+    private static string RiskLabel(ArAgingSnapshotDto item) => item.Days90PlusAmount > 0 ? "Critical" : item.Days90Amount > 0 ? "High" : item.Days60Amount > 0 ? "Medium" : "Healthy";
+    private static string RiskClass(ArAgingSnapshotDto item) => item.Days90PlusAmount > 0 ? "bill-chip-danger" : item.Days90Amount > 0 ? "bill-chip-danger" : item.Days60Amount > 0 ? "bill-chip-warning" : "bill-chip-success";
+
+    private sealed class ArForm { [RequiredGuid(ErrorMessage = "Account is required.")] public Guid AccountId { get; set; } [Required] public DateTime SnapshotDate { get; set; } = DateTime.Today; [Range(0, 100000000)] public decimal CurrentAmount { get; set; } [Range(0, 100000000)] public decimal Days30Amount { get; set; } [Range(0, 100000000)] public decimal Days60Amount { get; set; } [Range(0, 100000000)] public decimal Days90Amount { get; set; } [Range(0, 100000000)] public decimal Days90PlusAmount { get; set; } public decimal Total => CurrentAmount + Days30Amount + Days60Amount + Days90Amount + Days90PlusAmount; }
+    private sealed class RequiredGuidAttribute : ValidationAttribute { public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty; }
 }

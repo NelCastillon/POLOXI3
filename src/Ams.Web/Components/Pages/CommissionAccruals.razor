@@ -16,38 +16,43 @@
         <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/statements")'>
             <i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements
         </button>
-        <button class="um-btn um-btn-primary" @onclick="() => _showPost = true">
+        <button class="um-btn um-btn-primary" @onclick="OpenPost">
             <i class="bi bi-plus-circle" aria-hidden="true"></i> Post Accrual
         </button>
     </Actions>
 </AppPageHeader>
 
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+}
+
 <!-- Forecast summary tiles -->
 <div class="cf-forecast-strip">
     <div class="cf-fc-card cf-fc-blue">
         <div class="cf-fc-lbl">Projected This Month</div>
-        <div class="cf-fc-val">$142,300</div>
-        <div class="cf-fc-sub">▲ 4.2% vs prior month</div>
+        <div class="cf-fc-val">@Fmt(ProjectedThisMonth)</div>
+        <div class="cf-fc-sub">From current DB accruals</div>
     </div>
     <div class="cf-fc-card cf-fc-green">
         <div class="cf-fc-lbl">YTD Earned</div>
-        <div class="cf-fc-val">$389,750</div>
-        <div class="cf-fc-sub">68% of annual plan</div>
+        <div class="cf-fc-val">@Fmt(YtdEarned)</div>
+        <div class="cf-fc-sub">Posted and settled entries</div>
     </div>
     <div class="cf-fc-card cf-fc-amber">
         <div class="cf-fc-lbl">Pending Accruals</div>
-        <div class="cf-fc-val">$28,100</div>
-        <div class="cf-fc-sub">14 entries not yet reversed</div>
+        <div class="cf-fc-val">@Fmt(PendingAccruals)</div>
+        <div class="cf-fc-sub">@(_items?.Count(x=>x.StatusCode=="Pending") ?? 0) entries not yet reversed</div>
     </div>
     <div class="cf-fc-card cf-fc-purple">
         <div class="cf-fc-lbl">New Biz vs Renewal</div>
-        <div class="cf-fc-val">58% / 42%</div>
-        <div class="cf-fc-sub">New biz outpacing forecast</div>
+        <div class="cf-fc-val">@((_items?.Count ?? 0) == 0 ? "—" : "DB synced")</div>
+        <div class="cf-fc-sub">Based on commission transactions</div>
     </div>
     <div class="cf-fc-card cf-fc-red">
         <div class="cf-fc-lbl">Clawback Risk</div>
-        <div class="cf-fc-val">$18,400</div>
-        <div class="cf-fc-sub">Policies within 90-day window</div>
+        <div class="cf-fc-val">@Fmt(ClawbackRisk)</div>
+        <div class="cf-fc-sub">Overdue reversal exposure</div>
     </div>
 </div>
 
@@ -84,29 +89,23 @@
 </div>
 
 <!-- Post Accrual Dialog -->
-<SfDialog Width="480px" IsModal="true" @bind-Visible="_showPost" Header="Post Accrual Entry" ShowCloseIcon="true">
+<SfDialog Width="560px" IsModal="true" @bind-Visible="_showPost" ShowCloseIcon="false">
     <DialogTemplates>
         <Content>
-            <div class="cf-dlg-body">
-                <div class="form-group mb-2"><label class="cf-lbl">Accrual Date</label>
-                    <SfDatePicker TValue="DateTime" @bind-Value="_postDate" Width="100%"></SfDatePicker>
-                </div>
-                <div class="form-group mb-2"><label class="cf-lbl">Accrued Amount</label>
-                    <SfNumericTextBox TValue="decimal" @bind-Value="_postAmount" Format="C2" Width="100%"></SfNumericTextBox>
-                </div>
-                <div class="form-group mb-2"><label class="cf-lbl">Expected Reversal Date</label>
-                    <SfDatePicker TValue="DateTime" @bind-Value="_postReversalDate" Width="100%"></SfDatePicker>
-                </div>
-                <div class="form-group mb-2"><label class="cf-lbl">Notes</label>
-                    <SfTextBox @bind-Value="_postNotes" Multiline="true"></SfTextBox>
-                </div>
-            </div>
+            <div class="um-modal-header"><i class="bi bi-graph-up" aria-hidden="true"></i><span>Post Accrual Entry</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="ClosePost"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm EditContext="_postEditContext">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Accrual Date <span class="text-danger">*</span></label><InputDate @bind-Value="_postForm.AccrualDate" class="um-input" /><ValidationMessage For="() => _postForm.AccrualDate" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Accrued Amount <span class="text-danger">*</span></label><InputNumber @bind-Value="_postForm.AccruedAmount" class="um-input" /><ValidationMessage For="() => _postForm.AccruedAmount" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Expected Reversal Date <span class="text-danger">*</span></label><InputDate @bind-Value="_postForm.ReversalDate" class="um-input" /><ValidationMessage For="() => _postForm.ReversalDate" class="validation-message text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_postForm.Notes" class="um-input" rows="3" /><ValidationMessage For="() => _postForm.Notes" class="validation-message text-danger" /></div>
+                    @if (!string.IsNullOrWhiteSpace(_postFormError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_postFormError</div> }
+                </div></div>
+            </EditForm>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="ClosePost">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="PostAccrual">Post</button></div>
         </Content>
     </DialogTemplates>
-    <DialogButtons>
-        <DialogButton Content="Post" IsPrimary="true" OnClick="() => _showPost = false"></DialogButton>
-        <DialogButton Content="Cancel" OnClick="() => _showPost = false"></DialogButton>
-    </DialogButtons>
 </SfDialog>
 
 @if (_items is null)
@@ -147,27 +146,56 @@ else
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string? _searchTerm;
+    private string? _loadError;
     private string _filterStatus = "";
     private bool _showPost;
-    private DateTime _postDate = DateTime.Today;
-    private DateTime _postReversalDate = DateTime.Today.AddMonths(1);
-    private decimal _postAmount;
-    private string? _postNotes;
+    private PostAccrualForm _postForm = new();
+    private EditContext _postEditContext = default!;
+    private string? _postFormError;
     private List<CommissionAccrualEntryDto>? _items;
+    private decimal ProjectedThisMonth => (_items ?? []).Where(x => x.AccrualDate.Month == DateTime.Today.Month && x.AccrualDate.Year == DateTime.Today.Year).Sum(x => x.AccruedAmount);
+    private decimal YtdEarned => (_items ?? []).Where(x => x.AccrualDate.Year == DateTime.Today.Year && x.StatusCode is "Posted" or "Settled" or "Reversed").Sum(x => x.AccruedAmount);
+    private decimal PendingAccruals => (_items ?? []).Where(x => x.StatusCode == "Pending").Sum(x => x.AccruedAmount);
+    private decimal ClawbackRisk => (_items ?? []).Where(x => x.ReversalDate != null && x.ReversalDate < DateOnly.FromDateTime(DateTime.Today) && (x.ReversedAmount ?? 0) == 0).Sum(x => x.AccruedAmount);
 
     private IEnumerable<CommissionAccrualEntryDto> FilteredItems => (_items ?? []).Where(x =>
         string.IsNullOrEmpty(_filterStatus) || x.StatusCode == _filterStatus);
 
     protected override async Task OnInitializedAsync()
     {
+        _postEditContext = new(_postForm);
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Forecast & Accruals",""));
         await LoadAsync();
     }
 
+    private void OpenPost() { _postForm = new(); _postEditContext = new(_postForm); _postFormError = null; _showPost = true; }
+    private void ClosePost() => _showPost = false;
+
+    private void PostAccrual()
+    {
+        _postFormError = null;
+        if (!_postEditContext.Validate()) return;
+        if (_postForm.ReversalDate < _postForm.AccrualDate)
+        {
+            _postFormError = "Expected Reversal Date must be on or after Accrual Date.";
+            return;
+        }
+        _showPost = false;
+    }
+
     private async Task LoadAsync()
     {
-        var result = await Api.SearchCommissionAccrualEntriesAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        try
+        {
+            _loadError = null;
+            var result = await Api.SearchCommissionAccrualEntriesAsync(_tenantId, _searchTerm);
+            _items = result?.Items.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            _items = [];
+        }
     }
 
     static string Fmt(decimal? v) => v.HasValue ? v.Value.ToString("C0") : "$0";
@@ -179,4 +207,12 @@ else
             <div><div class="cf-kpi-val">@val</div><div class="cf-kpi-lbl">@label</div></div>
         </div>
     };
+
+    private sealed class PostAccrualForm
+    {
+        [Required] public DateTime AccrualDate { get; set; } = DateTime.Today;
+        [Range(0.01, 100000000)] public decimal AccruedAmount { get; set; }
+        [Required] public DateTime ReversalDate { get; set; } = DateTime.Today.AddMonths(1);
+        [StringLength(1000)] public string? Notes { get; set; }
+    }
 }

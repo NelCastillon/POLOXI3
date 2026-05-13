@@ -1,5 +1,6 @@
 @page "/marketing/reviews"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -17,6 +18,11 @@
         </button>
     </Actions>
 </AppPageHeader>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+}
 
 <!-- KPI -->
 <div class="mkv-kpi-strip">
@@ -39,7 +45,8 @@
 
 @if (_tab == "reviews")
 {
-    <div class="mkv-reviews-list">
+    <div class="mkv-reviews-list position-relative">
+        @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading reviews…</span></div> }
         @foreach (var rev in _reviews)
         {
             <div class="mkv-review-card">
@@ -119,8 +126,11 @@ else
 </SfDialog>
 
 @code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string _tab = "reviews";
     private bool _showSend;
+    private bool _loading;
+    private string? _loadError;
     private string _sendPlatform = "Google", _sendChannel = "Email";
     private int _minNps = 9;
 
@@ -128,29 +138,24 @@ else
     private List<ReviewRequest> _requests = [];
     private decimal _avgRating;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Reviews",""));
-        _reviews =
-        [
-            new("Pamela Torres",      "Google",   5, new DateTime(2025,3,12), "Beth and the team made switching so easy. Been a client for 3 years now!",       "Thank you, Pamela! We appreciate your trust."),
-            new("Marcus Webb",        "Google",   5, new DateTime(2025,3,8),  "Great rates, fast claims response. Highly recommend.",                            ""),
-            new("Sato Technologies",  "Google",   4, new DateTime(2025,3,2),  "Solid commercial coverage, very responsive producer.",                            ""),
-            new("Kaitlyn Bloom",      "Facebook", 5, new DateTime(2025,2,28), "Friendly staff, they explained every part of our policy clearly.",                "Thank you Kaitlyn!"),
-            new("Robert Sullivan",    "Google",   3, new DateTime(2025,2,20), "Had some trouble with our claim timeline, but it was resolved.",                  "We're sorry to hear about the delay, Robert."),
-            new("Maria Chen",         "Yelp",     5, new DateTime(2025,2,15), "Always available when I have questions. 10/10 would recommend.",                  ""),
-        ];
-        _requests =
-        [
-            new("Pamela Torres",   "SMS",   new DateTime(2025,3,11), "Google",   true,  10),
-            new("Marcus Webb",     "Email", new DateTime(2025,3,7),  "Google",   true,  9),
-            new("David Kim",       "Email", new DateTime(2025,3,10), "Google",   false, 9),
-            new("Ana Delgado",     "SMS",   new DateTime(2025,3,5),  "Facebook", false, 8),
-            new("Tyler Grant",     "Email", new DateTime(2025,3,3),  "Google",   false, 10),
-            new("Sato Tech LLC",   "Email", new DateTime(2025,3,1),  "Google",   true,  9),
-            new("Kaitlyn Bloom",   "SMS",   new DateTime(2025,2,27), "Facebook", true,  10),
-        ];
-        _avgRating = _reviews.Any() ? (decimal)_reviews.Average(r => r.Rating) : 0m;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; _loadError = null;
+        try
+        {
+            var result = await Api.SearchMarketingReviewsAsync(_tenantId);
+            _reviews = result?.Reviews.Select(x => new ReviewRow(x.ClientName, x.Platform, x.Rating, x.ReviewDate, x.Content, x.Response)).ToList() ?? [];
+            _requests = result?.Requests.Select(x => new ReviewRequest(x.ClientName, x.Channel, x.SentDate, x.Platform, x.ReviewLeft, x.NpsScore)).ToList() ?? [];
+            _avgRating = _reviews.Any() ? (decimal)_reviews.Average(r => r.Rating) : 0m;
+        }
+        catch (Exception ex) { _loadError = $"Failed to load reviews: {ex.Message}"; _reviews = []; _requests = []; _avgRating = 0; }
+        finally { _loading = false; }
     }
 
     private static string RenderStars(int r) => string.Concat(Enumerable.Range(1, 5).Select(i => i <= r ? "★" : "☆"));

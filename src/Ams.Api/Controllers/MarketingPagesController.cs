@@ -17,9 +17,103 @@ public sealed class MarketingPagesController : ControllerBase
         _connectionFactory = connectionFactory;
     }
 
+    private async Task EnsureMarketingPageDataAsync(Guid tenantId, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Marketing') EXEC(N'CREATE SCHEMA Marketing');
+
+IF OBJECT_ID(N'Marketing.Segment', N'U') IS NULL
+BEGIN
+    CREATE TABLE Marketing.Segment (SegmentId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY, TenantId UNIQUEIDENTIFIER NOT NULL, Name NVARCHAR(200) NOT NULL, Icon NVARCHAR(80) NOT NULL, ColorCss NVARCHAR(80) NOT NULL, Description NVARCHAR(1000) NULL, ContactCount INT NOT NULL DEFAULT 0, IsDynamic BIT NOT NULL DEFAULT 1, Rules NVARCHAR(2000) NULL, UpdatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(), CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL, ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Marketing.CrossSellOpportunity', N'U') IS NULL
+BEGIN
+    CREATE TABLE Marketing.CrossSellOpportunity (OpportunityId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY, TenantId UNIQUEIDENTIFIER NOT NULL, AccountName NVARCHAR(200) NOT NULL, AccountType NVARCHAR(80) NOT NULL, Producer NVARCHAR(150) NOT NULL, OpportunityType NVARCHAR(150) NOT NULL, Score INT NOT NULL DEFAULT 0, EstimatedPremium DECIMAL(18,2) NOT NULL DEFAULT 0, TriggerSignal NVARCHAR(500) NULL, LastContactDate DATETIME2 NOT NULL, StatusCode NVARCHAR(50) NOT NULL DEFAULT N'Open', CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(), ModifiedDateUtc DATETIME2 NULL, IsDeleted BIT NOT NULL DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Marketing.WinBackAccount', N'U') IS NULL
+BEGIN
+    CREATE TABLE Marketing.WinBackAccount (WinBackId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY, TenantId UNIQUEIDENTIFIER NOT NULL, AccountName NVARCHAR(200) NOT NULL, PolicyType NVARCHAR(150) NOT NULL, LapseDate DATETIME2 NOT NULL, DaysLapsed INT NOT NULL DEFAULT 0, LastPremium DECIMAL(18,2) NOT NULL DEFAULT 0, LapseReason NVARCHAR(200) NULL, StatusCode NVARCHAR(50) NOT NULL DEFAULT N'New', LapseWindow NVARCHAR(50) NOT NULL, CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(), ModifiedDateUtc DATETIME2 NULL, IsDeleted BIT NOT NULL DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Marketing.Referral', N'U') IS NULL
+BEGIN
+    CREATE TABLE Marketing.Referral (ReferralId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY, TenantId UNIQUEIDENTIFIER NOT NULL, ProspectName NVARCHAR(200) NOT NULL, ReferredBy NVARCHAR(200) NOT NULL, ReferralType NVARCHAR(80) NOT NULL, ReceivedDate DATETIME2 NOT NULL, StatusCode NVARCHAR(50) NOT NULL DEFAULT N'Pending', PolicyInterest NVARCHAR(200) NULL, EstimatedPremium DECIMAL(18,2) NOT NULL DEFAULT 0, Producer NVARCHAR(150) NOT NULL DEFAULT N'Unassigned', CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(), ModifiedDateUtc DATETIME2 NULL, IsDeleted BIT NOT NULL DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Marketing.Review', N'U') IS NULL
+BEGIN
+    CREATE TABLE Marketing.Review (ReviewId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY, TenantId UNIQUEIDENTIFIER NOT NULL, ClientName NVARCHAR(200) NOT NULL, Platform NVARCHAR(80) NOT NULL, Rating INT NOT NULL, ReviewDate DATETIME2 NOT NULL, Content NVARCHAR(2000) NOT NULL, Response NVARCHAR(2000) NULL, CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(), ModifiedDateUtc DATETIME2 NULL, IsDeleted BIT NOT NULL DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Marketing.ReviewRequest', N'U') IS NULL
+BEGIN
+    CREATE TABLE Marketing.ReviewRequest (ReviewRequestId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY, TenantId UNIQUEIDENTIFIER NOT NULL, ClientName NVARCHAR(200) NOT NULL, Channel NVARCHAR(80) NOT NULL, SentDate DATETIME2 NOT NULL, Platform NVARCHAR(80) NOT NULL, ReviewLeft BIT NOT NULL DEFAULT 0, NpsScore INT NOT NULL DEFAULT 0, CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(), ModifiedDateUtc DATETIME2 NULL, IsDeleted BIT NOT NULL DEFAULT 0);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Marketing.Segment WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Marketing.Segment (SegmentId,TenantId,Name,Icon,ColorCss,Description,ContactCount,IsDynamic,Rules,UpdatedDateUtc,IsDeleted) VALUES
+    (NEWID(),@TenantId,N'Active Commercial Clients',N'bi-building',N'mks-ic-blue',N'All commercial accounts with Active status and at least one policy',3840,1,N'Status = Active|Type = Commercial|Policies >= 1',SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'Personal Lines Households',N'bi-house',N'mks-ic-purple',N'Household accounts with personal auto or homeowners policies',12400,1,N'Type = Personal|Policy: Auto OR HO',DATEADD(day,-1,SYSUTCDATETIME()),0),
+    (NEWID(),@TenantId,N'SMB — No Workers Comp',N'bi-briefcase',N'mks-ic-amber',N'Small business accounts without an active Workers Compensation policy',1290,1,N'Type = Commercial|Employees 1-50|NO WC policy',SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,N'NPS Promoters',N'bi-star-fill',N'mks-ic-gold',N'Contacts who gave an NPS score of 9 or 10 in the last 12 months',1750,1,N'NPS >= 9|Survey < 12mo',SYSUTCDATETIME(),0);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Marketing.CrossSellOpportunity WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Marketing.CrossSellOpportunity (OpportunityId,TenantId,AccountName,AccountType,Producer,OpportunityType,Score,EstimatedPremium,TriggerSignal,LastContactDate,StatusCode,IsDeleted) VALUES
+    (NEWID(),@TenantId,N'Riverside Construction LLC',N'Commercial',N'Beth Nguyen',N'Missing Umbrella',94,4200,N'Payroll > $500k, no umbrella',DATEADD(day,-12,SYSUTCDATETIME()),N'Open',0),
+    (NEWID(),@TenantId,N'Harmon Family',N'Personal',N'Jake Park',N'Home + Auto Bundle',88,1800,N'2 separate carriers, bundling discount',DATEADD(day,-25,SYSUTCDATETIME()),N'Open',0),
+    (NEWID(),@TenantId,N'Summit Roofing Inc',N'Commercial',N'Beth Nguyen',N'Workers Comp Expansion',85,6400,N'Added 4 employees, no WC update',DATEADD(day,-5,SYSUTCDATETIME()),N'Open',0),
+    (NEWID(),@TenantId,N'Tanaka Medical Group',N'Commercial',N'Sara Kim',N'Benefits Upsell',76,12000,N'Enrolled 22 employees, no dental/vision',DATEADD(day,-10,SYSUTCDATETIME()),N'Open',0);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Marketing.WinBackAccount WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Marketing.WinBackAccount (WinBackId,TenantId,AccountName,PolicyType,LapseDate,DaysLapsed,LastPremium,LapseReason,StatusCode,LapseWindow,IsDeleted) VALUES
+    (NEWID(),@TenantId,N'Marsh Family',N'Personal Auto',DATEADD(day,-52,SYSUTCDATETIME()),52,1840,N'Price',N'Contacted',N'60–90',0),
+    (NEWID(),@TenantId,N'Vega Plumbing LLC',N'BOP',DATEADD(day,-69,SYSUTCDATETIME()),69,4200,N'Price',N'Interested',N'60–90',0),
+    (NEWID(),@TenantId,N'Bloom Events Co',N'General Liability',DATEADD(day,-30,SYSUTCDATETIME()),30,2800,N'Went elsewhere',N'New',N'30–60',0),
+    (NEWID(),@TenantId,N'Kelly Landscaping',N'Workers Comp',DATEADD(day,-33,SYSUTCDATETIME()),33,5600,N'Price',N'Reactivated',N'30–60',0);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Marketing.Referral WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Marketing.Referral (ReferralId,TenantId,ProspectName,ReferredBy,ReferralType,ReceivedDate,StatusCode,PolicyInterest,EstimatedPremium,Producer,IsDeleted) VALUES
+    (NEWID(),@TenantId,N'The Park Family',N'David & Lynn Chen',N'Client',DATEADD(day,-8,SYSUTCDATETIME()),N'Pending',N'Home + Auto',2400,N'Beth Nguyen',0),
+    (NEWID(),@TenantId,N'Harbor View Café',N'Sullivan Mfg',N'Client',DATEADD(day,-17,SYSUTCDATETIME()),N'Contacted',N'BOP + Liquor Liab.',3100,N'Jake Park',0),
+    (NEWID(),@TenantId,N'Reeves Construction',N'Apex Dist.',N'Partner',DATEADD(day,-22,SYSUTCDATETIME()),N'Converted',N'Workers Comp',7800,N'Sara Kim',0),
+    (NEWID(),@TenantId,N'Sato Tech LLC',N'Online Form',N'Online',DATEADD(day,-2,SYSUTCDATETIME()),N'Pending',N'Tech E&O + Cyber',6200,N'Jake Park',0);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Marketing.Review WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Marketing.Review (ReviewId,TenantId,ClientName,Platform,Rating,ReviewDate,Content,Response,IsDeleted) VALUES
+    (NEWID(),@TenantId,N'Pamela Torres',N'Google',5,DATEADD(day,-5,SYSUTCDATETIME()),N'Beth and the team made switching so easy. Been a client for 3 years now!',N'Thank you, Pamela! We appreciate your trust.',0),
+    (NEWID(),@TenantId,N'Marcus Webb',N'Google',5,DATEADD(day,-9,SYSUTCDATETIME()),N'Great rates, fast claims response. Highly recommend.',N'',0),
+    (NEWID(),@TenantId,N'Sato Technologies',N'Google',4,DATEADD(day,-15,SYSUTCDATETIME()),N'Solid commercial coverage, very responsive producer.',N'',0),
+    (NEWID(),@TenantId,N'Kaitlyn Bloom',N'Facebook',5,DATEADD(day,-18,SYSUTCDATETIME()),N'Friendly staff, they explained every part of our policy clearly.',N'Thank you Kaitlyn!',0);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Marketing.ReviewRequest WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Marketing.ReviewRequest (ReviewRequestId,TenantId,ClientName,Channel,SentDate,Platform,ReviewLeft,NpsScore,IsDeleted) VALUES
+    (NEWID(),@TenantId,N'Pamela Torres',N'SMS',DATEADD(day,-6,SYSUTCDATETIME()),N'Google',1,10,0),
+    (NEWID(),@TenantId,N'Marcus Webb',N'Email',DATEADD(day,-10,SYSUTCDATETIME()),N'Google',1,9,0),
+    (NEWID(),@TenantId,N'David Kim',N'Email',DATEADD(day,-7,SYSUTCDATETIME()),N'Google',0,9,0),
+    (NEWID(),@TenantId,N'Ana Delgado',N'SMS',DATEADD(day,-12,SYSUTCDATETIME()),N'Facebook',0,8,0);
+END;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));
+    }
+
     [HttpGet("email-blasts")]
     public async Task<IActionResult> SearchEmailBlasts([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, CancellationToken cancellationToken)
     {
+        await EnsureMarketingPageDataAsync(tenantId, cancellationToken);
         const string sql = @"
 SELECT EmailBlastId, TenantId, CampaignId, Name, Subject, PreviewText, AudienceSegment, SenderName, SenderEmail,
        Status, ScheduledDateUtc, SentDateUtc, RecipientCount, SentCount, OpenCount, ClickCount, BounceCount, UnsubscribeCount,
@@ -57,6 +151,7 @@ WHERE EmailBlastId = @Id AND IsDeleted = 0;";
     [HttpGet("landing-pages")]
     public async Task<IActionResult> SearchLandingPages([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, CancellationToken cancellationToken)
     {
+        await EnsureMarketingPageDataAsync(tenantId, cancellationToken);
         const string sql = @"
 SELECT lp.LandingPageId, lp.TenantId, lp.CampaignId, COALESCE(c.Name, '') AS CampaignName,
        lp.Name, lp.Slug, lp.TemplateName, lp.Status, lp.PublishedUrl, lp.PrimaryCta,
@@ -81,6 +176,89 @@ WHERE LandingPageId = @Id AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
         return NoContent();
+    }
+
+    [HttpGet("segments")]
+    public async Task<IActionResult> SearchSegments([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, CancellationToken cancellationToken)
+    {
+        await EnsureMarketingPageDataAsync(tenantId, cancellationToken);
+        const string sql = @"SELECT SegmentId,TenantId,Name,Icon,ColorCss,COALESCE(Description,'') AS Description,ContactCount,IsDynamic,COALESCE(Rules,'') AS Rules,UpdatedDateUtc FROM Marketing.Segment WHERE TenantId=@TenantId AND IsDeleted=0 AND (@SearchTerm IS NULL OR @SearchTerm='' OR Name LIKE '%' + @SearchTerm + '%' OR Description LIKE '%' + @SearchTerm + '%') ORDER BY UpdatedDateUtc DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var items = (await cn.QueryAsync<MarketingSegmentDto>(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm }, cancellationToken: cancellationToken))).AsList();
+        return Ok(new PagedResult<MarketingSegmentDto> { Items = items, TotalCount = items.Count, PageNumber = 1, PageSize = items.Count });
+    }
+
+    [HttpPost("segments")]
+    public async Task<IActionResult> CreateSegment([FromBody] MarketingSegmentDto request, CancellationToken cancellationToken)
+    {
+        await EnsureMarketingPageDataAsync(request.TenantId, cancellationToken);
+        var id = Guid.NewGuid();
+        const string sql = @"INSERT INTO Marketing.Segment (SegmentId,TenantId,Name,Icon,ColorCss,Description,ContactCount,IsDynamic,Rules,UpdatedDateUtc,CreatedDateUtc,IsDeleted) VALUES (@Id,@TenantId,@Name,@Icon,@ColorCss,@Description,@ContactCount,@IsDynamic,@Rules,SYSUTCDATETIME(),SYSUTCDATETIME(),0);";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.Name, Icon = string.IsNullOrWhiteSpace(request.Icon) ? "bi-pie-chart" : request.Icon, ColorCss = string.IsNullOrWhiteSpace(request.ColorCss) ? "mks-ic-blue" : request.ColorCss, request.Description, request.ContactCount, request.IsDynamic, request.Rules }, cancellationToken: cancellationToken));
+        return Ok(new { id });
+    }
+
+    [HttpGet("cross-sell")]
+    public async Task<IActionResult> SearchCrossSell([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        await EnsureMarketingPageDataAsync(tenantId, cancellationToken);
+        const string sql = @"SELECT OpportunityId,TenantId,AccountName,AccountType,Producer,OpportunityType,Score,EstimatedPremium,COALESCE(TriggerSignal,'') AS TriggerSignal,LastContactDate,StatusCode FROM Marketing.CrossSellOpportunity WHERE TenantId=@TenantId AND IsDeleted=0 AND StatusCode <> N'Dismissed' ORDER BY Score DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var items = (await cn.QueryAsync<MarketingCrossSellOpportunityDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+        return Ok(new PagedResult<MarketingCrossSellOpportunityDto> { Items = items, TotalCount = items.Count, PageNumber = 1, PageSize = items.Count });
+    }
+
+    [HttpPost("cross-sell/{id:guid}/dismiss")]
+    public async Task<IActionResult> DismissCrossSell(Guid id, CancellationToken cancellationToken)
+    {
+        const string sql = "UPDATE Marketing.CrossSellOpportunity SET StatusCode=N'Dismissed', ModifiedDateUtc=SYSUTCDATETIME() WHERE OpportunityId=@Id AND IsDeleted=0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
+        return NoContent();
+    }
+
+    [HttpGet("win-back")]
+    public async Task<IActionResult> SearchWinBack([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        await EnsureMarketingPageDataAsync(tenantId, cancellationToken);
+        const string sql = @"SELECT WinBackId,TenantId,AccountName,PolicyType,LapseDate,DaysLapsed,LastPremium,COALESCE(LapseReason,'') AS LapseReason,StatusCode,LapseWindow FROM Marketing.WinBackAccount WHERE TenantId=@TenantId AND IsDeleted=0 ORDER BY DaysLapsed DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var items = (await cn.QueryAsync<MarketingWinBackDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+        return Ok(new PagedResult<MarketingWinBackDto> { Items = items, TotalCount = items.Count, PageNumber = 1, PageSize = items.Count });
+    }
+
+    [HttpGet("referrals")]
+    public async Task<IActionResult> SearchReferrals([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        await EnsureMarketingPageDataAsync(tenantId, cancellationToken);
+        const string sql = @"SELECT ReferralId,TenantId,ProspectName,ReferredBy,ReferralType,ReceivedDate,StatusCode,COALESCE(PolicyInterest,'') AS PolicyInterest,EstimatedPremium,Producer FROM Marketing.Referral WHERE TenantId=@TenantId AND IsDeleted=0 ORDER BY ReceivedDate DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var items = (await cn.QueryAsync<MarketingReferralDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+        return Ok(new PagedResult<MarketingReferralDto> { Items = items, TotalCount = items.Count, PageNumber = 1, PageSize = items.Count });
+    }
+
+    [HttpPost("referrals")]
+    public async Task<IActionResult> CreateReferral([FromBody] MarketingReferralDto request, CancellationToken cancellationToken)
+    {
+        await EnsureMarketingPageDataAsync(request.TenantId, cancellationToken);
+        var id = Guid.NewGuid();
+        const string sql = @"INSERT INTO Marketing.Referral (ReferralId,TenantId,ProspectName,ReferredBy,ReferralType,ReceivedDate,StatusCode,PolicyInterest,EstimatedPremium,Producer,CreatedDateUtc,IsDeleted) VALUES (@Id,@TenantId,@ProspectName,@ReferredBy,@ReferralType,SYSUTCDATETIME(),N'Pending',@PolicyInterest,@EstimatedPremium,@Producer,SYSUTCDATETIME(),0);";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.ProspectName, request.ReferredBy, request.ReferralType, request.PolicyInterest, request.EstimatedPremium, request.Producer }, cancellationToken: cancellationToken));
+        return Ok(new { id });
+    }
+
+    [HttpGet("reviews")]
+    public async Task<IActionResult> SearchReviews([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        await EnsureMarketingPageDataAsync(tenantId, cancellationToken);
+        const string reviewsSql = @"SELECT ReviewId,TenantId,ClientName,Platform,Rating,ReviewDate,Content,COALESCE(Response,'') AS Response FROM Marketing.Review WHERE TenantId=@TenantId AND IsDeleted=0 ORDER BY ReviewDate DESC;";
+        const string requestsSql = @"SELECT ReviewRequestId,TenantId,ClientName,Channel,SentDate,Platform,ReviewLeft,NpsScore FROM Marketing.ReviewRequest WHERE TenantId=@TenantId AND IsDeleted=0 ORDER BY SentDate DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var reviews = (await cn.QueryAsync<MarketingReviewDto>(new CommandDefinition(reviewsSql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+        var requests = (await cn.QueryAsync<MarketingReviewRequestDto>(new CommandDefinition(requestsSql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+        return Ok(new { Reviews = reviews, Requests = requests });
     }
 
     [HttpPost("landing-pages/{id:guid}/archive")]

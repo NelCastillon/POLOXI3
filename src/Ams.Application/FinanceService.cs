@@ -2,6 +2,7 @@ using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Finance;
 
 namespace Ams.Application;
 
@@ -40,6 +41,12 @@ public sealed class FinanceService : IFinanceService
     public Task<PagedResult<GLAccountDto>> SearchGLAccountsAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _glRepo.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 
+    public Task<Guid> CreateGLAccountAsync(CreateGLAccountRequest request, CancellationToken cancellationToken = default)
+        => _glRepo.CreateAsync(request, cancellationToken);
+
+    public Task UpdateGLAccountAsync(Guid id, UpdateGLAccountRequest request, CancellationToken cancellationToken = default)
+        => _glRepo.UpdateAsync(id, request, cancellationToken);
+
     // ── Journal Entries ──────────────────────────────────────────
     public Task<JournalEntryDto?> GetJournalEntryByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _jeRepo.GetByIdAsync(id, cancellationToken);
@@ -47,12 +54,24 @@ public sealed class FinanceService : IFinanceService
     public Task<PagedResult<JournalEntryDto>> SearchJournalEntriesAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _jeRepo.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 
+    public Task<Guid> CreateJournalEntryAsync(CreateJournalEntryRequest request, CancellationToken cancellationToken = default)
+        => _jeRepo.CreateAsync(request, cancellationToken);
+
+    public Task UpdateJournalEntryAsync(Guid id, UpdateJournalEntryRequest request, CancellationToken cancellationToken = default)
+        => _jeRepo.UpdateAsync(id, request, cancellationToken);
+
     // ── Vendors ──────────────────────────────────────────────────
     public Task<VendorDto?> GetVendorByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _vendorRepo.GetByIdAsync(id, cancellationToken);
 
     public Task<PagedResult<VendorDto>> SearchVendorsAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _vendorRepo.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
+
+    public Task<Guid> CreateVendorAsync(CreateVendorRequest request, CancellationToken cancellationToken = default)
+        => _vendorRepo.CreateAsync(request, cancellationToken);
+
+    public Task UpdateVendorAsync(Guid id, UpdateVendorRequest request, CancellationToken cancellationToken = default)
+        => _vendorRepo.UpdateAsync(id, request, cancellationToken);
 
     // ── AP Invoices ──────────────────────────────────────────────
     public Task<ApInvoiceDto?> GetApInvoiceByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -75,10 +94,22 @@ public sealed class FinanceService : IFinanceService
     public Task<PagedResult<AccountingPeriodDto>> SearchAccountingPeriodsAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _accountingPeriodRepo.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 
+    public Task<Guid> CreateAccountingPeriodAsync(CreateAccountingPeriodRequest request, CancellationToken cancellationToken = default)
+        => _accountingPeriodRepo.CreateAsync(request, cancellationToken);
+
+    public Task UpdateAccountingPeriodAsync(Guid id, UpdateAccountingPeriodRequest request, CancellationToken cancellationToken = default)
+        => _accountingPeriodRepo.UpdateAsync(id, request, cancellationToken);
+
     // ── Bank Reconciliation ──────────────────────────────────────
     public Task<BankReconciliationDto?> GetBankReconciliationByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _bankReconRepo.GetByIdAsync(id, cancellationToken);
 
     public Task<PagedResult<BankReconciliationDto>> SearchBankReconciliationsAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _bankReconRepo.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
+
+    public Task<Guid> CreateBankReconciliationAsync(CreateBankReconciliationRequest request, CancellationToken cancellationToken = default)
+        => _bankReconRepo.CreateAsync(request, cancellationToken);
+
+    public Task UpdateBankReconciliationAsync(Guid id, UpdateBankReconciliationRequest request, CancellationToken cancellationToken = default)
+        => _bankReconRepo.UpdateAsync(id, request, cancellationToken);
 }

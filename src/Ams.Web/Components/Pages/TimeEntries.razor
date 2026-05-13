@@ -1,34 +1,233 @@
-﻿@page "/timeentries"
+@page "/timeentries"
 @inject ApiClient Api
+@inject NavigationManager Nav
 
-<PageTitle>Time Entries</PageTitle>
-<AppPageHeader Title="Time Entries" Icon="bi-clock" />
-<div class="toolbar">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+<PageTitle>Time Entries — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Time Entries"
+               Subtitle="Tenant Admin view of billable time synchronized with Billing and Accounting"
+               Icon="bi-clock">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Time Entry</button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    <button type="button" class="pc-kpi-card @KpiClass("")" @onclick='() => SetFilter("")' title="Show all time entries"><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label"><i class="bi bi-clock" aria-hidden="true"></i> Entries</div></button>
+    <button type="button" class="pc-kpi-card @KpiClass("Draft")" @onclick='() => SetFilter("Draft")' title="Show draft entries"><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Draft")</div><div class="pc-kpi-label"><i class="bi bi-pencil" aria-hidden="true"></i> Draft</div></button>
+    <button type="button" class="pc-kpi-card @KpiClass("Submitted")" @onclick='() => SetFilter("Submitted")' title="Show submitted entries"><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Submitted")</div><div class="pc-kpi-label"><i class="bi bi-send" aria-hidden="true"></i> Submitted</div></button>
+    <button type="button" class="pc-kpi-card @KpiClass("Approved")" @onclick='() => SetFilter("Approved")' title="Show approved entries"><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Approved")</div><div class="pc-kpi-label"><i class="bi bi-check-circle" aria-hidden="true"></i> Approved</div></button>
+    <button type="button" class="pc-kpi-card" title="Total hours"><div class="pc-kpi-value">@_items.Sum(x => x.Hours).ToString("N1")</div><div class="pc-kpi-label"><i class="bi bi-hourglass" aria-hidden="true"></i> Hours</div></button>
+    <button type="button" class="pc-kpi-card" title="Billable amount"><div class="pc-kpi-value">@Fmt(_items.Sum(x => x.BillableHours * x.RateAmount))</div><div class="pc-kpi-label"><i class="bi bi-currency-dollar" aria-hidden="true"></i> Billable</div></button>
 </div>
-@if (_items is null) { <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div> }
-else {
-<SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="10"></GridPageSettings>
-    <GridColumns>
-        <GridColumn Field="@nameof(TimeEntryDto.EntryDate)"     HeaderText="Date"         Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
-        <GridColumn Field="@nameof(TimeEntryDto.Hours)"         HeaderText="Hours"        Width="100" Format="N2"></GridColumn>
-        <GridColumn Field="@nameof(TimeEntryDto.BillableHours)" HeaderText="Billable Hrs" Width="120" Format="N2"></GridColumn>
-        <GridColumn Field="@nameof(TimeEntryDto.RateAmount)"    HeaderText="Rate"         Width="110" Format="C2"></GridColumn>
-        <GridColumn Field="@nameof(TimeEntryDto.Description)"   HeaderText="Description"  Width="300"></GridColumn>
-        <GridColumn Field="@nameof(TimeEntryDto.StatusCode)"    HeaderText="Status"       Width="120"></GridColumn>
-    </GridColumns>
-</SfGrid>
+
+<div class="toolbar">
+    <SfTextBox Placeholder="Search descriptions…" @bind-Value="_searchTerm" Width="320px"></SfTextBox>
+    <select class="um-input" @bind="_statusFilter">
+        <option value="">All Statuses</option>
+        @foreach (var status in _statuses)
+        {
+            <option value="@status">@status</option>
+        }
+    </select>
+    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
 }
+
+<div class="um-grid-card">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading time entries…</span></div>
+    }
+    <SfGrid TValue="TimeEntryDto" DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="520px">
+        <GridEvents TValue="TimeEntryDto" RowSelected="OnRowSelected" />
+        <GridPageSettings PageSize="15"></GridPageSettings>
+        <GridColumns>
+            <GridColumn Field="@nameof(TimeEntryDto.EntryDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
+            <GridColumn Field="@nameof(TimeEntryDto.Hours)" HeaderText="Hours" Width="100" Format="N2" TextAlign="TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(TimeEntryDto.BillableHours)" HeaderText="Billable Hrs" Width="120" Format="N2" TextAlign="TextAlign.Right"></GridColumn>
+            <GridColumn Field="@nameof(TimeEntryDto.RateAmount)" HeaderText="Rate" Width="110" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
+            <GridColumn HeaderText="Amount" Width="130" TextAlign="TextAlign.Right"><Template>@{ var item = (TimeEntryDto)context; }@(item.BillableHours * item.RateAmount).ToString("C2")</Template></GridColumn>
+            <GridColumn Field="@nameof(TimeEntryDto.Description)" HeaderText="Description" Width="320"></GridColumn>
+            <GridColumn Field="@nameof(TimeEntryDto.StatusCode)" HeaderText="Status" Width="120"><Template>@{ var item = (TimeEntryDto)context; }<span class="badge @StatusClass(item.StatusCode)">@item.StatusCode</span></Template></GridColumn>
+            <GridColumn HeaderText="Actions" Width="130">
+                <Template>
+                    @{ var item = (TimeEntryDto)context; }
+                    <div style="display:flex;gap:.25rem">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick='() => UpdateStatusAsync(item, "Submitted")' title="Submit"><i class="bi bi-send" aria-hidden="true"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick='() => UpdateStatusAsync(item, "Approved")' title="Approve"><i class="bi bi-check-circle" aria-hidden="true"></i></button>
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumns>
+    </SfGrid>
+</div>
+
+<SfDialog @bind-Visible="_showForm" Width="680px" IsModal="true" ShowCloseIcon="false">
+    <DialogTemplates>
+        <Content>
+            <div class="um-modal-header"><i class="bi bi-clock" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Time Entry" : "Edit Time Entry")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm EditContext="_editContext">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountId" class="um-input"><option value="@Guid.Empty">Select account…</option>@foreach (var account in _accounts) { <option value="@account.AccountId">@account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.AccountId" class="text-danger" /></div>
+                    <div class="um-field"><label>User <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.UserId" class="um-input"><option value="@Guid.Empty">Select user…</option>@foreach (var user in _users) { <option value="@user.UserId">@user.FullName</option> }</InputSelect><ValidationMessage For="() => _form.UserId" class="text-danger" /></div>
+                    <div class="um-field"><label>Entry Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.EntryDate" class="um-input" /><ValidationMessage For="() => _form.EntryDate" class="text-danger" /></div>
+                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Hours <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.Hours" class="um-input" /><ValidationMessage For="() => _form.Hours" class="text-danger" /></div>
+                    <div class="um-field"><label>Billable Hours <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.BillableHours" class="um-input" /><ValidationMessage For="() => _form.BillableHours" class="text-danger" /></div>
+                    <div class="um-field"><label>Rate <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.RateAmount" class="um-input" /><ValidationMessage For="() => _form.RateAmount" class="text-danger" /></div>
+                    <div class="um-field"><label>Invoice</label><InputSelect @bind-Value="_form.InvoiceId" class="um-input"><option value="">None</option>@foreach (var invoice in _invoices) { <option value="@invoice.InvoiceId">@invoice.InvoiceNumber</option> }</InputSelect><ValidationMessage For="() => _form.InvoiceId" class="text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="3" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                    @if (!string.IsNullOrWhiteSpace(_formError))
+                    {
+                        <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                    }
+                </div></div>
+            </EditForm>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Time Entry")</button></div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast _toast = default!;
     private string? _searchTerm;
-    private List<TimeEntryDto>? _items;
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private string _statusFilter = string.Empty;
+    private bool _loading, _showForm, _saving;
+    private string? _loadError, _formError;
+    private List<TimeEntryDto> _items = [];
+    private List<BillingAccountDto> _accounts = [];
+    private List<UserDto> _users = [];
+    private List<InvoiceDto> _invoices = [];
+    private Guid _editingId = Guid.Empty;
+    private TimeForm _form = new();
+    private EditContext _editContext = default!;
+    private readonly List<string> _statuses = ["Draft", "Submitted", "Approved", "Invoiced"];
+
+    private IEnumerable<TimeEntryDto> FilteredItems => _items.Where(x => string.IsNullOrWhiteSpace(_statusFilter) || x.StatusCode == _statusFilter);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _editContext = new(_form);
+        await LoadAsync();
+    }
+
     private async Task LoadAsync()
     {
-        var result = await Api.SearchTimeEntriesAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var time = await Api.SearchTimeEntriesAsync(_tenantId, _searchTerm);
+            var accounts = await Api.SearchBillingAccountsAsync(_tenantId, pageSize: 500);
+            var users = await Api.SearchUsersAsync(_tenantId, pageSize: 500);
+            var invoices = await Api.SearchInvoicesAsync(_tenantId);
+            _items = time?.Items.ToList() ?? [];
+            _accounts = accounts?.Items.ToList() ?? [];
+            _users = users?.Items.ToList() ?? [];
+            _invoices = invoices?.Items.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Time entries failed to load: {ex.Message}";
+            await ToastAsync(_loadError, true);
+        }
+        finally { _loading = false; }
+    }
+
+    private void SetFilter(string status) => _statusFilter = status;
+    private string KpiClass(string status) => _statusFilter == status ? "pc-kpi-card--active" : string.Empty;
+    private void OnRowSelected(RowSelectEventArgs<TimeEntryDto> args) => OpenEdit(args.Data);
+    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
+    private void OpenEdit(TimeEntryDto item)
+    {
+        _editingId = item.TimeEntryId;
+        _form = new TimeForm { AccountId = item.AccountId, UserId = item.UserId, EntryDate = item.EntryDate.ToDateTime(TimeOnly.MinValue), Hours = item.Hours, BillableHours = item.BillableHours, RateAmount = item.RateAmount, Description = item.Description, StatusCode = item.StatusCode, InvoiceId = item.InvoiceId };
+        _editContext = new(_form);
+        _formError = null;
+        _showForm = true;
+    }
+    private void CloseForm() => _showForm = false;
+
+    private async Task SaveAsync()
+    {
+        if (!_editContext.Validate()) return;
+        if (_form.BillableHours > _form.Hours) { _formError = "Billable Hours cannot exceed Hours."; return; }
+        _saving = true;
+        try
+        {
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateTimeEntryAsync(new CreateTimeEntryRequest { TenantId = _tenantId, AccountId = _form.AccountId, UserId = _form.UserId, EntryDate = DateOnly.FromDateTime(_form.EntryDate), Hours = _form.Hours, BillableHours = _form.BillableHours, RateAmount = _form.RateAmount, Description = _form.Description, StatusCode = _form.StatusCode, InvoiceId = _form.InvoiceId });
+                await ToastAsync("Time entry created.");
+            }
+            else
+            {
+                await Api.UpdateTimeEntryAsync(_editingId, new UpdateTimeEntryRequest { TimeEntryId = _editingId, AccountId = _form.AccountId, UserId = _form.UserId, EntryDate = DateOnly.FromDateTime(_form.EntryDate), Hours = _form.Hours, BillableHours = _form.BillableHours, RateAmount = _form.RateAmount, Description = _form.Description, StatusCode = _form.StatusCode, InvoiceId = _form.InvoiceId });
+                await ToastAsync("Time entry updated.");
+            }
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            await ToastAsync(_formError, true);
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task UpdateStatusAsync(TimeEntryDto item, string status)
+    {
+        try
+        {
+            await Api.UpdateTimeEntryAsync(item.TimeEntryId, new UpdateTimeEntryRequest { TimeEntryId = item.TimeEntryId, AccountId = item.AccountId, UserId = item.UserId, EntryDate = item.EntryDate, Hours = item.Hours, BillableHours = item.BillableHours, RateAmount = item.RateAmount, Description = item.Description, StatusCode = status, InvoiceId = item.InvoiceId });
+            await ToastAsync($"Time entry marked {status.ToLowerInvariant()}.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ToastAsync($"Update failed: {ex.Message}", true); }
+    }
+
+    private async Task ToastAsync(string message, bool isError = false) => await _toast.ShowAsync(new ToastModel { Content = message, CssClass = isError ? "e-toast-danger" : "e-toast-success" });
+    private static string Fmt(decimal value) => value.ToString("C0");
+    private static string StatusClass(string status) => status switch { "Approved" => "badge-green", "Submitted" => "badge-blue", "Invoiced" => "badge-purple", _ => "badge-neutral" };
+
+    private sealed class TimeForm
+    {
+        [RequiredGuid(ErrorMessage = "Account is required.")]
+        public Guid AccountId { get; set; }
+        [RequiredGuid(ErrorMessage = "User is required.")]
+        public Guid UserId { get; set; }
+        [Required]
+        public DateTime EntryDate { get; set; } = DateTime.Today;
+        [Range(0.01, 24)]
+        public decimal Hours { get; set; }
+        [Range(0, 24)]
+        public decimal BillableHours { get; set; }
+        [Range(0, 100000)]
+        public decimal RateAmount { get; set; }
+        [StringLength(1000)]
+        public string? Description { get; set; }
+        [Required, StringLength(50)]
+        public string StatusCode { get; set; } = "Draft";
+        public Guid? InvoiceId { get; set; }
+    }
+
+    private sealed class RequiredGuidAttribute : ValidationAttribute
+    {
+        public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty;
     }
 }

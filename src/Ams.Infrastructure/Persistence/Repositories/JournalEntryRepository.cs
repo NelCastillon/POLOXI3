@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Finance;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -41,5 +42,33 @@ WHERE JournalEntryId = @Id AND IsDeleted = 0";
         var items = (await multi.ReadAsync<JournalEntryDto>()).AsList();
         var total = await multi.ReadSingleAsync<int>();
         return new PagedResult<JournalEntryDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateJournalEntryRequest request, CancellationToken cancellationToken = default)
+    {
+        var id = Guid.NewGuid();
+        const string sql = @"
+INSERT INTO Finance.JournalEntry (JournalEntryId, TenantId, EntryNumber, EntryDate, Description, TotalDebit, TotalCredit, StatusCode, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+VALUES (@Id, @TenantId, @EntryNumber, @EntryDate, @Description, @TotalDebit, @TotalCredit, @StatusCode, SYSUTCDATETIME(), @CreatedByUserId, NULL, NULL, 0);";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.EntryNumber, request.EntryDate, request.Description, request.TotalDebit, request.TotalCredit, request.StatusCode, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateJournalEntryRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Finance.JournalEntry
+SET EntryNumber = @EntryNumber,
+    EntryDate = @EntryDate,
+    Description = @Description,
+    TotalDebit = @TotalDebit,
+    TotalCredit = @TotalCredit,
+    StatusCode = @StatusCode,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE JournalEntryId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.EntryNumber, request.EntryDate, request.Description, request.TotalDebit, request.TotalCredit, request.StatusCode, request.ModifiedByUserId }, cancellationToken: cancellationToken));
     }
 }

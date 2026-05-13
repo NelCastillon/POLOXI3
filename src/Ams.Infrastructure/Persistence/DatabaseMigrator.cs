@@ -141,6 +141,7 @@ public sealed class DatabaseMigrator
         new("0108_CRM_LeadDetailTabs_CreateSeed", Migration0108_CrmLeadDetailTabsCreateSeed),
         new("0109_CRM_LeadActivity_SchemaSync", Migration0109_CrmLeadActivitySchemaSync),
         new("0110_DocumentConfig_CreateSeed", Migration0110_DocumentConfigCreateSeed),
+        new("0111_Billing_TimeExpense_CreateSeed", Migration0111_BillingTimeExpenseCreateSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -767,6 +768,214 @@ IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '_Migrations' AND schema_id
     }
 
     private sealed record Migration(string Name, string Sql);
+
+    private const string Migration0111_BillingTimeExpenseCreateSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Billing')
+    EXEC('CREATE SCHEMA Billing');
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'TimeEntry' AND schema_id = SCHEMA_ID(N'Billing'))
+BEGIN
+    CREATE TABLE Billing.TimeEntry (
+        TimeEntryId       UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        TenantId          UNIQUEIDENTIFIER NOT NULL,
+        EngagementId      UNIQUEIDENTIFIER NULL,
+        AccountId         UNIQUEIDENTIFIER NOT NULL,
+        UserId            UNIQUEIDENTIFIER NOT NULL,
+        EntryDate         DATE             NOT NULL,
+        Hours             DECIMAL(9,2)     NOT NULL,
+        BillableHours     DECIMAL(9,2)     NOT NULL,
+        RateAmount        DECIMAL(18,2)    NOT NULL,
+        Description       NVARCHAR(1000)   NULL,
+        StatusCode        NVARCHAR(50)     NOT NULL DEFAULT N'Draft',
+        InvoiceId         UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId   UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc   DATETIME2        NULL,
+        ModifiedByUserId  UNIQUEIDENTIFIER NULL,
+        IsDeleted         BIT              NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IX_TimeEntry_Tenant_Date ON Billing.TimeEntry(TenantId, EntryDate DESC, IsDeleted);
+    CREATE INDEX IX_TimeEntry_Tenant_Account ON Billing.TimeEntry(TenantId, AccountId, IsDeleted);
+END
+
+IF COL_LENGTH(N'Billing.TimeEntry', N'TenantId') IS NULL ALTER TABLE Billing.TimeEntry ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_TimeEntry_TenantId_0111 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Billing.TimeEntry', N'EngagementId') IS NULL ALTER TABLE Billing.TimeEntry ADD EngagementId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Billing.TimeEntry', N'AccountId') IS NULL ALTER TABLE Billing.TimeEntry ADD AccountId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_TimeEntry_AccountId_0111 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Billing.TimeEntry', N'UserId') IS NULL ALTER TABLE Billing.TimeEntry ADD UserId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_TimeEntry_UserId_0111 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Billing.TimeEntry', N'EntryDate') IS NULL ALTER TABLE Billing.TimeEntry ADD EntryDate DATE NOT NULL CONSTRAINT DF_TimeEntry_EntryDate_0111 DEFAULT CONVERT(date, SYSUTCDATETIME());
+IF COL_LENGTH(N'Billing.TimeEntry', N'Hours') IS NULL ALTER TABLE Billing.TimeEntry ADD Hours DECIMAL(9,2) NOT NULL CONSTRAINT DF_TimeEntry_Hours_0111 DEFAULT 0;
+IF COL_LENGTH(N'Billing.TimeEntry', N'BillableHours') IS NULL ALTER TABLE Billing.TimeEntry ADD BillableHours DECIMAL(9,2) NOT NULL CONSTRAINT DF_TimeEntry_BillableHours_0111 DEFAULT 0;
+IF COL_LENGTH(N'Billing.TimeEntry', N'RateAmount') IS NULL ALTER TABLE Billing.TimeEntry ADD RateAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_TimeEntry_RateAmount_0111 DEFAULT 0;
+IF COL_LENGTH(N'Billing.TimeEntry', N'Description') IS NULL ALTER TABLE Billing.TimeEntry ADD Description NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Billing.TimeEntry', N'StatusCode') IS NULL ALTER TABLE Billing.TimeEntry ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_TimeEntry_StatusCode_0111 DEFAULT N'Draft';
+IF COL_LENGTH(N'Billing.TimeEntry', N'InvoiceId') IS NULL ALTER TABLE Billing.TimeEntry ADD InvoiceId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Billing.TimeEntry', N'CreatedDateUtc') IS NULL ALTER TABLE Billing.TimeEntry ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_TimeEntry_CreatedDateUtc_0111 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Billing.TimeEntry', N'CreatedByUserId') IS NULL ALTER TABLE Billing.TimeEntry ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Billing.TimeEntry', N'ModifiedDateUtc') IS NULL ALTER TABLE Billing.TimeEntry ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Billing.TimeEntry', N'ModifiedByUserId') IS NULL ALTER TABLE Billing.TimeEntry ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Billing.TimeEntry', N'IsDeleted') IS NULL ALTER TABLE Billing.TimeEntry ADD IsDeleted BIT NOT NULL CONSTRAINT DF_TimeEntry_IsDeleted_0111 DEFAULT 0;
+
+IF COL_LENGTH(N'Billing.TimeEntry', N'TimesheetId') IS NOT NULL
+BEGIN
+    DECLARE @TimesheetDefaultName SYSNAME = (
+        SELECT dc.name
+        FROM sys.default_constraints dc
+        INNER JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
+        WHERE dc.parent_object_id = OBJECT_ID(N'Billing.TimeEntry') AND c.name = N'TimesheetId'
+    );
+    IF @TimesheetDefaultName IS NULL
+        ALTER TABLE Billing.TimeEntry ADD CONSTRAINT DF_TimeEntry_TimesheetId_0111 DEFAULT NEWID() FOR TimesheetId;
+END
+
+DECLARE @TimeEntryRequiredDefaultsSql NVARCHAR(MAX) = N'';
+SELECT @TimeEntryRequiredDefaultsSql +=
+    N'ALTER TABLE Billing.TimeEntry ADD CONSTRAINT ' + QUOTENAME(LEFT(N'DF_TimeEntry_' + c.name + N'_0111', 128)) +
+    N' DEFAULT ' +
+    CASE
+        WHEN ty.name = N'uniqueidentifier' THEN N'NEWID()'
+        WHEN ty.name = N'date' THEN N'CONVERT(date, SYSUTCDATETIME())'
+        WHEN ty.name IN (N'datetime', N'datetime2', N'smalldatetime') THEN N'SYSUTCDATETIME()'
+        WHEN ty.name = N'bit' THEN N'0'
+        WHEN ty.name IN (N'tinyint', N'smallint', N'int', N'bigint', N'decimal', N'numeric', N'money', N'smallmoney', N'float', N'real')
+            THEN CASE WHEN c.name LIKE N'%Hour%' OR c.name LIKE N'%Amount%' OR c.name LIKE N'%Rate%' OR c.name LIKE N'%Cost%' OR c.name LIKE N'%Qty%' OR c.name LIKE N'%Quantity%' THEN N'1' ELSE N'0' END
+        ELSE N'N'''''
+    END +
+    N' FOR ' + QUOTENAME(c.name) + N';'
+FROM sys.columns c
+INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+LEFT JOIN sys.default_constraints dc ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
+WHERE c.object_id = OBJECT_ID(N'Billing.TimeEntry')
+  AND c.is_nullable = 0
+  AND c.is_identity = 0
+  AND c.is_computed = 0
+  AND dc.object_id IS NULL
+  AND ty.name NOT IN (N'timestamp', N'rowversion');
+IF @TimeEntryRequiredDefaultsSql <> N'' EXEC sp_executesql @TimeEntryRequiredDefaultsSql;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Billing.TimeEntry') AND name = N'IX_TimeEntry_Tenant_Date')
+    CREATE INDEX IX_TimeEntry_Tenant_Date ON Billing.TimeEntry(TenantId, EntryDate DESC, IsDeleted);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Billing.TimeEntry') AND name = N'IX_TimeEntry_Tenant_Account')
+    CREATE INDEX IX_TimeEntry_Tenant_Account ON Billing.TimeEntry(TenantId, AccountId, IsDeleted);
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = N'ExpenseEntry' AND schema_id = SCHEMA_ID(N'Billing'))
+BEGIN
+    CREATE TABLE Billing.ExpenseEntry (
+        ExpenseId         UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        TenantId          UNIQUEIDENTIFIER NOT NULL,
+        EngagementId      UNIQUEIDENTIFIER NULL,
+        AccountId         UNIQUEIDENTIFIER NOT NULL,
+        UserId            UNIQUEIDENTIFIER NOT NULL,
+        ExpenseDate       DATE             NOT NULL,
+        CategoryCode      NVARCHAR(80)     NOT NULL,
+        Amount            DECIMAL(18,2)    NOT NULL,
+        Description       NVARCHAR(1000)   NULL,
+        IsBillable        BIT              NOT NULL DEFAULT 1,
+        StatusCode        NVARCHAR(50)     NOT NULL DEFAULT N'Draft',
+        InvoiceId         UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc    DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId   UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc   DATETIME2        NULL,
+        ModifiedByUserId  UNIQUEIDENTIFIER NULL,
+        IsDeleted         BIT              NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IX_ExpenseEntry_Tenant_Date ON Billing.ExpenseEntry(TenantId, ExpenseDate DESC, IsDeleted);
+    CREATE INDEX IX_ExpenseEntry_Tenant_Account ON Billing.ExpenseEntry(TenantId, AccountId, IsDeleted);
+END
+
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'TenantId') IS NULL ALTER TABLE Billing.ExpenseEntry ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_ExpenseEntry_TenantId_0111 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'EngagementId') IS NULL ALTER TABLE Billing.ExpenseEntry ADD EngagementId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'AccountId') IS NULL ALTER TABLE Billing.ExpenseEntry ADD AccountId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_ExpenseEntry_AccountId_0111 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'UserId') IS NULL ALTER TABLE Billing.ExpenseEntry ADD UserId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_ExpenseEntry_UserId_0111 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'ExpenseDate') IS NULL ALTER TABLE Billing.ExpenseEntry ADD ExpenseDate DATE NOT NULL CONSTRAINT DF_ExpenseEntry_ExpenseDate_0111 DEFAULT CONVERT(date, SYSUTCDATETIME());
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'CategoryCode') IS NULL ALTER TABLE Billing.ExpenseEntry ADD CategoryCode NVARCHAR(80) NOT NULL CONSTRAINT DF_ExpenseEntry_CategoryCode_0111 DEFAULT N'Other';
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'Amount') IS NULL ALTER TABLE Billing.ExpenseEntry ADD Amount DECIMAL(18,2) NOT NULL CONSTRAINT DF_ExpenseEntry_Amount_0111 DEFAULT 0;
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'Description') IS NULL ALTER TABLE Billing.ExpenseEntry ADD Description NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'IsBillable') IS NULL ALTER TABLE Billing.ExpenseEntry ADD IsBillable BIT NOT NULL CONSTRAINT DF_ExpenseEntry_IsBillable_0111 DEFAULT 1;
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'StatusCode') IS NULL ALTER TABLE Billing.ExpenseEntry ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ExpenseEntry_StatusCode_0111 DEFAULT N'Draft';
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'InvoiceId') IS NULL ALTER TABLE Billing.ExpenseEntry ADD InvoiceId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'CreatedDateUtc') IS NULL ALTER TABLE Billing.ExpenseEntry ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ExpenseEntry_CreatedDateUtc_0111 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'CreatedByUserId') IS NULL ALTER TABLE Billing.ExpenseEntry ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'ModifiedDateUtc') IS NULL ALTER TABLE Billing.ExpenseEntry ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'ModifiedByUserId') IS NULL ALTER TABLE Billing.ExpenseEntry ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Billing.ExpenseEntry', N'IsDeleted') IS NULL ALTER TABLE Billing.ExpenseEntry ADD IsDeleted BIT NOT NULL CONSTRAINT DF_ExpenseEntry_IsDeleted_0111 DEFAULT 0;
+
+DECLARE @ExpenseEntryRequiredDefaultsSql NVARCHAR(MAX) = N'';
+SELECT @ExpenseEntryRequiredDefaultsSql +=
+    N'ALTER TABLE Billing.ExpenseEntry ADD CONSTRAINT ' + QUOTENAME(LEFT(N'DF_ExpenseEntry_' + c.name + N'_0111', 128)) +
+    N' DEFAULT ' +
+    CASE
+        WHEN ty.name = N'uniqueidentifier' THEN N'NEWID()'
+        WHEN ty.name = N'date' THEN N'CONVERT(date, SYSUTCDATETIME())'
+        WHEN ty.name IN (N'datetime', N'datetime2', N'smalldatetime') THEN N'SYSUTCDATETIME()'
+        WHEN ty.name = N'bit' THEN N'0'
+        WHEN ty.name IN (N'tinyint', N'smallint', N'int', N'bigint', N'decimal', N'numeric', N'money', N'smallmoney', N'float', N'real')
+            THEN CASE WHEN c.name LIKE N'%Hour%' OR c.name LIKE N'%Amount%' OR c.name LIKE N'%Rate%' OR c.name LIKE N'%Cost%' OR c.name LIKE N'%Qty%' OR c.name LIKE N'%Quantity%' THEN N'1' ELSE N'0' END
+        ELSE N'N'''''
+    END +
+    N' FOR ' + QUOTENAME(c.name) + N';'
+FROM sys.columns c
+INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+LEFT JOIN sys.default_constraints dc ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
+WHERE c.object_id = OBJECT_ID(N'Billing.ExpenseEntry')
+  AND c.is_nullable = 0
+  AND c.is_identity = 0
+  AND c.is_computed = 0
+  AND dc.object_id IS NULL
+  AND ty.name NOT IN (N'timestamp', N'rowversion');
+IF @ExpenseEntryRequiredDefaultsSql <> N'' EXEC sp_executesql @ExpenseEntryRequiredDefaultsSql;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Billing.ExpenseEntry') AND name = N'IX_ExpenseEntry_Tenant_Date')
+    CREATE INDEX IX_ExpenseEntry_Tenant_Date ON Billing.ExpenseEntry(TenantId, ExpenseDate DESC, IsDeleted);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Billing.ExpenseEntry') AND name = N'IX_ExpenseEntry_Tenant_Account')
+    CREATE INDEX IX_ExpenseEntry_Tenant_Account ON Billing.ExpenseEntry(TenantId, AccountId, IsDeleted);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @UserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+DECLARE @AccountId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 AccountId FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '20000000-0000-0000-0000-000000000001');
+DECLARE @Now DATETIME2 = SYSUTCDATETIME();
+
+IF NOT EXISTS (SELECT 1 FROM Billing.TimeEntry WHERE TenantId = @TenantId)
+BEGIN
+    IF COL_LENGTH(N'Billing.TimeEntry', N'TimesheetId') IS NOT NULL AND OBJECT_ID(N'Billing.Timesheet', N'U') IS NOT NULL
+    BEGIN
+        DECLARE @SeedTimesheetId UNIQUEIDENTIFIER = (SELECT TOP 1 TimesheetId FROM Billing.Timesheet ORDER BY 1);
+        IF @SeedTimesheetId IS NOT NULL
+        BEGIN
+            EXEC sp_executesql N'
+                INSERT INTO Billing.TimeEntry (TimeEntryId, TimesheetId, TenantId, AccountId, UserId, EntryDate, Hours, BillableHours, RateAmount, Description, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
+                VALUES
+                    (NEWID(), @SeedTimesheetId, @TenantId, @AccountId, @UserId, DATEADD(day, -5, CAST(@Now AS date)), 2.50, 2.50, 185.00, N''Policy renewal analysis and billing preparation'', N''Approved'', @Now, @UserId, 0),
+                    (NEWID(), @SeedTimesheetId, @TenantId, @AccountId, @UserId, DATEADD(day, -3, CAST(@Now AS date)), 1.25, 1.25, 185.00, N''Client billing review and accounting follow-up'', N''Draft'', @Now, @UserId, 0),
+                    (NEWID(), @SeedTimesheetId, @TenantId, @AccountId, @UserId, DATEADD(day, -1, CAST(@Now AS date)), 3.00, 2.00, 165.00, N''Endorsement support and invoice reconciliation'', N''Submitted'', @Now, @UserId, 0);',
+                N'@SeedTimesheetId UNIQUEIDENTIFIER, @TenantId UNIQUEIDENTIFIER, @AccountId UNIQUEIDENTIFIER, @UserId UNIQUEIDENTIFIER, @Now DATETIME2',
+                @SeedTimesheetId, @TenantId, @AccountId, @UserId, @Now;
+        END
+    END
+    ELSE
+    BEGIN
+        EXEC sp_executesql N'
+            INSERT INTO Billing.TimeEntry (TimeEntryId, TenantId, AccountId, UserId, EntryDate, Hours, BillableHours, RateAmount, Description, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
+            VALUES
+                (NEWID(), @TenantId, @AccountId, @UserId, DATEADD(day, -5, CAST(@Now AS date)), 2.50, 2.50, 185.00, N''Policy renewal analysis and billing preparation'', N''Approved'', @Now, @UserId, 0),
+                (NEWID(), @TenantId, @AccountId, @UserId, DATEADD(day, -3, CAST(@Now AS date)), 1.25, 1.25, 185.00, N''Client billing review and accounting follow-up'', N''Draft'', @Now, @UserId, 0),
+                (NEWID(), @TenantId, @AccountId, @UserId, DATEADD(day, -1, CAST(@Now AS date)), 3.00, 2.00, 165.00, N''Endorsement support and invoice reconciliation'', N''Submitted'', @Now, @UserId, 0);',
+            N'@TenantId UNIQUEIDENTIFIER, @AccountId UNIQUEIDENTIFIER, @UserId UNIQUEIDENTIFIER, @Now DATETIME2',
+            @TenantId, @AccountId, @UserId, @Now;
+    END
+END
+
+IF NOT EXISTS (SELECT 1 FROM Billing.ExpenseEntry WHERE TenantId = @TenantId)
+BEGIN
+    EXEC sp_executesql N'
+        INSERT INTO Billing.ExpenseEntry (ExpenseId, TenantId, AccountId, UserId, ExpenseDate, CategoryCode, Amount, Description, IsBillable, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES
+            (NEWID(), @TenantId, @AccountId, @UserId, DATEADD(day, -6, CAST(@Now AS date)), N''Travel'', 148.35, N''Mileage and parking for client stewardship visit'', 1, N''Approved'', @Now, @UserId, 0),
+            (NEWID(), @TenantId, @AccountId, @UserId, DATEADD(day, -4, CAST(@Now AS date)), N''Postage'', 32.50, N''Certified policy delivery package'', 1, N''Draft'', @Now, @UserId, 0),
+            (NEWID(), @TenantId, @AccountId, @UserId, DATEADD(day, -2, CAST(@Now AS date)), N''Meals'', 86.20, N''Client renewal meeting lunch'', 0, N''Submitted'', @Now, @UserId, 0);',
+        N'@TenantId UNIQUEIDENTIFIER, @AccountId UNIQUEIDENTIFIER, @UserId UNIQUEIDENTIFIER, @Now DATETIME2',
+        @TenantId, @AccountId, @UserId, @Now;
+END
+";
 
     // â”€â”€ 0048 â€” Agency Dashboard: Claims schema + seed data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private const string Migration0048_AgencyDashboardClaimsSeed = @"

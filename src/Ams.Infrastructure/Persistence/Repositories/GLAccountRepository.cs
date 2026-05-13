@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Finance;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -34,5 +35,33 @@ WHERE GLAccountId = @Id AND IsDeleted = 0";
         var items = (await multi.ReadAsync<GLAccountDto>()).AsList();
         var total = await multi.ReadSingleAsync<int>();
         return new PagedResult<GLAccountDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateGLAccountRequest request, CancellationToken cancellationToken = default)
+    {
+        var id = Guid.NewGuid();
+        const string sql = @"
+INSERT INTO Finance.GLAccount (GLAccountId, TenantId, AccountCode, AccountName, AccountTypeCode, Description, ParentGLAccountId, IsActive, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+VALUES (@Id, @TenantId, @AccountCode, @AccountName, @AccountTypeCode, @Description, @ParentGLAccountId, @IsActive, SYSUTCDATETIME(), @CreatedByUserId, NULL, NULL, 0);";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.AccountCode, request.AccountName, request.AccountTypeCode, request.Description, request.ParentGLAccountId, request.IsActive, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateGLAccountRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Finance.GLAccount
+SET AccountCode = @AccountCode,
+    AccountName = @AccountName,
+    AccountTypeCode = @AccountTypeCode,
+    Description = @Description,
+    ParentGLAccountId = @ParentGLAccountId,
+    IsActive = @IsActive,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE GLAccountId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.AccountCode, request.AccountName, request.AccountTypeCode, request.Description, request.ParentGLAccountId, request.IsActive, request.ModifiedByUserId }, cancellationToken: cancellationToken));
     }
 }

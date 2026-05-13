@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Finance;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -35,5 +36,37 @@ WHERE VendorId = @Id AND IsDeleted = 0";
         var items = (await multi.ReadAsync<VendorDto>()).AsList();
         var total = await multi.ReadSingleAsync<int>();
         return new PagedResult<VendorDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateVendorRequest request, CancellationToken cancellationToken = default)
+    {
+        var id = Guid.NewGuid();
+        const string sql = @"
+INSERT INTO Finance.Vendor (VendorId, TenantId, VendorCode, VendorName, ContactName, Email, Phone, PaymentTermsCode, CurrencyCode, TaxId, VendorTypeCode, StatusCode, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+VALUES (@Id, @TenantId, @VendorCode, @VendorName, @ContactName, @Email, @Phone, @PaymentTermsCode, @CurrencyCode, @TaxId, @VendorTypeCode, @StatusCode, SYSUTCDATETIME(), @CreatedByUserId, NULL, NULL, 0);";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.VendorCode, request.VendorName, request.ContactName, request.Email, request.Phone, request.PaymentTermsCode, request.CurrencyCode, request.TaxId, request.VendorTypeCode, request.StatusCode, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateVendorRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Finance.Vendor
+SET VendorCode = @VendorCode,
+    VendorName = @VendorName,
+    ContactName = @ContactName,
+    Email = @Email,
+    Phone = @Phone,
+    PaymentTermsCode = @PaymentTermsCode,
+    CurrencyCode = @CurrencyCode,
+    TaxId = @TaxId,
+    VendorTypeCode = @VendorTypeCode,
+    StatusCode = @StatusCode,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE VendorId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.VendorCode, request.VendorName, request.ContactName, request.Email, request.Phone, request.PaymentTermsCode, request.CurrencyCode, request.TaxId, request.VendorTypeCode, request.StatusCode, request.ModifiedByUserId }, cancellationToken: cancellationToken));
     }
 }

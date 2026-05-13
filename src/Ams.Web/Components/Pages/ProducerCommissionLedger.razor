@@ -1,4 +1,5 @@
 @page "/commissions/producer-ledger"
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -23,10 +24,10 @@
 <!-- KPI strip -->
 <div class="pl-kpi-strip">
     @PlKpi("bi-people",            "Producers",       _producers.Count.ToString(),                              "pl-ki-blue")
-    @PlKpi("bi-currency-dollar",   "YTD Earned",      "$389,750",                                               "pl-ki-green")
-    @PlKpi("bi-arrow-down-circle", "YTD Clawbacks",   "$6,200",                                                 "pl-ki-red")
-    @PlKpi("bi-currency-dollar",   "YTD Net",         "$383,550",                                               "pl-ki-green")
-    @PlKpi("bi-graph-up",          "Top Producer",    _producers.OrderByDescending(p=>p.YtdNet).First().Name,   "pl-ki-blue")
+    @PlKpi("bi-currency-dollar",   "YTD Earned",      Fmt(_producers.Sum(p=>p.YtdGross)),                       "pl-ki-green")
+    @PlKpi("bi-arrow-down-circle", "YTD Clawbacks",   Fmt(_producers.Sum(p=>p.YtdClawbacks)),                   "pl-ki-red")
+    @PlKpi("bi-currency-dollar",   "YTD Net",         Fmt(_producers.Sum(p=>p.YtdNet)),                         "pl-ki-green")
+    @PlKpi("bi-graph-up",          "Top Producer",    _producers.OrderByDescending(p=>p.YtdNet).FirstOrDefault()?.Name ?? "—", "pl-ki-blue")
     @PlKpi("bi-scissors",          "Split Earners",   _producers.Count(p=>p.HasSplit).ToString()+" producers",  "pl-ki-purple")
 </div>
 
@@ -65,6 +66,16 @@
     </select>
 </div>
 
+@if (_loading)
+{
+    <div style="padding:2rem"><SfSpinner Visible="true" /></div>
+}
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+}
+else
+{
 <!-- Producer cards + ledger -->
 <div class="pl-body">
     <!-- Producer selector sidebar -->
@@ -117,72 +128,43 @@
         }
     </div>
 </div>
+}
 
 <!-- Export Dialog -->
-<SfDialog @bind-Visible="_showExport" Width="440px" ShowCloseIcon="true" IsModal="true" Header="Export Producer Ledger">
+<SfDialog @bind-Visible="_showExport" Width="520px" ShowCloseIcon="false" IsModal="true">
     <DialogTemplates>
         <Content>
-            <div class="pl-dlg-body">
-                <div class="form-group mb-2"><label class="pl-lbl">Format</label>
-                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"CSV","Excel","PDF"}' @bind-Value="_exportFmt" Width="100%"></SfDropDownList>
-                </div>
-                <div class="form-group mb-2"><label class="pl-lbl">Period</label>
-                    <SfDateRangePicker TValue="DateTime?" @bind-StartValue="_exportFrom" @bind-EndValue="_exportTo" Width="100%"></SfDateRangePicker>
-                </div>
-                <div class="form-group mb-2">
-                    <SfCheckBox Label="Include split allocation detail" @bind-Checked="_exportSplits"></SfCheckBox>
-                </div>
-            </div>
+            <div class="um-modal-header"><i class="bi bi-download" aria-hidden="true"></i><span>Export Producer Ledger</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseExport"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm EditContext="_exportEditContext">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Format <span class="text-danger">*</span></label><InputSelect @bind-Value="_exportForm.Format" class="um-input"><option value="CSV">CSV</option><option value="Excel">Excel</option><option value="PDF">PDF</option></InputSelect><ValidationMessage For="() => _exportForm.Format" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Start Date <span class="text-danger">*</span></label><InputDate @bind-Value="_exportForm.StartDate" class="um-input" /><ValidationMessage For="() => _exportForm.StartDate" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>End Date <span class="text-danger">*</span></label><InputDate @bind-Value="_exportForm.EndDate" class="um-input" /><ValidationMessage For="() => _exportForm.EndDate" class="validation-message text-danger" /></div>
+                    <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_exportForm.IncludeSplits" /> Include split allocation detail</label></div>
+                    @if (!string.IsNullOrWhiteSpace(_exportFormError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_exportFormError</div> }
+                </div></div>
+            </EditForm>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseExport">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="ExportLedger">Export</button></div>
         </Content>
     </DialogTemplates>
-    <DialogButtons>
-        <DialogButton Content="Export" IsPrimary="true" OnClick="() => _showExport = false"></DialogButton>
-        <DialogButton Content="Cancel" OnClick="() => _showExport = false"></DialogButton>
-    </DialogButtons>
 </SfDialog>
 
 @code {
-    private string? _searchTerm, _filterPeriod, _filterProducer, _filterType, _selectedProducer;
-    private bool _showExport;
-    private string _exportFmt = "Excel";
-    private DateTime? _exportFrom, _exportTo;
-    private bool _exportSplits = true;
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private string? _searchTerm, _filterPeriod, _filterProducer, _filterType, _selectedProducer, _loadError;
+    private bool _showExport, _loading;
+    private ExportLedgerForm _exportForm = new();
+    private EditContext _exportEditContext = default!;
+    private string? _exportFormError;
 
-    private readonly List<ProducerSummary> _producers =
-    [
-        new("Sarah Chen",    "Standard Plan 2025", 156_000m, 2_100m, 153_900m, true),
-        new("Marcus Webb",   "Standard Plan 2025",  98_400m, 1_200m,  97_200m, true),
-        new("Linda Torres",  "Senior Producer 2025",72_800m,   800m,  72_000m, false),
-        new("James Holloway","Senior Producer 2025",64_500m, 1_800m,  62_700m, false),
-        new("Priya Patel",   "Standard Plan 2025",  45_200m,   300m,  44_900m, false),
-        new("Tom Harris",    "Referral Plan",        21_100m,   150m,  20_950m, false),
-        new("Naomi Price",   "Standard Plan 2025",  31_750m,     0m,  31_750m, true),
-    ];
+    private List<ProducerSummary> _producers = [];
 
     private IEnumerable<ProducerSummary> FilteredProducers => _producers.Where(p =>
         string.IsNullOrEmpty(_filterProducer) || p.Name == _filterProducer).Where(p =>
         string.IsNullOrEmpty(_searchTerm) || p.Name.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase));
 
-    private readonly Dictionary<string, List<LedgerEntry>> _allLedgers = new()
-    {
-        ["Sarah Chen"] =
-        [
-            new(new DateTime(2025,2,1),  "Credit",    "STM-2025-0041","New biz commission — POL-2025-00182",   0m,    4_500m, 18_400m),
-            new(new DateTime(2025,2,5),  "Credit",    "STM-2025-0041","New biz commission — POL-2025-00211",   0m,    3_100m, 21_500m),
-            new(new DateTime(2025,2,8),  "Clawback",  "CLW-2025-0011","Policy cancellation — POL-2024-07415",350m,       0m, 21_150m),
-            new(new DateTime(2025,2,10), "Credit",    "STM-2025-0041","Renewal — POL-2024-09912",              0m,    2_240m, 23_390m),
-            new(new DateTime(2025,2,15), "Clawback",  "CLW-2025-0012","NSF chargeback — POL-2025-00095",      50m,       0m, 23_340m),
-            new(new DateTime(2025,2,20), "Override",  "OVR-2025-0004","Branch override credit",                0m,    1_650m, 24_990m),
-            new(new DateTime(2025,2,28), "Adjustment","ADJ-2025-0002","Period-end reconciliation adj.",       200m,       0m, 24_790m),
-        ],
-        ["Marcus Webb"] =
-        [
-            new(new DateTime(2025,2,1),  "Credit",  "STM-2025-0039","Split share — POL-2025-00182",0m, 2_250m, 11_250m),
-            new(new DateTime(2025,2,5),  "Credit",  "STM-2025-0039","Split share — POL-2025-00211",0m, 1_550m, 12_800m),
-            new(new DateTime(2025,2,10), "Credit",  "STM-2025-0039","Split share — renewal",       0m, 1_120m, 13_920m),
-            new(new DateTime(2025,2,8),  "Clawback","CLW-2025-0011","Clawback share POL-2024-07415",175m, 0m, 13_745m),
-        ],
-    };
+    private Dictionary<string, List<LedgerEntry>> _allLedgers = [];
 
     private List<LedgerEntry> LedgerEntries => _selectedProducer is not null && _allLedgers.TryGetValue(_selectedProducer, out var l)
         ? l.Where(e => string.IsNullOrEmpty(_filterType) || e.Type == _filterType).ToList()
@@ -190,13 +172,78 @@
 
     private decimal RunningBalance => LedgerEntries.LastOrDefault()?.Balance ?? 0m;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        _exportEditContext = new(_exportForm);
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Producer Ledger",""));
-        _selectedProducer = _producers.First().Name;
+        await LoadAsync();
+    }
+
+    private void CloseExport() => _showExport = false;
+
+    private void ExportLedger()
+    {
+        _exportFormError = null;
+        if (!_exportEditContext.Validate()) return;
+        if (_exportForm.EndDate < _exportForm.StartDate)
+        {
+            _exportFormError = "End Date must be on or after Start Date.";
+            return;
+        }
+        _showExport = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var payees = (await Api.SearchCommissionPayeesAsync(_tenantId))?.Items.ToList() ?? [];
+            var plans = (await Api.SearchCommissionPlansAsync(_tenantId))?.Items.ToDictionary(x => x.CommissionPlanId) ?? [];
+            var transactions = (await Api.SearchCommissionTransactionsAsync(_tenantId))?.Items.ToList() ?? [];
+            var clawbacks = (await Api.SearchCommissionClawbacksAsync(_tenantId))?.Items.ToList() ?? [];
+
+            _producers = payees.Select((payee, index) =>
+            {
+                var name = $"{payee.PayeeTypeCode} {index + 1}";
+                var gross = transactions.Where(t => t.PayeeId == payee.PayeeId).Sum(t => t.CommissionAmount);
+                var claws = clawbacks.Where(c => c.PayeeId == payee.PayeeId).Sum(c => c.Amount);
+                var plan = plans.TryGetValue(payee.CommissionPlanId, out var p) ? p.PlanName : payee.PayeeTypeCode;
+                return new ProducerSummary(name, plan, gross, claws, gross - claws, payee.SplitPercentage < 100m);
+            }).ToList();
+
+            _allLedgers = payees.Select((payee, index) => new { Payee = payee, Name = $"{payee.PayeeTypeCode} {index + 1}" })
+                .ToDictionary(x => x.Name, x => BuildLedger(x.Payee, transactions, clawbacks));
+
+            _selectedProducer = _producers.FirstOrDefault()?.Name;
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            _producers = [];
+            _allLedgers = [];
+        }
+        finally { _loading = false; }
+    }
+
+    private static List<LedgerEntry> BuildLedger(CommissionPayeeDto payee, List<CommissionTransactionDto> transactions, List<CommissionClawbackDto> clawbacks)
+    {
+        var rows = new List<(DateTime Date, string Type, string Reference, string Description, decimal Debit, decimal Credit)>();
+        rows.AddRange(transactions.Where(t => t.PayeeId == payee.PayeeId).Select(t => (t.TransactionDate.ToDateTime(TimeOnly.MinValue), "Credit", t.SourceEntityName, $"{t.StatusCode} commission at {t.CommissionRate:N2}%", 0m, t.CommissionAmount)));
+        rows.AddRange(clawbacks.Where(c => c.PayeeId == payee.PayeeId).Select(c => (c.ClawbackDate.ToDateTime(TimeOnly.MinValue), "Clawback", c.ReasonCode, c.Notes ?? c.StatusCode, c.Amount, 0m)));
+
+        decimal balance = 0;
+        return rows.OrderBy(x => x.Date).Select(x =>
+        {
+            balance += x.Credit - x.Debit;
+            return new LedgerEntry(x.Date, x.Type, x.Reference, x.Description, x.Debit, x.Credit, balance);
+        }).ToList();
     }
 
     void SelectProducer(string name) => _selectedProducer = name;
+
+    static string Fmt(decimal v) => v.ToString("C0");
 
     RenderFragment PlKpi(string icon, string label, string val, string color) => __builder =>
     {
@@ -208,4 +255,12 @@
 
     record ProducerSummary(string Name, string Plan, decimal YtdGross, decimal YtdClawbacks, decimal YtdNet, bool HasSplit);
     record LedgerEntry(DateTime Date, string Type, string Reference, string Description, decimal Debit, decimal Credit, decimal Balance);
+
+    private sealed class ExportLedgerForm
+    {
+        [Required, StringLength(20)] public string Format { get; set; } = "Excel";
+        [Required] public DateTime StartDate { get; set; } = DateTime.Today.AddMonths(-1);
+        [Required] public DateTime EndDate { get; set; } = DateTime.Today;
+        public bool IncludeSplits { get; set; } = true;
+    }
 }

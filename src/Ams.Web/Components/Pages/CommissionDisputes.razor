@@ -11,32 +11,24 @@
 </SfToast>
 
 <!-- New Dispute Dialog -->
-<SfDialog @bind-Visible="_showNew" Width="560px" ShowCloseIcon="true" IsModal="true" Header="Raise Exception / Dispute">
+<SfDialog @bind-Visible="_showNew" Width="640px" ShowCloseIcon="false" IsModal="true">
     <DialogTemplates>
         <Content>
-            <div class="ce-dlg-body">
-                <div class="form-group mb-2"><label class="ce-lbl">Exception Type</label>
-                    <SfDropDownList TValue="string" TItem="string" DataSource="_exTypes" @bind-Value="_newType" Width="100%"></SfDropDownList>
-                </div>
-                <div class="form-group mb-2"><label class="ce-lbl">Producer / Payee</label>
-                    <SfTextBox @bind-Value="_newPayee" Placeholder="Producer name…"></SfTextBox>
-                </div>
-                <div class="form-group mb-2"><label class="ce-lbl">Disputed Amount</label>
-                    <SfNumericTextBox TValue="decimal" @bind-Value="_newAmount" Format="C2" Width="100%"></SfNumericTextBox>
-                </div>
-                <div class="form-group mb-2"><label class="ce-lbl">Description</label>
-                    <SfTextBox @bind-Value="_newDesc" Multiline="true" Placeholder="Describe the exception or dispute…"></SfTextBox>
-                </div>
-                <div class="form-group mb-2"><label class="ce-lbl">Policy / Statement Reference</label>
-                    <SfTextBox @bind-Value="_newRef" Placeholder="Policy # or Statement ID…"></SfTextBox>
-                </div>
-            </div>
+            <div class="um-modal-header"><i class="bi bi-exclamation-circle" aria-hidden="true"></i><span>Raise Exception / Dispute</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseNew"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm EditContext="_newEditContext">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Exception Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_newForm.ExceptionType" class="um-input">@foreach (var t in _exTypes) { <option value="@t">@t</option> }</InputSelect><ValidationMessage For="() => _newForm.ExceptionType" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Producer / Payee <span class="text-danger">*</span></label><InputText @bind-Value="_newForm.Payee" class="um-input" placeholder="Producer name…" /><ValidationMessage For="() => _newForm.Payee" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Disputed Amount <span class="text-danger">*</span></label><InputNumber @bind-Value="_newForm.DisputedAmount" class="um-input" /><ValidationMessage For="() => _newForm.DisputedAmount" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Policy / Statement Reference</label><InputText @bind-Value="_newForm.Reference" class="um-input" placeholder="Policy # or Statement ID…" /><ValidationMessage For="() => _newForm.Reference" class="validation-message text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_newForm.Description" class="um-input" rows="3" placeholder="Describe the exception or dispute…" /><ValidationMessage For="() => _newForm.Description" class="validation-message text-danger" /></div>
+                    @if (!string.IsNullOrWhiteSpace(_newFormError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_newFormError</div> }
+                </div></div>
+            </EditForm>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseNew">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SubmitExceptionAsync">Submit</button></div>
         </Content>
     </DialogTemplates>
-    <DialogButtons>
-        <DialogButton Content="Submit" IsPrimary="true" OnClick="SubmitExceptionAsync"></DialogButton>
-        <DialogButton Content="Cancel" OnClick="() => _showNew = false"></DialogButton>
-    </DialogButtons>
 </SfDialog>
 
 <AppPageHeader Title="Commission Exceptions &amp; Disputes"
@@ -49,7 +41,7 @@
         <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'>
             <i class="bi bi-journal-text" aria-hidden="true"></i> Producer Ledger
         </button>
-        <button class="um-btn um-btn-primary" @onclick="() => _showNew = true">
+        <button class="um-btn um-btn-primary" @onclick="OpenNew">
             <i class="bi bi-plus-circle" aria-hidden="true"></i> Raise Exception
         </button>
     </Actions>
@@ -93,9 +85,13 @@
     </select>
 </div>
 
-@if (_rows is null)
+@if (_loading)
 {
     <div style="padding:2rem"><SfSpinner Visible="true" /></div>
+}
+else if (!string.IsNullOrWhiteSpace(_loadError))
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
 }
 else
 {
@@ -153,51 +149,90 @@ else
 
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private string? _searchTerm;
+    private string? _searchTerm, _loadError;
     private string _filterType = "", _filterStatus = "";
-    private bool _showNew;
-    private string? _newPayee, _newDesc, _newRef, _newType = "Missing Payment";
-    private decimal _newAmount;
+    private bool _showNew, _loading;
+    private ExceptionForm _newForm = new();
+    private EditContext _newEditContext = default!;
+    private string? _newFormError;
     private SfToast _toast = default!;
 
     private readonly List<string> _exTypes = ["Missing Payment","Rate Mismatch","Split Error","Clawback Dispute","Override Error","House Account Dispute","Calculation Error","Other"];
 
-    private List<ExRow> _rows =
-    [
-        new(Guid.NewGuid(),"Sarah Chen",     "Missing Payment",   1250m, "STM-2025-0041",  "Commission not posted for Jan invoice",     "Open",     DateTime.Today.AddDays(-3),  null),
-        new(Guid.NewGuid(),"Marcus Webb",    "Rate Mismatch",      380m, "POL-2025-00182", "Applied 8% instead of 10% new biz rate",    "In Review",DateTime.Today.AddDays(-8),  null),
-        new(Guid.NewGuid(),"Linda Torres",   "Split Error",        620m, "STM-2025-0038",  "50/50 split applied instead of 60/40",       "Open",     DateTime.Today.AddDays(-2),  null),
-        new(Guid.NewGuid(),"James Holloway", "Clawback Dispute",  1800m, "CLW-2025-0009",  "Policy reinstated — clawback should reverse", "In Review",DateTime.Today.AddDays(-14), null),
-        new(Guid.NewGuid(),"Priya Patel",    "Calculation Error",  210m, "POL-2024-09912", "Incorrect premium base used for Q4 2024",    "Resolved", DateTime.Today.AddDays(-30), DateTime.Today.AddDays(-20)),
-        new(Guid.NewGuid(),"Tom Harris",     "Override Error",     150m, "STM-2025-0029",  "Branch override not applied per plan terms", "Denied",   DateTime.Today.AddDays(-45), DateTime.Today.AddDays(-35)),
-        new(Guid.NewGuid(),"Naomi Price",    "Missing Payment",    940m, "STM-2025-0043",  "Feb statement missing renewal commission",   "Open",     DateTime.Today.AddDays(-1),  null),
-    ];
+    private List<ExRow> _rows = [];
 
     private IEnumerable<ExRow> FilteredRows => _rows.Where(r =>
         (string.IsNullOrEmpty(_searchTerm)   || r.Producer.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase) || r.Description.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase)) &&
         (string.IsNullOrEmpty(_filterType)   || r.Type == _filterType) &&
         (string.IsNullOrEmpty(_filterStatus) || r.Status == _filterStatus));
 
-    protected override void OnInitialized() =>
+    protected override async Task OnInitializedAsync()
+    {
+        _newEditContext = new(_newForm);
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Exceptions",""));
+        await LoadAsync();
+    }
+
+    private void OpenNew() { _newForm = new(); _newEditContext = new(_newForm); _newFormError = null; _showNew = true; }
+    private void CloseNew() => _showNew = false;
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchCommissionDisputesAsync(_tenantId, _searchTerm);
+            _rows = result?.Items.Select(ToRow).ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            _rows = [];
+        }
+        finally { _loading = false; }
+    }
 
     async Task SubmitExceptionAsync()
     {
-        if (string.IsNullOrWhiteSpace(_newPayee) || _newAmount <= 0) return;
-        _rows.Insert(0, new(Guid.NewGuid(), _newPayee, _newType!, _newAmount, _newRef ?? "", _newDesc ?? "", "Open", DateTime.Today, null));
-        _showNew = false;
-        _newPayee = _newDesc = _newRef = null; _newAmount = 0;
-        await _toast.ShowAsync(new ToastModel { Content = "Exception submitted.", CssClass = "e-toast-success" });
+        _newFormError = null;
+        if (!_newEditContext.Validate()) return;
+        try
+        {
+            var reason = string.Join(" - ", new[] { _newForm.ExceptionType, _newForm.Description }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            await Api.CreateCommissionDisputeAsync(new CreateCommissionDisputeRequest { TenantId = _tenantId, DisputeDate = DateOnly.FromDateTime(DateTime.Today), DisputeReason = reason, DisputedAmount = _newForm.DisputedAmount, Resolution = string.IsNullOrWhiteSpace(_newForm.Reference) ? null : $"Reference: {_newForm.Reference}", StatusCode = "Open" });
+            _showNew = false;
+            await LoadAsync();
+            await _toast.ShowAsync(new ToastModel { Content = "Exception submitted.", CssClass = "e-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            _newFormError = $"Save failed: {ex.Message}";
+            await _toast.ShowAsync(new ToastModel { Content = _newFormError, CssClass = "e-toast-danger" });
+        }
     }
 
-    async Task Review(ExRow r)  { Upd(r, "In Review"); await _toast.ShowAsync(new ToastModel { Content = "Marked In Review.", CssClass = "e-toast-info" }); }
-    async Task Resolve(ExRow r) { Upd(r, "Resolved",  DateTime.Today); await _toast.ShowAsync(new ToastModel { Content = "Exception resolved.", CssClass = "e-toast-success" }); }
-    async Task Deny(ExRow r)    { Upd(r, "Denied",    DateTime.Today); await _toast.ShowAsync(new ToastModel { Content = "Exception denied.", CssClass = "e-toast-warning" }); }
+    async Task Review(ExRow r)  { await UpdAsync(r, "In Review"); await _toast.ShowAsync(new ToastModel { Content = "Marked In Review.", CssClass = "e-toast-info" }); }
+    async Task Resolve(ExRow r) { await UpdAsync(r, "Resolved", DateTime.Today); await _toast.ShowAsync(new ToastModel { Content = "Exception resolved.", CssClass = "e-toast-success" }); }
+    async Task Deny(ExRow r)    { await UpdAsync(r, "Denied", DateTime.Today); await _toast.ShowAsync(new ToastModel { Content = "Exception denied.", CssClass = "e-toast-warning" }); }
 
-    void Upd(ExRow r, string s, DateTime? d = null)
+    async Task UpdAsync(ExRow r, string s, DateTime? d = null)
     {
-        var i = _rows.IndexOf(r);
-        if (i >= 0) _rows[i] = r with { Status = s, ResolvedDate = d };
+        try
+        {
+            await Api.UpdateCommissionDisputeAsync(r.Id, new UpdateCommissionDisputeRequest { TenantId = _tenantId, DisputeId = r.Id, DisputeDate = DateOnly.FromDateTime(r.RaisedDate), DisputeReason = $"{r.Type} - {r.Description}", DisputedAmount = r.DisputedAmount, Resolution = r.Reference, StatusCode = s, ResolvedDateUtc = d });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = $"Update failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+    }
+
+    static ExRow ToRow(CommissionDisputeDto item)
+    {
+        var parts = item.DisputeReason.Split(" - ", 2, StringSplitOptions.TrimEntries);
+        return new ExRow(item.DisputeId, item.PayeeId.ToString()[..8], parts[0], item.DisputedAmount, item.Resolution ?? item.TransactionId?.ToString()[..8] ?? "", parts.Length > 1 ? parts[1] : item.DisputeReason, item.StatusCode, item.DisputeDate.ToDateTime(TimeOnly.MinValue), item.ResolvedDateUtc?.Date);
     }
 
     static string Fmt(decimal v) => v.ToString("C0");
@@ -215,5 +250,14 @@ else
     {
         public string Status { get; set; } = Status;
         public DateTime? ResolvedDate { get; set; } = ResolvedDate;
+    }
+
+    private sealed class ExceptionForm
+    {
+        [Required, StringLength(100)] public string ExceptionType { get; set; } = "Missing Payment";
+        [Required, StringLength(200)] public string Payee { get; set; } = string.Empty;
+        [Range(0.01, 100000000)] public decimal DisputedAmount { get; set; }
+        [StringLength(100)] public string? Reference { get; set; }
+        [StringLength(1000)] public string? Description { get; set; }
     }
 }
