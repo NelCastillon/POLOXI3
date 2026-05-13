@@ -142,6 +142,7 @@ public sealed class DatabaseMigrator
         new("0109_CRM_LeadActivity_SchemaSync", Migration0109_CrmLeadActivitySchemaSync),
         new("0110_DocumentConfig_CreateSeed", Migration0110_DocumentConfigCreateSeed),
         new("0111_Billing_TimeExpense_CreateSeed", Migration0111_BillingTimeExpenseCreateSeed),
+        new("0112_Claims_EnterpriseSchemaSync", Migration0112_ClaimsEnterpriseSchemaSync),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -766,6 +767,158 @@ IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '_Migrations' AND schema_id
             throw;
         }
     }
+
+    private const string Migration0112_ClaimsEnterpriseSchemaSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Claims') EXEC('CREATE SCHEMA Claims');
+
+IF OBJECT_ID(N'Claims.Claim', N'U') IS NULL
+BEGIN
+    CREATE TABLE Claims.Claim (
+        ClaimId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+        AccountId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+        ClaimNumber NVARCHAR(50) NOT NULL,
+        PolicyNumber NVARCHAR(50) NOT NULL,
+        AccountName NVARCHAR(160) NOT NULL,
+        Lob NVARCHAR(80) NOT NULL,
+        Carrier NVARCHAR(120) NOT NULL,
+        Status NVARCHAR(50) NOT NULL,
+        LossType NVARCHAR(80) NOT NULL,
+        PrimaryClaimant NVARCHAR(160) NOT NULL,
+        DateOfLoss DATE NOT NULL,
+        DateReported DATE NOT NULL,
+        ClosedDate DATE NULL,
+        TotalIncurred DECIMAL(18,2) NOT NULL DEFAULT 0,
+        TotalReserves DECIMAL(18,2) NOT NULL DEFAULT 0,
+        TotalPaid DECIMAL(18,2) NOT NULL DEFAULT 0,
+        AssignedHandler NVARCHAR(120) NOT NULL DEFAULT N'Unassigned',
+        IsLitigation BIT NOT NULL DEFAULT 0,
+        HasSubrogation BIT NOT NULL DEFAULT 0,
+        IsCatastrophe BIT NOT NULL DEFAULT 0,
+        IsDisputed BIT NOT NULL DEFAULT 0,
+        FollowUpReason NVARCHAR(120) NOT NULL DEFAULT N'Initial follow-up',
+        Priority NVARCHAR(40) NOT NULL DEFAULT N'Medium',
+        FollowUpDueDate DATE NULL,
+        IsSnoozed BIT NOT NULL DEFAULT 0,
+        CatCode NVARCHAR(80) NULL,
+        LossLocation NVARCHAR(400) NULL,
+        StateOfLoss NVARCHAR(20) NULL,
+        LossDescription NVARCHAR(2000) NULL,
+        CauseOfLoss NVARCHAR(120) NULL,
+        CarrierClaimNumber NVARCHAR(80) NULL,
+        ReportedBy NVARCHAR(120) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL DEFAULT 0
+    );
+END
+
+IF COL_LENGTH(N'Claims.Claim', N'PolicyId') IS NULL ALTER TABLE Claims.Claim ADD PolicyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Claim_PolicyId_0112 DEFAULT NEWID();
+IF COL_LENGTH(N'Claims.Claim', N'AccountId') IS NULL ALTER TABLE Claims.Claim ADD AccountId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Claim_AccountId_0112 DEFAULT NEWID();
+IF COL_LENGTH(N'Claims.Claim', N'PolicyNumber') IS NULL ALTER TABLE Claims.Claim ADD PolicyNumber NVARCHAR(50) NOT NULL CONSTRAINT DF_Claim_PolicyNumber_0112 DEFAULT N'';
+IF COL_LENGTH(N'Claims.Claim', N'AccountName') IS NULL ALTER TABLE Claims.Claim ADD AccountName NVARCHAR(160) NOT NULL CONSTRAINT DF_Claim_AccountName_0112 DEFAULT N'';
+IF COL_LENGTH(N'Claims.Claim', N'Lob') IS NULL ALTER TABLE Claims.Claim ADD Lob NVARCHAR(80) NOT NULL CONSTRAINT DF_Claim_Lob_0112 DEFAULT N'';
+IF COL_LENGTH(N'Claims.Claim', N'Carrier') IS NULL ALTER TABLE Claims.Claim ADD Carrier NVARCHAR(120) NOT NULL CONSTRAINT DF_Claim_Carrier_0112 DEFAULT N'';
+IF COL_LENGTH(N'Claims.Claim', N'LossType') IS NULL ALTER TABLE Claims.Claim ADD LossType NVARCHAR(80) NOT NULL CONSTRAINT DF_Claim_LossType_0112 DEFAULT N'';
+IF COL_LENGTH(N'Claims.Claim', N'PrimaryClaimant') IS NULL ALTER TABLE Claims.Claim ADD PrimaryClaimant NVARCHAR(160) NOT NULL CONSTRAINT DF_Claim_PrimaryClaimant_0112 DEFAULT N'';
+IF COL_LENGTH(N'Claims.Claim', N'DateOfLoss') IS NULL ALTER TABLE Claims.Claim ADD DateOfLoss DATE NOT NULL CONSTRAINT DF_Claim_DateOfLoss_0112 DEFAULT CONVERT(date, SYSUTCDATETIME());
+IF COL_LENGTH(N'Claims.Claim', N'DateReported') IS NULL ALTER TABLE Claims.Claim ADD DateReported DATE NOT NULL CONSTRAINT DF_Claim_DateReported_0112 DEFAULT CONVERT(date, SYSUTCDATETIME());
+IF COL_LENGTH(N'Claims.Claim', N'ClosedDate') IS NULL ALTER TABLE Claims.Claim ADD ClosedDate DATE NULL;
+IF COL_LENGTH(N'Claims.Claim', N'TotalIncurred') IS NULL ALTER TABLE Claims.Claim ADD TotalIncurred DECIMAL(18,2) NOT NULL CONSTRAINT DF_Claim_TotalIncurred_0112 DEFAULT 0;
+IF COL_LENGTH(N'Claims.Claim', N'TotalReserves') IS NULL ALTER TABLE Claims.Claim ADD TotalReserves DECIMAL(18,2) NOT NULL CONSTRAINT DF_Claim_TotalReserves_0112 DEFAULT 0;
+IF COL_LENGTH(N'Claims.Claim', N'TotalPaid') IS NULL ALTER TABLE Claims.Claim ADD TotalPaid DECIMAL(18,2) NOT NULL CONSTRAINT DF_Claim_TotalPaid_0112 DEFAULT 0;
+IF COL_LENGTH(N'Claims.Claim', N'AssignedHandler') IS NULL ALTER TABLE Claims.Claim ADD AssignedHandler NVARCHAR(120) NOT NULL CONSTRAINT DF_Claim_AssignedHandler_0112 DEFAULT N'Unassigned';
+IF COL_LENGTH(N'Claims.Claim', N'IsLitigation') IS NULL ALTER TABLE Claims.Claim ADD IsLitigation BIT NOT NULL CONSTRAINT DF_Claim_IsLitigation_0112 DEFAULT 0;
+IF COL_LENGTH(N'Claims.Claim', N'HasSubrogation') IS NULL ALTER TABLE Claims.Claim ADD HasSubrogation BIT NOT NULL CONSTRAINT DF_Claim_HasSubrogation_0112 DEFAULT 0;
+IF COL_LENGTH(N'Claims.Claim', N'IsDisputed') IS NULL ALTER TABLE Claims.Claim ADD IsDisputed BIT NOT NULL CONSTRAINT DF_Claim_IsDisputed_0112 DEFAULT 0;
+IF COL_LENGTH(N'Claims.Claim', N'FollowUpReason') IS NULL ALTER TABLE Claims.Claim ADD FollowUpReason NVARCHAR(120) NOT NULL CONSTRAINT DF_Claim_FollowUpReason_0112 DEFAULT N'Initial follow-up';
+IF COL_LENGTH(N'Claims.Claim', N'Priority') IS NULL ALTER TABLE Claims.Claim ADD Priority NVARCHAR(40) NOT NULL CONSTRAINT DF_Claim_Priority_0112 DEFAULT N'Medium';
+IF COL_LENGTH(N'Claims.Claim', N'FollowUpDueDate') IS NULL ALTER TABLE Claims.Claim ADD FollowUpDueDate DATE NULL;
+IF COL_LENGTH(N'Claims.Claim', N'IsSnoozed') IS NULL ALTER TABLE Claims.Claim ADD IsSnoozed BIT NOT NULL CONSTRAINT DF_Claim_IsSnoozed_0112 DEFAULT 0;
+IF COL_LENGTH(N'Claims.Claim', N'CatCode') IS NULL ALTER TABLE Claims.Claim ADD CatCode NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Claims.Claim', N'LossLocation') IS NULL ALTER TABLE Claims.Claim ADD LossLocation NVARCHAR(400) NULL;
+IF COL_LENGTH(N'Claims.Claim', N'StateOfLoss') IS NULL ALTER TABLE Claims.Claim ADD StateOfLoss NVARCHAR(20) NULL;
+IF COL_LENGTH(N'Claims.Claim', N'LossDescription') IS NULL ALTER TABLE Claims.Claim ADD LossDescription NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Claims.Claim', N'CauseOfLoss') IS NULL ALTER TABLE Claims.Claim ADD CauseOfLoss NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Claims.Claim', N'CarrierClaimNumber') IS NULL ALTER TABLE Claims.Claim ADD CarrierClaimNumber NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Claims.Claim', N'ReportedBy') IS NULL ALTER TABLE Claims.Claim ADD ReportedBy NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Claims.Claim', N'CreatedByUserId') IS NULL ALTER TABLE Claims.Claim ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Claims.Claim', N'ModifiedDateUtc') IS NULL ALTER TABLE Claims.Claim ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Claims.Claim', N'ModifiedByUserId') IS NULL ALTER TABLE Claims.Claim ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+
+IF OBJECT_ID(N'Claims.ClaimActivity', N'U') IS NULL
+BEGIN
+    CREATE TABLE Claims.ClaimActivity (
+        ClaimActivityId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NULL,
+        ClaimId UNIQUEIDENTIFIER NOT NULL,
+        ActivityType NVARCHAR(50) NOT NULL,
+        ActivityDescription NVARCHAR(1000) NULL,
+        Title NVARCHAR(200) NULL,
+        Category NVARCHAR(80) NULL,
+        Party NVARCHAR(120) NULL,
+        Notes NVARCHAR(2000) NULL,
+        Amount DECIMAL(18,2) NULL,
+        PriorAmount DECIMAL(18,2) NULL,
+        ActivityDate DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CreatedBy NVARCHAR(120) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        IsPinned BIT NOT NULL DEFAULT 0,
+        IsDeleted BIT NOT NULL DEFAULT 0
+    );
+END
+
+IF COL_LENGTH(N'Claims.ClaimActivity', N'TenantId') IS NULL ALTER TABLE Claims.ClaimActivity ADD TenantId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Claims.ClaimActivity', N'Title') IS NULL ALTER TABLE Claims.ClaimActivity ADD Title NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Claims.ClaimActivity', N'Category') IS NULL ALTER TABLE Claims.ClaimActivity ADD Category NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Claims.ClaimActivity', N'Party') IS NULL ALTER TABLE Claims.ClaimActivity ADD Party NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Claims.ClaimActivity', N'Notes') IS NULL ALTER TABLE Claims.ClaimActivity ADD Notes NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Claims.ClaimActivity', N'Amount') IS NULL ALTER TABLE Claims.ClaimActivity ADD Amount DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Claims.ClaimActivity', N'PriorAmount') IS NULL ALTER TABLE Claims.ClaimActivity ADD PriorAmount DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Claims.ClaimActivity', N'ActivityDate') IS NULL ALTER TABLE Claims.ClaimActivity ADD ActivityDate DATETIME2 NOT NULL CONSTRAINT DF_ClaimActivity_ActivityDate_0112 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Claims.ClaimActivity', N'CreatedBy') IS NULL ALTER TABLE Claims.ClaimActivity ADD CreatedBy NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Claims.ClaimActivity', N'IsPinned') IS NULL ALTER TABLE Claims.ClaimActivity ADD IsPinned BIT NOT NULL CONSTRAINT DF_ClaimActivity_IsPinned_0112 DEFAULT 0;
+IF COL_LENGTH(N'Claims.ClaimActivity', N'IsDeleted') IS NULL ALTER TABLE Claims.ClaimActivity ADD IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimActivity_IsDeleted_0112 DEFAULT 0;
+
+IF OBJECT_ID(N'Claims.CatEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Claims.CatEvent (CatEventId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY, TenantId UNIQUEIDENTIFIER NOT NULL, Name NVARCHAR(160) NOT NULL, CatCode NVARCHAR(80) NOT NULL, EventType NVARCHAR(80) NOT NULL, Severity NVARCHAR(40) NOT NULL, AffectedStates NVARCHAR(120) NULL, StartDate DATE NOT NULL, EndDate DATE NULL, Description NVARCHAR(1000) NULL, CreatedDateUtc DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(), ModifiedDateUtc DATETIME2 NULL, IsDeleted BIT NOT NULL DEFAULT 0);
+END
+
+IF OBJECT_ID(N'Claims.CatAffectedInsured', N'U') IS NULL
+BEGIN
+    CREATE TABLE Claims.CatAffectedInsured (AffectedInsuredId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY, CatEventId UNIQUEIDENTIFIER NOT NULL, AccountId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(), AccountName NVARCHAR(160) NOT NULL, PolicyNumber NVARCHAR(50) NOT NULL, Lob NVARCHAR(80) NOT NULL, County NVARCHAR(80) NULL, ZipCode NVARCHAR(20) NULL, TivAtRisk DECIMAL(18,2) NOT NULL DEFAULT 0, GeoTagged BIT NOT NULL DEFAULT 0, FnolFiled BIT NOT NULL DEFAULT 0, BlastSent BIT NOT NULL DEFAULT 0, ContactStatus NVARCHAR(50) NOT NULL DEFAULT N'No Contact', Handler NVARCHAR(120) NOT NULL DEFAULT N'Unassigned', ModifiedDateUtc DATETIME2 NULL, IsDeleted BIT NOT NULL DEFAULT 0);
+END
+
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+EXEC sp_executesql N'
+UPDATE Claims.Claim
+SET FollowUpDueDate = COALESCE(FollowUpDueDate, DATEADD(day, 7, DateReported)),
+    TotalIncurred = CASE WHEN TotalIncurred = 0 THEN TotalReserves + TotalPaid ELSE TotalIncurred END;
+
+IF NOT EXISTS (SELECT 1 FROM Claims.Claim WHERE TenantId = @TenantId AND PolicyNumber = N''TRV-GL-2024-00421'')
+BEGIN
+    INSERT INTO Claims.Claim (ClaimId,TenantId,PolicyId,AccountId,ClaimNumber,PolicyNumber,AccountName,Lob,Carrier,Status,LossType,PrimaryClaimant,DateOfLoss,DateReported,TotalIncurred,TotalReserves,TotalPaid,AssignedHandler,IsLitigation,HasSubrogation,IsCatastrophe,IsDisputed,FollowUpReason,Priority,FollowUpDueDate,CatCode,LossLocation,StateOfLoss,LossDescription,CauseOfLoss,CarrierClaimNumber,ReportedBy,CreatedDateUtc,IsDeleted)
+    VALUES
+    (NEWID(),@TenantId,NEWID(),NEWID(),N''CLM-2025-00142'',N''TRV-GL-2024-00421'',N''Sullivan Mfg. LLC'',N''General Liability'',N''Travelers Indemnity'',N''Open'',N''Bodily Injury'',N''James Hartford'',DATEADD(day,-42,CAST(SYSUTCDATETIME() AS date)),DATEADD(day,-40,CAST(SYSUTCDATETIME() AS date)),85500,120000,35000,N''Sarah Kim'',1,0,0,1,N''Reserve Review Due'',N''High'',DATEADD(day,-3,CAST(SYSUTCDATETIME() AS date)),NULL,N''4800 Main St, Houston, TX 77002'',N''TX'',N''Slip and fall loss with ongoing medical treatment.'',N''Slip & Fall'',N''TRV-CLM-88-004219'',N''Maria Santos'',SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,NEWID(),NEWID(),N''CLM-2025-00133'',N''LIB-GL-2024-77210'',N''Bridgewater Hotels'',N''General Liability'',N''Liberty Mutual'',N''Open'',N''Water/Flood'',N''Bridgewater Hotels'',DATEADD(day,-28,CAST(SYSUTCDATETIME() AS date)),DATEADD(day,-27,CAST(SYSUTCDATETIME() AS date)),42000,65000,14000,N''Kevin Obi'',0,0,1,0,N''CAT Field Inspection'',N''High'',DATEADD(day,-2,CAST(SYSUTCDATETIME() AS date)),N''CAT-2025-TX-Hail'',N''Houston, TX'',N''TX'',N''Water intrusion after hailstorm.'',N''Wind/Hail'',NULL,N''Tenant Admin'',SYSUTCDATETIME(),0),
+    (NEWID(),@TenantId,NEWID(),NEWID(),N''CLM-2025-00131'',N''LIB-GL-2024-77210'',N''Bridgewater Hotels'',N''General Liability'',N''Liberty Mutual'',N''In Litigation'',N''Slip & Fall'',N''Robert Dunning'',DATEADD(day,-215,CAST(SYSUTCDATETIME() AS date)),DATEADD(day,-212,CAST(SYSUTCDATETIME() AS date)),475000,650000,120000,N''Maria Santos'',1,1,0,1,N''Litigation Update'',N''Urgent'',DATEADD(day,-1,CAST(SYSUTCDATETIME() AS date)),NULL,N''Dallas, TX'',N''TX'',N''Litigated slip and fall claim.'',N''Slip & Fall'',NULL,N''Tenant Admin'',SYSUTCDATETIME(),0);
+END',
+N'@TenantId UNIQUEIDENTIFIER',
+@TenantId = @TenantId;
+
+IF NOT EXISTS (SELECT 1 FROM Claims.CatEvent WHERE TenantId = @TenantId)
+BEGIN
+    DECLARE @CatEventId UNIQUEIDENTIFIER = NEWID();
+    INSERT INTO Claims.CatEvent (CatEventId,TenantId,Name,CatCode,EventType,Severity,AffectedStates,StartDate,EndDate,Description,CreatedDateUtc,IsDeleted)
+    VALUES (@CatEventId,@TenantId,N'Texas May 2025 Hailstorm',N'CAT-2025-TX-Hail',N'Hailstorm',N'Critical',N'TX, OK',DATEADD(day,-12,CAST(SYSUTCDATETIME() AS date)),DATEADD(day,-10,CAST(SYSUTCDATETIME() AS date)),N'Severe hailstorm across DFW and Houston metro areas.',SYSUTCDATETIME(),0);
+    INSERT INTO Claims.CatAffectedInsured (AffectedInsuredId,CatEventId,AccountId,AccountName,PolicyNumber,Lob,County,ZipCode,TivAtRisk,GeoTagged,FnolFiled,BlastSent,ContactStatus,Handler,IsDeleted)
+    VALUES (NEWID(),@CatEventId,NEWID(),N'Sullivan Mfg. LLC',N'TRV-GL-2024-00421',N'General Liability',N'Harris',N'77002',1200000,1,1,1,N'Contacted',N'Sarah Kim',0), (NEWID(),@CatEventId,NEWID(),N'Bridgewater Hotels',N'LIB-GL-2024-77210',N'General Liability',N'Galveston',N'77550',2100000,1,1,1,N'FNOL Filed',N'Kevin Obi',0), (NEWID(),@CatEventId,NEWID(),N'Metro Freight Co.',N'HFD-CA-2024-14822',N'Commercial Auto',N'Harris',N'77029',320000,1,0,1,N'Contacted',N'James Park',0), (NEWID(),@CatEventId,NEWID(),N'Dallas Roofing LLC',N'CNA-WC-2024-55102',N'Workers Comp',N'Dallas',N'75201',450000,0,0,0,N'No Contact',N'Kevin Obi',0);
+END
+";
 
     private sealed record Migration(string Name, string Sql);
 

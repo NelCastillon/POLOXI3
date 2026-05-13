@@ -119,42 +119,63 @@
 </div>
 
 <!-- Invite / Add dialog -->
-<SfDialog @bind-Visible="_showInvite" Width="500px" IsModal="true" ShowCloseIcon="true">
+<SfDialog @bind-Visible="_showInvite" Width="620px" IsModal="true" ShowCloseIcon="false">
     <DialogTemplates>
-        <Header><span class="pu-dlg-hdr"><i class="bi bi-person-plus" aria-hidden="true"></i> Add Portal User</span></Header>
         <Content>
-            <div class="pu-dlg-body">
-                <div class="pu-dlg-row">
-                    <SfTextBox Placeholder="Full name *" @bind-Value="_newUser.Name" />
-                    <SfTextBox Placeholder="Email address *" @bind-Value="_newUser.Email" />
+            <EditForm Model="_newUser" OnValidSubmit="CommitAddUser" OnInvalidSubmit="HandleInvalidSubmit">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-person-plus" aria-hidden="true"></i>
+                    <span>Add Portal User</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseInvite"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
                 </div>
-                <div class="pu-dlg-row">
-                    <SfTextBox Placeholder="Account name" @bind-Value="_newUser.AccountName" />
-                    <SfDropDownList TValue="string" TItem="Lv" DataSource="_roleOpts" Placeholder="Portal role"
-                                    Width="100%" @bind-Value="_newUser.Role">
-                        <DropDownListFieldSettings Value="V" Text="L" />
-                    </SfDropDownList>
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Full Name <span class="um-required">*</span></label>
+                            <SfTextBox Placeholder="Full name" @bind-Value="_newUser.Name" />
+                            <ValidationMessage For="() => _newUser.Name" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Email Address <span class="um-required">*</span></label>
+                            <SfTextBox Placeholder="email@domain.com" @bind-Value="_newUser.Email" />
+                            <ValidationMessage For="() => _newUser.Email" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Account Name</label>
+                            <SfTextBox Placeholder="Account name" @bind-Value="_newUser.AccountName" />
+                            <ValidationMessage For="() => _newUser.AccountName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Portal Role <span class="um-required">*</span></label>
+                            <SfDropDownList TValue="string" TItem="Lv" DataSource="_roleOpts" Placeholder="Portal role"
+                                            Width="100%" @bind-Value="_newUser.Role">
+                                <DropDownListFieldSettings Value="V" Text="L" />
+                            </SfDropDownList>
+                            <ValidationMessage For="() => _newUser.Role" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Security</label>
+                            <SfCheckBox @bind-Checked="_newUser.MfaEnabled" Label="Require MFA" />
+                        </div>
+                        <div class="um-field">
+                            <label>Invite</label>
+                            <SfCheckBox @bind-Checked="_sendWelcome" Label="Send welcome email" />
+                        </div>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_formError))
+                    {
+                        <div class="text-danger" style="margin-top:.75rem;"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
+                    }
                 </div>
-                <div class="pu-dlg-check">
-                    <label><SfCheckBox @bind-Checked="_newUser.MfaEnabled" /> Require MFA</label>
-                    <label><SfCheckBox @bind-Checked="_sendWelcome" /> Send welcome email</label>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseInvite">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary">
+                        <i class="bi bi-check-lg" aria-hidden="true"></i> Add User
+                    </button>
                 </div>
-                @if (!string.IsNullOrEmpty(_formError))
-                {
-                    <div class="pu-form-error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_formError</div>
-                }
-            </div>
+            </EditForm>
         </Content>
-        <FooterTemplate>
-            <div class="pu-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="CloseInvite">Cancel</button>
-                <button class="um-btn um-btn-primary"
-                        disabled="@(string.IsNullOrEmpty(_newUser.Name) || string.IsNullOrEmpty(_newUser.Email))"
-                        @onclick="CommitAddUser">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Add User
-                </button>
-            </div>
-        </FooterTemplate>
     </DialogTemplates>
 </SfDialog>
 
@@ -229,7 +250,7 @@
 
     private async Task CommitAddUser()
     {
-        if (string.IsNullOrWhiteSpace(_newUser.Email)) { _formError = "Email is required."; return; }
+        _formError = null;
         _newUser.Id = Guid.NewGuid();
         _newUser.Status = "Pending";
         _newUser.LastLogin = DateTime.MinValue;
@@ -249,6 +270,11 @@
         await ShowToast($"Portal user {_newUser.Name} added{(_sendWelcome ? " — invite sent." : ".")}");
         _newUser = new();
         await LoadAsync();
+    }
+
+    private void HandleInvalidSubmit(EditContext editContext)
+    {
+        _formError = "Fix the highlighted validation errors before adding this portal user.";
     }
 
     private void CloseInvite() { _showInvite = false; _newUser = new(); _formError = null; }
@@ -289,9 +315,21 @@
     private sealed class PortalUser
     {
         public Guid     Id          { get; set; }
+
+        [Required(ErrorMessage = "Full name is required.")]
+        [StringLength(160, ErrorMessage = "Full name cannot exceed 160 characters.")]
         public string   Name        { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Email address is required.")]
+        [EmailAddress(ErrorMessage = "Enter a valid email address.")]
+        [StringLength(320, ErrorMessage = "Email address cannot exceed 320 characters.")]
         public string   Email       { get; set; } = string.Empty;
+
+        [StringLength(200, ErrorMessage = "Account name cannot exceed 200 characters.")]
         public string   AccountName { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Portal role is required.")]
+        [StringLength(50, ErrorMessage = "Portal role cannot exceed 50 characters.")]
         public string   Role        { get; set; } = "Policyholder";
         public string   Status      { get; set; } = "Pending";
         public DateTime LastLogin   { get; set; }

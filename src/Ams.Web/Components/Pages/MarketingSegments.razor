@@ -62,7 +62,7 @@
                 <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo($"/marketing/campaigns/new")'>
                     <i class="bi bi-megaphone" aria-hidden="true"></i> Use in Campaign
                 </button>
-                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => { _editSeg = seg; _showEdit = true; }">
+                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(seg)">
                     <i class="bi bi-pencil" aria-hidden="true"></i> Edit
                 </button>
             </div>
@@ -117,6 +117,27 @@
     </DialogTemplates>
 </SfDialog>
 
+<!-- Edit segment dialog -->
+<SfDialog @bind-Visible="_showEdit" Width="640px" IsModal="true" ShowCloseIcon="false">
+    <DialogTemplates>
+        <Content>
+            <div class="um-modal-header"><i class="bi bi-pencil-square" aria-hidden="true"></i><span>Edit Audience Segment</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showEdit = false"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm EditContext="_editEditContext">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Segment Name <span class="text-danger">*</span></label><InputText @bind-Value="_editForm.Name" class="um-input" /><ValidationMessage For="() => _editForm.Name" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Segment Type</label><InputSelect @bind-Value="_editForm.Type" class="um-input"><option>Dynamic</option><option>Static</option></InputSelect><ValidationMessage For="() => _editForm.Type" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Contact Count</label><InputNumber @bind-Value="_editForm.ContactCount" class="um-input" /><ValidationMessage For="() => _editForm.ContactCount" class="validation-message text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_editForm.Description" class="um-input" rows="3" /><ValidationMessage For="() => _editForm.Description" class="validation-message text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Rules</label><InputTextArea @bind-Value="_editForm.Rules" class="um-input" rows="3" /><ValidationMessage For="() => _editForm.Rules" class="validation-message text-danger" /></div>
+                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
+                </div></div>
+            </EditForm>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showEdit = false">Cancel</button><button class="um-btn um-btn-primary" @onclick="CommitEditAsync" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button></div>
+        </Content>
+    </DialogTemplates>
+</SfDialog>
+
 @code {
     private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private SfToast? _toast;
@@ -124,7 +145,9 @@
     private bool _showCreate, _showEdit, _loading, _saving;
     private string? _loadError, _formError;
     private SegmentForm _createForm = new();
+    private SegmentForm _editForm = new();
     private EditContext _createEditContext = default!;
+    private EditContext _editEditContext = default!;
     private SegRow? _editSeg;
 
     // Stub type used only for SfQueryBuilder column schema
@@ -147,6 +170,7 @@
     protected override async Task OnInitializedAsync()
     {
         _createEditContext = new(_createForm);
+        _editEditContext = new(_editForm);
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Segments",""));
         await LoadAsync();
     }
@@ -157,7 +181,7 @@
         try
         {
             var result = await Api.SearchMarketingSegmentsAsync(_tenantId);
-            _segments = result?.Items.Select(x => new SegRow(x.Name, x.Icon, x.ColorCss, x.Description, x.ContactCount, x.IsDynamic, x.UpdatedDateUtc, SplitRules(x.Rules))).ToList() ?? [];
+            _segments = result?.Items.Select(x => new SegRow(x.SegmentId, x.Name, x.Icon, x.ColorCss, x.Description, x.ContactCount, x.IsDynamic, x.UpdatedDateUtc, SplitRules(x.Rules))).ToList() ?? [];
         }
         catch (Exception ex) { _loadError = $"Failed to load segments: {ex.Message}"; _segments = []; }
         finally { _loading = false; }
@@ -166,6 +190,14 @@
     private static List<string> SplitRules(string rules) => string.IsNullOrWhiteSpace(rules) ? ["(all contacts)"] : rules.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
     private void OpenCreate() { _createForm = new(); _createEditContext = new(_createForm); _formError = null; _showCreate = true; }
     private void CloseCreate() => _showCreate = false;
+    private void OpenEdit(SegRow seg)
+    {
+        _editSeg = seg;
+        _editForm = new SegmentForm { Name = seg.Name, Type = seg.IsDynamic ? "Dynamic" : "Static", Description = seg.Description, ContactCount = seg.Count, Rules = string.Join('|', seg.Rules) };
+        _editEditContext = new(_editForm);
+        _formError = null;
+        _showEdit = true;
+    }
 
     private async Task CommitCreateAsync()
     {
@@ -192,7 +224,23 @@
         finally { _saving = false; }
     }
 
-    private sealed record SegRow(string Name, string Icon, string ColorCss, string Description, int Count, bool IsDynamic, DateTime Updated, List<string> Rules);
+    private async Task CommitEditAsync()
+    {
+        if (_editSeg is null) return;
+        _formError = null;
+        if (!_editEditContext.Validate()) return;
+        _saving = true;
+        try
+        {
+            await Api.UpdateMarketingSegmentAsync(_editSeg.Id, new MarketingSegmentDto { SegmentId = _editSeg.Id, TenantId = _tenantId, Name = _editForm.Name, Icon = _editSeg.Icon, ColorCss = _editSeg.ColorCss, Description = _editForm.Description ?? string.Empty, ContactCount = _editForm.ContactCount, IsDynamic = _editForm.Type == "Dynamic", Rules = _editForm.Rules ?? string.Empty });
+            _showEdit = false;
+            await LoadAsync();
+        }
+        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private sealed record SegRow(Guid Id, string Name, string Icon, string ColorCss, string Description, int Count, bool IsDynamic, DateTime Updated, List<string> Rules);
     private sealed record LV(string Value, string Label);
 
     private sealed class SegmentForm
@@ -200,5 +248,7 @@
         [Required, StringLength(200)] public string Name { get; set; } = string.Empty;
         [StringLength(1000)] public string? Description { get; set; }
         [Required, StringLength(20)] public string Type { get; set; } = "Dynamic";
+        [Range(0, 100000000)] public int ContactCount { get; set; }
+        [StringLength(2000)] public string? Rules { get; set; }
     }
 }

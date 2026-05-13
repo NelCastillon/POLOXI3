@@ -37,6 +37,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWorkflowRepository, WorkflowRepository>();
         services.AddScoped<IAuditRepository, AuditRepository>();
         services.AddScoped<IAssistantRepository, AssistantRepository>();
+        services.AddScoped<IClaimsRepository, ClaimsRepository>();
 
         // ── New repositories ─────────────────────────────────────────
         services.AddScoped<ITenantRepository, TenantRepository>();
@@ -79,6 +80,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWorkflowService, WorkflowService>();
         services.AddScoped<IAuditService, AuditService>();
         services.AddScoped<IAssistantService, AssistantService>();
+        services.AddScoped<IClaimsService, ClaimsService>();
 
         // ── New services ─────────────────────────────────────────────
         services.AddScoped<ITenantService, TenantService>();

@@ -130,22 +130,8 @@
     private decimal _totalReached, _avgOpenRate, _totalConversions, _totalRevenue, _totalSpend;
     private decimal _unsubRate = 0.18m;
 
-    private static readonly List<(string Name, int Pct, string Css)> _channels =
-    [
-        ("Email", 48, "mka-ch-blue"),
-        ("SMS", 27, "mka-ch-green"),
-        ("Multi-Channel", 18, "mka-ch-purple"),
-        ("Direct Mail", 7, "mka-ch-amber"),
-    ];
-
-    private static readonly List<(string Name, int Conversions, decimal Revenue)> _oppTypes =
-    [
-        ("Home + Auto Bundle",     412,  206_000m),
-        ("Workers Comp Expansion", 231,  115_500m),
-        ("Missing Umbrella",       187,   94_000m),
-        ("Benefits Upsell",         44,   88_000m),
-        ("Win-Back Recovery",      231,  115_500m),
-    ];
+    private List<(string Name, int Pct, string Css)> _channels = [];
+    private List<(string Name, int Conversions, decimal Revenue)> _oppTypes = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -160,6 +146,7 @@
         {
             var campaigns = await Api.SearchCommunicationCampaignsAsync(_tenantId);
             _rows = campaigns?.Items.Select(c => new CampPerfRow(c.Name, c.Type, c.Reached, c.OpenRate, EstimateClickRate(c.OpenRate), c.Conversions, c.Revenue, EstimateSpend(c.Type, c.Reached))).ToList() ?? [];
+            SyncBreakdowns();
         }
         catch (Exception ex) { _loadError = $"Failed to load analytics: {ex.Message}"; _rows = []; }
 
@@ -170,6 +157,22 @@
         _totalSpend      = _rows.Sum(r => r.Spend);
         _loading = false;
     }
+
+    private void SyncBreakdowns()
+    {
+        var reachedTotal = Math.Max(_rows.Sum(r => r.Reached), 1);
+        _channels = _rows.GroupBy(r => r.Type).Select(g => (g.Key, (int)Math.Round(g.Sum(r => r.Reached) * 100m / reachedTotal), ChannelCss(g.Key))).ToList();
+        _oppTypes = _rows.OrderByDescending(r => r.Revenue).Take(5).Select(r => (r.Name, r.Conversions, r.Revenue)).ToList();
+    }
+
+    private static string ChannelCss(string type) => type switch
+    {
+        "Email" => "mka-ch-blue",
+        "SMS" => "mka-ch-green",
+        "Multi-Channel" => "mka-ch-purple",
+        "Direct Mail" => "mka-ch-amber",
+        _ => "mka-ch-blue",
+    };
 
     private static decimal EstimateClickRate(decimal openRate) => Math.Round(openRate * 0.22m, 1);
     private static decimal EstimateSpend(string type, int reached) => Math.Max(500m, reached * (type == "Direct Mail" ? 1.15m : type == "SMS" ? 0.18m : 0.42m));

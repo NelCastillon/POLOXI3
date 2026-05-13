@@ -69,6 +69,37 @@ public sealed partial class ApiClient
     public Task<DashboardKpiDto?> GetDashboardKpiAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<DashboardKpiDto>($"api/dashboard?tenantId={tenantId}", cancellationToken);
 
+    public Task<ExecutiveDashboardPageDto?> GetExecutiveDashboardPageAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<ExecutiveDashboardPageDto>($"api/dashboard/executive?tenantId={tenantId}", cancellationToken);
+
+    public Task<PagedResult<DashboardControllerRecordDto>?> SearchDashboardRecordsAsync(Guid tenantId, string kind, string? searchTerm = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<DashboardControllerRecordDto>>($"api/dashboard/records/{Uri.EscapeDataString(kind)}?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public async Task<Guid> CreateDashboardRecordAsync(UpsertDashboardRecordRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/dashboard/records", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public async Task UpdateDashboardRecordAsync(Guid id, UpsertDashboardRecordRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/dashboard/records/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteDashboardRecordAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/dashboard/records/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public sealed class DashboardControllerRecordDto
+    {
+        public Guid Id { get; set; }
+        public string JsonData { get; set; } = string.Empty;
+    }
+
     // -- Agency Dashboard -------------------------------------
     public Task<AgencyExecutiveOverviewDto?> GetAgencyOverviewAsync(Guid tenantId, CancellationToken ct = default)
         => _httpClient.GetFromJsonAsync<AgencyExecutiveOverviewDto>($"api/agency-dashboard/overview?tenantId={tenantId}", ct);
@@ -90,6 +121,32 @@ public sealed partial class ApiClient
 
     public Task<BillingSummaryDto?> GetBillingSummaryAsync(Guid tenantId, CancellationToken ct = default)
         => _httpClient.GetFromJsonAsync<BillingSummaryDto>($"api/agency-dashboard/billing-summary?tenantId={tenantId}", ct);
+
+    // -- AI & Intelligence ------------------------------------
+    public Task<PagedResult<AiInsightCardDto>?> GetAiInsightCardsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<AiInsightCardDto>>($"analytics/ai/insight-cards?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public Task<AiAssistantConfigDto?> GetAiAssistantConfigAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<AiAssistantConfigDto>($"analytics/ai/assistant-config?tenantId={tenantId}", cancellationToken);
+
+    public async Task<AiAssistantResponseDto?> AskAiAssistantAsync(AiAssistantAskRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("analytics/ai/assistant/ask", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<AiAssistantResponseDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task SetAiInsightDismissedAsync(Guid id, bool dismissed, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"analytics/ai/insights/{id}/dismiss?dismissed={dismissed}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task CreateAiInsightTaskAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"analytics/ai/insights/{id}/task", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
 
     // -- Platform Core ----------------------------------------
     public Task<PagedResult<TenantDto>?> SearchTenantsAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
@@ -2059,11 +2116,45 @@ public sealed partial class ApiClient
         return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
     }
 
+    public async Task<ReportDownloadFile> DownloadReportExcelAsync(Guid reportDefinitionId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.GetAsync($"api/reports/definitions/{reportDefinitionId}/download?tenantId={tenantId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return new ReportDownloadFile(GetFileName(response, "report-export.xls"), await response.Content.ReadAsByteArrayAsync(cancellationToken));
+    }
+
+    public Task<ReportPreviewDto?> GetReportPreviewAsync(Guid reportDefinitionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<ReportPreviewDto>($"api/reports/definitions/{reportDefinitionId}/preview?tenantId={tenantId}", cancellationToken);
+
+    public async Task<ReportDownloadFile> DownloadReportsExcelAsync(DownloadReportsRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/reports/definitions/download", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return new ReportDownloadFile(GetFileName(response, "reports-export.xls"), await response.Content.ReadAsByteArrayAsync(cancellationToken));
+    }
+
+    private static string GetFileName(HttpResponseMessage response, string fallback)
+        => response.Content.Headers.ContentDisposition?.FileNameStar?.Trim('"')
+           ?? response.Content.Headers.ContentDisposition?.FileName?.Trim('"')
+           ?? fallback;
+
     public async Task<Guid> ScheduleReportAsync(ScheduleReportRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/reports/schedules", request, cancellationToken);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public async Task SetReportScheduleStatusAsync(Guid id, bool isActive, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync($"api/reports/schedules/{id}/status?isActive={isActive}", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteReportScheduleAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/reports/schedules/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
     }
 
     public Task<PagedResult<MarketingEmailBlastDto>?> SearchMarketingEmailBlastsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
@@ -2106,6 +2197,12 @@ public sealed partial class ApiClient
         return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
     }
 
+    public async Task UpdateMarketingSegmentAsync(Guid id, MarketingSegmentDto request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/marketing/segments/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     public Task<PagedResult<MarketingCrossSellOpportunityDto>?> SearchMarketingCrossSellAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<MarketingCrossSellOpportunityDto>>($"api/marketing/cross-sell?tenantId={tenantId}", cancellationToken);
 
@@ -2118,6 +2215,12 @@ public sealed partial class ApiClient
     public Task<PagedResult<MarketingWinBackDto>?> SearchMarketingWinBackAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<MarketingWinBackDto>>($"api/marketing/win-back?tenantId={tenantId}", cancellationToken);
 
+    public async Task UpdateMarketingWinBackStatusAsync(Guid id, string status, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/marketing/win-back/{id}/status", new { Status = status }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     public Task<PagedResult<MarketingReferralDto>?> SearchMarketingReferralsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<MarketingReferralDto>>($"api/marketing/referrals?tenantId={tenantId}", cancellationToken);
 
@@ -2128,8 +2231,21 @@ public sealed partial class ApiClient
         return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
     }
 
+    public async Task UpdateMarketingReferralStatusAsync(Guid id, string status, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/marketing/referrals/{id}/status", new { Status = status }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     public Task<MarketingReviewsResult?> SearchMarketingReviewsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<MarketingReviewsResult>($"api/marketing/reviews?tenantId={tenantId}", cancellationToken);
+
+    public async Task<Guid> CreateMarketingReviewRequestAsync(MarketingReviewRequestDto request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/marketing/reviews/requests", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
 
     public Task<PagedResult<ConfigurationSettingDto>?> SearchConfigurationSettingsAsync(string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<ConfigurationSettingDto>>($"api/platform/configuration?searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);

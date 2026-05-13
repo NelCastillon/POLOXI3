@@ -1,0 +1,53 @@
+using Ams.Application.Abstractions.Persistence;
+using Ams.Application.Abstractions.Services;
+using Ams.Application.Common.Dtos;
+using Ams.Application.Common.Models;
+using Ams.Application.Features.Claims;
+
+namespace Ams.Application;
+
+public sealed class ClaimsService : IClaimsService
+{
+    private readonly IClaimsRepository _repository;
+
+    public ClaimsService(IClaimsRepository repository) => _repository = repository;
+
+    public Task<PagedResult<ClaimDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? lob, string? catCode, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default)
+        => _repository.SearchAsync(tenantId, searchTerm, status, lob, catCode, pageNumber, pageSize, cancellationToken);
+
+    public Task<ClaimDetailDto?> GetDetailAsync(Guid claimId, CancellationToken cancellationToken = default)
+        => _repository.GetDetailAsync(claimId, cancellationToken);
+
+    public Task<Guid> CreateAsync(CreateClaimRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateAsync(request, cancellationToken);
+
+    public Task UpdateStatusAsync(Guid claimId, UpdateClaimStatusRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateStatusAsync(claimId, request, cancellationToken);
+
+    public Task UpdateFollowUpAsync(Guid claimId, UpdateClaimFollowUpRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateFollowUpAsync(claimId, request, cancellationToken);
+
+    public Task<Guid> AddActivityAsync(CreateClaimActivityRequest request, CancellationToken cancellationToken = default)
+        => _repository.AddActivityAsync(request, cancellationToken);
+
+    public Task<PagedResult<CatEventDto>> SearchCatEventsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.SearchCatEventsAsync(tenantId, cancellationToken);
+
+    public Task<Guid> CreateCatEventAsync(CreateCatEventRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateCatEventAsync(request, cancellationToken);
+
+    public Task<CatastrophePageDto> GetCatastrophePageAsync(Guid tenantId, Guid? catEventId, CancellationToken cancellationToken = default)
+        => _repository.GetCatastrophePageAsync(tenantId, catEventId, cancellationToken);
+
+    public Task MarkAffectedInsuredContactedAsync(Guid affectedInsuredId, CancellationToken cancellationToken = default)
+        => _repository.MarkAffectedInsuredContactedAsync(affectedInsuredId, cancellationToken);
+
+    public Task<int> ApplyGeoTagAsync(Guid catEventId, string? states, string? counties, string? zips, string? lob, decimal? minTiv, CancellationToken cancellationToken = default)
+        => _repository.ApplyGeoTagAsync(catEventId, states, counties, zips, lob, minTiv, cancellationToken);
+
+    public Task<int> SendCatBlastAsync(CatBlastRequest request, CancellationToken cancellationToken = default)
+        => _repository.SendCatBlastAsync(request, cancellationToken);
+
+    public Task<Guid> CreateFastCatFnolAsync(FastCatFnolRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateFastCatFnolAsync(request, cancellationToken);
+}

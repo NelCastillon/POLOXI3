@@ -13,7 +13,7 @@
         <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/marketing/campaigns/new")'>
             <i class="bi bi-megaphone" aria-hidden="true"></i> New Review Campaign
         </button>
-        <button class="um-btn um-btn-primary" @onclick="() => _showSend = true">
+        <button class="um-btn um-btn-primary" @onclick="OpenSend">
             <i class="bi bi-send" aria-hidden="true"></i> Send Requests
         </button>
     </Actions>
@@ -97,27 +97,37 @@ else
 }
 
 <!-- Bulk send dialog -->
-<SfDialog @bind-Visible="_showSend" Width="480px" IsModal="true" ShowCloseIcon="true">
+<SfDialog @bind-Visible="_showSend" Width="480px" IsModal="true" ShowCloseIcon="false">
     <DialogTemplates>
-        <Header><span><i class="bi bi-send" aria-hidden="true"></i> Send Review Requests</span></Header>
         <Content>
-            <div style="display:flex;flex-direction:column;gap:.75rem;padding:.5rem 0">
-                <div><label class="mkv-dlg-lbl">Target Platform</label>
-                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"Google","Facebook","Yelp","All"}' @bind-Value="_sendPlatform" Width="100%"></SfDropDownList>
+            <div class="um-modal-header"><i class="bi bi-send" aria-hidden="true"></i><span>Send Review Requests</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showSend = false"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm EditContext="_sendEditContext">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field"><label>Client Name <span class="text-danger">*</span></label>
+                    <InputText @bind-Value="_sendForm.ClientName" class="um-input" />
+                    <ValidationMessage For="() => _sendForm.ClientName" class="validation-message text-danger" />
                 </div>
-                <div><label class="mkv-dlg-lbl">Minimum NPS Score</label>
-                    <SfNumericTextBox TValue="int" @bind-Value="_minNps" Min="1" Max="10" Width="100%"></SfNumericTextBox>
+                <div class="um-field"><label>Target Platform</label>
+                    <InputSelect @bind-Value="_sendForm.Platform" class="um-input"><option>Google</option><option>Facebook</option><option>Yelp</option></InputSelect>
+                    <ValidationMessage For="() => _sendForm.Platform" class="validation-message text-danger" />
                 </div>
-                <div><label class="mkv-dlg-lbl">Channel</label>
-                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"Email","SMS","Both"}' @bind-Value="_sendChannel" Width="100%"></SfDropDownList>
+                <div class="um-field"><label>NPS Score</label>
+                    <InputNumber @bind-Value="_sendForm.NpsScore" class="um-input" />
+                    <ValidationMessage For="() => _sendForm.NpsScore" class="validation-message text-danger" />
                 </div>
-                <div class="mkv-dlg-info"><i class="bi bi-info-circle" aria-hidden="true"></i> Will send to <strong>@_requests.Count(r => r.NpsScore >= _minNps && !r.ReviewLeft)</strong> eligible contacts.</div>
-            </div>
+                <div class="um-field"><label>Channel</label>
+                    <InputSelect @bind-Value="_sendForm.Channel" class="um-input"><option>Email</option><option>SMS</option><option>Both</option></InputSelect>
+                    <ValidationMessage For="() => _sendForm.Channel" class="validation-message text-danger" />
+                </div>
+                @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
+                </div></div>
+            </EditForm>
         </Content>
         <FooterTemplate>
-            <div style="display:flex;justify-content:flex-end;gap:.5rem;padding:.5rem 0 0">
+            <div class="um-modal-footer">
                 <button class="um-btn um-btn-ghost" @onclick="() => _showSend = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="() => _showSend = false">
+                <button class="um-btn um-btn-primary" @onclick="SendRequestAsync">
                     <i class="bi bi-send" aria-hidden="true"></i> Send
                 </button>
             </div>
@@ -130,9 +140,9 @@ else
     private string _tab = "reviews";
     private bool _showSend;
     private bool _loading;
-    private string? _loadError;
-    private string _sendPlatform = "Google", _sendChannel = "Email";
-    private int _minNps = 9;
+    private string? _loadError, _formError;
+    private ReviewRequestForm _sendForm = new();
+    private EditContext _sendEditContext = default!;
 
     private List<ReviewRow>     _reviews  = [];
     private List<ReviewRequest> _requests = [];
@@ -140,6 +150,7 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        _sendEditContext = new(_sendForm);
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("Reviews",""));
         await LoadAsync();
     }
@@ -167,6 +178,35 @@ else
         _          => "mkv-plt",
     };
 
+    private void OpenSend()
+    {
+        _sendForm = new();
+        _sendEditContext = new(_sendForm);
+        _formError = null;
+        _showSend = true;
+    }
+
+    private async Task SendRequestAsync()
+    {
+        _formError = null;
+        if (!_sendEditContext.Validate()) return;
+        try
+        {
+            await Api.CreateMarketingReviewRequestAsync(new MarketingReviewRequestDto { TenantId = _tenantId, ClientName = _sendForm.ClientName, Channel = _sendForm.Channel, Platform = _sendForm.Platform, NpsScore = _sendForm.NpsScore });
+            _showSend = false;
+            await LoadAsync();
+        }
+        catch (Exception ex) { _formError = $"Send failed: {ex.Message}"; }
+    }
+
     private sealed record ReviewRow(string ClientName, string Platform, int Rating, DateTime Date, string Content, string Response);
     private sealed record ReviewRequest(string ClientName, string Channel, DateTime SentDate, string Platform, bool ReviewLeft, int NpsScore);
+
+    private sealed class ReviewRequestForm
+    {
+        [Required, StringLength(200)] public string ClientName { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string Channel { get; set; } = "Email";
+        [Required, StringLength(80)] public string Platform { get; set; } = "Google";
+        [Range(1, 10)] public int NpsScore { get; set; } = 9;
+    }
 }

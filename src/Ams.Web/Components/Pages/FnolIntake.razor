@@ -3,6 +3,7 @@
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 @inject ConfirmationDialogService Confirmations
+@inject Ams.Web.Services.ApiClient Api
 
 <PageTitle>FNOL Intake — AMS</PageTitle>
 
@@ -594,6 +595,7 @@
 
 @code {
     SfToast _toast = default!;
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     int     _step  = 0;
     bool    _showConfirm     = false;
     bool    _policyNotFound  = false;
@@ -764,7 +766,30 @@
     async Task SubmitFnol()
     {
         if (!CanSubmit) return;
-        _assignedClaimNumber = $"CLM-{DateTime.Today.Year}-{new Random().Next(10000, 99999)}";
+        var id = await Api.CreateClaimAsync(new Ams.Application.Features.Claims.CreateClaimRequest
+        {
+            TenantId = TenantId,
+            PolicyNumber = _form.PolicyNumber,
+            AccountName = _policyFound?.InsuredName ?? _form.PrimaryClaimant,
+            Lob = _policyFound?.Lob ?? "General Liability",
+            Carrier = _policyFound?.Carrier ?? "Tenant Carrier",
+            LossType = _form.LossType,
+            PrimaryClaimant = _form.PrimaryClaimant,
+            DateOfLoss = _form.DateOfLoss ?? DateTime.Today,
+            DateReported = _form.DateReported ?? DateTime.Today,
+            LossDescription = _form.LossDescription,
+            LossLocation = string.Join(", ", new[] { _form.LossAddress, _form.LossCity, _form.StateOfLoss, _form.LossZip }.Where(s => !string.IsNullOrWhiteSpace(s))),
+            StateOfLoss = _form.StateOfLoss,
+            CauseOfLoss = _form.CauseOfLoss,
+            AssignedHandler = _form.AssignedHandler,
+            Priority = _form.Priority,
+            CatCode = _form.CatEventTag,
+            IsCatastrophe = !string.IsNullOrWhiteSpace(_form.CatEventTag),
+            IsLitigation = _form.LitigationStatus is "Attorney Retained" or "Suit Filed",
+            IsDisputed = _form.CoverageNotes.Contains("reservation", StringComparison.OrdinalIgnoreCase)
+        });
+        var created = await Api.GetClaimDetailAsync(id);
+        _assignedClaimNumber = created?.Claim.ClaimNumber ?? "Created";
         _showConfirm = true;
         await _toast.ShowAsync(new ToastModel { Title="FNOL Submitted", Content=$"Claim {_assignedClaimNumber} created.", CssClass="e-toast-success" });
     }

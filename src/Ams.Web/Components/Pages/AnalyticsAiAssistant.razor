@@ -1,5 +1,6 @@
 @page "/analytics/ai-assistant"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>AI Assistant — AMS</PageTitle>
@@ -126,6 +127,7 @@
 </div>
 
 @code {
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string _userInput = string.Empty;
     private string _ctxType = "global";
     private string _ctxValue = string.Empty;
@@ -133,27 +135,9 @@
     private ElementReference _msgContainer;
     private List<ChatMessage> _messages = [];
 
-    private static readonly List<string> _starters =
-    [
-        "What are my highest renewal risk accounts this month?",
-        "Which accounts are best candidates for umbrella cross-sell?",
-        "Summarize open service requests older than 48 hours",
-        "Find data quality issues that could block renewal notices",
-        "What's the next best action for my top 5 at-risk accounts?",
-    ];
+    private List<string> _starters = [];
+    private List<CapabilityDef> _capabilities = [];
 
-    private static readonly List<CapabilityDef> _capabilities =
-    [
-        new("Summarize Account History",  "Narrative summary of activity, claims, and contacts",           "bi-building",           "aia-ci-blue",   "Summarize the full account history for [Account Name], including policy history, claims, open service requests, and recent communications."),
-        new("Summarize Comms Thread",     "Key themes and action items from email / note threads",          "bi-chat-dots",          "aia-ci-blue",   "Summarize the last 30 days of communication for account [Account Name] and identify any open action items or commitments."),
-        new("Next Best Action",           "AI-recommended outreach or service action",                      "bi-lightning-charge",   "aia-ci-amber",  "What is the recommended next best action for accounts expiring in the next 30 days with no recent producer contact?"),
-        new("Identify Renewal Risk",      "Flag accounts most likely to lapse",                             "bi-arrow-clockwise",    "aia-ci-red",    "Identify accounts with the highest renewal risk in the next 60 days and explain the primary risk factors for each."),
-        new("Recommend Cross-Sell",       "Surface coverage gaps and upsell opportunities",                 "bi-arrows-expand",      "aia-ci-green",  "Which accounts in my book have significant coverage gaps that represent a cross-sell or upsell opportunity? Prioritize by premium potential."),
-        new("Detect Service Bottlenecks", "Highlight workflow delays and capacity issues",                  "bi-hourglass-split",    "aia-ci-amber",  "Are there any service bottlenecks in the current open service request queue? Identify root causes and suggest resolution steps."),
-        new("Data Quality Issues",        "Find records with missing or inconsistent data",                 "bi-database-exclamation","aia-ci-blue",  "What are the most impactful data quality issues in the account and policy records that could affect renewal processing or reporting?"),
-    ];
-
-    // Simulated AI responses keyed by capability prompt keywords
     private static readonly Dictionary<string, (string Response, AiAction[] Actions)> _aiResponses = new()
     {
         ["renewal risk"] = (
@@ -202,10 +186,11 @@
         _thinking = true;
         StateHasChanged();
 
-        await Task.Delay(1100 + Random.Shared.Next(200, 600));
+        var aiResponse = await Api.AskAiAssistantAsync(new AiAssistantAskRequest { TenantId = _tenantId, Prompt = userText, ContextType = _ctxType, ContextValue = _ctxValue });
         _thinking = false;
 
-        var (response, actions) = FindResponse(userText);
+        var response = aiResponse?.Response ?? FindResponse(userText).Response;
+        var actions = aiResponse?.Actions.Select(a => new AiAction(a.Label, a.Icon)).ToArray() ?? FindResponse(userText).Actions;
         var aiMsg = new ChatMessage("assistant", string.Empty) { IsStreaming = true, Actions = actions };
         _messages.Add(aiMsg);
 
@@ -251,9 +236,12 @@
 
     private void ClearConversation() => _messages.Clear();
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Analytics","/analytics/reports"), new("AI Assistant",""));
+        var config = await Api.GetAiAssistantConfigAsync(_tenantId);
+        _starters = config?.Starters ?? [];
+        _capabilities = config?.Capabilities.Select(c => new CapabilityDef(c.Name, c.Description, c.Icon, c.IconCss, c.Prompt)).ToList() ?? [];
     }
 
     private sealed class ChatMessage(string role, string content)

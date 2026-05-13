@@ -2,6 +2,7 @@
 @namespace Ams.Web.Components.Pages
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject ApiClient Api
 
 <PageTitle>@(_claim is null ? "Claim" : _claim.ClaimNumber) — Claim Detail</PageTitle>
 
@@ -993,9 +994,68 @@ else
     protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Claims","/claims"), new("Claim Detail",""));
-        await Task.Delay(0);
-        BuildStub();
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        var detail = await Api.GetClaimDetailAsync(ClaimId);
+        if (detail is null)
+        {
+            _claim = null;
+            _loading = false;
+            return;
+        }
+
+        MapClaim(detail.Claim);
+        MapActivities(detail.Activities);
         _loading = false;
+    }
+
+    void MapClaim(ClaimDto claim)
+    {
+        _claim = new ClaimRecord
+        {
+            ClaimId=claim.ClaimId, PolicyId=claim.PolicyId, AccountId=claim.AccountId,
+            ClaimNumber=claim.ClaimNumber, CarrierClaimNumber=claim.CarrierClaimNumber ?? "",
+            PolicyNumber=claim.PolicyNumber, AccountName=claim.AccountName,
+            Lob=claim.Lob, Carrier=claim.Carrier,
+            Status=claim.Status, LossType=claim.LossType, CauseOfLoss=claim.CauseOfLoss ?? "",
+            CatCode=claim.CatCode,
+            DateOfLoss=claim.DateOfLoss, DateReported=claim.DateReported,
+            DateAcknowledged=claim.CreatedDateUtc, ClosedDate=claim.ClosedDate, DaysOpen=claim.DaysOpen,
+            LossLocation=claim.LossLocation ?? "", StateOfLoss=claim.StateOfLoss ?? "",
+            LossDescription=claim.LossDescription ?? "",
+            PolicyEffDate=claim.DateOfLoss.AddYears(-1), PolicyExpDate=claim.DateOfLoss.AddDays(365),
+            PolicyDeductible=0, CoverageLimit=0,
+            TotalIncurred=claim.TotalIncurred, TotalReserves=claim.TotalReserves, TotalPaid=claim.TotalPaid,
+            SalvageReceived=0, SubrogationReceived=0,
+            AdjusterName=claim.AssignedHandler, AssignedHandler=claim.AssignedHandler,
+            Producer="Tenant Admin", Csr=claim.AssignedHandler, Branch="Tenant Administration",
+            ReportedBy=claim.ReportedBy,
+            IsLitigation=claim.IsLitigation, HasSubrogation=claim.HasSubrogation, IsCatastrophe=claim.IsCatastrophe, IsDisputed=claim.IsDisputed
+        };
+
+        _coverages = [new CovRow { CovCode=claim.Lob, CovName=$"{claim.Lob} claim coverage", CovType="Primary", Limit=null, Deductible=null, IsApplicable=true, Notes="Coverage data is sourced from the claim record." }];
+        _documents.Clear();
+    }
+
+    void MapActivities(List<ClaimActivityDto> activities)
+    {
+        _claimants = activities.Where(a => a.ActivityType == "Claimant").Select(a => new ClaimantRow { ClaimantId=a.ClaimActivityId, Name=a.Party, Role=a.Category, InjuryType=a.Title, Status="Logged", Notes=a.Notes }).ToList();
+        _comms = activities.Where(a => a.ActivityType == "Communication").Select(a => new CommRow { CommType=a.Category, Direction="Outbound", Party=a.Party, CommDate=a.ActivityDate, Subject=a.Title, Notes=a.Notes, LoggedBy=a.CreatedBy }).ToList();
+        _tasks = activities.Where(a => a.ActivityType == "Task").Select(a => new TaskRow { TaskId=a.ClaimActivityId, Title=a.Title, Priority=a.Category, Status=a.Party, AssignedTo=a.CreatedBy, DueDate=a.ActivityDate, Notes=a.Notes }).ToList();
+        _reserves = activities.Where(a => a.ActivityType == "Reserve").Select(a => new ReserveEntry { ReserveType=a.Category, Amount=a.Amount ?? 0, PriorAmount=a.PriorAmount, EffectiveDate=a.ActivityDate, Reason=a.Notes, SetBy=a.CreatedBy }).ToList();
+        _payments = activities.Where(a => a.ActivityType == "Payment").Select(a => new PaymentEntry { PaymentType=a.Category, Amount=a.Amount ?? 0, Payee=a.Party, PaymentDate=a.ActivityDate, CheckNumber="", Method="", Notes=a.Notes, LoggedBy=a.CreatedBy }).ToList();
+        _notes = activities.Where(a => a.ActivityType == "Note").Select(a => new NoteRow { NoteId=a.ClaimActivityId, Category=a.Category, Body=a.Notes, IsPinned=a.IsPinned, CreatedBy=a.CreatedBy, CreatedAt=a.ActivityDate }).ToList();
+        _timeline = activities.Select(a => new TimelineEvent { EventType=a.ActivityType, Title=a.Title, EventDate=a.ActivityDate, PerformedBy=a.CreatedBy, Party=a.Party, Notes=a.Notes }).ToList();
+
+        if (_claim is not null)
+        {
+            _timeline.Add(new TimelineEvent { EventType="Loss", Title="Loss Occurred", EventDate=_claim.DateOfLoss, PerformedBy="—", Party=_claim.AccountName, Notes=_claim.LossDescription });
+            _timeline.Add(new TimelineEvent { EventType="Reported", Title="Claim Reported", EventDate=_claim.DateReported, PerformedBy=_claim.ReportedBy ?? "Tenant Admin", Party=_claim.AccountName, Notes=_claim.LossType });
+        }
     }
 
     void BuildStub()
@@ -1117,7 +1177,8 @@ else
     async Task SaveClaimant()
     {
         if (string.IsNullOrWhiteSpace(_claimantForm.Name)) return;
-        _claimants.Add(new ClaimantRow { ClaimantId=Guid.NewGuid(), Name=_claimantForm.Name, Role=_claimantForm.Role, InjuryType=_claimantForm.InjuryType, Status="Unrepresented", Phone=_claimantForm.Phone, Email=_claimantForm.Email, Attorney=_claimantForm.Attorney, AttorneyPhone=_claimantForm.AttorneyPhone, Notes=_claimantForm.Notes });
+        await AddActivityAsync("Claimant", _claimantForm.InjuryType, _claimantForm.Role, _claimantForm.Name, _claimantForm.Notes);
+        await LoadAsync();
         _showClaimantDlg = false;
         await _toast.ShowAsync(new ToastModel { Title="Claimant Added", Content=$"{_claimantForm.Name} added.", CssClass="e-toast-success" });
     }
@@ -1125,14 +1186,8 @@ else
     async Task SaveTask()
     {
         if (string.IsNullOrWhiteSpace(_taskForm.Title)) return;
-        if (_editTask?.TaskId == Guid.Empty)
-        {
-            _tasks.Add(new TaskRow { TaskId=Guid.NewGuid(), Title=_taskForm.Title, Priority=_taskForm.Priority, Status=_taskForm.Status, AssignedTo=_taskForm.AssignedTo, DueDate=_taskForm.DueDate, Notes=_taskForm.Notes });
-        }
-        else if (_editTask is not null)
-        {
-            _editTask.Title=_taskForm.Title; _editTask.Priority=_taskForm.Priority; _editTask.Status=_taskForm.Status; _editTask.AssignedTo=_taskForm.AssignedTo; _editTask.DueDate=_taskForm.DueDate; _editTask.Notes=_taskForm.Notes;
-        }
+        await AddActivityAsync("Task", _taskForm.Title, _taskForm.Priority, _taskForm.Status, _taskForm.Notes, activityDate: _taskForm.DueDate ?? DateTime.Today, createdBy: string.IsNullOrWhiteSpace(_taskForm.AssignedTo) ? "Tenant Admin" : _taskForm.AssignedTo);
+        await LoadAsync();
         _showTaskDlg = false;
         await _toast.ShowAsync(new ToastModel { Title="Task Saved", Content=$"\"{_taskForm.Title}\" saved.", CssClass="e-toast-success" });
     }
@@ -1140,9 +1195,9 @@ else
     async Task SaveReserve()
     {
         if (string.IsNullOrWhiteSpace(_reserveForm.ReserveType)) return;
-        var prior = _reserves.Where(r => r.ReserveType == _reserveForm.ReserveType).OrderByDescending(r => r.EffectiveDate).FirstOrDefault();
-        _reserves.Add(new ReserveEntry { ReserveType=_reserveForm.ReserveType, Amount=_reserveForm.Amount, PriorAmount=prior?.Amount, EffectiveDate=DateTime.Today, Reason=_reserveForm.Reason, SetBy="Current User" });
-        if (_claim is not null) _claim.TotalReserves = _reserves.GroupBy(r => r.ReserveType).Sum(g => g.OrderByDescending(r => r.EffectiveDate).First().Amount);
+        var prior = _reserves.Where(r => r.ReserveType == _reserveForm.ReserveType).OrderByDescending(r => r.EffectiveDate).FirstOrDefault()?.Amount;
+        await AddActivityAsync("Reserve", $"Reserve updated — {_reserveForm.ReserveType}", _reserveForm.ReserveType, "Carrier", _reserveForm.Reason, _reserveForm.Amount, prior);
+        await LoadAsync();
         _showReserveDlg = false;
         await _toast.ShowAsync(new ToastModel { Title="Reserve Updated", Content=$"{_reserveForm.ReserveType} reserve updated to {_reserveForm.Amount.ToString("C0")}.", CssClass="e-toast-success" });
     }
@@ -1150,16 +1205,16 @@ else
     async Task SavePayment()
     {
         if (string.IsNullOrWhiteSpace(_paymentForm.Payee) || _paymentForm.Amount <= 0) return;
-        _payments.Add(new PaymentEntry { PaymentType=_paymentForm.PaymentType, Amount=_paymentForm.Amount, Payee=_paymentForm.Payee, PaymentDate=_paymentForm.PaymentDate ?? DateTime.Today, CheckNumber=_paymentForm.CheckNumber, Method=_paymentForm.Method, Notes=_paymentForm.Notes, LoggedBy="Current User" });
-        if (_claim is not null) { _claim.TotalPaid += _paymentForm.Amount; _claim.TotalIncurred = _claim.TotalPaid + _claim.TotalReserves - _claim.TotalPaid; }
+        await AddActivityAsync("Payment", $"Payment logged — {_paymentForm.Payee}", _paymentForm.PaymentType, _paymentForm.Payee, _paymentForm.Notes, _paymentForm.Amount, activityDate: _paymentForm.PaymentDate ?? DateTime.Today);
+        await LoadAsync();
         _showPaymentDlg = false;
         await _toast.ShowAsync(new ToastModel { Title="Payment Logged", Content=$"Payment of {_paymentForm.Amount.ToString("C0")} to {_paymentForm.Payee} logged.", CssClass="e-toast-success" });
     }
 
     async Task SaveComm()
     {
-        _comms.Add(new CommRow { CommType=_commForm.CommType, Direction=_commForm.Direction, Party=_commForm.Party, CommDate=_commForm.CommDate, Subject=_commForm.Subject, Notes=_commForm.Notes, LoggedBy="Current User" });
-        _timeline.Add(new TimelineEvent { EventType="Communication", Title=$"{_commForm.CommType} — {_commForm.Subject}", EventDate=_commForm.CommDate, PerformedBy="Current User", Party=_commForm.Party, Notes=_commForm.Notes });
+        await AddActivityAsync("Communication", _commForm.Subject, _commForm.CommType, _commForm.Party, _commForm.Notes, activityDate: _commForm.CommDate);
+        await LoadAsync();
         _showCommDlg = false;
         await _toast.ShowAsync(new ToastModel { Title="Communication Logged", Content="Communication entry saved.", CssClass="e-toast-success" });
     }
@@ -1167,7 +1222,8 @@ else
     async Task SaveNote()
     {
         if (string.IsNullOrWhiteSpace(_noteForm.Body)) return;
-        _notes.Add(new NoteRow { NoteId=Guid.NewGuid(), Category=_noteForm.Category, Body=_noteForm.Body, IsPinned=_noteForm.IsPinned, CreatedBy="Current User", CreatedAt=DateTime.Now });
+        await AddActivityAsync("Note", $"{_noteForm.Category} note", _noteForm.Category, "", _noteForm.Body, isPinned: _noteForm.IsPinned);
+        await LoadAsync();
         _showNoteDlg = false;
         await _toast.ShowAsync(new ToastModel { Title="Note Saved", Content="Note added to claim.", CssClass="e-toast-success" });
     }
@@ -1182,26 +1238,31 @@ else
     async Task CompleteTask(TaskRow t)
     {
         t.Status = "Completed";
+        await AddActivityAsync("Task", $"Task completed — {t.Title}", t.Priority, "Completed", t.Notes);
+        await LoadAsync();
         await _toast.ShowAsync(new ToastModel { Title="Task Complete", Content=$"\"{t.Title}\" marked complete.", CssClass="e-toast-success" });
     }
 
     async Task CloseClaim()
     {
         if (_claim is null) return;
-        _claim.Status    = "Closed";
-        _claim.ClosedDate = DateTime.Today;
-        _timeline.Add(new TimelineEvent { EventType="Closed", Title="Claim Closed", EventDate=DateTime.Now, PerformedBy="Current User", Party="", Notes="" });
+        await Api.UpdateClaimStatusAsync(_claim.ClaimId, new UpdateClaimStatusRequest { Status="Closed" });
+        await AddActivityAsync("Closed", "Claim Closed", "Status", "", "");
+        await LoadAsync();
         await _toast.ShowAsync(new ToastModel { Title="Claim Closed", Content=$"{_claim.ClaimNumber} has been closed.", CssClass="e-toast-success" });
     }
 
     async Task ReopenClaim()
     {
         if (_claim is null) return;
-        _claim.Status    = "Reopened";
-        _claim.ClosedDate = null;
-        _timeline.Add(new TimelineEvent { EventType="Reopened", Title="Claim Reopened", EventDate=DateTime.Now, PerformedBy="Current User", Party="", Notes="" });
+        await Api.UpdateClaimStatusAsync(_claim.ClaimId, new UpdateClaimStatusRequest { Status="Reopened" });
+        await AddActivityAsync("Reopened", "Claim Reopened", "Status", "", "");
+        await LoadAsync();
         await _toast.ShowAsync(new ToastModel { Title="Claim Reopened", Content=$"{_claim.ClaimNumber} has been reopened.", CssClass="e-toast-info" });
     }
+
+    Task AddActivityAsync(string activityType, string title, string category, string party, string notes, decimal? amount = null, decimal? priorAmount = null, DateTime? activityDate = null, string createdBy = "Tenant Admin", bool isPinned = false)
+        => Api.AddClaimActivityAsync(new CreateClaimActivityRequest { ClaimId=ClaimId, ActivityType=activityType, Title=title, Category=category, Party=party, Notes=notes, Amount=amount, PriorAmount=priorAmount, ActivityDate=activityDate ?? DateTime.UtcNow, CreatedBy=createdBy, IsPinned=isPinned });
 
     // ── Render helpers ────────────────────────────────────────────
     RenderFragment F(string label, string value) => __builder =>

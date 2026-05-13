@@ -2,6 +2,8 @@
 @namespace Ams.Web.Components.Pages
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject Ams.Web.Services.ApiClient Api
+@implements IDisposable
 
 <PageTitle>Claims Register — AMS</PageTitle>
 
@@ -10,63 +12,65 @@
 </SfToast>
 
 <!-- ── REPORT CLAIM DIALOG ───────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showNewClaimDlg" Width="560px" ShowCloseIcon="true" IsModal="true">
+<SfDialog @bind-Visible="_showNewClaimDlg" Width="1120px" ShowCloseIcon="false" IsModal="true">
     <DialogTemplates>
-        <Header><div class="pd-dlg-hdr"><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Report New Claim</div></Header>
         <Content>
-            <div class="pd-dlg-body">
-                <div class="pd-dlg-grid">
-                    <div>
-                        <label class="cr-dlg-lbl">Policy # *</label>
+            <div class="um-modal-header">
+                <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+                <span>Report New Claim</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showNewClaimDlg = false">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label>Policy # *</label>
                         <SfTextBox @bind-Value="_newClaim.PolicyNumber" Placeholder="e.g. TRV-GL-2024-00421" />
                     </div>
-                    <div>
-                        <label class="cr-dlg-lbl">Date of Loss *</label>
+                    <div class="um-field">
+                        <label>Date of Loss *</label>
                         <SfDatePicker TValue="DateTime?" @bind-Value="_newClaim.DateOfLoss" Placeholder="MM/DD/YYYY" />
                     </div>
-                    <div>
-                        <label class="cr-dlg-lbl">Date Reported</label>
+                    <div class="um-field">
+                        <label>Date Reported</label>
                         <SfDatePicker TValue="DateTime?" @bind-Value="_newClaim.DateReported" Placeholder="MM/DD/YYYY" />
                     </div>
-                    <div>
-                        <label class="cr-dlg-lbl">Loss Type *</label>
+                    <div class="um-field">
+                        <label>Loss Type *</label>
                         <SfDropDownList TValue="string" TItem="string"
                                         DataSource="@_lossTypes"
                                         @bind-Value="_newClaim.LossType"
                                         Placeholder="Select loss type" />
                     </div>
-                    <div>
-                        <label class="cr-dlg-lbl">Line of Business</label>
+                    <div class="um-field">
+                        <label>Line of Business</label>
                         <SfDropDownList TValue="string" TItem="string"
                                         DataSource="@_lobs"
                                         @bind-Value="_newClaim.Lob"
                                         Placeholder="Select LOB" />
                     </div>
-                    <div>
-                        <label class="cr-dlg-lbl">Claimant Name</label>
+                    <div class="um-field">
+                        <label>Claimant Name</label>
                         <SfTextBox @bind-Value="_newClaim.PrimaryClaimant" Placeholder="Primary claimant name" />
                     </div>
-                </div>
-                <div class="pd-dlg-grid-1">
-                    <div>
-                        <label class="cr-dlg-lbl">Loss Description *</label>
+                    <div class="um-field um-field--full">
+                        <label>Loss Description *</label>
                         <SfTextBox @bind-Value="_newClaim.LossDescription" Placeholder="Describe the loss…" Multiline="true" />
                     </div>
-                    <div>
-                        <label class="cr-dlg-lbl">Loss Location</label>
+                    <div class="um-field um-field--full">
+                        <label>Loss Location</label>
                         <SfTextBox @bind-Value="_newClaim.LossLocation" Placeholder="Location of loss" />
                     </div>
                 </div>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="pd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showNewClaimDlg = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SaveNewClaim">
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showNewClaimDlg = false">Cancel</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick="SaveNewClaim">
                     <i class="bi bi-check-lg" aria-hidden="true"></i> Report Claim
                 </button>
             </div>
-        </FooterTemplate>
+        </Content>
     </DialogTemplates>
 </SfDialog>
 
@@ -257,6 +261,7 @@
 
 @code {
     SfToast _toast = default!;
+    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
 
     string _search        = "";
     string _statusFilter  = "";
@@ -337,8 +342,29 @@
     protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Claims", "/claims"));
-        await Task.Delay(0);
-        BuildStub();
+        Nav.LocationChanged += OnLocationChanged;
+        await LoadAsync();
+        ApplyQueryFilters();
+    }
+
+    void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        ApplyQueryFilters();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    void ApplyQueryFilters()
+    {
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
+        if (query.TryGetValue("status", out var status)) _statusFilter = status.ToString();
+        if (query.TryGetValue("lob", out var lob)) _lobFilter = lob.ToString();
+    }
+
+    async Task LoadAsync()
+    {
+        var result = await Api.SearchClaimsAsync(TenantId, pageSize: 500);
+        _claims.Clear();
+        _claims.AddRange((result?.Items ?? []).Select(ToClaimRow));
     }
 
     void BuildStub()
@@ -374,20 +400,67 @@
         AssignedHandler=handler, IsLitigation=lit, HasSubrogation=sub, IsCatastrophe=cat, IsDisputed=dis
     };
 
+    static ClaimRow ToClaimRow(Ams.Application.Common.Dtos.ClaimDto c) => new()
+    {
+        ClaimId = c.ClaimId,
+        PolicyId = c.PolicyId,
+        AccountId = c.AccountId,
+        ClaimNumber = c.ClaimNumber,
+        PolicyNumber = c.PolicyNumber,
+        AccountName = c.AccountName,
+        Lob = c.Lob,
+        Carrier = c.Carrier,
+        Status = c.Status,
+        LossType = c.LossType,
+        PrimaryClaimant = c.PrimaryClaimant,
+        DateOfLoss = c.DateOfLoss,
+        DateReported = c.DateReported,
+        ClosedDate = c.ClosedDate,
+        DaysOpen = c.DaysOpen,
+        TotalIncurred = c.TotalIncurred,
+        TotalReserves = c.TotalReserves,
+        TotalPaid = c.TotalPaid,
+        AssignedHandler = c.AssignedHandler,
+        IsLitigation = c.IsLitigation,
+        HasSubrogation = c.HasSubrogation,
+        IsCatastrophe = c.IsCatastrophe,
+        IsDisputed = c.IsDisputed
+    };
+
     void SetStatusFilter(string s) => _statusFilter = _statusFilter == s ? "" : s;
     void ResetFilters() { _search=""; _statusFilter=""; _lobFilter=""; _carrierFilter=""; _handlerFilter=""; _lossTypeFilter=""; }
-    void Refresh() => BuildStub();
+    async Task Refresh() => await LoadAsync();
     void OpenClaim(ClaimRow c) => Nav.NavigateTo($"/claims/{c.ClaimId}");
 
     async Task SaveNewClaim()
     {
         if (string.IsNullOrWhiteSpace(_newClaim.PolicyNumber)) return;
+        var id = await Api.CreateClaimAsync(new Ams.Application.Features.Claims.CreateClaimRequest
+        {
+            TenantId = TenantId,
+            PolicyNumber = _newClaim.PolicyNumber,
+            AccountName = string.IsNullOrWhiteSpace(_newClaim.PrimaryClaimant) ? "New Claim Account" : _newClaim.PrimaryClaimant,
+            Lob = string.IsNullOrWhiteSpace(_newClaim.Lob) ? "General Liability" : _newClaim.Lob,
+            Carrier = "Tenant Carrier",
+            LossType = _newClaim.LossType,
+            PrimaryClaimant = _newClaim.PrimaryClaimant,
+            DateOfLoss = _newClaim.DateOfLoss ?? DateTime.Today,
+            DateReported = _newClaim.DateReported ?? DateTime.Today,
+            LossDescription = _newClaim.LossDescription,
+            LossLocation = _newClaim.LossLocation,
+            AssignedHandler = "Unassigned",
+            Priority = "Standard"
+        });
+        await LoadAsync();
         _showNewClaimDlg = false;
         await _toast.ShowAsync(new ToastModel { Title="Claim Reported", Content=$"Claim reported for policy {_newClaim.PolicyNumber}.", CssClass="e-toast-success" });
+        Nav.NavigateTo($"/claims/{id}");
     }
 
     async Task ExportAsync() =>
         await _toast.ShowAsync(new ToastModel { Title="Exported", Content="Claims register exported.", CssClass="e-toast-success" });
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
 
     RenderFragment CrKpi(string icon, string label, string val, string color, string? filterVal, System.Action? onClick) => __builder =>
     {

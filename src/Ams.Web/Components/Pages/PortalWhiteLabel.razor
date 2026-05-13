@@ -1,5 +1,6 @@
 @page "/portal/white-label"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>White-Label &amp; Embedded Experience — AMS</PageTitle>
@@ -47,14 +48,14 @@
     <div class="pwl-status-card">
         <i class="bi bi-people" aria-hidden="true"></i>
         <div>
-            <div class="pwl-sv">1,240</div>
+            <div class="pwl-sv">@_account.ActivePortalUsers.ToString("N0")</div>
             <span class="pwl-sl">Active Portal Users</span>
         </div>
     </div>
     <div class="pwl-status-card">
         <i class="bi bi-phone-vibrate" aria-hidden="true"></i>
         <div>
-            <div class="pwl-sv">847</div>
+            <div class="pwl-sv">@_account.MobileInstalls.ToString("N0")</div>
             <span class="pwl-sl">Mobile App Installs</span>
         </div>
     </div>
@@ -192,7 +193,7 @@ else if (_activeTab == "mobile")
             <div class="pwl-panel">
                 <div class="pwl-panel-hdr"><i class="bi bi-bar-chart" aria-hidden="true"></i> Mobile App Metrics</div>
                 <div class="pwl-metric-list">
-                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Total Installs</span><span class="pwl-metric-val">847</span></div>
+                    <div class="pwl-metric-row"><span class="pwl-metric-lbl">Total Installs</span><span class="pwl-metric-val">@_account.MobileInstalls.ToString("N0")</span></div>
                     <div class="pwl-metric-row"><span class="pwl-metric-lbl">iOS / Android Split</span><span class="pwl-metric-val">61% / 39%</span></div>
                     <div class="pwl-metric-row"><span class="pwl-metric-lbl">DAU (Last 30d avg)</span><span class="pwl-metric-val">214</span></div>
                     <div class="pwl-metric-row"><span class="pwl-metric-lbl">Push Opt-In Rate</span><span class="pwl-metric-val">78%</span></div>
@@ -375,13 +376,15 @@ else if (_activeTab == "access")
 
 @code {
     private SfToast? _toast;
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private string _activeTab = "portal";
     private bool _showPublishConfirm;
 
     private string _portalStatus = "Live";
     private string _appStatus    = "Published";
     private string _chatStatus   = "Active";
-    private int    _chatSessions = 704;
+    private int    _chatSessions;
+    private PortalMyAccountDto _account = new();
 
     private PortalConfig  _portal = new();
     private MobileAppCfg  _mobile = new();
@@ -394,12 +397,16 @@ else if (_activeTab == "access")
     private static readonly List<Lv> _posOpts = [new("bottom-right","Bottom Right"), new("bottom-left","Bottom Left")];
     private static readonly List<Lv> _idpOpts = [new("none","None — Password only"), new("okta","Okta"), new("azure","Microsoft Entra ID"), new("google","Google Workspace"), new("saml","Generic SAML 2.0"), new("oidc","Generic OIDC")];
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("White-Label",""));
-        _portal = new PortalConfig { Domain="portal.sullivanagency.com", Title="Sullivan Agency Client Portal", PrimaryColor="#1d4ed8", AccentColor="#059669", HidePoweredBy=true, EnableAnnouncements=true, EnableCrossSellWidget=true };
-        _mobile = new MobileAppCfg { AppName="Sullivan Agency App", IosBundleId="com.sullivanagency.client", AndroidPackage="com.sullivanagency.client", Version="2.4.1", MinVersion="2.0.0", BiometricEnabled=true, PushEnabled=true, OfflineMode=true };
-        _chat   = new ChatConfig { AssistantName="Aria", WelcomeMessage="Hi there! I'm Aria, your agency assistant. I can help with COI requests, policy questions, payments, and more. How can I help today?", WidgetColor="#1d4ed8", Position="bottom-right", Enabled=true, AiEnabled=true, LiveHandoff=true, ShowOnMobile=true, EscalationEmail="support@sullivanagency.com", OfficeHours="Mon–Fri, 8am–5pm CT" };
+        _account = await Api.GetPortalMyAccountAsync(_tenantId) ?? new PortalMyAccountDto { AgencyName = "First Insurance", SupportEmail = "support@firstinsurance.com", PortalDomain = "portal.firstinsurance.com" };
+        var branding = await Api.GetPortalBrandingSettingsAsync(_tenantId) ?? new PortalBrandingSettingsDto { DisplayName = $"{_account.AgencyName} Client Portal", Domain = _account.PortalDomain, SupportEmail = _account.SupportEmail, PrimaryColor = "#1d4ed8", AccentColor = "#059669" };
+        var mobile = await Api.GetPortalMobileSettingsAsync(_tenantId);
+        _chatSessions = _account.ChatSessions30d;
+        _portal = new PortalConfig { Domain=branding.Domain, Title=branding.DisplayName, PrimaryColor=branding.PrimaryColor, AccentColor=branding.AccentColor, HidePoweredBy=!branding.ShowPoweredBy, EnableAnnouncements=true, EnableCrossSellWidget=true };
+        _mobile = new MobileAppCfg { AppName=mobile?.AppName ?? $"{_account.AgencyName} Mobile", IosBundleId=mobile?.BundleId ?? "", AndroidPackage=mobile?.BundleId ?? "", IosLink=mobile?.IosUrl ?? "", AndroidLink=mobile?.AndroidUrl ?? "", Version=mobile?.AppVersion ?? "2.4.1", MinVersion="2.0.0", BiometricEnabled=mobile?.BiometricLogin ?? true, PushEnabled=true, OfflineMode=true };
+        _chat   = new ChatConfig { AssistantName="Aria", WelcomeMessage=$"Hi there! I'm Aria, your {_account.AgencyName} assistant. I can help with COI requests, policy questions, payments, and more. How can I help today?", WidgetColor=branding.PrimaryColor, Position="bottom-right", Enabled=_account.ChatEnabled, AiEnabled=true, LiveHandoff=true, ShowOnMobile=true, EscalationEmail=_account.SupportEmail, OfficeHours="Mon–Fri, 8am–5pm CT" };
         _access = new AccessConfig { Idp="none", MfaRequired=false, AllowSocialLogin=true, SessionTimeout=true, PwdMinLength=10, SessionTimeoutMins=30, MaxFailedAttempts=5, LockoutMins=15, RequireUppercase=true, RequireSpecialChar=true };
         _portalCaps =
         [

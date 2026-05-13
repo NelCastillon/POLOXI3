@@ -1,5 +1,6 @@
 @page "/marketing/campaigns/new"
 @namespace Ams.Web.Components.Pages
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -265,18 +266,8 @@ else
     private bool    _abTest           = false;
 
     private HashSet<int> _selectedSegs = [];
-
-    private static readonly List<SegmentOption> _segments =
-    [
-        new(1, "Active Commercial Clients", "bi-building", 3_840),
-        new(2, "Personal Lines Households", "bi-house", 12_400),
-        new(3, "SMB — No Workers Comp",    "bi-briefcase", 1_290),
-        new(4, "HH With Teen Drivers",      "bi-car-front", 2_150),
-        new(5, "BOP Holders — No Umbrella", "bi-umbrella", 980),
-        new(6, "Lapsed 60–180 Days",        "bi-arrow-repeat", 3_100),
-        new(7, "NPS Promoters (9–10)",      "bi-star-fill", 1_750),
-        new(8, "Employer Groups",           "bi-people", 640),
-    ];
+    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private List<SegmentOption> _segments = [];
 
     private bool IsValid => !string.IsNullOrEmpty(_name) && !string.IsNullOrEmpty(_type)
                          && _selectedSegs.Any() && !string.IsNullOrEmpty(_subject);
@@ -290,8 +281,12 @@ else
         _ => null
     };
 
-    protected override void OnInitialized() =>
+    protected override async Task OnInitializedAsync()
+    {
         Breadcrumbs.SetCrumbs(new("Home","/"), new("Marketing","/marketing/campaigns"), new("New Campaign",""));
+        var result = await Api.SearchMarketingSegmentsAsync(_tenantId);
+        _segments = result?.Items.Select((s, index) => new SegmentOption(index + 1, s.Name, s.Icon, s.ContactCount)).ToList() ?? [];
+    }
 
     private void GoToStep(int step)
     {
@@ -315,15 +310,34 @@ else
 
     private async Task SaveDraftAsync()
     {
-        await Task.Delay(0);
-        await _toast!.ShowAsync(new ToastModel { Content = "Draft saved.", CssClass = "e-toast-info" });
+        await SaveCampaignAsync("Draft");
+        await _toast!.ShowAsync(new ToastModel { Content = "Draft saved.", CssClass = "e-toast-success" });
     }
 
     private async Task LaunchAsync()
     {
-        await Task.Delay(0);
+        await SaveCampaignAsync(_sendMode == "Scheduled" ? "Scheduled" : "Active");
         await _toast!.ShowAsync(new ToastModel { Content = $"Campaign '{_name}' launched successfully.", CssClass = "e-toast-success" });
         Nav.NavigateTo("/marketing/campaigns");
+    }
+
+    private async Task SaveCampaignAsync(string status)
+    {
+        var segmentNames = string.Join(", ", _selectedSegs.Select(id => _segments.First(s => s.Id == id).Name));
+        var reached = _selectedSegs.Sum(id => _segments.First(s => s.Id == id).Count);
+        await Api.CreateCommunicationCampaignAsync(new CommunicationCampaignDto
+        {
+            TenantId = _tenantId,
+            Name = _name.Trim(),
+            Type = _type,
+            Status = status,
+            Segment = segmentNames,
+            StartDate = _sendAt,
+            Reached = status == "Draft" ? 0 : reached,
+            OpenRate = 0,
+            Conversions = 0,
+            Revenue = 0
+        });
     }
 
     private sealed record SegmentOption(int Id, string Name, string Icon, int Count);

@@ -65,7 +65,8 @@
             <GridColumn Field="@nameof(ReferralRow.Producer)" HeaderText="Producer" Width="170" />
             <GridColumn HeaderText="" Width="70" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                 <Template>
-                    <button class="um-btn um-btn-ghost um-btn-sm"><i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+                    @{ var r = (ReferralRow)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => AdvanceAsync(r)"><i class="bi bi-arrow-right" aria-hidden="true"></i></button>
                 </Template>
             </GridColumn>
         </GridColumns>
@@ -114,7 +115,7 @@
         try
         {
             var result = await Api.SearchMarketingReferralsAsync(_tenantId);
-            _referrals = result?.Items.Select(x => new ReferralRow(x.ProspectName, x.ReferredBy, x.ReferralType, x.ReceivedDate, x.StatusCode, x.PolicyInterest, x.EstimatedPremium, x.Producer)).ToList() ?? [];
+            _referrals = result?.Items.Select(x => new ReferralRow(x.ReferralId, x.ProspectName, x.ReferredBy, x.ReferralType, x.ReceivedDate, x.StatusCode, x.PolicyInterest, x.EstimatedPremium, x.Producer)).ToList() ?? [];
         }
         catch (Exception ex) { _loadError = $"Failed to load referrals: {ex.Message}"; _referrals = []; }
         finally { _loading = false; }
@@ -153,7 +154,18 @@
         _           => "mkr-status mkr-st--pend",
     };
 
-    private sealed record ReferralRow(string ProspectName, string ReferredBy, string ReferralType,
+    private async Task AdvanceAsync(ReferralRow row)
+    {
+        var next = row.Status switch { "Pending" => "Contacted", "Contacted" => "Converted", _ => row.Status };
+        try
+        {
+            await Api.UpdateMarketingReferralStatusAsync(row.Id, next);
+            await LoadAsync();
+        }
+        catch (Exception ex) { _loadError = $"Update failed: {ex.Message}"; }
+    }
+
+    private sealed record ReferralRow(Guid Id, string ProspectName, string ReferredBy, string ReferralType,
         DateTime ReceivedDate, string Status, string PolicyInterest, decimal EstimatedPremium, string Producer);
 
     private sealed class ReferralForm
