@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Ams.Application.Common.Validation;
 
 namespace Ams.Application.Features.Finance;
 
@@ -26,8 +27,8 @@ public class CreateVendorRequest
     [Required, StringLength(50)] public string VendorCode { get; set; } = string.Empty;
     [Required, StringLength(200)] public string VendorName { get; set; } = string.Empty;
     [StringLength(150)] public string? ContactName { get; set; }
-    [EmailAddress, StringLength(254)] public string? Email { get; set; }
-    [Phone, StringLength(50)] public string? Phone { get; set; }
+    [AmsEmailAddress, StringLength(254)] public string? Email { get; set; }
+    [AmsPhone, StringLength(50)] public string? Phone { get; set; }
     [Required, StringLength(50)] public string PaymentTermsCode { get; set; } = "Net30";
     [Required, StringLength(3)] public string CurrencyCode { get; set; } = "USD";
     [StringLength(50)] public string? TaxId { get; set; }

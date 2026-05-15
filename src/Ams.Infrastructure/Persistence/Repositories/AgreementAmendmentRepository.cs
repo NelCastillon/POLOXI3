@@ -41,4 +41,33 @@ VALUES (@AmendmentId, @TenantId, @AgreementId, @AmendmentNumber, @AmendmentTypeC
         await cn.ExecuteAsync(new CommandDefinition(sql, new { AmendmentId = id, request.TenantId, request.AgreementId, request.AmendmentNumber, request.AmendmentTypeCode, request.EffectiveDate, request.Description, request.CreatedByUserId }, cancellationToken: cancellationToken));
         return id;
     }
+
+    public async Task UpdateAsync(Guid id, UpdateAgreementAmendmentRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE OPS.AgreementAmendment
+SET AgreementId = @AgreementId,
+    AmendmentNumber = @AmendmentNumber,
+    AmendmentTypeCode = @AmendmentTypeCode,
+    EffectiveDate = @EffectiveDate,
+    Description = @Description,
+    StatusCode = @StatusCode,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE AmendmentId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.AgreementId, request.AmendmentNumber, request.AmendmentTypeCode, request.EffectiveDate, request.Description, request.StatusCode, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE OPS.AgreementAmendment
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE AmendmentId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+    }
 }

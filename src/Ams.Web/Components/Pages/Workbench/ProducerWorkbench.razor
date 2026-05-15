@@ -1,8 +1,11 @@
 @page "/workbench/producer"
 @namespace Ams.Web.Components.Pages.Workbench
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
 @inject ProducerWorkbenchApiClient WorkbenchApi
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthenticationStateProvider
 
 <PageTitle>Producer Workbench</PageTitle>
 
@@ -739,8 +742,8 @@
 </SfToast>
 
 @code {
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    private readonly Guid _tenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+    private Guid? _tenantId;
+    private Guid? _tenantAdminUserId;
     private SfToast? _toast;
 
     // ── State ─────────────────────────────────────────────────────────────────────
@@ -839,7 +842,13 @@
         try
         {
             _loadError = null;
-            var dto = await WorkbenchApi.GetWorkbenchAsync(_tenantId, _tenantAdminUserId);
+
+            if (!await ResolveTenantAdminContextAsync())
+            {
+                return;
+            }
+
+            var dto = await WorkbenchApi.GetWorkbenchAsync(_tenantId!.Value, _tenantAdminUserId!.Value);
             if (dto is null) return;
 
             // ── Goal ──────────────────────────────────────────────────────
@@ -1064,13 +1073,57 @@
     {
         try
         {
-            await WorkbenchApi.LogContactAsync(_tenantId, item.ItemId, item.ItemType);
+            if (!_tenantId.HasValue && !await ResolveTenantAdminContextAsync())
+            {
+                return;
+            }
+
+            await WorkbenchApi.LogContactAsync(_tenantId!.Value, item.ItemId, item.ItemType);
             await ShowToastAsync($"Contact logged for {item.CompanyName}.", "e-toast-success");
         }
         catch (Exception ex)
         {
             await ShowToastAsync($"Failed to log contact: {ex.Message}", "e-toast-danger");
         }
+    }
+
+    private async Task<bool> ResolveTenantAdminContextAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            _loadError = "Unable to load producer workbench: user is not authenticated.";
+            await ShowToastAsync(_loadError, "e-toast-danger");
+            return false;
+        }
+
+        _tenantId = GetClaimGuid(user, "tenant_id", "tenantId", "TenantId");
+        _tenantAdminUserId = GetClaimGuid(user, ClaimTypes.NameIdentifier, "sub", "user_id", "userId", "UserId");
+
+        if (!_tenantId.HasValue || !_tenantAdminUserId.HasValue)
+        {
+            _loadError = "Unable to load producer workbench: tenant or user context is missing.";
+            await ShowToastAsync(_loadError, "e-toast-danger");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static Guid? GetClaimGuid(ClaimsPrincipal user, params string[] claimTypes)
+    {
+        foreach (var claimType in claimTypes)
+        {
+            var value = user.FindFirst(claimType)?.Value;
+            if (Guid.TryParse(value, out var id))
+            {
+                return id;
+            }
+        }
+
+        return null;
     }
 
     // ── Toast ─────────────────────────────────────────────────────────────────────

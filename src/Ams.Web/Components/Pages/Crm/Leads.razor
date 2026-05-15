@@ -1,6 +1,7 @@
 @page "/crm/leads"
 @namespace Ams.Web.Components.Pages.Crm
 @using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Validation
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
@@ -247,6 +248,9 @@
                         <Template>
                             @{ var r = (LeadRow)context; }
                             <div class="ld-row-actions">
+                                <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(r)" title="Edit">
+                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                </button>
                                 <button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenDetail(r)" title="View">
                                     <i class="bi bi-arrow-right" aria-hidden="true"></i>
                                 </button>
@@ -590,6 +594,9 @@
             @if (!string.IsNullOrEmpty(_detail.Notes)) { @DetailRow("Notes", @<p class="ld-detail-notes">@_detail.Notes</p>) }
         </div>
         <div class="ld-detail-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_detail!)">
+                <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+            </button>
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _selected.Clear(); _selected.Add(_detail!); _showAssign = true; }">
                 <i class="bi bi-person-check" aria-hidden="true"></i> Assign
             </button>
@@ -616,7 +623,7 @@
                IsBusy="_savingLead"
                Width="420px">
     <Content>
-        <EditForm Model="_leadForm" OnValidSubmit="SaveLeadAsync">
+        <EditForm @key="_leadForm" Model="_leadForm" OnValidSubmit="SaveLeadAsync">
             <DataAnnotationsValidator />
 
             <div class="form-row">
@@ -641,7 +648,22 @@
             </div>
             <div class="form-row">
                 <label class="form-label">Phone</label>
-                <InputText type="tel" class="form-control" placeholder="(555) 123-4567" @bind-Value="_leadForm.Phone" />
+                <div class="ld-phone-field @PhoneFieldCss">
+                    <InputText type="tel" class="form-control" placeholder="(555) 123-4567" @bind-Value="_leadForm.Phone" @bind-Value:after="OnPhoneChanged" />
+                    @if (!string.IsNullOrWhiteSpace(_leadForm.Phone))
+                    {
+                        <span class="ld-phone-status @PhoneStatusCss" title="@PhoneStatusText">
+                            <i class="bi @(IsPhoneValid(_leadForm.Phone) ? "bi-check-circle-fill" : "bi-exclamation-circle-fill")" aria-hidden="true"></i>
+                        </span>
+                    }
+                </div>
+                @if (!string.IsNullOrWhiteSpace(_leadForm.Phone))
+                {
+                    <div class="ld-phone-hint @PhoneHintCss">
+                        <i class="bi @(IsPhoneValid(_leadForm.Phone) ? "bi-shield-check" : "bi-info-circle")" aria-hidden="true"></i>
+                        <span>@PhoneStatusText</span>
+                    </div>
+                }
                 <ValidationMessage For="() => _leadForm.Phone" class="text-danger" />
             </div>
             <div class="form-row">
@@ -910,6 +932,9 @@
 {
     <div class="ld-ctx-overlay" @onclick="() => _menuLead = null"></div>
     <div class="ld-ctx-menu" style="top:@(_menuY)px;left:@(_menuX)px">
+        <button @onclick="() => { OpenEdit(_menuLead!); _menuLead = null; }">
+            <i class="bi bi-pencil" aria-hidden="true"></i> Edit Lead
+        </button>
         <button @onclick="() => { OpenDetail(_menuLead!); _menuLead = null; }">
             <i class="bi bi-person" aria-hidden="true"></i> View Detail
         </button>
@@ -1010,6 +1035,7 @@
     private bool   _showAdd       = false;
     private bool   _savingLead    = false;
     private Guid   _editingId     = Guid.Empty;
+    private static readonly Guid TenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
 
     // Import
     private List<LeadImportRow> _importPreview = [];
@@ -1117,7 +1143,7 @@
             Owner = dto.AssignedToUserId.HasValue && ownerLookup.TryGetValue(dto.AssignedToUserId.Value, out var owner) ? owner : "Unassigned",
             Rating = ScoreToRating(score),
             Score = score,
-            EstPremium = 0,
+            EstPremium = dto.AnnualRevenue ?? 0,
             CreatedAt = dto.CreatedDateUtc,
             LastActivity = null,
             Notes = dto.InterestedService
@@ -1223,6 +1249,24 @@
     {
         _editingId = Guid.Empty;
         ClearFormFields();
+        _showAdd = true;
+    }
+
+    private void OpenEdit(LeadRow lead)
+    {
+        _editingId = lead.LeadId;
+        _leadForm = new()
+        {
+            FirstName = lead.FirstName,
+            LastName = lead.LastName,
+            Company = lead.CompanyName,
+            Email = lead.Email,
+            Phone = lead.Phone,
+            Source = lead.Source == "Direct" ? string.Empty : lead.Source,
+            Owner = lead.AssignedToUserId?.ToString() ?? string.Empty,
+            EstPremium = lead.EstPremium,
+            Notes = lead.Notes ?? string.Empty
+        };
         _showAdd = true;
     }
 
@@ -1351,11 +1395,48 @@
         try
         {
             _savingLead = true;
-            // TODO: if (_editingId == Guid.Empty)
-            //     await Api.CreateLeadAsync(...)
-            // else
-            //     await Api.UpdateLeadAsync(_editingId, ...)
-            await Task.Delay(0);
+            var normalizedPhone = NormalizePhone(_leadForm.Phone);
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateLeadAsync(new CreateLeadRequest
+                {
+                    TenantId = _tenantId,
+                    LeadNumber = $"LD-{DateTime.UtcNow:yyyyMMddHHmmss}",
+                    AccountName = _leadForm.Company.Trim(),
+                    FirstName = _leadForm.FirstName.Trim(),
+                    LastName = _leadForm.LastName.Trim(),
+                    Email = _leadForm.Email.Trim(),
+                    Phone = normalizedPhone,
+                    InterestedService = _leadForm.Notes,
+                    AnnualRevenue = _leadForm.EstPremium,
+                    Score = _leadForm.EstPremium > 0 ? 50 : 25,
+                    PriorityCode = _leadForm.EstPremium >= 25000 ? "Hot" : _leadForm.EstPremium > 0 ? "Warm" : "Cold",
+                    SourceCode = _leadForm.Source,
+                    NurturingStageCode = "New",
+                    AssignedToUserId = Guid.TryParse(_leadForm.Owner, out var ownerId) ? ownerId : null,
+                    CreatedByUserId = TenantAdminUserId
+                });
+            }
+            else
+            {
+                await Api.UpdateLeadAsync(_editingId, new UpdateLeadRequest
+                {
+                    LeadId = _editingId,
+                    AccountName = _leadForm.Company.Trim(),
+                    FirstName = _leadForm.FirstName.Trim(),
+                    LastName = _leadForm.LastName.Trim(),
+                    Email = _leadForm.Email.Trim(),
+                    Phone = normalizedPhone,
+                    InterestedService = _leadForm.Notes,
+                    AnnualRevenue = _leadForm.EstPremium,
+                    PriorityCode = _leadForm.EstPremium >= 25000 ? "Hot" : _leadForm.EstPremium > 0 ? "Warm" : "Cold",
+                    SourceCode = _leadForm.Source,
+                    NurturingStageCode = "New",
+                    StatusCode = 1,
+                    AssignedToUserId = Guid.TryParse(_leadForm.Owner, out var ownerId) ? ownerId : null,
+                    UpdatedByUserId = TenantAdminUserId
+                });
+            }
 
             _showAdd = false;
             _editingId = Guid.Empty;
@@ -1376,6 +1457,35 @@
     private void ClearFormFields()
     {
         _leadForm = new();
+    }
+
+    private void OnPhoneChanged()
+    {
+        if (IsPhoneValid(_leadForm.Phone))
+        {
+            _leadForm.Phone = NormalizePhone(_leadForm.Phone);
+        }
+    }
+
+    private string PhoneFieldCss => string.IsNullOrWhiteSpace(_leadForm.Phone) ? string.Empty : IsPhoneValid(_leadForm.Phone) ? "ld-phone-field--valid" : "ld-phone-field--invalid";
+    private string PhoneStatusCss => IsPhoneValid(_leadForm.Phone) ? "ld-phone-status--valid" : "ld-phone-status--invalid";
+    private string PhoneHintCss => IsPhoneValid(_leadForm.Phone) ? "ld-phone-hint--valid" : "ld-phone-hint--invalid";
+    private string PhoneStatusText => IsPhoneValid(_leadForm.Phone) ? $"Phone formatted as {NormalizePhone(_leadForm.Phone)}" : "Enter a valid 10-digit phone number, for example (555) 123-4567.";
+
+    private static bool IsPhoneValid(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return true;
+        var digits = new string(value.Where(char.IsDigit).ToArray());
+        if (digits.Length == 11 && digits[0] == '1') digits = digits[1..];
+        return digits.Length == 10;
+    }
+
+    private static string? NormalizePhone(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var digits = new string(value.Where(char.IsDigit).ToArray());
+        if (digits.Length == 11 && digits[0] == '1') digits = digits[1..];
+        return digits.Length == 10 ? $"({digits[..3]}) {digits.Substring(3, 3)}-{digits[6..]}" : value.Trim();
     }
 
     private async Task ShowToastAsync(string msg, string css = "e-toast-info")
@@ -1545,11 +1655,12 @@
         public string Company { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "Email is required")]
-        [EmailAddress(ErrorMessage = "Email must be a valid email address")]
+        [AmsEmailAddress]
         [StringLength(200, ErrorMessage = "Email cannot exceed 200 characters")]
         public string Email { get; set; } = string.Empty;
 
-        [StringLength(20, ErrorMessage = "Phone cannot exceed 20 characters")]
+        [AmsPhone]
+        [StringLength(30, ErrorMessage = "Phone cannot exceed 30 characters")]
         public string Phone { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "Source is required")]

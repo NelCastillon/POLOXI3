@@ -21,12 +21,14 @@ public sealed class LeadRepository : ILeadRepository
 INSERT INTO CRM.Lead
 (
     LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone,
-    InterestedService, StatusCodeId, CreatedDateUtc, CreatedByUserId, IsDeleted
+    InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, AssignedToUserId,
+    StatusCodeId, CreatedDateUtc, CreatedByUserId, IsDeleted
 )
 VALUES
 (
     @LeadId, @TenantId, @LeadNumber, @AccountName, @FirstName, @LastName, @Email, @Phone,
-    @InterestedService, 1, SYSUTCDATETIME(), @CreatedByUserId, 0
+    @InterestedService, @AnnualRevenue, @Score, @PriorityCode, @SourceCode, @NurturingStageCode, @AssignedToUserId,
+    1, SYSUTCDATETIME(), @CreatedByUserId, 0
 );";
 
         var id = Guid.NewGuid();
@@ -42,6 +44,12 @@ VALUES
             request.Email,
             request.Phone,
             request.InterestedService,
+            request.AnnualRevenue,
+            request.Score,
+            request.PriorityCode,
+            request.SourceCode,
+            request.NurturingStageCode,
+            request.AssignedToUserId,
             request.CreatedByUserId
         }, cancellationToken: cancellationToken));
 
@@ -50,7 +58,7 @@ VALUES
 
     public async Task<LeadDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        const string sql = @"SELECT LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc FROM CRM.Lead WHERE LeadId = @Id AND IsDeleted = 0;";
+        const string sql = @"SELECT LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc FROM CRM.Lead WHERE LeadId = @Id AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await cn.QuerySingleOrDefaultAsync<LeadDto>(
             new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
@@ -60,7 +68,7 @@ VALUES
     {
         var sql = RepositorySql.BuildPagedSearchSql(
             "CRM.Lead",
-            "LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc",
+            "LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc",
             "FirstName LIKE '%' + @SearchTerm + '%' OR LastName LIKE '%' + @SearchTerm + '%' OR Email LIKE '%' + @SearchTerm + '%' OR AccountName LIKE '%' + @SearchTerm + '%' OR LeadNumber LIKE '%' + @SearchTerm + '%'",
             "CreatedDateUtc DESC",
             true);
@@ -97,6 +105,7 @@ SET AccountName = COALESCE(@AccountName, AccountName),
     Email = @Email,
     Phone = @Phone,
     InterestedService = @InterestedService,
+    AnnualRevenue = @AnnualRevenue,
     Score = COALESCE(@Score, Score),
     PriorityCode = @PriorityCode,
     SourceCode = @SourceCode,

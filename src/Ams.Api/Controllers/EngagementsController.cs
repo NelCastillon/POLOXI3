@@ -29,4 +29,18 @@ public sealed class EngagementsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateEngagementRequest request, CancellationToken cancellationToken)
         => Ok(await _service.CreateAsync(request, cancellationToken));
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateEngagementRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdateAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] Guid? modifiedByUserId, CancellationToken cancellationToken)
+    {
+        await _service.DeleteAsync(id, modifiedByUserId, cancellationToken);
+        return NoContent();
+    }
 }

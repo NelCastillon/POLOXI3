@@ -12,6 +12,7 @@ public sealed class LeadDto
     public string? Email { get; set; }
     public string? Phone { get; set; }
     public string? InterestedService { get; set; }
+    public decimal? AnnualRevenue { get; set; }
     public int? Score { get; set; }
     public string? PriorityCode { get; set; }
     public string? SourceCode { get; set; }

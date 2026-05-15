@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Ams.Application.Common.Validation;
 
 namespace Ams.Application.Features.Accounts;
 
@@ -8,9 +9,9 @@ public sealed class UpdateAccountRequest
     public string AccountName { get; set; } = string.Empty;
     [Required, StringLength(50)]
     public string AccountTypeCode { get; set; } = string.Empty;
-    [EmailAddress, StringLength(200)]
+    [AmsEmailAddress, StringLength(200)]
     public string? MainEmail { get; set; }
-    [StringLength(50)]
+    [AmsPhone, StringLength(50)]
     public string? MainPhone { get; set; }
     [Required, StringLength(50)]
     public string StatusCode { get; set; } = "Active";

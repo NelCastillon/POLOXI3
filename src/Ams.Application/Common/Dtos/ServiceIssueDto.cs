@@ -8,6 +8,7 @@ public sealed class ServiceIssueDto
     public Guid? AccountId { get; set; }
     public string IssueNumber { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
+    public string? Description { get; set; }
     public string SeverityCode { get; set; } = string.Empty;
     public Guid? AssignedToUserId { get; set; }
     public string StatusCode { get; set; } = string.Empty;

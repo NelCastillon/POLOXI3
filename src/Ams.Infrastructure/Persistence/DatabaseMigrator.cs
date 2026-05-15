@@ -143,6 +143,7 @@ public sealed class DatabaseMigrator
         new("0110_DocumentConfig_CreateSeed", Migration0110_DocumentConfigCreateSeed),
         new("0111_Billing_TimeExpense_CreateSeed", Migration0111_BillingTimeExpenseCreateSeed),
         new("0112_Claims_EnterpriseSchemaSync", Migration0112_ClaimsEnterpriseSchemaSync),
+        new("0113_OPS_TaskType_CreateSeed", Migration0113_OpsTaskTypeCreateSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -918,6 +919,59 @@ BEGIN
     INSERT INTO Claims.CatAffectedInsured (AffectedInsuredId,CatEventId,AccountId,AccountName,PolicyNumber,Lob,County,ZipCode,TivAtRisk,GeoTagged,FnolFiled,BlastSent,ContactStatus,Handler,IsDeleted)
     VALUES (NEWID(),@CatEventId,NEWID(),N'Sullivan Mfg. LLC',N'TRV-GL-2024-00421',N'General Liability',N'Harris',N'77002',1200000,1,1,1,N'Contacted',N'Sarah Kim',0), (NEWID(),@CatEventId,NEWID(),N'Bridgewater Hotels',N'LIB-GL-2024-77210',N'General Liability',N'Galveston',N'77550',2100000,1,1,1,N'FNOL Filed',N'Kevin Obi',0), (NEWID(),@CatEventId,NEWID(),N'Metro Freight Co.',N'HFD-CA-2024-14822',N'Commercial Auto',N'Harris',N'77029',320000,1,0,1,N'Contacted',N'James Park',0), (NEWID(),@CatEventId,NEWID(),N'Dallas Roofing LLC',N'CNA-WC-2024-55102',N'Workers Comp',N'Dallas',N'75201',450000,0,0,0,N'No Contact',N'Kevin Obi',0);
 END
+";
+
+    private const string Migration0113_OpsTaskTypeCreateSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'OPS') EXEC('CREATE SCHEMA OPS');
+
+IF OBJECT_ID(N'OPS.TaskType', N'U') IS NULL
+BEGIN
+    CREATE TABLE OPS.TaskType (
+        TaskTypeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_OPS_TaskType PRIMARY KEY,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TaskTypeCode NVARCHAR(50) NOT NULL,
+        TaskTypeName NVARCHAR(100) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_OPS_TaskType_SortOrder DEFAULT 100,
+        IsActive BIT NOT NULL CONSTRAINT DF_OPS_TaskType_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OPS_TaskType_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_OPS_TaskType_IsDeleted DEFAULT 0
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'OPS.TaskType') AND name = N'UX_OPS_TaskType_Tenant_Code')
+    CREATE UNIQUE INDEX UX_OPS_TaskType_Tenant_Code ON OPS.TaskType(TenantId, TaskTypeCode) WHERE IsDeleted = 0;
+
+DECLARE @TaskTypeTenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @TaskTypeAdminUserId UNIQUEIDENTIFIER = (SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TaskTypeTenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc);
+
+DECLARE @TaskTypes TABLE (TaskTypeCode NVARCHAR(50), TaskTypeName NVARCHAR(100), SortOrder INT);
+INSERT INTO @TaskTypes (TaskTypeCode, TaskTypeName, SortOrder) VALUES
+(N'Agreement', N'Agreement', 1),
+(N'Engagement', N'Engagement', 2),
+(N'Amendment', N'Amendment', 3),
+(N'Renewal', N'Renewal', 10),
+(N'Quote Follow-up', N'Quote Follow-up', 20),
+(N'Certificate', N'Certificate', 30),
+(N'Endorsement', N'Endorsement', 40),
+(N'Call', N'Call', 50),
+(N'Document', N'Document', 60),
+(N'Admin', N'Admin', 70),
+(N'Billing', N'Billing', 80),
+(N'Claim', N'Claim', 90),
+(N'Approval', N'Approval', 100),
+(N'Service Request', N'Service Request', 110),
+(N'Workflow', N'Workflow', 120),
+(N'Issue', N'Issue', 130),
+(N'Activity', N'Activity', 140);
+
+INSERT INTO OPS.TaskType (TaskTypeId, TenantId, TaskTypeCode, TaskTypeName, Description, SortOrder, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TaskTypeTenantId, s.TaskTypeCode, s.TaskTypeName, N'Seeded task type', s.SortOrder, 1, SYSUTCDATETIME(), @TaskTypeAdminUserId, 0
+FROM @TaskTypes s
+WHERE NOT EXISTS (SELECT 1 FROM OPS.TaskType t WHERE t.TenantId = @TaskTypeTenantId AND t.TaskTypeCode = s.TaskTypeCode AND t.IsDeleted = 0);
 ";
 
     private sealed record Migration(string Name, string Sql);
@@ -2909,15 +2963,15 @@ IF OBJECT_ID(N'Portal.AdminRecord') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Po
 BEGIN
     INSERT INTO Portal.AdminRecord (PortalAdminRecordId, TenantId, Kind, Code, Name, Status, JsonData, CreatedDateUtc, IsDeleted)
     VALUES
-    (NEWID(), @TenantId, N'AccountingWorkbench', N'REC-1001', N'Carrier statement variance - commercial package', N'Open', N'{"queueCode":"reconciliation","accountName":"Northstar Robotics","policyNumber":"CPP-24-11802","carrierName":"Contoso Mutual","assignedTo":"Tenant Admin","priority":"High","slaStatus":"At Risk","amount":0,"variance":1840.00,"dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, 1, @Now), 126) + N'","reason":"Carrier statement premium differs from AMS invoice.","notes":"Review endorsement premium and commission split before trust sweep.","detailUrl":"/billing/accounting"}', DATEADD(day, -4, @Now), 0),
-    (NEWID(), @TenantId, N'AccountingWorkbench', N'REC-1002', N'Download mismatch - direct bill commission', N'Open', N'{"queueCode":"reconciliation","accountName":"Hamilton Food Group","policyNumber":"WC-24-55318","carrierName":"Fabrikam Insurance","assignedTo":"Tenant Admin","priority":"Normal","slaStatus":"On Track","amount":0,"variance":-620.00,"dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, 3, @Now), 126) + N'","reason":"Direct bill commission download has negative variance.","notes":"Validate producer code and commission plan override.","detailUrl":"/billing/accounting"}', DATEADD(day, -2, @Now), 0),
+    (NEWID(), @TenantId, N'AccountingWorkbench', N'REC-1001', N'Carrier statement variance - commercial package', N'Open', N'{"queueCode":"reconciliation","accountName":"Northstar Robotics","policyNumber":"CPP-24-11802","carrierName":"Contoso Mutual","assignedTo":"Tenant Admin","priority":"High","slaStatus":"At Risk","amount":0,"variance":1840.00,"dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, 1, @Now), 126) + N'","reason":"Carrier statement premium differs from AMS invoice.","notes":"Review endorsement premium and commission split before trust sweep.","detailUrl":"/billing/reconciliation"}', DATEADD(day, -4, @Now), 0),
+    (NEWID(), @TenantId, N'AccountingWorkbench', N'REC-1002', N'Download mismatch - direct bill commission', N'Open', N'{"queueCode":"reconciliation","accountName":"Hamilton Food Group","policyNumber":"WC-24-55318","carrierName":"Fabrikam Insurance","assignedTo":"Tenant Admin","priority":"Normal","slaStatus":"On Track","amount":0,"variance":-620.00,"dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, 3, @Now), 126) + N'","reason":"Direct bill commission download has negative variance.","notes":"Validate producer code and commission plan override.","detailUrl":"/billing/reconciliation"}', DATEADD(day, -2, @Now), 0),
     (NEWID(), @TenantId, N'AccountingWorkbench', N'PAY-1001', N'Unapplied ACH payment', N'Open', N'{"queueCode":"unapplied-payments","accountName":"Vista Property Partners","policyNumber":"BOP-24-44710","paymentMethod":"ACH","assignedTo":"Tenant Admin","priority":"High","slaStatus":"At Risk","amount":7250.00,"receivedDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, -5, @Now), 126) + N'","ageDays":5,"dueDate":"' + CONVERT(NVARCHAR(30), @Now, 126) + N'","notes":"ACH batch imported without invoice match; likely renewal down payment.","detailUrl":"/billing/payments"}', DATEADD(day, -5, @Now), 0),
     (NEWID(), @TenantId, N'AccountingWorkbench', N'PAY-1002', N'Unapplied lockbox check', N'Open', N'{"queueCode":"unapplied-payments","accountName":"Cascade Fleet Services","policyNumber":"AUTO-24-88201","paymentMethod":"Check","assignedTo":"Tenant Admin","priority":"Normal","slaStatus":"On Track","amount":3180.00,"receivedDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, -2, @Now), 126) + N'","ageDays":2,"dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, 2, @Now), 126) + N'","notes":"Lockbox memo omitted invoice number.","detailUrl":"/billing/payments"}', DATEADD(day, -2, @Now), 0),
-    (NEWID(), @TenantId, N'AccountingWorkbench', N'COM-1001', N'Producer commission adjustment', N'Open', N'{"queueCode":"commission-adj","producerName":"Tenant Admin","policyNumber":"CYB-24-91702","assignedTo":"Tenant Admin","priority":"Normal","slaStatus":"On Track","amount":-950.00,"reason":"Split correction","dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, 4, @Now), 126) + N'","notes":"Adjust producer split after servicing team corrected producer of record.","detailUrl":"/commissions/transactions"}', DATEADD(day, -1, @Now), 0),
-    (NEWID(), @TenantId, N'AccountingWorkbench', N'DB-1001', N'Direct-bill exception - missing policy match', N'Open', N'{"queueCode":"direct-bill","accountName":"Northstar Robotics","policyNumber":"UMB-24-22091","carrierName":"Contoso Mutual","assignedTo":"Tenant Admin","priority":"Critical","slaStatus":"Breached","amount":12800.00,"dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, -1, @Now), 126) + N'","notes":"Carrier download could not match policy; commission receivable not posted.","detailUrl":"/billing/accounting"}', DATEADD(day, -8, @Now), 0),
-    (NEWID(), @TenantId, N'AccountingWorkbench', N'ME-1001', N'Month-end: reconcile trust account', N'In Progress', N'{"queueCode":"month-end","category":"Trust Accounting","assignedTo":"Tenant Admin","priority":"High","slaStatus":"At Risk","status":"In Progress","dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, 1, @Now), 126) + N'","ageDays":3,"notes":"Trust account reconciliation pending bank feed approval.","detailUrl":"/accounting-periods"}', DATEADD(day, -3, @Now), 0),
-    (NEWID(), @TenantId, N'AccountingWorkbench', N'ME-1002', N'Month-end: post commission accrual', N'Pending', N'{"queueCode":"month-end","category":"Commissions","assignedTo":"Tenant Admin","priority":"Normal","slaStatus":"On Track","status":"Pending","dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, 3, @Now), 126) + N'","ageDays":1,"notes":"Post accrual after direct-bill exception queue is cleared.","detailUrl":"/accounting-periods"}', DATEADD(day, -1, @Now), 0),
-    (NEWID(), @TenantId, N'AccountingWorkbench', N'ME-1003', N'Month-end: close billing subledger', N'Complete', N'{"queueCode":"month-end","category":"Billing","assignedTo":"Tenant Admin","priority":"Low","slaStatus":"On Track","status":"Complete","completedAt":"' + CONVERT(NVARCHAR(30), DATEADD(day, -1, @Now), 126) + N'","dueDate":"' + CONVERT(NVARCHAR(30), @Now, 126) + N'","ageDays":0,"notes":"Billing subledger closed successfully.","detailUrl":"/accounting-periods"}', DATEADD(day, -2, @Now), 0);
+    (NEWID(), @TenantId, N'AccountingWorkbench', N'COM-1001', N'Producer commission adjustment', N'Open', N'{"queueCode":"commission-adj","producerName":"Tenant Admin","policyNumber":"CYB-24-91702","assignedTo":"Tenant Admin","priority":"Normal","slaStatus":"On Track","amount":-950.00,"reason":"Split correction","dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, 4, @Now), 126) + N'","notes":"Adjust producer split after servicing team corrected producer of record.","detailUrl":"/commissions/exceptions"}', DATEADD(day, -1, @Now), 0),
+    (NEWID(), @TenantId, N'AccountingWorkbench', N'DB-1001', N'Direct-bill exception - missing policy match', N'Open', N'{"queueCode":"direct-bill","accountName":"Northstar Robotics","policyNumber":"UMB-24-22091","carrierName":"Contoso Mutual","assignedTo":"Tenant Admin","priority":"Critical","slaStatus":"Breached","amount":12800.00,"dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, -1, @Now), 126) + N'","notes":"Carrier download could not match policy; commission receivable not posted.","detailUrl":"/billing/reconciliation"}', DATEADD(day, -8, @Now), 0),
+    (NEWID(), @TenantId, N'AccountingWorkbench', N'ME-1001', N'Month-end: reconcile trust account', N'In Progress', N'{"queueCode":"month-end","category":"Trust Accounting","assignedTo":"Tenant Admin","priority":"High","slaStatus":"At Risk","status":"In Progress","dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, 1, @Now), 126) + N'","ageDays":3,"notes":"Trust account reconciliation pending bank feed approval.","detailUrl":"/finance/accounting-periods"}', DATEADD(day, -3, @Now), 0),
+    (NEWID(), @TenantId, N'AccountingWorkbench', N'ME-1002', N'Month-end: post commission accrual', N'Pending', N'{"queueCode":"month-end","category":"Commissions","assignedTo":"Tenant Admin","priority":"Normal","slaStatus":"On Track","status":"Pending","dueDate":"' + CONVERT(NVARCHAR(30), DATEADD(day, 3, @Now), 126) + N'","ageDays":1,"notes":"Post accrual after direct-bill exception queue is cleared.","detailUrl":"/finance/accounting-periods"}', DATEADD(day, -1, @Now), 0),
+    (NEWID(), @TenantId, N'AccountingWorkbench', N'ME-1003', N'Month-end: close billing subledger', N'Complete', N'{"queueCode":"month-end","category":"Billing","assignedTo":"Tenant Admin","priority":"Low","slaStatus":"On Track","status":"Complete","completedAt":"' + CONVERT(NVARCHAR(30), DATEADD(day, -1, @Now), 126) + N'","dueDate":"' + CONVERT(NVARCHAR(30), @Now, 126) + N'","ageDays":0,"notes":"Billing subledger closed successfully.","detailUrl":"/finance/accounting-periods"}', DATEADD(day, -2, @Now), 0);
 END
 """;
     private const string Migration0096_MarketingWorkbenchSeed = """
@@ -3969,6 +4023,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHE
 IF COL_LENGTH(N'CRM.Lead', N'SourceCode') IS NULL ALTER TABLE CRM.Lead ADD SourceCode NVARCHAR(50) NULL;
 IF COL_LENGTH(N'CRM.Lead', N'NurturingStageCode') IS NULL ALTER TABLE CRM.Lead ADD NurturingStageCode NVARCHAR(50) NULL;
 IF COL_LENGTH(N'CRM.Lead', N'QualifiedDate') IS NULL ALTER TABLE CRM.Lead ADD QualifiedDate DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.Lead', N'AnnualRevenue') IS NULL ALTER TABLE CRM.Lead ADD AnnualRevenue DECIMAL(18,2) NULL;
 IF COL_LENGTH(N'CRM.Lead', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.Lead ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
 IF COL_LENGTH(N'CRM.Lead', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.Lead ADD ModifiedDateUtc DATETIME2 NULL;
 

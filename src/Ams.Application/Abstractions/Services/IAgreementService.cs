@@ -9,4 +9,6 @@ public interface IAgreementService
     Task<AgreementDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<PagedResult<AgreementDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
     Task<Guid> CreateAsync(CreateAgreementRequest request, CancellationToken cancellationToken = default);
+    Task UpdateAsync(Guid id, UpdateAgreementRequest request, CancellationToken cancellationToken = default);
+    Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default);
 }

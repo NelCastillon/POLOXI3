@@ -152,7 +152,7 @@
                 <div class="um-modal-body"><div class="um-form-grid">
                     <div class="um-field"><label>Task # <span class="text-danger">*</span></label><InputText @bind-Value="_form.TaskNumber" class="um-input" disabled="@_editId.HasValue" /><ValidationMessage For="() => _form.TaskNumber" class="text-danger" /></div>
                     <div class="um-field"><label>Title <span class="text-danger">*</span></label><InputText @bind-Value="_form.Title" class="um-input" /><ValidationMessage For="() => _form.Title" class="text-danger" /></div>
-                    <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.TaskTypeCode" class="um-input">@foreach (var type in TaskTypes) { <option>@type</option> }</InputSelect><ValidationMessage For="() => _form.TaskTypeCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.TaskTypeCode" class="um-input">@foreach (var type in _taskTypes.Where(x => x.IsActive)) { <option value="@type.TaskTypeCode">@type.TaskTypeName</option> }</InputSelect><ValidationMessage For="() => _form.TaskTypeCode" class="text-danger" /></div>
                     <div class="um-field"><label>Assigned To</label><InputSelect @bind-Value="_form.AssignedToUserId" class="um-input"><option value="">Unassigned</option>@foreach (var user in _assignees) { <option value="@user.UserId">@user.Name</option> }</InputSelect><ValidationMessage For="() => _form.AssignedToUserId" class="text-danger" /></div>
                     <div class="um-field"><label>Stage <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StageCode" class="um-input"><option>Intake</option><option>In Progress</option><option>Review</option><option>Approval</option><option>Done</option></InputSelect><ValidationMessage For="() => _form.StageCode" class="text-danger" /></div>
                     <div class="um-field"><label>Priority <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.PriorityCode" class="um-input"><option>Low</option><option>Medium</option><option>High</option></InputSelect><ValidationMessage For="() => _form.PriorityCode" class="text-danger" /></div>
@@ -184,6 +184,7 @@
     static readonly Guid TenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
 
     List<TaskItemDto> _items = [], _filtered = [];
+    List<TaskTypeDto> _taskTypes = [];
     readonly List<UserOption> _assignees = [];
     string _search = string.Empty;
     string? _activeFilter, _loadError;
@@ -195,10 +196,9 @@
 
     readonly Lane[] _lanes = [new("Intake", "Intake", "New work and triage"), new("In Progress", "In Progress", "Active execution"), new("Review", "Review", "Quality and service checks"), new("Approval", "Approval", "Workflow decisions"), new("Done", "Done", "Completed work")];
     readonly ModuleLink[] _modules = [new("Agreements", "Manage agreement lifecycle and customer commitments.", "/agreements", "bi-file-earmark-check"), new("Engagements", "Track active customer engagements and delivery status.", "/engagements", "bi-briefcase"), new("Milestones", "Monitor operational milestones and due dates.", "/ops/milestones", "bi-flag"), new("Amendments", "Review agreement amendments and changes.", "/ops/amendments", "bi-pencil-square"), new("Issue Tracker", "Resolve service issues by severity and SLA risk.", "/ops/issues", "bi-bug"), new("Service Requests", "Route and resolve client service requests.", "/ops/service-requests", "bi-tools"), new("Activity History", "Audit operational activity and timeline events.", "/ops/activities", "bi-clock-history"), new("Workflow Canvas", "Approve, reject, return, and track workflow instances.", "/workflow", "bi-diagram-3")];
-    static readonly string[] TaskTypes = ["Renewal", "Quote Follow-up", "Certificate", "Endorsement", "Call", "Document", "Admin", "Billing", "Claim", "Approval", "Service Request", "Workflow", "Issue", "Activity"];
 
     protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks")); await LoadAsync(); }
-    async Task LoadAsync() { _loading = true; _loadError = null; try { await LoadAssigneesAsync(); var result = await Api.SearchTaskItemsAsync(TenantId, _search, pageSize: 200); _items = result?.Items.ToList() ?? []; ApplyFilter(); _selected = _selected is null ? _filtered.FirstOrDefault() : _filtered.FirstOrDefault(x => x.TaskItemId == _selected.TaskItemId) ?? _filtered.FirstOrDefault(); } catch (Exception ex) { _loadError = $"Failed to load tasks: {ex.Message}"; } finally { _loading = false; } }
+    async Task LoadAsync() { _loading = true; _loadError = null; try { await LoadTaskTypesAsync(); await LoadAssigneesAsync(); var result = await Api.SearchTaskItemsAsync(TenantId, _search, pageSize: 200); _items = result?.Items.ToList() ?? []; ApplyFilter(); _selected = _selected is null ? _filtered.FirstOrDefault() : _filtered.FirstOrDefault(x => x.TaskItemId == _selected.TaskItemId) ?? _filtered.FirstOrDefault(); } catch (Exception ex) { _loadError = $"Failed to load tasks: {ex.Message}"; } finally { _loading = false; } }
     async Task OnSearchKeyUp(KeyboardEventArgs args) { if (args.Key == "Enter") await LoadAsync(); }
     void ApplyFilter()
     {
@@ -221,7 +221,7 @@
     }
     void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
     void SelectItem(TaskItemDto item) => _selected = item;
-    void OpenCreate() { _editId = null; _form = new() { TaskNumber = $"TASK-{DateTime.UtcNow:yyyyMMddHHmmss}", TaskTypeCode = "Admin", AssignedToUserId = TenantAdminUserId, DueDate = DateOnly.FromDateTime(DateTime.Today) }; _showForm = true; }
+    void OpenCreate() { _editId = null; _form = new() { TaskNumber = $"TASK-{DateTime.UtcNow:yyyyMMddHHmmss}", TaskTypeCode = _taskTypes.FirstOrDefault(x => x.TaskTypeCode == "Admin")?.TaskTypeCode ?? _taskTypes.FirstOrDefault(x => x.IsActive)?.TaskTypeCode ?? "Task", AssignedToUserId = TenantAdminUserId, DueDate = DateOnly.FromDateTime(DateTime.Today) }; _showForm = true; }
     void OpenEdit(TaskItemDto item) { _editId = item.TaskItemId; _form = new() { TaskNumber = item.TaskNumber, Title = item.Title, Description = item.Description, TaskTypeCode = item.TaskTypeCode, StageCode = item.StageCode, PriorityCode = item.PriorityCode, StatusCode = item.StatusCode, RelatedEntityName = item.RelatedEntityName, AssignedToUserId = item.AssignedToUserId, DueDate = item.DueDate }; _showForm = true; }
     async Task SaveAsync()
     {
@@ -274,9 +274,25 @@
             var users = await Api.SearchUsersAsync(TenantId);
             _assignees.AddRange((users?.Items ?? []).OrderBy(DisplayName).Select(u => new UserOption(u.UserId, DisplayName(u))));
         }
-        catch { }
+        catch (Exception ex)
+        {
+            ShowToast($"Failed to load assignees: {ex.Message}", isError: true);
+        }
 
         if (!_assignees.Any(a => a.UserId == TenantAdminUserId)) _assignees.Insert(0, new(TenantAdminUserId, "Tenant Admin"));
+    }
+    async Task LoadTaskTypesAsync()
+    {
+        if (_taskTypes.Count > 0) return;
+        try
+        {
+            var result = await Api.SearchTaskTypesAsync(TenantId, pageSize: 250);
+            _taskTypes = (result?.Items ?? []).OrderBy(x => x.SortOrder).ThenBy(x => x.TaskTypeName).ToList();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Failed to load task types: {ex.Message}", isError: true);
+        }
     }
     static bool IsOverdue(TaskItemDto item) => item.StatusCode != "Completed" && item.DueDate.HasValue && item.DueDate.Value < DateOnly.FromDateTime(DateTime.Today);
     static string PriorityCss(string priority) => priority == "High" ? "ops-priority-high" : priority == "Low" ? "ops-priority-low" : "ops-priority-medium";

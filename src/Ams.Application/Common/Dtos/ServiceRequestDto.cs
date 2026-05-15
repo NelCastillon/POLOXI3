@@ -10,6 +10,7 @@ public sealed class ServiceRequestDto
     public string RequestNumber { get; set; } = string.Empty;
     public string RequestTypeCode { get; set; } = string.Empty;
     public string Subject { get; set; } = string.Empty;
+    public string? Description { get; set; }
     public string PriorityCode { get; set; } = string.Empty;
     public Guid? AssignedToUserId { get; set; }
     public string StatusCode { get; set; } = string.Empty;

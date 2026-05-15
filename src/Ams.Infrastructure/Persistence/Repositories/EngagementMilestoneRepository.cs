@@ -41,4 +41,32 @@ VALUES (@MilestoneId, @TenantId, @EngagementId, @MilestoneName, @DueDate, 'Pendi
         await cn.ExecuteAsync(new CommandDefinition(sql, new { MilestoneId = id, request.TenantId, request.EngagementId, request.MilestoneName, request.DueDate, request.CreatedByUserId }, cancellationToken: cancellationToken));
         return id;
     }
+
+    public async Task UpdateAsync(Guid id, UpdateEngagementMilestoneRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE OPS.EngagementMilestone
+SET EngagementId = @EngagementId,
+    MilestoneName = @MilestoneName,
+    DueDate = @DueDate,
+    CompletedDate = @CompletedDate,
+    StatusCode = @StatusCode,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE MilestoneId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.EngagementId, request.MilestoneName, request.DueDate, request.CompletedDate, request.StatusCode, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE OPS.EngagementMilestone
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE MilestoneId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+    }
 }

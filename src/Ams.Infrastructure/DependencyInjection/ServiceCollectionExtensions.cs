@@ -234,6 +234,7 @@ public static class ServiceCollectionExtensions
         // ── Operations extended engines ──────────────────────────────
         services.AddScoped<IEngagementMilestoneRepository, EngagementMilestoneRepository>();
         services.AddScoped<ITaskItemRepository, TaskItemRepository>();
+        services.AddScoped<ITaskTypeRepository, TaskTypeRepository>();
         services.AddScoped<IServiceIssueRepository, ServiceIssueRepository>();
         services.AddScoped<IAgreementAmendmentRepository, AgreementAmendmentRepository>();
         services.AddScoped<IAgreementRenewalRepository, AgreementRenewalRepository>();
@@ -243,6 +244,7 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<IEngagementMilestoneService, EngagementMilestoneService>();
         services.AddScoped<ITaskItemService, TaskItemService>();
+        services.AddScoped<ITaskTypeService, TaskTypeService>();
         services.AddScoped<IServiceIssueService, ServiceIssueService>();
         services.AddScoped<IAgreementAmendmentService, AgreementAmendmentService>();
         services.AddScoped<IAgreementRenewalService, AgreementRenewalService>();

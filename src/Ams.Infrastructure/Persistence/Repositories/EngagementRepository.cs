@@ -51,4 +51,36 @@ VALUES (@EngagementId, @TenantId, @EngagementNumber, @AccountId, @AgreementId, @
         await cn.ExecuteAsync(new CommandDefinition(sql, new { EngagementId = id, request.TenantId, request.EngagementNumber, request.AccountId, request.AgreementId, request.EngagementName, request.EngagementTypeCode, request.OwnerUserId, request.StartDate, request.EndDate, request.CreatedByUserId }, cancellationToken: cancellationToken));
         return id;
     }
+
+    public async Task UpdateAsync(Guid id, UpdateEngagementRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE OPS.Engagement
+SET EngagementNumber = @EngagementNumber,
+    AccountId = @AccountId,
+    AgreementId = @AgreementId,
+    EngagementName = @EngagementName,
+    EngagementTypeCode = @EngagementTypeCode,
+    OwnerUserId = @OwnerUserId,
+    StartDate = @StartDate,
+    EndDate = @EndDate,
+    StatusCode = @StatusCode,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE EngagementId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.EngagementNumber, request.AccountId, request.AgreementId, request.EngagementName, request.EngagementTypeCode, request.OwnerUserId, request.StartDate, request.EndDate, request.StatusCode, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE OPS.Engagement
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE EngagementId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+    }
 }

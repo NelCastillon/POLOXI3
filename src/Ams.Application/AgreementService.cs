@@ -23,4 +23,10 @@ public sealed class AgreementService : IAgreementService
 
     public Task<Guid> CreateAsync(CreateAgreementRequest request, CancellationToken cancellationToken = default)
         => _repository.CreateAsync(request, cancellationToken);
+
+    public Task UpdateAsync(Guid id, UpdateAgreementRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateAsync(id, request, cancellationToken);
+
+    public Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+        => _repository.DeleteAsync(id, modifiedByUserId, cancellationToken);
 }

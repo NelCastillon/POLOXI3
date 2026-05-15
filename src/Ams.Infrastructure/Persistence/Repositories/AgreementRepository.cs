@@ -17,7 +17,7 @@ public sealed class AgreementRepository : IAgreementRepository
 
     public async Task<AgreementDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        const string sql = @"SELECT AgreementId, TenantId, AgreementNumber, AccountId, OpportunityId, AgreementStatusCodeId AS StatusCode, CreatedDateUtc FROM Sales.Agreement WHERE AgreementId = @Id AND IsDeleted = 0;";
+        const string sql = @"SELECT AgreementId, TenantId, AgreementNumber, AccountId, OpportunityId, '' AS AgreementTypeCode, CAST(CreatedDateUtc AS date) AS StartDate, NULL AS EndDate, NULL AS Description, AgreementStatusCodeId AS StatusCode, CreatedDateUtc FROM Sales.Agreement WHERE AgreementId = @Id AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await cn.QuerySingleOrDefaultAsync<AgreementDto>(
             new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
@@ -27,7 +27,7 @@ public sealed class AgreementRepository : IAgreementRepository
     {
         var sql = RepositorySql.BuildPagedSearchSql(
             "Sales.Agreement",
-            "AgreementId, TenantId, AgreementNumber, AccountId, OpportunityId, AgreementStatusCodeId AS StatusCode, CreatedDateUtc",
+            "AgreementId, TenantId, AgreementNumber, AccountId, OpportunityId, '' AS AgreementTypeCode, CAST(CreatedDateUtc AS date) AS StartDate, NULL AS EndDate, NULL AS Description, AgreementStatusCodeId AS StatusCode, CreatedDateUtc",
             "AgreementNumber LIKE '%' + @SearchTerm + '%'",
             "CreatedDateUtc DESC",
             true);
@@ -63,5 +63,29 @@ VALUES (@AgreementId, @TenantId, @AgreementNumber, @AccountId, NULL, 1, SYSUTCDA
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { AgreementId = id, request.TenantId, request.AgreementNumber, request.AccountId, request.CreatedByUserId }, cancellationToken: cancellationToken));
         return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateAgreementRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Sales.Agreement
+SET AgreementNumber = @AgreementNumber,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE AgreementId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.AgreementNumber, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Sales.Agreement
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE AgreementId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
     }
 }

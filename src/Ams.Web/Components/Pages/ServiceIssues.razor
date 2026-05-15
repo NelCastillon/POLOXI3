@@ -60,6 +60,13 @@
             <GridColumn Field="StatusCode" HeaderText="Status" Width="120" />
             <GridColumn Field="ResolvedDate" HeaderText="Resolved" Type="ColumnType.Date" Format="d" Width="130" />
             <GridColumn Field="CreatedDateUtc" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="130" />
+            <GridColumn HeaderText="Actions" Width="120" TextAlign="TextAlign.Center">
+                <Template>
+                    @{ var r = (ServiceIssueDto)context; }
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button>
+                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button>
+                </Template>
+            </GridColumn>
         </GridColumns>
     </SfGrid>
 </div>
@@ -68,7 +75,7 @@
     <DialogContent>
         <div class="um-modal-header">
             <i class="bi bi-bug"></i>
-            <span>New Issue</span>
+            <span>@(_editId.HasValue ? "Edit Issue" : "New Issue")</span>
             <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false">
                 <i class="bi bi-x-lg"></i>
             </button>
@@ -97,8 +104,25 @@
                         <ValidationMessage For="() => _form.SeverityCode" class="text-danger" />
                     </div>
                     <div class="um-field">
-                        <label>Account Id</label>
-                        <InputText @bind-Value="_form.AccountIdText" class="um-input" />
+                        <label>Status <span class="text-danger">*</span></label>
+                        <InputSelect @bind-Value="_form.StatusCode" class="um-input">
+                            <option>Open</option>
+                            <option>In Progress</option>
+                            <option>Resolved</option>
+                            <option>Closed</option>
+                        </InputSelect>
+                        <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Resolved Date</label>
+                        <InputDate @bind-Value="_form.ResolvedDate" class="um-input" />
+                        <ValidationMessage For="() => _form.ResolvedDate" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Account Name</label>
+                        <SfDropDownList TValue="string" TItem="AccountOption" DataSource="_accounts" @bind-Value="_form.AccountIdText" AllowFiltering="true" FilterType="Syncfusion.Blazor.DropDowns.FilterType.Contains" ShowClearButton="true" Placeholder="Search account name" CssClass="um-input">
+                            <DropDownListFieldSettings Value="Value" Text="Label" />
+                        </SfDropDownList>
                         <ValidationMessage For="() => _form.AccountIdText" class="text-danger" />
                     </div>
                     <div class="um-field um-field--full">
@@ -110,11 +134,25 @@
             </div>
             <div class="um-modal-footer">
                 <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
-                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Create</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button>
             </div>
         </EditForm>
     </DialogContent>
 </SfDialog>
+@if (_showDelete && _deleteTarget is not null)
+{
+    <div class="mt-modal-backdrop" @onclick="() => _showDelete = false">
+        <div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div>
+            <div class="um-confirm-title">Delete issue?</div>
+            <div class="um-confirm-text">This will remove <strong>@_deleteTarget.Title</strong>.</div>
+            <div class="um-modal-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </div>
+}
 <SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
 <style>
     @@keyframes um-shake {
@@ -123,9 +161,13 @@
 </style>
 @code {
     static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    static readonly Guid TenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
     string? _searchTerm, _loadError, _filter;
-    bool _loading, _saving, _showForm;
+    bool _loading, _saving, _showForm, _showDelete;
+    Guid? _editId;
+    ServiceIssueDto? _deleteTarget;
     List<ServiceIssueDto> _items = [], _filtered = [];
+    List<AccountOption> _accounts = [];
     SfToast _toast = default!;
     IssueForm _form = new();
 
@@ -141,6 +183,7 @@
         _loadError = null;
         try
         {
+            await LoadAccountsAsync();
             var result = await Api.SearchServiceIssuesAsync(TenantId, searchTerm: _searchTerm);
             _items = result?.Items.ToList() ?? [];
             ApplyFilter();
@@ -158,28 +201,58 @@
     Task OnSearchAsync() => LoadAsync();
     void ApplyFilter() => _filtered = _filter switch { "High" => _items.Where(x => x.SeverityCode == "High").ToList(), "Open" => _items.Where(x => x.StatusCode == "Open").ToList(), _ => [.. _items] };
     void SetFilter(string? f) { _filter = f; ApplyFilter(); }
-    void OnRowSelected(RowSelectEventArgs<ServiceIssueDto> args) { }
+    void OnRowSelected(RowSelectEventArgs<ServiceIssueDto> args) => OpenEdit(args.Data);
     void OpenCreate()
     {
+        _editId = null;
         _form = new() { IssueNumber = $"ISS-{DateTime.UtcNow:yyyyMMddHHmmss}" };
         _showForm = true;
     }
+    void OpenEdit(ServiceIssueDto item)
+    {
+        _editId = item.IssueId;
+        _form = new()
+        {
+            IssueNumber = item.IssueNumber,
+            Title = item.Title,
+            Description = item.Description,
+            SeverityCode = item.SeverityCode,
+            StatusCode = item.StatusCode,
+            ResolvedDate = item.ResolvedDate,
+            AccountIdText = item.AccountId?.ToString()
+        };
+        _showForm = true;
+    }
+    void ConfirmDelete(ServiceIssueDto item) { _deleteTarget = item; _showDelete = true; }
     async Task SaveAsync()
     {
         _saving = true;
         try
         {
-            await Api.CreateServiceIssueAsync(new()
-            {
-                TenantId = TenantId,
-                IssueNumber = _form.IssueNumber,
-                Title = _form.Title,
-                Description = _form.Description,
-                SeverityCode = _form.SeverityCode,
-                AccountId = string.IsNullOrWhiteSpace(_form.AccountIdText) ? null : Guid.Parse(_form.AccountIdText)
-            });
+            if (_editId.HasValue)
+                await Api.UpdateServiceIssueAsync(_editId.Value, new()
+                {
+                    IssueNumber = _form.IssueNumber,
+                    Title = _form.Title,
+                    Description = _form.Description,
+                    SeverityCode = _form.SeverityCode,
+                    StatusCode = _form.StatusCode,
+                    ResolvedDate = _form.ResolvedDate,
+                    AccountId = string.IsNullOrWhiteSpace(_form.AccountIdText) ? null : Guid.Parse(_form.AccountIdText),
+                    ModifiedByUserId = TenantAdminUserId
+                });
+            else
+                await Api.CreateServiceIssueAsync(new()
+                {
+                    TenantId = TenantId,
+                    IssueNumber = _form.IssueNumber,
+                    Title = _form.Title,
+                    Description = _form.Description,
+                    SeverityCode = _form.SeverityCode,
+                    AccountId = string.IsNullOrWhiteSpace(_form.AccountIdText) ? null : Guid.Parse(_form.AccountIdText)
+                });
             _showForm = false;
-            await _toast.ShowAsync(new() { Content = "Issue created", CssClass = "e-toast-success" });
+            await _toast.ShowAsync(new() { Content = _editId.HasValue ? "Issue updated" : "Issue created", CssClass = "e-toast-success" });
             await LoadAsync();
         }
         catch (Exception ex)
@@ -191,7 +264,37 @@
             _saving = false;
         }
     }
-    void ResetForm() => _form = new();
+    async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteServiceIssueAsync(_deleteTarget.IssueId, TenantAdminUserId);
+            _showDelete = false;
+            await _toast.ShowAsync(new() { Content = "Issue deleted", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+    void ResetForm() { _form = new(); _editId = null; }
+
+    async Task LoadAccountsAsync()
+    {
+        if (_accounts.Count > 0) return;
+        var result = await Api.SearchAccountsAsync(TenantId);
+        _accounts = (result?.Items ?? []).OrderBy(x => x.AccountName).Select(x => new AccountOption(x.AccountId.ToString(), x.AccountName)).ToList();
+    }
+
+    sealed record AccountOption(string Value, string Label);
+
     sealed class IssueForm
     {
         [Required, StringLength(50)]
@@ -203,7 +306,11 @@
         [Required, StringLength(50)]
         public string SeverityCode { get; set; } = "Medium";
 
-        [RegularExpression("^$|^[0-9a-fA-F-]{36}$", ErrorMessage = "Enter a valid Account Id.")]
+        [Required, StringLength(50)]
+        public string StatusCode { get; set; } = "Open";
+
+        public DateOnly? ResolvedDate { get; set; }
+
         public string? AccountIdText { get; set; }
 
         [StringLength(2000)]

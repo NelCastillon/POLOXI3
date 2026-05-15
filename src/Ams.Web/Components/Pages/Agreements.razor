@@ -2,6 +2,7 @@
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
+@using Ams.Application.Common.Dtos
 @using Ams.Application.Features.Operations
 
 <PageTitle>Agreements — Operations</PageTitle>
@@ -41,32 +42,43 @@
         <GridColumn Field="AccountId" HeaderText="Account Id" Width="250" />
         <GridColumn Field="StatusCode" HeaderText="Status" Width="120" />
         <GridColumn Field="CreatedDateUtc" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="180" />
+        <GridColumn HeaderText="Actions" Width="120" TextAlign="TextAlign.Center"><Template>@{ var r = (AgreementDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(r)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button></Template></GridColumn>
     </GridColumns>
 </SfGrid>
 </div>
 
 <SfDialog @bind-Visible="_showForm" Width="560px" IsModal="true" ShowCloseIcon="false">
     <DialogEvents Closed="ResetForm" />
-    <DialogContent><div class="um-modal-header"><i class="bi bi-file-earmark-check"></i><span>New Agreement</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div>
-    <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid">
+    <DialogContent><div class="um-modal-header"><i class="bi bi-file-earmark-check"></i><span>@(_editId.HasValue ? "Edit Agreement" : "New Agreement")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button></div>
+    <EditForm @key="_form" Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="ShowValidation"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid">
         <div class="um-field"><label>Agreement # <span class="text-danger">*</span></label><InputText @bind-Value="_form.AgreementNumber" class="um-input" /><ValidationMessage For="() => _form.AgreementNumber" class="text-danger" /></div>
-        <div class="um-field"><label>Account Id <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountIdText" class="um-input" /><ValidationMessage For="() => _form.AccountIdText" class="text-danger" /></div>
-        <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputText @bind-Value="_form.AgreementTypeCode" class="um-input" /><ValidationMessage For="() => _form.AgreementTypeCode" class="text-danger" /></div>
+        <div class="um-field"><label>Account Name <span class="text-danger">*</span></label><SfDropDownList TValue="string" TItem="AccountOption" DataSource="_accounts" @bind-Value="_form.AccountIdText" AllowFiltering="true" FilterType="Syncfusion.Blazor.DropDowns.FilterType.Contains" Placeholder="Search account name" CssClass="um-input"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>@if (_showValidation) { <ValidationMessage For="() => _form.AccountIdText" class="text-danger" /> }</div>
+        <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AgreementTypeCode" class="um-input">@foreach (var type in _taskTypes.Where(x => x.IsActive)) { <option value="@type.TaskTypeCode">@type.TaskTypeName</option> }</InputSelect><ValidationMessage For="() => _form.AgreementTypeCode" class="text-danger" /></div>
         <div class="um-field"><label>Start Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.StartDate" class="um-input" /><ValidationMessage For="() => _form.StartDate" class="text-danger" /></div>
         <div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="3" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
-    </div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Create</button></div></EditForm></DialogContent>
+    </div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editId.HasValue ? "Save Changes" : "Create")</button></div></EditForm></DialogContent>
 </SfDialog>
+@if (_showDelete && _deleteTarget is not null) { <div class="mt-modal-backdrop" @onclick="() => _showDelete = false"><div class="um-confirm-dialog mt-confirm" @onclick:stopPropagation="true"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash"></i></div><div class="um-confirm-title">Delete agreement?</div><div class="um-confirm-text">This will remove <strong>@_deleteTarget.AgreementNumber</strong>.</div><div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></div> }
 <SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
 <style>@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }</style>
 
 @code {
     static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    string? _searchTerm, _loadError; int? _filter; bool _loading, _saving, _showForm; List<AgreementDto> _items = [], _filtered = []; SfToast _toast = default!; AgreementForm _form = new();
+    static readonly Guid TenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+    string? _searchTerm, _loadError; int? _filter; bool _loading, _saving, _showForm, _showDelete, _showValidation; Guid? _editId; AgreementDto? _deleteTarget; List<AgreementDto> _items = [], _filtered = []; List<AccountOption> _accounts = []; List<TaskTypeDto> _taskTypes = []; SfToast _toast = default!; AgreementForm _form = new();
     protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new("Agreements", null)); await LoadAsync(); }
-    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchAgreementsAsync(TenantId, _searchTerm); _items = result?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load agreements: {ex.Message}"; } finally { _loading = false; } }
-    Task OnSearchAsync() => LoadAsync(); void ApplyFilter() => _filtered = _filter.HasValue ? _items.Where(x => x.StatusCode == _filter.Value).ToList() : [.. _items]; void SetFilter(int? filter) { _filter = filter; ApplyFilter(); } void OnRowSelected(RowSelectEventArgs<AgreementDto> args) { }
-    void OpenCreate() { _form = new() { AgreementNumber = $"AGR-{DateTime.UtcNow:yyyyMMddHHmmss}", StartDate = DateOnly.FromDateTime(DateTime.Today) }; _showForm = true; }
-    async Task SaveAsync() { _saving = true; try { await Api.CreateAgreementAsync(new() { TenantId = TenantId, AgreementNumber = _form.AgreementNumber, AccountId = Guid.Parse(_form.AccountIdText), AgreementTypeCode = _form.AgreementTypeCode, StartDate = _form.StartDate, Description = _form.Description }); _showForm = false; await _toast.ShowAsync(new() { Content = "Agreement created", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
-    void ResetForm() => _form = new();
-    sealed class AgreementForm { [Required, StringLength(50)] public string AgreementNumber { get; set; } = string.Empty; [Required, RegularExpression("^[0-9a-fA-F-]{36}$", ErrorMessage = "Enter a valid Account Id.")] public string AccountIdText { get; set; } = string.Empty; [Required, StringLength(50)] public string AgreementTypeCode { get; set; } = "Agreement"; [Required] public DateOnly StartDate { get; set; } = DateOnly.FromDateTime(DateTime.Today); [StringLength(1000)] public string? Description { get; set; } }
+    async Task LoadAsync() { _loading = true; _loadError = null; try { await LoadAccountsAsync(); await LoadTaskTypesAsync(); var result = await Api.SearchAgreementsAsync(TenantId, _searchTerm); _items = result?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load agreements: {ex.Message}"; } finally { _loading = false; } }
+    Task OnSearchAsync() => LoadAsync(); void ApplyFilter() => _filtered = _filter.HasValue ? _items.Where(x => x.StatusCode == _filter.Value).ToList() : [.. _items]; void SetFilter(int? filter) { _filter = filter; ApplyFilter(); } void OnRowSelected(RowSelectEventArgs<AgreementDto> args) => OpenEdit(args.Data);
+    void OpenCreate() { _editId = null; _showValidation = false; _form = new() { AgreementNumber = $"AGR-{DateTime.UtcNow:yyyyMMddHHmmss}", AgreementTypeCode = GetDefaultTaskTypeCode("Agreement"), StartDate = DateOnly.FromDateTime(DateTime.Today) }; _showForm = true; }
+    void OpenEdit(AgreementDto item) { _editId = item.AgreementId; _showValidation = false; _form = new() { AgreementNumber = item.AgreementNumber, AccountIdText = item.AccountId.ToString(), AgreementTypeCode = string.IsNullOrWhiteSpace(item.AgreementTypeCode) ? "Agreement" : item.AgreementTypeCode, StartDate = item.StartDate == default ? DateOnly.FromDateTime(item.CreatedDateUtc) : item.StartDate, Description = item.Description }; _showForm = true; }
+    void ConfirmDelete(AgreementDto item) { _deleteTarget = item; _showDelete = true; }
+    async Task SaveAsync() { _showValidation = true; _saving = true; try { if (_editId.HasValue) await Api.UpdateAgreementAsync(_editId.Value, new() { AgreementNumber = _form.AgreementNumber, AgreementTypeCode = _form.AgreementTypeCode, StartDate = _form.StartDate, Description = _form.Description, ModifiedByUserId = TenantAdminUserId }); else await Api.CreateAgreementAsync(new() { TenantId = TenantId, AgreementNumber = _form.AgreementNumber, AccountId = Guid.Parse(_form.AccountIdText), AgreementTypeCode = _form.AgreementTypeCode, StartDate = _form.StartDate, Description = _form.Description }); _showForm = false; await _toast.ShowAsync(new() { Content = _editId.HasValue ? "Agreement updated" : "Agreement created", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
+    async Task ExecuteDeleteAsync() { if (_deleteTarget is null) return; _saving = true; try { await Api.DeleteAgreementAsync(_deleteTarget.AgreementId, TenantAdminUserId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Agreement deleted", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
+    void ResetForm() { _form = new(); _editId = null; _showValidation = false; }
+    void ShowValidation() => _showValidation = true;
+    async Task LoadAccountsAsync() { if (_accounts.Count > 0) return; var result = await Api.SearchAccountsAsync(TenantId); _accounts = (result?.Items ?? []).OrderBy(x => x.AccountName).Select(x => new AccountOption(x.AccountId.ToString(), x.AccountName)).ToList(); }
+    async Task LoadTaskTypesAsync() { if (_taskTypes.Count > 0) return; var result = await Api.SearchTaskTypesAsync(TenantId, pageSize: 250); _taskTypes = (result?.Items ?? []).OrderBy(x => x.SortOrder).ThenBy(x => x.TaskTypeName).ToList(); }
+    string GetDefaultTaskTypeCode(string defaultCode) => _taskTypes.FirstOrDefault(x => x.TaskTypeCode == defaultCode)?.TaskTypeCode ?? defaultCode;
+    sealed record AccountOption(string Value, string Label);
+    sealed class AgreementForm { [Required, StringLength(50)] public string AgreementNumber { get; set; } = string.Empty; [Required(ErrorMessage = "Select an account.")] public string AccountIdText { get; set; } = string.Empty; [Required, StringLength(50)] public string AgreementTypeCode { get; set; } = "Agreement"; [Required] public DateOnly StartDate { get; set; } = DateOnly.FromDateTime(DateTime.Today); [StringLength(1000)] public string? Description { get; set; } }
 }

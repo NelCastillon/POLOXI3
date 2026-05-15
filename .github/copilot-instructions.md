@@ -39,6 +39,7 @@
 - CRM Configuration success toasts should use `CssClass = "e-toast-success"` and should reload data after successful create/update/delete.
 - CRM Configuration navigation entries belong under the `CRM Configuration` section in `NavSidebar.razor` with contextual Bootstrap icons and `/tenant/crm/...` routes.
 - For Producer and CSR pages, retrieve the user list and filter by the user's Role field to get Producer and CSR lists.
+- For `/workbench/producer`, the page is intentionally viewed and used as the Tenant Admin User; workbench data should remain scoped to the Tenant Admin User while avoiding mock/default/computed data.
 
 ## AMS CRM Workflow Hierarchy
 - The AMS CRM workflow hierarchy should be Lead (unqualified) → Account (organization/person master record) → Opportunity (revenue potential) → Submission (underwriting package) → Quotes.

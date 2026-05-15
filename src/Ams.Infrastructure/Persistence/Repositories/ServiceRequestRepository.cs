@@ -13,7 +13,7 @@ public sealed class ServiceRequestRepository : IServiceRequestRepository
 
     public async Task<ServiceRequestDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        const string sql = "SELECT ServiceRequestId, TenantId, AccountId, AgreementId, EngagementId, RequestNumber, RequestTypeCode, Subject, PriorityCode, AssignedToUserId, StatusCode, ResolvedDate, CreatedDateUtc FROM OPS.ServiceRequest WHERE ServiceRequestId = @Id AND IsDeleted = 0;";
+        const string sql = "SELECT ServiceRequestId, TenantId, AccountId, AgreementId, EngagementId, RequestNumber, RequestTypeCode, Subject, Description, PriorityCode, AssignedToUserId, StatusCode, ResolvedDate, CreatedDateUtc FROM OPS.ServiceRequest WHERE ServiceRequestId = @Id AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await cn.QuerySingleOrDefaultAsync<ServiceRequestDto>(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }
@@ -21,7 +21,7 @@ public sealed class ServiceRequestRepository : IServiceRequestRepository
     public async Task<PagedResult<ServiceRequestDto>> SearchAsync(Guid tenantId, Guid? accountId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-;WITH Cte AS (SELECT ServiceRequestId, TenantId, AccountId, AgreementId, EngagementId, RequestNumber, RequestTypeCode, Subject, PriorityCode, AssignedToUserId, StatusCode, ResolvedDate, CreatedDateUtc FROM OPS.ServiceRequest WHERE TenantId = @TenantId AND IsDeleted = 0 AND (@AccountId IS NULL OR AccountId = @AccountId) AND (@SearchTerm IS NULL OR @SearchTerm = '' OR Subject LIKE '%' + @SearchTerm + '%' OR RequestNumber LIKE '%' + @SearchTerm + '%'))
+;WITH Cte AS (SELECT ServiceRequestId, TenantId, AccountId, AgreementId, EngagementId, RequestNumber, RequestTypeCode, Subject, Description, PriorityCode, AssignedToUserId, StatusCode, ResolvedDate, CreatedDateUtc FROM OPS.ServiceRequest WHERE TenantId = @TenantId AND IsDeleted = 0 AND (@AccountId IS NULL OR AccountId = @AccountId) AND (@SearchTerm IS NULL OR @SearchTerm = '' OR Subject LIKE '%' + @SearchTerm + '%' OR RequestNumber LIKE '%' + @SearchTerm + '%'))
 SELECT * FROM Cte ORDER BY CreatedDateUtc DESC OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
 SELECT COUNT(1) FROM OPS.ServiceRequest WHERE TenantId = @TenantId AND IsDeleted = 0 AND (@AccountId IS NULL OR AccountId = @AccountId) AND (@SearchTerm IS NULL OR @SearchTerm = '' OR Subject LIKE '%' + @SearchTerm + '%' OR RequestNumber LIKE '%' + @SearchTerm + '%');";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -40,5 +40,39 @@ VALUES (@ServiceRequestId, @TenantId, @AccountId, @AgreementId, @EngagementId, @
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { ServiceRequestId = id, request.TenantId, request.AccountId, request.AgreementId, request.EngagementId, request.RequestNumber, request.RequestTypeCode, request.Subject, request.Description, request.PriorityCode, request.AssignedToUserId, request.CreatedByUserId }, cancellationToken: cancellationToken));
         return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateServiceRequestRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE OPS.ServiceRequest
+SET AccountId = @AccountId,
+    AgreementId = @AgreementId,
+    EngagementId = @EngagementId,
+    RequestNumber = @RequestNumber,
+    RequestTypeCode = @RequestTypeCode,
+    Subject = @Subject,
+    Description = @Description,
+    PriorityCode = @PriorityCode,
+    AssignedToUserId = @AssignedToUserId,
+    StatusCode = @StatusCode,
+    ResolvedDate = @ResolvedDate,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE ServiceRequestId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.AccountId, request.AgreementId, request.EngagementId, request.RequestNumber, request.RequestTypeCode, request.Subject, request.Description, request.PriorityCode, request.AssignedToUserId, request.StatusCode, request.ResolvedDate, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE OPS.ServiceRequest
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE ServiceRequestId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
     }
 }

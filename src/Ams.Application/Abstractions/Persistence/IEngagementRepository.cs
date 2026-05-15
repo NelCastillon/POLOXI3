@@ -10,4 +10,6 @@ public interface IEngagementRepository
     Task<PagedResult<EngagementDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
     Task<PagedResult<EngagementTaskDto>> SearchTasksAsync(Guid tenantId, Guid? engagementId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
     Task<Guid> CreateAsync(CreateEngagementRequest request, CancellationToken cancellationToken = default);
+    Task UpdateAsync(Guid id, UpdateEngagementRequest request, CancellationToken cancellationToken = default);
+    Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default);
 }

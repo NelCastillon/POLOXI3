@@ -13,4 +13,6 @@ public sealed class ServiceIssueService : IServiceIssueService
     public Task<ServiceIssueDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => _repository.GetByIdAsync(id, cancellationToken);
     public Task<PagedResult<ServiceIssueDto>> SearchAsync(Guid tenantId, Guid? engagementId, Guid? accountId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => _repository.SearchAsync(tenantId, engagementId, accountId, searchTerm, pageNumber, pageSize, cancellationToken);
     public Task<Guid> CreateAsync(CreateServiceIssueRequest request, CancellationToken cancellationToken = default) => _repository.CreateAsync(request, cancellationToken);
+    public Task UpdateAsync(Guid id, UpdateServiceIssueRequest request, CancellationToken cancellationToken = default) => _repository.UpdateAsync(id, request, cancellationToken);
+    public Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => _repository.DeleteAsync(id, modifiedByUserId, cancellationToken);
 }

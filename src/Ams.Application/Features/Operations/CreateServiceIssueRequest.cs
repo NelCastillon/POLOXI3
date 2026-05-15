@@ -18,3 +18,28 @@ public sealed class CreateServiceIssueRequest
     public Guid? AssignedToUserId { get; set; }
     public Guid? CreatedByUserId { get; set; }
 }
+
+public sealed class UpdateServiceIssueRequest
+{
+    public Guid? AccountId { get; set; }
+    public Guid? EngagementId { get; set; }
+
+    [Required, StringLength(50)]
+    public string IssueNumber { get; set; } = string.Empty;
+
+    [Required, StringLength(200)]
+    public string Title { get; set; } = string.Empty;
+
+    [StringLength(2000)]
+    public string? Description { get; set; }
+
+    [Required, StringLength(50)]
+    public string SeverityCode { get; set; } = "Medium";
+
+    [Required, StringLength(50)]
+    public string StatusCode { get; set; } = "Open";
+
+    public Guid? AssignedToUserId { get; set; }
+    public DateOnly? ResolvedDate { get; set; }
+    public Guid? ModifiedByUserId { get; set; }
+}

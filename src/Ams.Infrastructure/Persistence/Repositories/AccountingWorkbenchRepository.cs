@@ -71,7 +71,14 @@ SELECT
     TRY_CONVERT(DATETIME2, JSON_VALUE(pr.JsonData, '$.completedAt')) AS CompletedAt,
     COALESCE(TRY_CONVERT(INT, JSON_VALUE(pr.JsonData, '$.ageDays')), DATEDIFF(DAY, pr.CreatedDateUtc, SYSUTCDATETIME())) AS AgeDays,
     COALESCE(JSON_VALUE(pr.JsonData, '$.notes'), '') AS Notes,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.detailUrl'), '/workbench/accounting') AS DetailUrl
+    CASE JSON_VALUE(pr.JsonData, '$.queueCode')
+        WHEN 'reconciliation' THEN '/billing/reconciliation'
+        WHEN 'unapplied-payments' THEN '/billing/payments'
+        WHEN 'commission-adj' THEN '/commissions/exceptions'
+        WHEN 'direct-bill' THEN '/billing/reconciliation'
+        WHEN 'month-end' THEN '/finance/accounting-periods'
+        ELSE COALESCE(NULLIF(JSON_VALUE(pr.JsonData, '$.detailUrl'), ''), '/workbench/accounting')
+    END AS DetailUrl
 FROM Portal.AdminRecord pr
 WHERE pr.TenantId = @TenantId
   AND pr.Kind = 'AccountingWorkbench'
