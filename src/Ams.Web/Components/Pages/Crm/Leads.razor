@@ -3,8 +3,11 @@
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Common.Validation
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
+@inject LeadScoringRealtimeClient LeadScoringRealtime
+@implements IAsyncDisposable
 
 <PageTitle>Leads</PageTitle>
 
@@ -776,156 +779,184 @@
 </SfDialog>
 
 <!-- ══════════════════════════════════════════════════════════
-     DIALOG — Assign Owner
+     MODAL — Assign Owner
      ══════════════════════════════════════════════════════════ -->
-<SfDialog @bind-Visible="_showAssign" Width="420px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="ld-dlg-hdr"><i class="bi bi-person-check" aria-hidden="true"></i> Assign Owner</span></Header>
-        <Content>
-            <div class="ld-assign-body">
-                <p class="ld-assign-info">Assign <strong>@_selected.Count lead(s)</strong> to:</p>
-                <SfDropDownList TValue="string" TItem="LabelValue"
-                                DataSource="_ownerOptions"
-                                Placeholder="Select owner…"
-                                Width="100%"
-                                @bind-Value="_assignTarget">
-                    <DropDownListFieldSettings Value="Value" Text="Label" />
-                </SfDropDownList>
-                <label class="ld-toggle-label" style="margin-top:.75rem">
-                    <input type="checkbox" @bind="_assignNotify" />
-                    Notify owner by email
-                </label>
+@if (_showAssign)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="() => _showAssign = false">
+        <div class="mt-modal ld-enterprise-modal" role="dialog" aria-modal="true" aria-labelledby="assignOwnerTitle" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-person-check" aria-hidden="true"></i>
+                <span id="assignOwnerTitle">Assign Owner</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showAssign = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="ld-dlg-footer">
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field um-field--full">
+                        <p class="ld-assign-info">Assign <strong>@_selected.Count lead(s)</strong> to:</p>
+                    </div>
+                    <div class="um-field um-field--full">
+                        <label>Owner</label>
+                        <InputSelect class="um-input" @bind-Value="_assignTarget">
+                            <option value="">Select owner…</option>
+                            @foreach (var owner in _ownerOptions)
+                            {
+                                <option value="@owner.Value">@owner.Label</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <div class="um-field um-field--full um-field--checkbox">
+                        <label><InputCheckbox @bind-Value="_assignNotify" /> Notify owner by email</label>
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
                 <button class="um-btn um-btn-ghost" @onclick="() => _showAssign = false">Cancel</button>
                 <button class="um-btn um-btn-primary" @onclick="CommitAssignAsync" disabled="@string.IsNullOrEmpty(_assignTarget)">
                     <i class="bi bi-check-lg" aria-hidden="true"></i> Assign
                 </button>
             </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
 <!-- ══════════════════════════════════════════════════════════
-     DIALOG — Merge Duplicates
+     MODAL — Merge Duplicates
      ══════════════════════════════════════════════════════════ -->
-<SfDialog @bind-Visible="_showMerge" Width="600px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="ld-dlg-hdr"><i class="bi bi-intersect" aria-hidden="true"></i> Merge Duplicates</span></Header>
-        <Content>
-            <div class="ld-merge-body">
-                @if (_selected.Count < 2)
-                {
-                    <div class="ld-merge-warn">
-                        <i class="bi bi-info-circle" aria-hidden="true"></i>
-                        Select at least 2 leads in the grid before merging.
-                    </div>
-                }
-                else
-                {
-                    <p class="ld-merge-intro">
-                        Merging <strong>@_selected.Count leads</strong>. Choose the <em>master</em> record — all other records will be de-duplicated into it.
-                    </p>
-                    <div class="ld-merge-list">
-                        @foreach (var r in _selected)
+@if (_showMerge)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="() => _showMerge = false">
+        <div class="mt-modal ld-enterprise-modal" role="dialog" aria-modal="true" aria-labelledby="mergeLeadsTitle" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-intersect" aria-hidden="true"></i>
+                <span id="mergeLeadsTitle">Merge Duplicates</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showMerge = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field um-field--full">
+                        @if (_selected.Count < 2)
                         {
-                            <label class="ld-merge-option @(_mergeTarget == r.LeadId.ToString() ? "ld-merge-option--active" : "")">
-                                <input type="radio" name="merge-target" value="@r.LeadId"
-                                       @onchange="() => _mergeTarget = r.LeadId.ToString()" />
-                                <div class="ld-merge-card">
-                                    <div class="ld-merge-name">@r.FullName</div>
-                                    <div class="ld-merge-meta">@r.CompanyName · @r.Email · @r.Source</div>
-                                    <div class="ld-merge-meta">Score: @r.Score · Stage: @r.Stage · Owner: @r.Owner</div>
-                                </div>
-                            </label>
+                            <div class="ld-merge-warn">
+                                <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                Select at least 2 leads in the grid before merging.
+                            </div>
+                        }
+                        else
+                        {
+                            <p class="ld-merge-intro">
+                                Merging <strong>@_selected.Count leads</strong>. Choose the <em>master</em> record — all other records will be de-duplicated into it.
+                            </p>
+                            <div class="ld-merge-list">
+                                @foreach (var r in _selected)
+                                {
+                                    <label class="ld-merge-option @(_mergeTarget == r.LeadId.ToString() ? "ld-merge-option--active" : "")">
+                                        <input type="radio" name="merge-target" value="@r.LeadId" @onchange="() => _mergeTarget = r.LeadId.ToString()" />
+                                        <div class="ld-merge-card">
+                                            <div class="ld-merge-name">@r.FullName</div>
+                                            <div class="ld-merge-meta">@r.CompanyName · @r.Email · @r.Source</div>
+                                            <div class="ld-merge-meta">Score: @r.Score · Stage: @r.Stage · Owner: @r.Owner</div>
+                                        </div>
+                                    </label>
+                                }
+                            </div>
                         }
                     </div>
-                }
+                </div>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="ld-dlg-footer">
+            <div class="um-modal-footer">
                 <button class="um-btn um-btn-ghost" @onclick="() => _showMerge = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="CommitMergeAsync"
-                        disabled="@(string.IsNullOrEmpty(_mergeTarget) || _selected.Count < 2)">
+                <button class="um-btn um-btn-danger" @onclick="CommitMergeAsync" disabled="@(string.IsNullOrEmpty(_mergeTarget) || _selected.Count < 2)">
                     <i class="bi bi-intersect" aria-hidden="true"></i> Merge into Master
                 </button>
             </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
 <!-- ══════════════════════════════════════════════════════════
-     DIALOG — Convert to Opportunity  (confirmation)
+     MODAL — Convert to Opportunity
      ══════════════════════════════════════════════════════════ -->
-<SfDialog @bind-Visible="_showConvert" Width="480px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="ld-dlg-hdr"><i class="bi bi-trophy" aria-hidden="true"></i> Convert to Opportunity</span></Header>
-        <Content>
-            <div class="ld-convert-body">
-                <p>Convert <strong>@_selected.Count lead(s)</strong> to opportunities?</p>
-                <ul class="ld-convert-list">
-                    @foreach (var r in _selected.Take(5))
-                    {
-                        <li>@r.FullName — @r.CompanyName (@r.EstPremium.ToString("C0") est.)</li>
-                    }
-                    @if (_selected.Count > 5) { <li>… and @(_selected.Count - 5) more</li> }
-                </ul>
-                <label class="ld-toggle-label">
-                    <input type="checkbox" @bind="_convertKeepLead" />
-                    Keep lead record after conversion
-                </label>
-                <label class="ld-toggle-label">
-                    <input type="checkbox" @bind="_convertCreateActivity" />
-                    Create follow-up activity on new opportunity
-                </label>
+@if (_showConvert)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="() => _showConvert = false">
+        <div class="mt-modal ld-enterprise-modal" role="dialog" aria-modal="true" aria-labelledby="convertLeadsTitle" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-trophy" aria-hidden="true"></i>
+                <span id="convertLeadsTitle">Convert to Opportunity</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showConvert = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="ld-dlg-footer">
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field um-field--full">
+                        <p>Convert <strong>@_selected.Count lead(s)</strong> to opportunities?</p>
+                        <ul class="ld-convert-list">
+                            @foreach (var r in _selected.Take(5))
+                            {
+                                <li>@r.FullName — @r.CompanyName (@r.EstPremium.ToString("C0") est.)</li>
+                            }
+                            @if (_selected.Count > 5) { <li>… and @(_selected.Count - 5) more</li> }
+                        </ul>
+                    </div>
+                    <div class="um-field um-field--full um-field--checkbox">
+                        <label><InputCheckbox @bind-Value="_convertKeepLead" /> Keep lead record after conversion</label>
+                    </div>
+                    <div class="um-field um-field--full um-field--checkbox">
+                        <label><InputCheckbox @bind-Value="_convertCreateActivity" /> Create follow-up activity on new opportunity</label>
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
                 <button class="um-btn um-btn-ghost" @onclick="() => _showConvert = false">Cancel</button>
                 <button class="um-btn um-btn-primary" @onclick="CommitConvertAsync">
                     <i class="bi bi-check-lg" aria-hidden="true"></i> Convert
                 </button>
             </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
 <!-- ══════════════════════════════════════════════════════════
-     DIALOG — Enroll Campaign
+     MODAL — Enroll Campaign
      ══════════════════════════════════════════════════════════ -->
-<SfDialog @bind-Visible="_showCampaign" Width="480px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="ld-dlg-hdr"><i class="bi bi-megaphone" aria-hidden="true"></i> Enroll in Campaign</span></Header>
-        <Content>
-            <div class="ld-campaign-body">
-                <p>Enroll <strong>@_selected.Count lead(s)</strong> into a campaign:</p>
-                <SfDropDownList TValue="string" TItem="LabelValue"
-                                DataSource="_campaignOptions"
-                                Placeholder="Select campaign…"
-                                Width="100%"
-                                @bind-Value="_campaignTarget">
-                    <DropDownListFieldSettings Value="Value" Text="Label" />
-                </SfDropDownList>
-                <label class="ld-toggle-label" style="margin-top:.75rem">
-                    <input type="checkbox" @bind="_campaignSendImmediately" />
-                    Send first campaign email immediately
-                </label>
+@if (_showCampaign)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="() => _showCampaign = false">
+        <div class="mt-modal ld-enterprise-modal" role="dialog" aria-modal="true" aria-labelledby="campaignLeadsTitle" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-megaphone" aria-hidden="true"></i>
+                <span id="campaignLeadsTitle">Enroll in Campaign</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showCampaign = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="ld-dlg-footer">
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field um-field--full">
+                        <p>Enroll <strong>@_selected.Count lead(s)</strong> into a campaign:</p>
+                    </div>
+                    <div class="um-field um-field--full">
+                        <label>Campaign</label>
+                        <InputSelect class="um-input" @bind-Value="_campaignTarget">
+                            <option value="">Select campaign…</option>
+                            @foreach (var campaign in _campaignOptions)
+                            {
+                                <option value="@campaign.Value">@campaign.Label</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <div class="um-field um-field--full um-field--checkbox">
+                        <label><InputCheckbox @bind-Value="_campaignSendImmediately" /> Send first campaign email immediately</label>
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
                 <button class="um-btn um-btn-ghost" @onclick="() => _showCampaign = false">Cancel</button>
                 <button class="um-btn um-btn-primary" @onclick="CommitCampaignAsync" disabled="@string.IsNullOrEmpty(_campaignTarget)">
                     <i class="bi bi-check-lg" aria-hidden="true"></i> Enroll
                 </button>
             </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
 <!-- ── Row context menu ───────────────────────────────────────────────────── -->
 @if (_menuLead is not null)
@@ -963,7 +994,11 @@
 </SfToast>
 
 @code {
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    Guid TenantId { get; set; }
+    Guid DevTenantId { get; set; }
+    Guid DevUserId { get; set; }
+    private Guid _tenantAdminUserId;
+    private Guid _tenantId;
     private SfToast?    _toast;
     private SfGrid<LeadRow>? _grid;
     private SfUploader? _uploader;
@@ -971,6 +1006,7 @@
     // ── View state ────────────────────────────────────────────────────────────
     private string _view   = "grid";
     private bool   _loading = false;
+    private bool   _hasLoaded = false;
 
     private record ViewDef(string Id, string Label, string Icon);
     private static readonly List<ViewDef> _views =
@@ -1035,7 +1071,7 @@
     private bool   _showAdd       = false;
     private bool   _savingLead    = false;
     private Guid   _editingId     = Guid.Empty;
-    private static readonly Guid TenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+    private Guid TenantAdminUserId { get; set; }
 
     // Import
     private List<LeadImportRow> _importPreview = [];
@@ -1090,8 +1126,69 @@
     // ── Lifecycle ─────────────────────────────────────────────────────────────
     protected override async Task OnInitializedAsync()
     {
+        Nav.LocationChanged += OnLocationChanged;
+        await ResolveCurrentUserContextAsync();
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Leads", "/crm/leads"));
         await LoadAsync();
+        _ = StartLeadScoringRealtimeAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _hasLoaded)
+        {
+            return;
+        }
+
+        await ResolveCurrentUserContextAsync();
+        await LoadAsync();
+        StateHasChanged();
+    }
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs args)
+    {
+        var path = Nav.ToBaseRelativePath(args.Location).Split('?', '#')[0].Trim('/');
+        if (!string.Equals(path, "crm/leads", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _ = InvokeAsync(async () =>
+        {
+            await ResolveCurrentUserContextAsync();
+            await LoadAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task OnLeadScoresChangedAsync(Guid tenantId)
+    {
+        await InvokeAsync(async () =>
+        {
+            await LoadAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task StartLeadScoringRealtimeAsync()
+    {
+        try
+        {
+            if (_tenantId != Guid.Empty)
+            {
+                await LeadScoringRealtime.StartAsync(_tenantId, OnLeadScoresChangedAsync);
+            }
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Real-time lead scoring updates are unavailable: {ex.Message}", "e-toast-warning");
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+        await LeadScoringRealtime.DisposeAsync();
     }
 
     private async Task LoadAsync()
@@ -1099,6 +1196,17 @@
         _loading = true; StateHasChanged();
         try
         {
+            if (_tenantId == Guid.Empty)
+            {
+                await ResolveCurrentUserContextAsync();
+            }
+
+            if (_tenantId == Guid.Empty)
+            {
+                _hasLoaded = false;
+                return;
+            }
+
             var leadsTask = Api.SearchLeadsAsync(_tenantId);
             var usersTask = Api.SearchUsersAsync(_tenantId);
             await Task.WhenAll(leadsTask, usersTask);
@@ -1116,11 +1224,13 @@
             var response = leadsTask.Result;
             _leads = response?.Items?.Select(l => MapToLeadRow(l, ownerLookup)).ToList() ?? [];
             RebuildDerived();
+            _hasLoaded = true;
         }
         catch (Exception ex)
         {
             await ShowToastAsync($"Error loading leads: {ex.Message}", "e-toast-danger");
             _leads = [];
+            _hasLoaded = false;
         }
         finally { _loading = false; }
     }
@@ -1675,5 +1785,16 @@
 
         [StringLength(1000, ErrorMessage = "Notes cannot exceed 1000 characters")]
         public string Notes { get; set; } = string.Empty;
+    }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        DevTenantId = context.TenantId;
+        DevUserId = context.UserId;
     }
 }

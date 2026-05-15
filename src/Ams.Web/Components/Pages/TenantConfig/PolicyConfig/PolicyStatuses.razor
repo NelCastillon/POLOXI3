@@ -2,6 +2,7 @@
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Features.PolicyConfig
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>Policy Statuses — Policy Configuration</PageTitle>
@@ -47,7 +48,12 @@
 <style>.validation-message{display:flex;align-items:center;gap:.45rem;margin-top:.55rem;color:#dc3545!important;font-size:.875rem;font-weight:700}.validation-message::before{content:"!";display:inline-flex;align-items:center;justify-content:center;width:1rem;height:1rem;min-width:1rem;flex-shrink:0;border-radius:999px;color:#fff;background:linear-gradient(135deg,#ef4444,#b91c1c);font-size:.7rem;font-weight:800}.um-input.modified.invalid{border-color:#dc3545!important;box-shadow:0 0 0 .18rem rgba(220,53,69,.14)!important}</style>
 
 @code {
-    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    Guid TenantAdminUserId { get; set; }
+    Guid DevTenantId { get; set; }
+    Guid DevUserId { get; set; }
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    Guid TenantId { get; set; }
     static readonly string[] _statusTypes = ["Active", "Pending", "Cancelled", "Expired", "Renewed"];
     List<PolicyStatusDto> _items = [];
     List<PolicyStatusDto> _filtered = [];
@@ -59,7 +65,7 @@
     PolicyStatusDto? _deleteTarget;
     SfToast _toast = default!;
     StatusFormModel _form = new();
-    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policy Config", null), new("Policy Statuses", null)); await LoadAsync(); }
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policy Config", null), new("Policy Statuses", null)); await LoadAsync(); }
     async Task LoadAsync() { _loading = true; _loadError = null; try { var r = await Api.SearchPolicyStatusesAsync(TenantId, _search, pageSize: 200); _items = r?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = ex.Message; } finally { _loading = false; } }
     void SetFilter(string filter) { _activeFilter = filter; ApplyFilter(); }
     void ApplyFilter() => _filtered = _activeFilter switch { "active" => _items.Where(x => x.IsActive).ToList(), "inactive" => _items.Where(x => !x.IsActive).ToList(), "default" => _items.Where(x => x.IsDefault).ToList(), _ => [.. _items] };
@@ -72,4 +78,15 @@
     async Task ExecuteDeleteAsync() { _saving = true; try { await Api.DeletePolicyStatusAsync(_deleteTarget!.PolicyStatusId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Deleted successfully", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
     void ResetForm() { _form = new(); _editId = null; }
     sealed class StatusFormModel { [Required, StringLength(50)] public string StatusCode { get; set; } = string.Empty; [Required, StringLength(100)] public string StatusName { get; set; } = string.Empty; [StringLength(50)] public string? StatusType { get; set; } [StringLength(500)] public string? Description { get; set; } [StringLength(20)] public string? ColorHex { get; set; } public bool IsDefault { get; set; } [Range(0, 9999)] public int SortOrder { get; set; } public bool IsActive { get; set; } = true; }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        DevTenantId = context.TenantId;
+        DevUserId = context.UserId;
+    }
 }

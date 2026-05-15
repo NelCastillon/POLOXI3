@@ -41,6 +41,7 @@ public static class ServiceCollectionExtensions
 
         // ── New repositories ─────────────────────────────────────────
         services.AddScoped<ITenantRepository, TenantRepository>();
+        services.AddScoped<IAuthRepository, AuthRepository>();
         services.AddScoped<IBranchRepository, BranchRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IRoleRepository, RoleRepository>();
@@ -84,6 +85,7 @@ public static class ServiceCollectionExtensions
 
         // ── New services ─────────────────────────────────────────────
         services.AddScoped<ITenantService, TenantService>();
+        services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IBranchService, BranchService>();
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<IRoleService, RoleService>();

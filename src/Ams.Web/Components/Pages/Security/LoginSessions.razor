@@ -2,6 +2,7 @@
 @namespace Ams.Web.Components.Pages.SecurityAdmin
 @using Ams.Application.Common.Dtos
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
 
@@ -114,7 +115,12 @@
 </div>
 
 @code {
-    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    Guid TenantAdminUserId { get; set; }
+    Guid DevTenantId { get; set; }
+    Guid DevUserId { get; set; }
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    Guid TenantId { get; set; }
     string _search = string.Empty;
     string _statusFilter = string.Empty;
     string _deviceFilter = string.Empty;
@@ -140,7 +146,7 @@
     IEnumerable<UserSessionDto> Filtered => _sessions.Where(x => (string.IsNullOrEmpty(_statusFilter) || Status(x) == _statusFilter) && (string.IsNullOrEmpty(_deviceFilter) || string.Equals(x.DeviceType, _deviceFilter, StringComparison.OrdinalIgnoreCase)) && MatchesDate(x.LoginDateUtc) && MatchesKpi(x) && (string.IsNullOrEmpty(_search) || (x.UserFullName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (x.UserEmail?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (x.IpAddress?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (x.UserAgent?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || LocationFor(x).Contains(_search, StringComparison.OrdinalIgnoreCase))).OrderByDescending(x => x.LoginDateUtc);
     IEnumerable<Group<UserSessionDto>> SessionGroups => Filtered.GroupBy(x => x.LoginDateUtc.ToLocalTime().Date).OrderByDescending(g => g.Key).Select(g => new Group<UserSessionDto>(FormatDateLabel(g.Key), g.ToList()));
 
-    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Users & Security", "/tenant/security/users"), new("Login Sessions", "/tenant/security/sessions")); await LoadAsync(); }
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Users & Security", "/tenant/security/users"), new("Login Sessions", "/tenant/security/sessions")); await LoadAsync(); }
     async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchUserSessionsAsync(TenantId, searchTerm: _search); _sessions = result?.Items.ToList() ?? []; _selected = _selected is null ? Filtered.FirstOrDefault() : Filtered.FirstOrDefault(x => x.SessionId == _selected.SessionId) ?? Filtered.FirstOrDefault(); } catch (Exception ex) { _loadError = $"Failed to load login sessions: {ex.Message}"; } finally { _loading = false; } }
     void Select(UserSessionDto item) => _selected = item;
     void ResetFilters() { _search = string.Empty; _statusFilter = string.Empty; _deviceFilter = string.Empty; _activeFilter = string.Empty; _dateFilter = 30; }
@@ -166,4 +172,15 @@
     RenderFragment KpiCard(string icon, string label, string value, string title, string css, string? filter) => @<button class="ss-kpi-card @css @(_activeFilter == (filter ?? string.Empty) ? "ss-kpi-active" : "")" title="@title" @onclick="() => SetFilter(filter)"><div class="ss-kpi-val">@value</div><div class="ss-kpi-lbl"><i class="bi @icon"></i> @label</div></button>;
     sealed record Group<T>(string Label, List<T> Items);
     sealed record KpiItem(string Name, int Count);
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        DevTenantId = context.TenantId;
+        DevUserId = context.UserId;
+    }
 }

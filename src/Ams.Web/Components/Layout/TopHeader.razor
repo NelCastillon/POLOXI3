@@ -1,7 +1,10 @@
 @using Microsoft.AspNetCore.Hosting
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
 @inject ShellStateService Shell
 @inject NotificationService Notifs
 @inject IWebHostEnvironment HostEnv
+@inject AuthenticationStateProvider AuthenticationStateProvider
 @implements IDisposable
 
 <header class="ams-header" role="banner">
@@ -50,7 +53,7 @@
                 title="Switch tenant"
                 aria-label="Tenant: Contoso Corp — click to switch">
             <i class="bi bi-building" aria-hidden="true"></i>
-            <span class="hdr-tenant-name">Contoso Corp</span>
+            <span class="hdr-tenant-name">@_tenantName</span>
             <i class="bi bi-chevron-down" aria-hidden="true"></i>
         </button>
 
@@ -167,19 +170,19 @@
                     aria-haspopup="menu"
                     aria-expanded="@_profileOpen.ToString().ToLower()"
                     aria-label="User menu">
-                <div class="hdr-avatar" aria-hidden="true">AU</div>
+                <div class="hdr-avatar" aria-hidden="true">@_initials</div>
                 <div class="hdr-user-meta">
-                    <span class="hdr-user-name">Admin User</span>
-                    <span class="hdr-user-role">System Admin</span>
+                    <span class="hdr-user-name">@_userName</span>
+                    <span class="hdr-user-role">@_roleLabel</span>
                 </div>
                 <i class="bi bi-chevron-down hdr-caret" aria-hidden="true"></i>
             </button>
             <ul class="hdr-drop hdr-drop-profile" role="menu" aria-label="User menu">
                 <li class="hdr-profile-hd">
-                    <div class="hdr-avatar hdr-avatar-lg" aria-hidden="true">AU</div>
+                    <div class="hdr-avatar hdr-avatar-lg" aria-hidden="true">@_initials</div>
                     <div>
-                        <div class="hdr-user-name">Admin User</div>
-                        <div class="hdr-user-email">admin@enterprise.com</div>
+                        <div class="hdr-user-name">@_userName</div>
+                        <div class="hdr-user-email">@_userEmail</div>
                     </div>
                 </li>
                 <li class="hdr-divider" role="separator"></li>
@@ -228,7 +231,7 @@
         new("My Profile",   "bi bi-person",          "/profile"),
         new("Preferences",  "bi bi-sliders",         "/preferences"),
         new("Help & Docs",  "bi bi-question-circle", "/help"),
-        new("Sign Out",     "bi bi-box-arrow-right", "/logout", Danger: true),
+        new("Sign Out",     "bi bi-box-arrow-right", "/auth/sign-out", Danger: true),
     ];
 
     // ── State ─────────────────────────────────────────────────
@@ -237,6 +240,11 @@
     private bool   _profileOpen;
     private string _envKey   = "dev";
     private string _envLabel = "DEV";
+    private string _tenantName = "Tenant";
+    private string _userName = "User";
+    private string _userEmail = string.Empty;
+    private string _roleLabel = "Authenticated";
+    private string _initials = "U";
 
     // ── Lifecycle ─────────────────────────────────────────────
     protected override void OnInitialized()
@@ -250,6 +258,29 @@
             "PRODUCTION"  => ("prod", "PROD"),
             var e         => (e.ToLower(), e),
         };
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            return;
+        }
+
+        _tenantName = user.FindFirst("tenant_name")?.Value ?? _tenantName;
+        _userName = user.Identity?.Name ?? user.FindFirst(ClaimTypes.Name)?.Value ?? _userName;
+        _userEmail = user.FindFirst(ClaimTypes.Email)?.Value ?? user.FindFirst("user_name")?.Value ?? string.Empty;
+        _roleLabel = user.FindAll(ClaimTypes.Role).Select(c => c.Value).FirstOrDefault() ?? _roleLabel;
+        _initials = BuildInitials(_userName);
+    }
+
+    private static string BuildInitials(string value)
+    {
+        var parts = value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : value.Length > 0 ? value[..1].ToUpperInvariant() : "U";
     }
 
     private void OnShellChange() => InvokeAsync(StateHasChanged);

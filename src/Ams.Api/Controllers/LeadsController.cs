@@ -1,6 +1,8 @@
+using Ams.Api.Hubs;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Features.Leads;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 
 namespace Ams.Api.Controllers;
 
@@ -9,10 +11,12 @@ namespace Ams.Api.Controllers;
 public sealed class LeadsController : ControllerBase
 {
     private readonly ILeadService _service;
+    private readonly IHubContext<LeadScoringHub> _leadScoringHub;
 
-    public LeadsController(ILeadService service)
+    public LeadsController(ILeadService service, IHubContext<LeadScoringHub> leadScoringHub)
     {
         _service = service;
+        _leadScoringHub = leadScoringHub;
     }
 
 
@@ -27,6 +31,20 @@ public sealed class LeadsController : ControllerBase
     public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
     {
         var item = await _service.GetByIdAsync(id, cancellationToken);
+        return item is null ? NotFound() : Ok(item);
+    }
+
+    [HttpGet("{id:guid}/score-factors")]
+    public async Task<IActionResult> GetScoreFactors(Guid id, CancellationToken cancellationToken)
+    {
+        var items = await _service.GetScoreFactorsAsync(id, cancellationToken);
+        return Ok(items);
+    }
+
+    [HttpGet("{id:guid}/engagement")]
+    public async Task<IActionResult> GetEngagementSummary(Guid id, CancellationToken cancellationToken)
+    {
+        var item = await _service.GetEngagementSummaryAsync(id, cancellationToken);
         return item is null ? NotFound() : Ok(item);
     }
 
@@ -186,4 +204,67 @@ public sealed class LeadsController : ControllerBase
         var rules = await _service.GetScoringRulesAsync(tenantId, cancellationToken);
         return Ok(rules);
     }
+
+    [HttpPost("scoring-rules")]
+    public async Task<IActionResult> CreateScoringRule([FromBody] CreateLeadScoringRuleRequest request, CancellationToken cancellationToken)
+    {
+        var id = await _service.CreateScoringRuleAsync(request, cancellationToken);
+        await NotifyLeadScoresChangedAsync(request.TenantId, cancellationToken);
+        return CreatedAtAction(nameof(GetScoringRules), new { tenantId = request.TenantId }, id);
+    }
+
+    [HttpPut("scoring-rules/{scoringRuleId:guid}")]
+    public async Task<IActionResult> UpdateScoringRule(Guid scoringRuleId, [FromBody] UpdateLeadScoringRuleRequest request, CancellationToken cancellationToken)
+    {
+        request.ScoringRuleId = scoringRuleId;
+        await _service.UpdateScoringRuleAsync(request, cancellationToken);
+        await NotifyLeadScoresChangedAsync(request.TenantId, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("scoring-rules/{scoringRuleId:guid}")]
+    public async Task<IActionResult> DeleteScoringRule(Guid scoringRuleId, CancellationToken cancellationToken)
+    {
+        var tenantId = await _service.GetScoringRuleTenantIdAsync(scoringRuleId, cancellationToken);
+        await _service.DeleteScoringRuleAsync(scoringRuleId, cancellationToken);
+        if (tenantId.HasValue)
+        {
+            await NotifyLeadScoresChangedAsync(tenantId.Value, cancellationToken);
+        }
+        return NoContent();
+    }
+
+    [HttpGet("engagement-factors")]
+    public async Task<IActionResult> GetEngagementFactors([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        var factors = await _service.GetEngagementFactorsAsync(tenantId, cancellationToken);
+        return Ok(factors);
+    }
+
+    [HttpPost("engagement-factors")]
+    public async Task<IActionResult> CreateEngagementFactor([FromBody] CreateLeadEngagementFactorRequest request, CancellationToken cancellationToken)
+    {
+        var id = await _service.CreateEngagementFactorAsync(request, cancellationToken);
+        await NotifyLeadScoresChangedAsync(request.TenantId, cancellationToken);
+        return CreatedAtAction(nameof(GetEngagementFactors), new { tenantId = request.TenantId }, id);
+    }
+
+    [HttpPut("engagement-factors/{engagementFactorId:guid}")]
+    public async Task<IActionResult> UpdateEngagementFactor(Guid engagementFactorId, [FromBody] UpdateLeadEngagementFactorRequest request, CancellationToken cancellationToken)
+    {
+        request.EngagementFactorId = engagementFactorId;
+        await _service.UpdateEngagementFactorAsync(request, cancellationToken);
+        await NotifyLeadScoresChangedAsync(request.TenantId, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("engagement-factors/{engagementFactorId:guid}")]
+    public async Task<IActionResult> DeleteEngagementFactor(Guid engagementFactorId, CancellationToken cancellationToken)
+    {
+        await _service.DeleteEngagementFactorAsync(engagementFactorId, cancellationToken);
+        return NoContent();
+    }
+
+    private Task NotifyLeadScoresChangedAsync(Guid tenantId, CancellationToken cancellationToken)
+        => _leadScoringHub.Clients.Group(LeadScoringHub.TenantGroup(tenantId)).SendAsync("LeadScoresChanged", tenantId, cancellationToken);
 }

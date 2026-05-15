@@ -1,0 +1,405 @@
+@page "/register"
+@layout LoginLayout
+@using Microsoft.AspNetCore.WebUtilities
+@inject ApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>Register user | AgencyBinder AMS Enterprise Platform</PageTitle>
+
+<div class="login-shell register-shell">
+    <section class="login-brand-panel" aria-label="Enterprise registration overview">
+        <div class="login-brand-top">
+            <div class="login-logo" aria-hidden="true">
+                <i class="bi bi-person-plus-fill"></i>
+            </div>
+            <div>
+                <div class="login-brand-name">AGENCYBINDER AMS Enterprise</div>
+                <div class="login-brand-kicker">Secure user onboarding</div>
+            </div>
+        </div>
+
+        <div class="login-hero-copy">
+            <span class="login-eyebrow"><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant-aware registration</span>
+            <h1>Onboard users with roles, permissions, and login credentials.</h1>
+            <p>
+                Create a database-backed account that syncs IAM profile data, role assignment, effective permissions, and login credentials for enterprise SaaS access.
+            </p>
+        </div>
+
+        <div class="login-proof-grid" aria-label="Registration capabilities">
+            <div class="login-proof-card">
+                <i class="bi bi-database-check" aria-hidden="true"></i>
+                <span>Database-backed</span>
+                <strong>Credentials stored securely</strong>
+            </div>
+            <div class="login-proof-card">
+                <i class="bi bi-diagram-3" aria-hidden="true"></i>
+                <span>RBAC</span>
+                <strong>Roles from IAM catalog</strong>
+            </div>
+            <div class="login-proof-card">
+                <i class="bi bi-key" aria-hidden="true"></i>
+                <span>Permissions</span>
+                <strong>Effective access on login</strong>
+            </div>
+            <div class="login-proof-card">
+                <i class="bi bi-fingerprint" aria-hidden="true"></i>
+                <span>Security</span>
+                <strong>MFA-ready profile</strong>
+            </div>
+        </div>
+
+        <div class="login-security-strip">
+            <span><i class="bi bi-lock-fill" aria-hidden="true"></i> PBKDF2 password hashing</span>
+            <span><i class="bi bi-person-badge" aria-hidden="true"></i> Role assignment</span>
+            <span><i class="bi bi-journal-check" aria-hidden="true"></i> Login attempt audit</span>
+        </div>
+    </section>
+
+    <section class="login-form-panel" aria-label="Register enterprise user">
+        <div class="login-form-card register-form-card">
+            <div class="login-form-header">
+                <div>
+                    <div class="login-form-kicker">Enterprise registration</div>
+                    <h2>Create login account</h2>
+                    <p>Register the user in IAM and assign a tenant role for login access.</p>
+                </div>
+                <span class="login-secure-badge"><i class="bi bi-shield-lock" aria-hidden="true"></i> IAM</span>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_loadError))
+            {
+                <div class="login-alert login-alert-danger" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    @_loadError
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(_success))
+            {
+                <div class="login-alert login-alert-success" role="status">
+                    <i class="bi bi-check-circle-fill" aria-hidden="true"></i>
+                    @_success
+                </div>
+            }
+
+            <EditForm Model="_form" OnValidSubmit="RegisterAsync" class="login-form">
+                <DataAnnotationsValidator />
+
+                <div class="register-section-title">Organization</div>
+                <div class="login-field">
+                    <label for="tenant">Organization</label>
+                    <div class="login-input-wrap">
+                        <i class="bi bi-buildings" aria-hidden="true"></i>
+                        <InputText id="tenant" class="login-blazor-input" @bind-Value="_form.Tenant" placeholder="enterprise.com or ENT-001" maxlength="253" />
+                    </div>
+                    <ValidationMessage For="() => _form.Tenant" class="text-danger" />
+                </div>
+
+                <div class="login-field">
+                    <label for="role">Role</label>
+                    <div class="login-input-wrap login-input-wrap-select">
+                        <i class="bi bi-person-badge" aria-hidden="true"></i>
+                        <InputSelect id="role" class="login-blazor-input" @bind-Value="_form.RoleId" disabled="@(_roles.Count == 0)">
+                            <option value="@Guid.Empty">Select a role</option>
+                            @foreach (var role in _roles)
+                            {
+                                <option value="@role.RoleId">@role.RoleName (@role.RoleCode)</option>
+                            }
+                        </InputSelect>
+                    </div>
+                    <ValidationMessage For="() => _form.RoleId" class="text-danger" />
+                    <span class="login-field-hint">Roles are loaded from the tenant IAM role catalog.</span>
+                </div>
+
+                <button type="button" class="login-sso-btn register-load-btn" @onclick="LoadTenantRolesAsync" disabled="@_loadingRoles">
+                    <i class="bi bi-arrow-repeat @(_loadingRoles ? "pw-spin" : string.Empty)" aria-hidden="true"></i>
+                    Load tenant roles
+                </button>
+
+                <div class="register-section-title">User profile</div>
+                <div class="register-grid-2">
+                    <div class="login-field">
+                        <label for="fullName">Full name</label>
+                        <div class="login-input-wrap">
+                            <i class="bi bi-person" aria-hidden="true"></i>
+                            <InputText id="fullName" class="login-blazor-input" @bind-Value="_form.FullName" placeholder="Alex Morgan" maxlength="300" />
+                        </div>
+                        <ValidationMessage For="() => _form.FullName" class="text-danger" />
+                    </div>
+
+                    <div class="login-field">
+                        <label for="displayName">Display name</label>
+                        <div class="login-input-wrap">
+                            <i class="bi bi-person-vcard" aria-hidden="true"></i>
+                            <InputText id="displayName" class="login-blazor-input" @bind-Value="_form.DisplayName" placeholder="Alex" maxlength="200" />
+                        </div>
+                        <ValidationMessage For="() => _form.DisplayName" class="text-danger" />
+                    </div>
+                </div>
+
+                <div class="register-grid-2">
+                    <div class="login-field">
+                        <label for="email">Email</label>
+                        <div class="login-input-wrap">
+                            <i class="bi bi-envelope" aria-hidden="true"></i>
+                            <InputText id="email" type="email" class="login-blazor-input" @bind-Value="_form.Email" placeholder="alex@enterprise.com" maxlength="300" />
+                        </div>
+                        <ValidationMessage For="() => _form.Email" class="text-danger" />
+                    </div>
+
+                    <div class="login-field">
+                        <label for="userName">Username</label>
+                        <div class="login-input-wrap">
+                            <i class="bi bi-at" aria-hidden="true"></i>
+                            <InputText id="userName" class="login-blazor-input" @bind-Value="_form.UserName" placeholder="alex.morgan" maxlength="200" />
+                        </div>
+                        <ValidationMessage For="() => _form.UserName" class="text-danger" />
+                    </div>
+                </div>
+
+                <div class="register-grid-2">
+                    <div class="login-field">
+                        <label for="department">Department</label>
+                        <div class="login-input-wrap">
+                            <i class="bi bi-briefcase" aria-hidden="true"></i>
+                            <InputText id="department" class="login-blazor-input" @bind-Value="_form.Department" placeholder="Sales" maxlength="200" />
+                        </div>
+                        <ValidationMessage For="() => _form.Department" class="text-danger" />
+                    </div>
+
+                    <div class="login-field">
+                        <label for="jobTitle">Job title</label>
+                        <div class="login-input-wrap">
+                            <i class="bi bi-award" aria-hidden="true"></i>
+                            <InputText id="jobTitle" class="login-blazor-input" @bind-Value="_form.JobTitle" placeholder="Tenant Admin" maxlength="100" />
+                        </div>
+                        <ValidationMessage For="() => _form.JobTitle" class="text-danger" />
+                    </div>
+                </div>
+
+                <div class="login-field">
+                    <label for="phone">Phone</label>
+                    <div class="login-input-wrap">
+                        <i class="bi bi-telephone" aria-hidden="true"></i>
+                        <InputText id="phone" class="login-blazor-input" @bind-Value="_form.PhoneNumber" placeholder="(555) 123-4567" maxlength="50" />
+                    </div>
+                    <ValidationMessage For="() => _form.PhoneNumber" class="text-danger" />
+                </div>
+
+                <div class="register-section-title">Login credentials</div>
+                <div class="register-grid-2">
+                    <div class="login-field">
+                        <label for="password">Password</label>
+                        <div class="login-input-wrap">
+                            <i class="bi bi-key" aria-hidden="true"></i>
+                            <InputText id="password" type="password" class="login-blazor-input" @bind-Value="_form.Password" placeholder="Minimum 12 characters" maxlength="128" />
+                        </div>
+                        <ValidationMessage For="() => _form.Password" class="text-danger" />
+                    </div>
+
+                    <div class="login-field">
+                        <label for="confirmPassword">Confirm password</label>
+                        <div class="login-input-wrap">
+                            <i class="bi bi-key-fill" aria-hidden="true"></i>
+                            <InputText id="confirmPassword" type="password" class="login-blazor-input" @bind-Value="_form.ConfirmPassword" placeholder="Repeat password" maxlength="128" />
+                        </div>
+                        <ValidationMessage For="() => _form.ConfirmPassword" class="text-danger" />
+                    </div>
+                </div>
+
+                <div class="login-options-row">
+                    <label class="login-check">
+                        <InputCheckbox @bind-Value="_form.RequireMfa" />
+                        <span>Require MFA enrollment</span>
+                    </label>
+                    <span class="login-options-note">Recommended for enterprise users.</span>
+                </div>
+
+                <button type="submit" class="login-submit" disabled="@_saving">
+                    <span>@(_saving ? "Creating account…" : "Create enterprise login")</span>
+                    <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                </button>
+            </EditForm>
+
+            <div class="login-footer-note">
+                Registration writes the IAM user, credential hash/salt, role assignment, and makes the account available to the login flow.
+            </div>
+        </div>
+
+        <div class="login-support-card">
+            <div>
+                <strong>Already registered?</strong>
+                <span>Use your tenant, email, and password to sign in.</span>
+            </div>
+            <a href="/login"><i class="bi bi-box-arrow-in-right" aria-hidden="true"></i> Sign in</a>
+        </div>
+    </section>
+</div>
+
+@code {
+    private readonly RegisterFormModel _form = new();
+    private readonly List<RoleDto> _roles = [];
+    private bool _loadingRoles;
+    private bool _saving;
+    private string? _loadError;
+    private string? _success;
+    private Guid? _tenantId;
+
+    protected override void OnInitialized()
+    {
+        var query = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
+        _form.Tenant = query.TryGetValue("tenant", out var tenant) ? tenant.ToString() : string.Empty;
+        _form.Email = query.TryGetValue("email", out var email) ? email.ToString() : string.Empty;
+        _form.UserName = _form.Email;
+    }
+
+    private async Task LoadTenantRolesAsync()
+    {
+        _loadingRoles = true;
+        _loadError = null;
+        _success = null;
+
+        try
+        {
+            var tenant = await ResolveTenantAsync();
+            if (tenant is null)
+            {
+                _loadError = "Tenant could not be found or is not active.";
+                return;
+            }
+
+            _tenantId = tenant.TenantId;
+            var result = await Api.SearchRolesAsync(tenant.TenantId, pageSize: 100);
+            _roles.Clear();
+            _roles.AddRange((result?.Items ?? []).Where(r => r.IsActive).OrderBy(r => r.SortOrder).ThenBy(r => r.RoleName));
+
+            if (_roles.Count == 0)
+            {
+                _loadError = "No active IAM roles are configured for this tenant.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load tenant roles: {ex.Message}";
+        }
+        finally
+        {
+            _loadingRoles = false;
+        }
+    }
+
+    private async Task RegisterAsync()
+    {
+        _saving = true;
+        _loadError = null;
+        _success = null;
+
+        try
+        {
+            if (!_tenantId.HasValue)
+            {
+                await LoadTenantRolesAsync();
+            }
+
+            if (!_tenantId.HasValue)
+            {
+                _loadError = "Load tenant roles before registering the login account.";
+                return;
+            }
+
+            var id = await Api.RegisterLoginUserAsync(new RegisterLoginUserRequest
+            {
+                TenantId = _tenantId.Value,
+                UserName = _form.UserName.Trim(),
+                Email = _form.Email.Trim(),
+                FullName = _form.FullName.Trim(),
+                DisplayName = _form.DisplayName,
+                PhoneNumber = _form.PhoneNumber,
+                Department = _form.Department,
+                JobTitle = _form.JobTitle,
+                Password = _form.Password,
+                ConfirmPassword = _form.ConfirmPassword,
+                RoleId = _form.RoleId,
+                RequireMfa = _form.RequireMfa
+            });
+
+            _success = "Enterprise login account created and synced to IAM. Redirecting to sign in…";
+            await Task.Delay(900);
+            Nav.NavigateTo($"/login?tenant={Uri.EscapeDataString(_form.Tenant)}&email={Uri.EscapeDataString(_form.Email)}", replace: true);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Registration failed: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task<TenantDto?> ResolveTenantAsync()
+    {
+        var tenantText = _form.Tenant.Trim();
+        if (string.IsNullOrWhiteSpace(tenantText))
+        {
+            return null;
+        }
+
+        var result = await Api.SearchTenantsAsync(tenantText, 1, 25);
+        return result?.Items.FirstOrDefault(t =>
+            t.IsActive &&
+            string.Equals(t.StatusCode, "Active", StringComparison.OrdinalIgnoreCase) &&
+            (string.Equals(t.TenantCode, tenantText, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(t.TenantName, tenantText, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(t.PrimaryDomain, tenantText, StringComparison.OrdinalIgnoreCase)))
+            ?? result?.Items.FirstOrDefault(t => t.IsActive && string.Equals(t.StatusCode, "Active", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private sealed class RegisterFormModel
+    {
+        [Required(ErrorMessage = "Organization is required.")]
+        [StringLength(253)]
+        public string Tenant { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Full name is required.")]
+        [StringLength(300, MinimumLength = 2)]
+        public string FullName { get; set; } = string.Empty;
+
+        [StringLength(200)]
+        public string? DisplayName { get; set; }
+
+        [Required(ErrorMessage = "Email is required.")]
+        [EmailAddress]
+        [StringLength(300)]
+        public string Email { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Username is required.")]
+        [StringLength(200, MinimumLength = 3)]
+        public string UserName { get; set; } = string.Empty;
+
+        [StringLength(200)]
+        public string? Department { get; set; }
+
+        [StringLength(100)]
+        public string? JobTitle { get; set; }
+
+        [Phone]
+        [StringLength(50)]
+        public string? PhoneNumber { get; set; }
+
+        [Required(ErrorMessage = "Password is required.")]
+        [StringLength(128, MinimumLength = 12)]
+        [RegularExpression(@"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z\d]).{12,}$", ErrorMessage = "Password must include upper case, lower case, number, and symbol characters.")]
+        public string Password { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Confirm password is required.")]
+        [Compare(nameof(Password), ErrorMessage = "Passwords do not match.")]
+        public string ConfirmPassword { get; set; } = string.Empty;
+
+        [Required]
+        public Guid RoleId { get; set; }
+
+        public bool RequireMfa { get; set; } = true;
+    }
+}

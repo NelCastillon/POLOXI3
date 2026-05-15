@@ -1,6 +1,9 @@
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
 @inject NavigationManager Nav
 @inject ShellStateService Shell
 @inject NavigationContextService NavContext
+@inject AuthenticationStateProvider AuthenticationStateProvider
 @implements IDisposable
 
 <nav id="ams-nav"
@@ -180,7 +183,7 @@
 
 @code {
     // ── Data model ───────────────────────────────────────────
-    private sealed record NavItem(string Label, string Url, string Icon = "bi bi-circle");
+    private sealed record NavItem(string Label, string Url, string Icon = "bi bi-circle", string? Permission = null, string? Role = null);
     private sealed record NavGroup(string Key, string Label, string Icon, NavItem[] Items);
     // A section with one group renders flat (items directly); multiple groups renders nested sub-groups.
     private sealed record NavSection(string Key, string Label, string Icon, NavGroup[] Groups);
@@ -232,7 +235,8 @@
             new("crm-leads", "Lead Management", "bi bi-person-plus",
             [
                 new("Leads",     "/crm/leads",             "bi bi-speedometer2"),
-                new("Lead Scoring",        "/crm/leads/scoring",     "bi bi-fire"),
+                new("Lead Scoring Factors", "/crm/leads/scoring",     "bi bi-fire"),
+                new("Lead Engagement Factors", "/crm/leads/engagement-factors", "bi bi-activity"),
                 new("Lead Assignment",     "/crm/leads/assignment",  "bi bi-person-check"),
                 new("Duplicate Check",     "/crm/leads/duplicates",  "bi bi-copy"),
                 new("Lead Follow-Up",      "/crm/leads/follow-up",   "bi bi-calendar-event"),
@@ -832,11 +836,69 @@
             "commission-config", "marketing-config", "portal-config", "integrations",
             "ai-config", "data-mgmt", "subscription",
         };
+
+        private static readonly Dictionary<string, string[]> SectionPermissions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["dashboard"] = ["DASHBOARD_VIEW", "REPORT_VIEW"],
+            ["workbench"] = ["WORKBENCH_VIEW"],
+            ["crm"] = ["CRM_VIEW"],
+            ["accounts"] = ["ACCOUNT_VIEW"],
+            ["opportunities"] = ["OPPORTUNITY_VIEW", "CRM_VIEW"],
+            ["submissions"] = ["SUBMISSION_VIEW"],
+            ["policies"] = ["POLICY_VIEW"],
+            ["renewals"] = ["RENEWAL_VIEW"],
+            ["claims"] = ["CLAIM_VIEW"],
+            ["tasks"] = ["WORKFLOW_VIEW", "TASK_VIEW"],
+            ["comms"] = ["COMMUNICATION_VIEW"],
+            ["docs"] = ["DOCUMENT_VIEW"],
+            ["billing"] = ["BILLING_VIEW", "FINANCE_VIEW"],
+            ["commissions"] = ["COMMISSION_VIEW"],
+            ["marketing"] = ["MARKETING_VIEW"],
+            ["portal"] = ["PORTAL_VIEW"],
+            ["reports"] = ["REPORT_VIEW"],
+            ["agency-setup"] = ["AGENCY_SETUP_MANAGE", "TENANT_MANAGE"],
+            ["security"] = ["USER_VIEW", "ROLE_VIEW", "SECURITY_POLICY_MANAGE"],
+            ["crm-config"] = ["CRM_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["account-config"] = ["ACCOUNT_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["policy-config"] = ["POLICY_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["carriers"] = ["CARRIER_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["workflow-config"] = ["WORKFLOW_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["comms-config"] = ["COMMUNICATION_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["docs-config"] = ["DOCUMENT_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["billing-config"] = ["BILLING_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["commission-config"] = ["COMMISSION_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["marketing-config"] = ["MARKETING_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["portal-config"] = ["PORTAL_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["integrations"] = ["INTEGRATION_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["ai-config"] = ["AI_CONFIG_MANAGE", "SETTINGS_MANAGE"],
+            ["data-mgmt"] = ["DATA_MANAGE", "SETTINGS_MANAGE"],
+            ["subscription"] = ["SUBSCRIPTION_MANAGE", "TENANT_MANAGE"],
+        };
+
+        private static readonly Dictionary<string, string[]> ItemPermissions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["/workbench/producer"] = ["WORKBENCH_PRODUCER", "WORKBENCH_VIEW"],
+            ["/workbench/csr"] = ["WORKBENCH_CSR", "WORKBENCH_VIEW"],
+            ["/workbench/service-manager"] = ["WORKBENCH_SERVICE_MANAGER", "WORKBENCH_VIEW"],
+            ["/workbench/accounting"] = ["WORKBENCH_ACCOUNTING", "FINANCE_VIEW", "WORKBENCH_VIEW"],
+            ["/workbench/marketing"] = ["WORKBENCH_MARKETING", "MARKETING_VIEW", "WORKBENCH_VIEW"],
+            ["/workbench/operations"] = ["WORKBENCH_OPERATIONS", "WORKFLOW_VIEW", "WORKBENCH_VIEW"],
+            ["/tenant/security/users"] = ["USER_VIEW", "USER_MANAGE"],
+            ["/tenant/security/roles"] = ["ROLE_VIEW", "ROLE_MANAGE"],
+            ["/tenant/security/perms"] = ["PERMISSION_MANAGE", "ROLE_VIEW"],
+            ["/tenant/security/audit"] = ["AUDIT_VIEW"],
+            ["/tenant/security/mfa"] = ["MFA_MANAGE"],
+            ["/tenant/security/sessions"] = ["SECURITY_POLICY_MANAGE", "AUDIT_VIEW"],
+        };
+
     private string _query = string.Empty;
     private readonly HashSet<string> _expandedSections = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _expandedGroups   = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<NavItem>   _favorites = [];
     private readonly List<NavItem>   _recents   = [];
+    private readonly HashSet<string> _permissions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _roles = new(StringComparer.OrdinalIgnoreCase);
+    private bool _isAuthenticated;
 
     private string _navClass =>
         "ams-nav" +
@@ -850,6 +912,35 @@
         NavContext.OnChange   += OnNavContextChange;
         Nav.LocationChanged   += OnLocationChanged;
         AutoExpandForUrl(Nav.Uri);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadUserAccessAsync();
+    }
+
+    private async Task LoadUserAccessAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        _isAuthenticated = user.Identity?.IsAuthenticated == true;
+        _roles.Clear();
+        _permissions.Clear();
+
+        if (!_isAuthenticated)
+        {
+            return;
+        }
+
+        foreach (var role in user.FindAll(ClaimTypes.Role).Select(c => c.Value))
+        {
+            _roles.Add(role);
+        }
+
+        foreach (var permission in user.FindAll("permission").Select(c => c.Value))
+        {
+            _permissions.Add(permission);
+        }
     }
 
     private void OnShellChange()      => InvokeAsync(StateHasChanged);
@@ -918,22 +1009,24 @@
     // ── Filtering ─────────────────────────────────────────────
     private IEnumerable<NavSection> GetVisibleSections()
     {
-        if (string.IsNullOrWhiteSpace(_query)) return AllSections;
+        var visible = AllSections.Where(CanSeeSection).Where(s => GetVisibleGroupsInSection(s).Any());
+        if (string.IsNullOrWhiteSpace(_query)) return visible;
         var q = _query.Trim();
-        return AllSections.Where(s =>
+        return visible.Where(s =>
             s.Label.Contains(q, StringComparison.OrdinalIgnoreCase) ||
             s.Groups.Any(g =>
                 g.Label.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                g.Items.Any(i => i.Label.Contains(q, StringComparison.OrdinalIgnoreCase))));
+                GetVisibleItems(g).Any(i => i.Label.Contains(q, StringComparison.OrdinalIgnoreCase))));
     }
 
     private IEnumerable<NavGroup> GetVisibleGroupsInSection(NavSection sec)
     {
-        if (string.IsNullOrWhiteSpace(_query)) return sec.Groups;
+        var visible = sec.Groups.Where(g => GetVisibleItems(g).Any());
+        if (string.IsNullOrWhiteSpace(_query)) return visible;
         var q = _query.Trim();
-        return sec.Groups.Where(g =>
+        return visible.Where(g =>
             g.Label.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-            g.Items.Any(i => i.Label.Contains(q, StringComparison.OrdinalIgnoreCase)));
+            GetVisibleItems(g).Any(i => i.Label.Contains(q, StringComparison.OrdinalIgnoreCase)));
     }
 
     private IEnumerable<NavItem> GetVisibleItems(NavGroup grp)
@@ -941,8 +1034,34 @@
         var items = string.IsNullOrWhiteSpace(_query)
             ? grp.Items.AsEnumerable()
             : grp.Items.Where(i => i.Label.Contains(_query.Trim(), StringComparison.OrdinalIgnoreCase));
-        return items.Select(ResolveItem);
+        return items.Where(CanSeeItem).Select(ResolveItem);
     }
+
+    private bool CanSeeSection(NavSection section)
+    {
+        if (HasFullAccess()) return true;
+        if (!_isAuthenticated) return false;
+        return !SectionPermissions.TryGetValue(section.Key, out var required) || HasAnyPermission(required);
+    }
+
+    private bool CanSeeItem(NavItem item)
+    {
+        if (HasFullAccess()) return true;
+        if (!_isAuthenticated) return false;
+        if (!string.IsNullOrWhiteSpace(item.Role) && !_roles.Contains(item.Role)) return false;
+        if (!string.IsNullOrWhiteSpace(item.Permission) && !_permissions.Contains(item.Permission)) return false;
+        var normalizedUrl = item.Url.Split('?')[0];
+        return !ItemPermissions.TryGetValue(normalizedUrl, out var required) || HasAnyPermission(required);
+    }
+
+    private bool HasFullAccess() =>
+        _roles.Contains("SYSTEM_ADMIN") ||
+        _roles.Contains("TENANT_ADMIN") ||
+        _permissions.Contains("NAV_ALL") ||
+        _permissions.Contains("PLATFORM_ADMIN");
+
+    private bool HasAnyPermission(IEnumerable<string> permissions) =>
+        permissions.Any(_permissions.Contains);
 
     private bool IsSectionOpen(NavSection sec) =>
         _expandedSections.Contains(sec.Key) || !string.IsNullOrEmpty(_query);

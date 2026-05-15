@@ -1,5 +1,6 @@
 @page "/finance/period-close"
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 
 <PageTitle>Period Close — AMS</PageTitle>
@@ -69,7 +70,12 @@ else
 </SfDialog>
 
 @code {
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    Guid TenantId { get; set; }
+    Guid TenantAdminUserId { get; set; }
+    Guid DevTenantId { get; set; }
+    Guid DevUserId { get; set; }
+    private Guid _tenantAdminUserId;
+    private Guid _tenantId;
     private string? _searchTerm, _error;
     private string _statusFilter = string.Empty;
     private bool _loading, _showForm, _saving;
@@ -80,7 +86,7 @@ else
     private PeriodCloseForm _form = new();
     private EditContext _editContext = default!;
     private IEnumerable<PeriodCloseEntryDto> FilteredItems => _items.Where(x => string.IsNullOrWhiteSpace(_statusFilter) || x.StatusCode == _statusFilter);
-    protected override async Task OnInitializedAsync() { _editContext = new(_form); await LoadAsync(); }
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); _editContext = new(_form); await LoadAsync(); }
     private async Task LoadAsync() { _loading = true; _error = null; try { var result = await Api.SearchPeriodCloseEntriesAsync(_tenantId, _searchTerm); var periods = await Api.SearchAccountingPeriodsAsync(_tenantId); _items = result?.Items.ToList() ?? []; _periods = periods?.Items.ToList() ?? []; } catch (Exception ex) { _error = ex.Message; _items = []; } finally { _loading = false; } }
     private void OnRowSelected(RowSelectEventArgs<PeriodCloseEntryDto> args) => OpenEdit(args.Data);
     private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
@@ -89,4 +95,15 @@ else
     private async Task SaveAsync() { if (!_editContext.Validate()) return; _saving = true; try { if (_editingId == Guid.Empty) await Api.CreatePeriodCloseEntryAsync(new CreatePeriodCloseEntryRequest { TenantId = _tenantId, AccountingPeriodId = _form.AccountingPeriodId, TaskDescription = _form.TaskDescription, StatusCode = _form.StatusCode, CompletedDateUtc = _form.CompletedDateUtc, Notes = _form.Notes }); else await Api.UpdatePeriodCloseEntryAsync(_editingId, new UpdatePeriodCloseEntryRequest { TenantId = _tenantId, PeriodCloseEntryId = _editingId, AccountingPeriodId = _form.AccountingPeriodId, TaskDescription = _form.TaskDescription, StatusCode = _form.StatusCode, CompletedDateUtc = _form.CompletedDateUtc, Notes = _form.Notes }); _showForm = false; await LoadAsync(); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; } finally { _saving = false; } }
     private static string StatusClass(string status) => status switch { "Completed" => "fin-chip-success", "Blocked" => "fin-chip-danger", "Open" => "fin-chip-warning", _ => "fin-chip-neutral" };
     private sealed class PeriodCloseForm { [RequiredGuid(ErrorMessage = "Accounting Period is required.")] public Guid AccountingPeriodId { get; set; } [Required, StringLength(500)] public string TaskDescription { get; set; } = string.Empty; [Required, StringLength(50)] public string StatusCode { get; set; } = "Open"; public DateTime? CompletedDateUtc { get; set; } [StringLength(1000)] public string? Notes { get; set; } }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        DevTenantId = context.TenantId;
+        DevUserId = context.UserId;
+    }
 }

@@ -1,6 +1,7 @@
-ï»¿@page "/commissions/split-rules"
+@page "/commissions/split-rules"
 @page "/commissions/splits"
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 
 <PageTitle>Commission Split Rules</PageTitle>
 
@@ -17,7 +18,7 @@
 
 @if (_loading)
 {
-    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loadingâ€¦</span></div>
+    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading…</span></div>
 }
 else if (!string.IsNullOrWhiteSpace(_loadError))
 {
@@ -46,7 +47,7 @@ else
         <div class="um-modal-header"><i class="bi bi-scissors" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Split Rule" : "Edit Split Rule")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
         <EditForm EditContext="_editContext"><DataAnnotationsValidator />
             <div class="um-modal-body"><div class="um-form-grid">
-                <div class="um-field"><label>Plan <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.CommissionPlanId" class="um-input"><option value="@Guid.Empty">Select planâ€¦</option>@foreach (var plan in _plans) { <option value="@plan.CommissionPlanId">@plan.PlanName</option> }</InputSelect><ValidationMessage For="() => _form.CommissionPlanId" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Plan <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.CommissionPlanId" class="um-input"><option value="@Guid.Empty">Select plan…</option>@foreach (var plan in _plans) { <option value="@plan.CommissionPlanId">@plan.PlanName</option> }</InputSelect><ValidationMessage For="() => _form.CommissionPlanId" class="validation-message text-danger" /></div>
                 <div class="um-field"><label>Rule Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.RuleName" class="um-input" /><ValidationMessage For="() => _form.RuleName" class="validation-message text-danger" /></div>
                 <div class="um-field"><label>Split Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.SplitTypeCode" class="um-input"><option value="Producer">Producer</option><option value="CSR">CSR</option><option value="House Account">House Account</option><option value="Override">Override</option></InputSelect><ValidationMessage For="() => _form.SplitTypeCode" class="validation-message text-danger" /></div>
                 <div class="um-field"><label>Split %</label><InputNumber @bind-Value="_form.SplitPct" class="um-input" /><ValidationMessage For="() => _form.SplitPct" class="validation-message text-danger" /></div>
@@ -58,12 +59,17 @@ else
                 @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
             </div></div>
         </EditForm>
-        <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Savingâ€¦" : "Save Rule")</button></div>
+        <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Rule")</button></div>
     </Content></DialogTemplates>
 </SfDialog>
 
 @code {
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    Guid TenantId { get; set; }
+    Guid TenantAdminUserId { get; set; }
+    Guid DevTenantId { get; set; }
+    Guid DevUserId { get; set; }
+    private Guid _tenantAdminUserId;
+    private Guid _tenantId;
     private string? _searchTerm, _loadError, _formError;
     private bool _loading, _showForm, _saving;
     private List<CommissionSplitRuleDto> _items = [];
@@ -74,6 +80,7 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        await ResolveCurrentUserContextAsync();
         _editContext = new(_form);
         await LoadAsync();
     }
@@ -103,4 +110,15 @@ else
     private void CloseForm() => _showForm = false;
     private async Task SaveAsync() { if (!_editContext.Validate()) return; if (_form.EffectiveEndDate.HasValue && _form.EffectiveEndDate.Value < _form.EffectiveStartDate) { _formError = "Effective End must be on or after Effective Start."; return; } _saving = true; try { if (_editingId == Guid.Empty) await Api.CreateCommissionSplitRuleAsync(new CreateCommissionSplitRuleRequest { TenantId = _tenantId, CommissionPlanId = _form.CommissionPlanId, RuleName = _form.RuleName, SplitTypeCode = _form.SplitTypeCode, SplitPct = _form.SplitPct, OverrideRatePct = _form.OverrideRatePct, Priority = _form.Priority, EffectiveStartDate = DateOnly.FromDateTime(_form.EffectiveStartDate), EffectiveEndDate = _form.EffectiveEndDate.HasValue ? DateOnly.FromDateTime(_form.EffectiveEndDate.Value) : null, StatusCode = _form.StatusCode }); else await Api.UpdateCommissionSplitRuleAsync(_editingId, new UpdateCommissionSplitRuleRequest { TenantId = _tenantId, SplitRuleId = _editingId, CommissionPlanId = _form.CommissionPlanId, RuleName = _form.RuleName, SplitTypeCode = _form.SplitTypeCode, SplitPct = _form.SplitPct, OverrideRatePct = _form.OverrideRatePct, Priority = _form.Priority, EffectiveStartDate = DateOnly.FromDateTime(_form.EffectiveStartDate), EffectiveEndDate = _form.EffectiveEndDate.HasValue ? DateOnly.FromDateTime(_form.EffectiveEndDate.Value) : null, StatusCode = _form.StatusCode }); _showForm = false; await LoadAsync(); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; } finally { _saving = false; } }
     private sealed class SplitRuleForm { [RequiredGuid(ErrorMessage = "Commission Plan is required.")] public Guid CommissionPlanId { get; set; } [Required, StringLength(200)] public string RuleName { get; set; } = string.Empty; [Required, StringLength(50)] public string SplitTypeCode { get; set; } = "Producer"; [Range(0, 100)] public decimal SplitPct { get; set; } [Range(0, 100)] public decimal? OverrideRatePct { get; set; } [Range(0, 9999)] public int Priority { get; set; } = 100; [Required] public DateTime EffectiveStartDate { get; set; } = DateTime.Today; public DateTime? EffectiveEndDate { get; set; } [Required, StringLength(50)] public string StatusCode { get; set; } = "Active"; }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        DevTenantId = context.TenantId;
+        DevUserId = context.UserId;
+    }
 }

@@ -1,5 +1,6 @@
 @page "/expenses"
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 
 <PageTitle>Expenses — AMS</PageTitle>
@@ -92,7 +93,12 @@
 </SfDialog>
 
 @code {
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    Guid TenantId { get; set; }
+    Guid TenantAdminUserId { get; set; }
+    Guid DevTenantId { get; set; }
+    Guid DevUserId { get; set; }
+    private Guid _tenantAdminUserId;
+    private Guid _tenantId;
     private SfToast _toast = default!;
     private string? _searchTerm, _loadError, _formError;
     private string _statusFilter = string.Empty, _categoryFilter = string.Empty, _activeFilter = string.Empty;
@@ -112,7 +118,7 @@
         (string.IsNullOrWhiteSpace(_categoryFilter) || x.CategoryCode == _categoryFilter) &&
         (_activeFilter switch { "Billable" => x.IsBillable, "NonBillable" => !x.IsBillable, "Draft" or "Submitted" or "Approved" => x.StatusCode == _activeFilter, _ => true }));
 
-    protected override async Task OnInitializedAsync() { _editContext = new(_form); await LoadAsync(); }
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); _editContext = new(_form); await LoadAsync(); }
     private async Task LoadAsync() { _loading = true; _loadError = null; try { var expenses = await Api.SearchExpensesAsync(_tenantId, _searchTerm); var accounts = await Api.SearchBillingAccountsAsync(_tenantId, pageSize: 500); var users = await Api.SearchUsersAsync(_tenantId, pageSize: 500); var invoices = await Api.SearchInvoicesAsync(_tenantId); _items = expenses?.Items.ToList() ?? []; _accounts = accounts?.Items.ToList() ?? []; _users = users?.Items.ToList() ?? []; _invoices = invoices?.Items.ToList() ?? []; } catch (Exception ex) { _loadError = $"Expenses failed to load: {ex.Message}"; await ToastAsync(_loadError, true); } finally { _loading = false; } }
     private void SetFilter(string filter) => _activeFilter = filter;
     private string KpiClass(string filter) => _activeFilter == filter ? "bill-kpi-active" : string.Empty;
@@ -128,4 +134,15 @@
 
     private sealed class ExpenseForm { [RequiredGuid(ErrorMessage = "Account is required.")] public Guid AccountId { get; set; } [RequiredGuid(ErrorMessage = "User is required.")] public Guid UserId { get; set; } [Required] public DateTime ExpenseDate { get; set; } = DateTime.Today; [Required, StringLength(80)] public string CategoryCode { get; set; } = "Travel"; [Range(0.01, 1000000)] public decimal Amount { get; set; } [StringLength(1000)] public string? Description { get; set; } public bool IsBillable { get; set; } = true; [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft"; public Guid? InvoiceId { get; set; } }
     private sealed class RequiredGuidAttribute : ValidationAttribute { public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty; }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        DevTenantId = context.TenantId;
+        DevUserId = context.UserId;
+    }
 }

@@ -2,9 +2,13 @@
 @namespace Ams.Web.Components.Pages.Crm
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Common.Validation
+@using Ams.Application.Common.Dtos
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject LeadScoringRealtimeClient LeadScoringRealtime
+@implements IAsyncDisposable
 
 <PageTitle>@(_lead is null ? "Lead" : _lead.FullName) — CRM</PageTitle>
 
@@ -41,7 +45,9 @@ else
     <!-- ── Header ───────────────────────────────────────────────────────────── -->
     <AppPageHeader Title="@_lead.FullName"
                    Subtitle="@_lead.CompanyName"
-                   Icon="bi-person-plus-fill">
+                   Icon="bi-person-plus-fill"
+                   ReturnUrl="/crm/leads"
+                   ReturnLabel="Back to Leads">
         <Actions>
             <button class="um-btn um-btn-ghost" @onclick="OpenEdit">
                 <i class="bi bi-pencil" aria-hidden="true"></i> Edit
@@ -969,6 +975,7 @@ else
     private bool     _loading = true;
     private string?  _loadError;
     private int      _tab     = 0;
+    private Guid     _tenantId;
 
     // ── Core record ───────────────────────────────────────────────────────────
     private LeadDetailModel? _lead;
@@ -1080,8 +1087,36 @@ else
     // ── Lifecycle ─────────────────────────────────────────────────────────────
     protected override async Task OnParametersSetAsync()
     {
+        await EnsureTenantContextAsync();
         await LoadAsync();
+        _ = StartLeadScoringRealtimeAsync();
     }
+
+    private async Task OnLeadScoresChangedAsync(Guid tenantId)
+    {
+        await InvokeAsync(async () =>
+        {
+            await LoadAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task StartLeadScoringRealtimeAsync()
+    {
+        try
+        {
+            if (_tenantId != Guid.Empty)
+            {
+                await LeadScoringRealtime.StartAsync(_tenantId, OnLeadScoresChangedAsync);
+            }
+        }
+        catch (Exception ex)
+        {
+            await Toast($"Real-time lead scoring updates are unavailable: {ex.Message}", "e-toast-warning");
+        }
+    }
+
+    public async ValueTask DisposeAsync() => await LeadScoringRealtime.DisposeAsync();
 
     private async Task LoadAsync()
     {
@@ -1096,6 +1131,9 @@ else
                 return;
             }
 
+            var scoreFactors = await Api.GetLeadScoreFactorsAsync(LeadId);
+            var engagement = await Api.GetLeadEngagementSummaryAsync(LeadId);
+
             var users = await Api.SearchUsersAsync(dto.TenantId, pageSize: 250);
             _ownerOptions = (users?.Items ?? [])
                 .Where(u => string.Equals(u.StatusCode, "Active", StringComparison.OrdinalIgnoreCase))
@@ -1105,11 +1143,15 @@ else
 
             var owner = ResolveOwnerName(dto.AssignedToUserId);
             _lead = MapToLeadDetail(dto, owner);
+            _scoreFactors = (scoreFactors ?? [])
+                .Select(ScoreFactor.FromDto)
+                .ToList();
+            ApplyEngagementSummary(engagement);
             _assignTarget = dto.AssignedToUserId?.ToString() ?? string.Empty;
 
             await LoadTabDataAsync(dto.TenantId);
 
-            BuildRightPanel();
+            BuildRightPanel(engagement is null);
             await LoadNbaAsync();
 
             Breadcrumbs.SetCrumbs(
@@ -1212,49 +1254,90 @@ else
         _ => "Cold",
     };
 
-    private void BuildRightPanel()
+    private void ApplyEngagementSummary(LeadEngagementSummaryDto? engagement)
+    {
+        if (engagement is null) return;
+
+        _engageLevel = engagement.Level;
+        _engageMetrics = new EngageMetrics
+        {
+            EmailsSent = engagement.EmailsSent,
+            EmailsOpened = engagement.EmailsOpened,
+            Clicks = engagement.Clicks,
+            PortalVisits = engagement.PortalVisits,
+            ActivityCount = engagement.ActivityCount,
+            DaysSinceTouch = engagement.DaysSinceTouch,
+        };
+
+        var matched = engagement.Factors?.Where(f => f.Matched).ToList() ?? [];
+        var max = Math.Max(1, matched.Count == 0 ? 1 : matched.Max(f => Math.Abs(f.Points)));
+        _engageBars = matched.Count == 0
+            ? []
+            : matched.Select((f, i) => new EngageBar { Date = DateTime.UtcNow.AddDays(-matched.Count + i + 1), Count = Math.Abs(f.Points), MaxCount = max }).ToList();
+    }
+
+    private void BuildRightPanel(bool useFallback)
     {
         if (_lead is null) return;
 
-        _scoreFactors =
-        [
-            new("Company size",   20, 20,  true),
-            new("Email opened",   15, 15,  true),
-            new("Website visits",  8, 10,  true),
-            new("Title match",    12, 15,  true),
-            new("Stale > 14 d",  -10, 15, false),
-        ];
-
-        _engageLevel   = _lead.Score >= 70 ? "High" : _lead.Score >= 40 ? "Medium" : "Low";
-        _engageMetrics = new EngageMetrics
+        if (useFallback)
         {
-            EmailsSent    = 8,
-            EmailsOpened  = 5,
-            Clicks        = 2,
-            PortalVisits  = 3,
-            ActivityCount = _activities.Count,
-            DaysSinceTouch = _lead.LastActivity.HasValue
-                ? (int)(DateTime.UtcNow - _lead.LastActivity.Value).TotalDays : 999,
-        };
+            var emailComms = _comms.Where(c => string.Equals(c.Channel, "Email", StringComparison.OrdinalIgnoreCase)).ToList();
+            var lastTouch = _activities.Select(a => (DateTime?)a.OccurredAt)
+                .Concat(_comms.Select(c => (DateTime?)c.SentAt))
+                .Concat(_campaigns.Select(c => (DateTime?)(c.LastTouch ?? c.EnrolledAt)))
+                .Where(d => d.HasValue)
+                .Select(d => d!.Value)
+                .DefaultIfEmpty(_lead.CreatedAt)
+                .Max();
 
-        var rnd  = new Random(LeadId.GetHashCode());
-        var max  = 0;
-        var bars = Enumerable.Range(0, 30)
-            .Select(i => { var c = rnd.Next(0, 5); max = Math.Max(max, c); return (Date: DateTime.UtcNow.AddDays(-29 + i), Count: c); })
+            _engageMetrics = new EngageMetrics
+            {
+                EmailsSent = emailComms.Count + _campaigns.Sum(c => c.EmailsSent),
+                EmailsOpened = emailComms.Count(c => c.Opened) + _campaigns.Sum(c => c.EmailsOpen),
+                Clicks = emailComms.Count(c => c.Clicked) + _campaigns.Sum(c => c.Clicks),
+                PortalVisits = 0,
+                ActivityCount = _activities.Count,
+                DaysSinceTouch = Math.Max(0, (int)(DateTime.UtcNow - lastTouch).TotalDays),
+            };
+
+            var fallbackScore = Math.Clamp(
+                (_engageMetrics.EmailsSent > 0 ? 10 : 0) +
+                (_engageMetrics.EmailsOpened > 0 ? 20 : 0) +
+                (_engageMetrics.Clicks > 0 ? 20 : 0) +
+                (_engageMetrics.ActivityCount > 0 ? 20 : 0) +
+                (_engageMetrics.DaysSinceTouch > 14 ? -20 : 0), 0, 100);
+            _engageLevel = fallbackScore >= 70 ? "High" : fallbackScore >= 40 ? "Medium" : "Low";
+        }
+
+        BuildEngagementBars();
+    }
+
+    private void BuildEngagementBars()
+    {
+        var startDate = DateTime.UtcNow.Date.AddDays(-29);
+        var touches = _activities.Select(a => a.OccurredAt)
+            .Concat(_comms.Select(c => c.SentAt))
+            .Concat(_campaigns.Select(c => c.LastTouch ?? c.EnrolledAt))
+            .Where(d => d.Date >= startDate)
+            .GroupBy(d => d.Date)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var max = Math.Max(1, touches.Values.DefaultIfEmpty(0).Max());
+        _engageBars = Enumerable.Range(0, 30)
+            .Select(i =>
+            {
+                var date = startDate.AddDays(i);
+                return new EngageBar { Date = date, Count = touches.TryGetValue(date, out var count) ? count : 0, MaxCount = max };
+            })
             .ToList();
-        _engageBars = bars.Select(b => new EngageBar { Date = b.Date, Count = b.Count, MaxCount = max }).ToList();
     }
 
     private async Task LoadNbaAsync()
     {
         _nbaLoading = true; StateHasChanged();
-        await Task.Delay(0); // TODO: Api.GetLeadNbaAsync(LeadId)
-        _nbaActions =
-        [
-            new("Call",    "Follow up on proposal",      "Proposal sent 5 days ago with no response.", "High",   DateTime.UtcNow.AddDays(1)),
-            new("Email",   "Send loss run request",      "No loss run on file — needed for quote.",    "High",   DateTime.UtcNow.AddDays(2)),
-            new("Enroll",  "Add to BOP nurture campaign","Lead matches BOP segment criteria.",          "Medium", null),
-        ];
+        await Task.Delay(0); // Placeholder until a real next-best-action API exists.
+        _nbaActions = [];
         _nbaLoading = false;
     }
 
@@ -1896,6 +1979,11 @@ else
     {
         public ScoreFactor(string label, int points, int maxPoints, bool positive)
         { Label = label; Points = points; MaxPoints = maxPoints; Positive = positive; }
+        public static ScoreFactor FromDto(LeadScoreFactorDto dto)
+        {
+            var points = dto.Matched ? dto.Points : 0;
+            return new ScoreFactor(dto.RuleName, points, Math.Max(Math.Abs(dto.Points), 1), points >= 0);
+        }
         public string Label     { get; }
         public int    Points    { get; }
         public int    MaxPoints { get; }
@@ -1932,4 +2020,10 @@ else
     }
 
     private sealed record LabelValue(string Value, string Label);
+
+    private async Task EnsureTenantContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+    }
 }

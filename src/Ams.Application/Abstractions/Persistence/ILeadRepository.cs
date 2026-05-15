@@ -8,6 +8,8 @@ public interface ILeadRepository
 {
     Task<Guid> CreateAsync(CreateLeadRequest request, CancellationToken cancellationToken = default);
     Task<LeadDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<LeadScoreFactorDto>> GetScoreFactorsAsync(Guid leadId, CancellationToken cancellationToken = default);
+    Task<LeadEngagementSummaryDto?> GetEngagementSummaryAsync(Guid leadId, CancellationToken cancellationToken = default);
     Task<PagedResult<LeadDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
     Task UpdateAsync(UpdateLeadRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<LeadContactDto>> GetContactsAsync(Guid leadId, CancellationToken cancellationToken = default);
@@ -31,4 +33,12 @@ public interface ILeadRepository
     Task UpdateDocumentAsync(UpdateLeadDocumentRequest request, CancellationToken cancellationToken = default);
     Task DeleteDocumentAsync(Guid documentId, Guid? modifiedByUserId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<LeadScoringRuleDto>> GetScoringRulesAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<Guid?> GetScoringRuleTenantIdAsync(Guid scoringRuleId, CancellationToken cancellationToken = default);
+    Task<Guid> CreateScoringRuleAsync(CreateLeadScoringRuleRequest request, CancellationToken cancellationToken = default);
+    Task UpdateScoringRuleAsync(UpdateLeadScoringRuleRequest request, CancellationToken cancellationToken = default);
+    Task DeleteScoringRuleAsync(Guid scoringRuleId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<LeadEngagementFactorDto>> GetEngagementFactorsAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<Guid> CreateEngagementFactorAsync(CreateLeadEngagementFactorRequest request, CancellationToken cancellationToken = default);
+    Task UpdateEngagementFactorAsync(UpdateLeadEngagementFactorRequest request, CancellationToken cancellationToken = default);
+    Task DeleteEngagementFactorAsync(Guid engagementFactorId, CancellationToken cancellationToken = default);
 }

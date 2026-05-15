@@ -1,4 +1,5 @@
 using Ams.Api.Extensions;
+using Ams.Api.Hubs;
 using Ams.Api.Middlewares;
 using Ams.Api.Security;
 using Ams.Infrastructure.DependencyInjection;
@@ -8,6 +9,7 @@ using Microsoft.AspNetCore.Authentication;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+builder.Services.AddSignalR();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHealthChecks();
@@ -39,5 +41,6 @@ app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+app.MapHub<LeadScoringHub>("/hubs/lead-scoring");
 app.MapHealthChecks("/health");
 app.Run();

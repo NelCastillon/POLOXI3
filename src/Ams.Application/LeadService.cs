@@ -21,6 +21,12 @@ public sealed class LeadService : ILeadService
     public Task<LeadDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _repository.GetByIdAsync(id, cancellationToken);
 
+    public Task<IReadOnlyList<LeadScoreFactorDto>> GetScoreFactorsAsync(Guid leadId, CancellationToken cancellationToken = default)
+        => _repository.GetScoreFactorsAsync(leadId, cancellationToken);
+
+    public Task<LeadEngagementSummaryDto?> GetEngagementSummaryAsync(Guid leadId, CancellationToken cancellationToken = default)
+        => _repository.GetEngagementSummaryAsync(leadId, cancellationToken);
+
     public Task<PagedResult<LeadDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 
@@ -89,4 +95,28 @@ public sealed class LeadService : ILeadService
 
     public Task<IReadOnlyList<LeadScoringRuleDto>> GetScoringRulesAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetScoringRulesAsync(tenantId, cancellationToken);
+
+    public Task<Guid?> GetScoringRuleTenantIdAsync(Guid scoringRuleId, CancellationToken cancellationToken = default)
+        => _repository.GetScoringRuleTenantIdAsync(scoringRuleId, cancellationToken);
+
+    public Task<Guid> CreateScoringRuleAsync(CreateLeadScoringRuleRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateScoringRuleAsync(request, cancellationToken);
+
+    public Task UpdateScoringRuleAsync(UpdateLeadScoringRuleRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateScoringRuleAsync(request, cancellationToken);
+
+    public Task DeleteScoringRuleAsync(Guid scoringRuleId, CancellationToken cancellationToken = default)
+        => _repository.DeleteScoringRuleAsync(scoringRuleId, cancellationToken);
+
+    public Task<IReadOnlyList<LeadEngagementFactorDto>> GetEngagementFactorsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetEngagementFactorsAsync(tenantId, cancellationToken);
+
+    public Task<Guid> CreateEngagementFactorAsync(CreateLeadEngagementFactorRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateEngagementFactorAsync(request, cancellationToken);
+
+    public Task UpdateEngagementFactorAsync(UpdateLeadEngagementFactorRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateEngagementFactorAsync(request, cancellationToken);
+
+    public Task DeleteEngagementFactorAsync(Guid engagementFactorId, CancellationToken cancellationToken = default)
+        => _repository.DeleteEngagementFactorAsync(engagementFactorId, cancellationToken);
 }

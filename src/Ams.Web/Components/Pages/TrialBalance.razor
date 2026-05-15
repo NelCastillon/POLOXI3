@@ -1,5 +1,6 @@
 @page "/finance/trial-balance"
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 
 <PageTitle>Trial Balance — AMS</PageTitle>
@@ -75,6 +76,11 @@ else
 </SfDialog>
 
 @code {
+    Guid TenantId { get; set; }
+    Guid TenantAdminUserId { get; set; }
+    Guid DevTenantId { get; set; }
+    Guid DevUserId { get; set; }
+    private Guid _tenantAdminUserId;
     private List<TrialBalanceSnapshotDto> _items = [];
     private List<GLAccountDto> _glAccounts = [];
     private List<AccountingPeriodDto> _periods = [];
@@ -83,9 +89,9 @@ else
     private Guid _editingId = Guid.Empty;
     private TrialBalanceForm _form = new();
     private EditContext _editContext = default!;
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private Guid _tenantId;
 
-    protected override async Task OnInitializedAsync() { _editContext = new(_form); await LoadAsync(); }
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); _editContext = new(_form); await LoadAsync(); }
     private async Task LoadAsync() { _loading = true; _error = null; try { var result = await Api.SearchTrialBalanceSnapshotsAsync(_tenantId, _searchTerm); var gl = await Api.SearchGLAccountsAsync(_tenantId, pageSize: 500); var periods = await Api.SearchAccountingPeriodsAsync(_tenantId); _items = result?.Items.ToList() ?? []; _glAccounts = gl?.Items.ToList() ?? []; _periods = periods?.Items.ToList() ?? []; } catch (Exception ex) { _error = ex.Message; _items = []; } finally { _loading = false; } }
     private void OnRowSelected(RowSelectEventArgs<TrialBalanceSnapshotDto> args) => OpenEdit(args.Data);
     private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
@@ -94,4 +100,15 @@ else
     private async Task SaveAsync() { if (!_editContext.Validate()) return; _saving = true; try { if (_editingId == Guid.Empty) await Api.CreateTrialBalanceSnapshotAsync(new CreateTrialBalanceSnapshotRequest { TenantId = _tenantId, SnapshotDate = DateOnly.FromDateTime(_form.SnapshotDate), AccountingPeriodId = _form.AccountingPeriodId, GLAccountId = _form.GLAccountId, AccountCode = _form.AccountCode, AccountName = _form.AccountName, DebitBalance = _form.DebitBalance, CreditBalance = _form.CreditBalance }); else await Api.UpdateTrialBalanceSnapshotAsync(_editingId, new UpdateTrialBalanceSnapshotRequest { TenantId = _tenantId, TrialBalanceSnapshotId = _editingId, SnapshotDate = DateOnly.FromDateTime(_form.SnapshotDate), AccountingPeriodId = _form.AccountingPeriodId, GLAccountId = _form.GLAccountId, AccountCode = _form.AccountCode, AccountName = _form.AccountName, DebitBalance = _form.DebitBalance, CreditBalance = _form.CreditBalance }); _showForm = false; await LoadAsync(); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; } finally { _saving = false; } }
     private static string Fmt(decimal value) => value.ToString("C0");
     private sealed class TrialBalanceForm { [Required] public DateTime SnapshotDate { get; set; } = DateTime.Today; public Guid? AccountingPeriodId { get; set; } [RequiredGuid(ErrorMessage = "GL Account is required.")] public Guid GLAccountId { get; set; } [Required, StringLength(50)] public string AccountCode { get; set; } = string.Empty; [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty; [Range(0, 100000000)] public decimal DebitBalance { get; set; } [Range(0, 100000000)] public decimal CreditBalance { get; set; } }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        DevTenantId = context.TenantId;
+        DevUserId = context.UserId;
+    }
 }

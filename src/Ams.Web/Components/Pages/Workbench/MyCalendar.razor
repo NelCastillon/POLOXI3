@@ -4,6 +4,7 @@
 @using Ams.Application.Features.Operations
 @using System.ComponentModel.DataAnnotations
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -234,8 +235,12 @@
 }
 
 @code {
-    static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    static readonly Guid TenantAdminUserId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+    Guid DevTenantId { get; set; }
+    Guid DevUserId { get; set; }
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    Guid TenantId { get; set; }
+    Guid TenantAdminUserId { get; set; }
     static readonly string[] CalendarTypes = ["Call", "Meeting", "Task", "Event", "Deadline", "Note"];
     static readonly string[] StatusCodes = ["Scheduled", "Completed", "Cancelled", "Rescheduled"];
     static readonly string[] DaysOfWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -275,6 +280,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        await ResolveCurrentUserContextAsync();
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Workbench", "/workbench"), new("My Calendar", "/workbench/calendar"));
         await LoadAsync();
     }
@@ -339,7 +345,7 @@
 
     static CalEvent ToEvent(CalendarEventDto item) => new(item.EventId, item.Title, item.EventTypeCode, item.StatusCode, item.Notes ?? string.Empty, DateOnly.FromDateTime(item.StartDateTimeUtc.ToLocalTime()), item.StartDateTimeUtc.ToLocalTime(), item.EndDateTimeUtc?.ToLocalTime(), item.AllDay, item.TimeZoneId, item.AssignedToUserId ?? item.OrganizerUserId);
     static string DisplayTime(CalEvent item) => item.AllDay ? "All day" : item.EndLocal is null ? item.StartLocal.ToString("h:mm tt") : $"{item.StartLocal:h:mm tt}–{item.EndLocal:h:mm tt}";
-    static string DisplayOwner(CalEvent item) => item.AssignedToUserId == TenantAdminUserId ? "Tenant Admin" : "Assigned user";
+    string DisplayOwner(CalEvent item) => item.AssignedToUserId == TenantAdminUserId ? "Tenant Admin" : "Assigned user";
     static string TypeCss(string type) => type.ToLowerInvariant().Replace(" ", "-");
     static string TypeIcon(string type) => type switch { "Call" => "bi-telephone-fill", "Meeting" => "bi-calendar-event-fill", "Task" => "bi-check2-square", "Deadline" => "bi-flag-fill", "Event" => "bi-star-fill", _ => "bi-calendar3" };
     static string FormatDateLabel(DateOnly date) => date == Today ? "Today" : date == DateOnly.FromDateTime(DateTime.Today.AddDays(1)) ? "Tomorrow" : date.ToString("dddd, MMMM d");
@@ -349,4 +355,15 @@
     sealed record CalEvent(Guid Id, string Title, string Type, string Status, string Notes, DateOnly Date, DateTime StartLocal, DateTime? EndLocal, bool AllDay, string TimeZoneId, Guid? AssignedToUserId);
     sealed record AgendaGroup(string Label, List<CalEvent> Events);
     sealed class EventForm { [Required] public DateTime StartLocal { get; set; } = DateTime.Today.AddHours(9); public DateTime? EndLocal { get; set; } = DateTime.Today.AddHours(10); public bool AllDay { get; set; } [Required, StringLength(50)] public string Type { get; set; } = "Meeting"; [Required, StringLength(50)] public string Status { get; set; } = "Scheduled"; [Required, StringLength(100)] public string TimeZoneId { get; set; } = "America/Chicago"; [Required, StringLength(200)] public string Title { get; set; } = string.Empty; [StringLength(2000)] public string? Notes { get; set; } }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        DevTenantId = context.TenantId;
+        DevUserId = context.UserId;
+    }
 }

@@ -1,5 +1,6 @@
 @page "/billing/ar-aging"
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 
 <PageTitle>AR Aging — AMS</PageTitle>
@@ -76,7 +77,12 @@
 </SfDialog>
 
 @code {
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    Guid TenantId { get; set; }
+    Guid TenantAdminUserId { get; set; }
+    Guid DevTenantId { get; set; }
+    Guid DevUserId { get; set; }
+    private Guid _tenantAdminUserId;
+    private Guid _tenantId;
     private SfToast _toast = default!;
     private List<ArAgingSnapshotDto> _items = [];
     private List<BillingAccountDto> _accounts = [];
@@ -89,7 +95,7 @@
     private EditContext _editContext = default!;
 
     private IEnumerable<ArAgingSnapshotDto> FilteredItems => _items.Where(x => _activeFilter switch { "Current" => x.CurrentAmount > 0, "30" => x.Days30Amount > 0, "60" => x.Days60Amount > 0, "90" => x.Days90Amount > 0, "90+" => x.Days90PlusAmount > 0, _ => true });
-    protected override async Task OnInitializedAsync() { _editContext = new(_form); await LoadAsync(); }
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); _editContext = new(_form); await LoadAsync(); }
     private async Task LoadAsync() { _loading = true; _loadError = null; try { var ar = await Api.SearchArAgingSnapshotsAsync(_tenantId, _searchTerm); var accounts = await Api.SearchBillingAccountsAsync(_tenantId, pageSize: 500); _items = ar?.Items.ToList() ?? []; _accounts = accounts?.Items.ToList() ?? []; } catch (Exception ex) { _loadError = $"AR Aging failed to load: {ex.Message}"; await ToastAsync(_loadError, true); } finally { _loading = false; } }
     private async Task SyncAsync() { _syncing = true; try { await Api.SyncArAgingFromInvoicesAsync(_tenantId, DateOnly.FromDateTime(_snapshotDate)); await ToastAsync("AR aging synchronized from Billing invoices."); await LoadAsync(); } catch (Exception ex) { await ToastAsync($"Sync failed: {ex.Message}", true); } finally { _syncing = false; } }
     private void SetFilter(string filter) => _activeFilter = filter;
@@ -106,4 +112,15 @@
 
     private sealed class ArForm { [RequiredGuid(ErrorMessage = "Account is required.")] public Guid AccountId { get; set; } [Required] public DateTime SnapshotDate { get; set; } = DateTime.Today; [Range(0, 100000000)] public decimal CurrentAmount { get; set; } [Range(0, 100000000)] public decimal Days30Amount { get; set; } [Range(0, 100000000)] public decimal Days60Amount { get; set; } [Range(0, 100000000)] public decimal Days90Amount { get; set; } [Range(0, 100000000)] public decimal Days90PlusAmount { get; set; } public decimal Total => CurrentAmount + Days30Amount + Days60Amount + Days90Amount + Days90PlusAmount; }
     private sealed class RequiredGuidAttribute : ValidationAttribute { public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty; }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        DevTenantId = context.TenantId;
+        DevUserId = context.UserId;
+    }
 }

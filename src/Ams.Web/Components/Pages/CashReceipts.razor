@@ -1,5 +1,6 @@
 @page "/finance/cash-receipts"
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 
 <PageTitle>Cash Receipts — AMS</PageTitle>
@@ -81,6 +82,11 @@ else
 </SfDialog>
 
 @code {
+    Guid TenantId { get; set; }
+    Guid TenantAdminUserId { get; set; }
+    Guid DevTenantId { get; set; }
+    Guid DevUserId { get; set; }
+    private Guid _tenantAdminUserId;
     private List<CashReceiptEntryDto> _items = [];
     private List<BillingAccountDto> _accounts = [];
     private List<InvoiceDto> _invoices = [];
@@ -92,9 +98,9 @@ else
     private Guid _editingId = Guid.Empty;
     private CashReceiptForm _form = new();
     private EditContext _editContext = default!;
-    private readonly Guid _tenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private Guid _tenantId;
     private IEnumerable<CashReceiptEntryDto> FilteredItems => _items.Where(x => string.IsNullOrWhiteSpace(_statusFilter) || x.StatusCode == _statusFilter);
-    protected override async Task OnInitializedAsync() { _editContext = new(_form); await LoadAsync(); }
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); _editContext = new(_form); await LoadAsync(); }
     private async Task LoadAsync() { _loading = true; _error = null; try { var result = await Api.SearchCashReceiptEntriesAsync(_tenantId, _searchTerm); var accounts = await Api.SearchBillingAccountsAsync(_tenantId); var invoices = await Api.SearchInvoicesAsync(_tenantId); var gl = await Api.SearchGLAccountsAsync(_tenantId, pageSize: 500); _items = result?.Items.ToList() ?? []; _accounts = accounts?.Items.ToList() ?? []; _invoices = invoices?.Items.ToList() ?? []; _glAccounts = gl?.Items.ToList() ?? []; } catch (Exception ex) { _error = ex.Message; _items = []; } finally { _loading = false; } }
     private void OnRowSelected(RowSelectEventArgs<CashReceiptEntryDto> args) => OpenEdit(args.Data);
     private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
@@ -104,4 +110,15 @@ else
     private static string Fmt(decimal value) => value.ToString("C0");
     private static string StatusClass(string status) => status switch { "Posted" => "fin-chip-success", "Pending" => "fin-chip-warning", "Void" => "fin-chip-neutral", _ => "fin-chip-info" };
     private sealed class CashReceiptForm { [RequiredGuid(ErrorMessage = "Account is required.")] public Guid AccountId { get; set; } public Guid? InvoiceId { get; set; } [Required] public DateTime ReceiptDate { get; set; } = DateTime.Today; [Range(0.01, 100000000)] public decimal Amount { get; set; } [Required, StringLength(50)] public string PaymentMethodCode { get; set; } = "ACH"; [StringLength(100)] public string? ReferenceNumber { get; set; } public Guid? GLAccountId { get; set; } [StringLength(80)] public string? BankAccountCode { get; set; } [StringLength(1000)] public string? Notes { get; set; } [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending"; }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        DevTenantId = context.TenantId;
+        DevUserId = context.UserId;
+    }
 }

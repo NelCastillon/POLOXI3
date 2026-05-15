@@ -474,6 +474,27 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    public async Task<AuthenticatedUserDto?> ValidateLoginAsync(Guid tenantId, string userNameOrEmail, string password, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/auth/validate", new { TenantId = tenantId, UserNameOrEmail = userNameOrEmail, Password = password }, cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            return null;
+        }
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<AuthenticatedUserDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task<Guid> RegisterLoginUserAsync(RegisterLoginUserRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/auth/register", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
     public Task<PagedResult<UserDto>?> SearchUsersAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<UserDto>>($"api/users?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
@@ -592,8 +613,11 @@ public sealed partial class ApiClient
     public Task<RoleDto?> GetRoleByIdAsync(Guid roleId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<RoleDto>($"api/roles/{roleId}", cancellationToken);
 
-    public Task<PagedResult<RoleDto>?> SearchRolesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PagedResult<RoleDto>>($"api/roles?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+    public Task<PagedResult<RoleDto>?> SearchRolesAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<RoleDto>>($"api/roles?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public Task<PagedResult<RoleDto>?> SearchRolesAsync(Guid tenantId, string? searchTerm, CancellationToken cancellationToken)
+        => SearchRolesAsync(tenantId, searchTerm, 1, 25, cancellationToken);
 
     public async Task<Guid> CreateRoleAsync(CreateRoleRequest request, CancellationToken cancellationToken = default)
     {
@@ -775,6 +799,34 @@ public sealed partial class ApiClient
     public Task<LeadDto?> GetLeadByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<LeadDto>($"api/leads/{id}", cancellationToken);
 
+    public Task<IReadOnlyList<LeadScoreFactorDto>?> GetLeadScoreFactorsAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadScoreFactorDto>>($"api/leads/{id}/score-factors", cancellationToken);
+
+    public Task<LeadEngagementSummaryDto?> GetLeadEngagementSummaryAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<LeadEngagementSummaryDto>($"api/leads/{id}/engagement", cancellationToken);
+
+    public Task<IReadOnlyList<LeadEngagementFactorDto>?> GetLeadEngagementFactorsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadEngagementFactorDto>>($"api/leads/engagement-factors?tenantId={tenantId}", cancellationToken);
+
+    public async Task<Guid> CreateLeadEngagementFactorAsync(CreateLeadEngagementFactorRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/leads/engagement-factors", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateLeadEngagementFactorAsync(Guid engagementFactorId, UpdateLeadEngagementFactorRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/leads/engagement-factors/{engagementFactorId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteLeadEngagementFactorAsync(Guid engagementFactorId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/leads/engagement-factors/{engagementFactorId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     public async Task UpdateLeadAsync(Guid id, UpdateLeadRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PutAsJsonAsync($"api/leads/{id}", request, cancellationToken);
@@ -882,6 +934,25 @@ public sealed partial class ApiClient
 
     public Task<IReadOnlyList<LeadScoringRuleDto>?> GetLeadScoringRulesAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadScoringRuleDto>>($"api/leads/scoring-rules?tenantId={tenantId}", cancellationToken);
+
+    public async Task<Guid> CreateLeadScoringRuleAsync(CreateLeadScoringRuleRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/leads/scoring-rules", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateLeadScoringRuleAsync(Guid scoringRuleId, UpdateLeadScoringRuleRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/leads/scoring-rules/{scoringRuleId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteLeadScoringRuleAsync(Guid scoringRuleId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/leads/scoring-rules/{scoringRuleId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
 
     // -- Account Segments -------------------------------------
     public Task<PagedResult<AccountSegmentDto>?> SearchAccountSegmentsAsync(string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)

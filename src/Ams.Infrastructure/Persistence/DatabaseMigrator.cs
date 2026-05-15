@@ -144,6 +144,11 @@ public sealed class DatabaseMigrator
         new("0111_Billing_TimeExpense_CreateSeed", Migration0111_BillingTimeExpenseCreateSeed),
         new("0112_Claims_EnterpriseSchemaSync", Migration0112_ClaimsEnterpriseSchemaSync),
         new("0113_OPS_TaskType_CreateSeed", Migration0113_OpsTaskTypeCreateSeed),
+        new("0114_IAM_LoginCredentials_SchemaSync", Migration0114_IamLoginCredentialsSchemaSync),
+        new("0115_IAM_Enterprise_RBAC_Navigation_Seed", Migration0115_IamEnterpriseRbacNavigationSeed),
+        new("0116_IAM_Admin_Login_Credentials_Seed", Migration0116_IamAdminLoginCredentialsSeed),
+        new("0117_CRM_LeadScoringRule_SchemaSync", Migration0117_CrmLeadScoringRuleSchemaSync),
+        new("0118_CRM_LeadEngagementFactor_CreateSeed", Migration0118_CrmLeadEngagementFactorCreateSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -166,6 +171,490 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.[User
 
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.[User]') AND name = N'IsLockedOut')
     ALTER TABLE IAM.[User] ADD IsLockedOut BIT NOT NULL DEFAULT 0;
+";
+
+    private const string Migration0114_IamLoginCredentialsSchemaSync = @"
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.[User]') AND name = N'PasswordHash')
+    ALTER TABLE IAM.[User] ADD PasswordHash NVARCHAR(500) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.[User]') AND name = N'PasswordSalt')
+    ALTER TABLE IAM.[User] ADD PasswordSalt NVARCHAR(200) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.[User]') AND name = N'PasswordChangedDateUtc')
+    ALTER TABLE IAM.[User] ADD PasswordChangedDateUtc DATETIME2 NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.[User]') AND name = N'LockoutEndDateUtc')
+    ALTER TABLE IAM.[User] ADD LockoutEndDateUtc DATETIME2 NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.[User]') AND name = N'FailedLoginAttempts')
+    ALTER TABLE IAM.[User] ADD FailedLoginAttempts INT NOT NULL DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_IAM_User_Tenant_UserName' AND object_id = OBJECT_ID(N'IAM.[User]'))
+    CREATE UNIQUE INDEX UX_IAM_User_Tenant_UserName ON IAM.[User] (TenantId, UserName) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_IAM_User_Tenant_Email' AND object_id = OBJECT_ID(N'IAM.[User]'))
+    CREATE UNIQUE INDEX UX_IAM_User_Tenant_Email ON IAM.[User] (TenantId, Email) WHERE IsDeleted = 0;
+";
+
+    private const string Migration0117_CrmLeadScoringRuleSchemaSync = @"
+DECLARE @SeedTenant UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM')
+    EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.LeadScoringRule', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadScoringRule
+    (
+        ScoringRuleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadScoringRule PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        RuleName NVARCHAR(200) NOT NULL,
+        RuleDescription NVARCHAR(500) NULL,
+        Field NVARCHAR(100) NOT NULL,
+        Operator NVARCHAR(50) NOT NULL,
+        Value NVARCHAR(500) NOT NULL CONSTRAINT DF_LeadScoringRule_Value DEFAULT N'',
+        Points INT NOT NULL CONSTRAINT DF_LeadScoringRule_Points DEFAULT 0,
+        PointValue INT NOT NULL CONSTRAINT DF_LeadScoringRule_PointValue DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_LeadScoringRule_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_LeadScoringRule_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadScoringRule_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadScoringRule_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'ScoringRuleId') IS NULL ALTER TABLE CRM.LeadScoringRule ADD ScoringRuleId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'RuleDescription') IS NULL ALTER TABLE CRM.LeadScoringRule ADD RuleDescription NVARCHAR(500) NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'Field') IS NULL ALTER TABLE CRM.LeadScoringRule ADD Field NVARCHAR(100) NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'Operator') IS NULL ALTER TABLE CRM.LeadScoringRule ADD Operator NVARCHAR(50) NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'Value') IS NULL ALTER TABLE CRM.LeadScoringRule ADD Value NVARCHAR(500) NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'Points') IS NULL ALTER TABLE CRM.LeadScoringRule ADD Points INT NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'PointValue') IS NULL ALTER TABLE CRM.LeadScoringRule ADD PointValue INT NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'SortOrder') IS NULL ALTER TABLE CRM.LeadScoringRule ADD SortOrder INT NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'CreatedByUserId') IS NULL ALTER TABLE CRM.LeadScoringRule ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.LeadScoringRule ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.LeadScoringRule ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'IsDeleted') IS NULL ALTER TABLE CRM.LeadScoringRule ADD IsDeleted BIT NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.LeadScoringRule ADD CreatedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'IsActive') IS NULL ALTER TABLE CRM.LeadScoringRule ADD IsActive BIT NULL;
+
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'LeadScoringRuleId') IS NOT NULL
+    EXEC(N'
+UPDATE CRM.LeadScoringRule
+SET ScoringRuleId = COALESCE(ScoringRuleId, LeadScoringRuleId, NEWID()),
+    Field = COALESCE(NULLIF(Field, N''''), CASE WHEN RuleName LIKE N''%Company%'' THEN N''CompanySize'' WHEN RuleName LIKE N''%Email%'' THEN N''EmailOpened'' WHEN RuleName LIKE N''%Website%'' OR RuleName LIKE N''%Web%'' THEN N''WebsiteVisits'' WHEN RuleName LIKE N''%Title%'' THEN N''Title'' WHEN RuleName LIKE N''%Stale%'' THEN N''StaleDays'' WHEN RuleName LIKE N''%Source%'' THEN N''Source'' WHEN RuleName LIKE N''%Revenue%'' OR RuleName LIKE N''%Premium%'' THEN N''AnnualRevenue'' ELSE N''Source'' END),
+    Operator = COALESCE(NULLIF(Operator, N''''), CASE WHEN RuleDescription LIKE N''%>%'' OR RuleName LIKE N''%Stale%'' THEN N''GreaterThan'' WHEN RuleDescription LIKE N''%contains%'' THEN N''Contains'' ELSE N''Equals'' END),
+    Value = COALESCE(Value, N''''),
+    Points = COALESCE(Points, PointValue, 0),
+    PointValue = COALESCE(PointValue, Points, 0),
+    SortOrder = COALESCE(SortOrder, 0),
+    IsActive = COALESCE(IsActive, 1),
+    IsDeleted = COALESCE(IsDeleted, 0),
+    CreatedDateUtc = COALESCE(CreatedDateUtc, SYSUTCDATETIME())
+WHERE ScoringRuleId IS NULL OR Field IS NULL OR Field = N'''' OR Operator IS NULL OR Operator = N'''' OR Value IS NULL OR Points IS NULL OR PointValue IS NULL OR SortOrder IS NULL OR IsActive IS NULL OR IsDeleted IS NULL OR CreatedDateUtc IS NULL;
+');
+ELSE
+    EXEC(N'
+UPDATE CRM.LeadScoringRule
+SET ScoringRuleId = COALESCE(ScoringRuleId, NEWID()),
+    Field = COALESCE(NULLIF(Field, N''''), CASE WHEN RuleName LIKE N''%Company%'' THEN N''CompanySize'' WHEN RuleName LIKE N''%Email%'' THEN N''EmailOpened'' WHEN RuleName LIKE N''%Website%'' OR RuleName LIKE N''%Web%'' THEN N''WebsiteVisits'' WHEN RuleName LIKE N''%Title%'' THEN N''Title'' WHEN RuleName LIKE N''%Stale%'' THEN N''StaleDays'' WHEN RuleName LIKE N''%Source%'' THEN N''Source'' WHEN RuleName LIKE N''%Revenue%'' OR RuleName LIKE N''%Premium%'' THEN N''AnnualRevenue'' ELSE N''Source'' END),
+    Operator = COALESCE(NULLIF(Operator, N''''), CASE WHEN RuleDescription LIKE N''%>%'' OR RuleName LIKE N''%Stale%'' THEN N''GreaterThan'' WHEN RuleDescription LIKE N''%contains%'' THEN N''Contains'' ELSE N''Equals'' END),
+    Value = COALESCE(Value, N''''),
+    Points = COALESCE(Points, PointValue, 0),
+    PointValue = COALESCE(PointValue, Points, 0),
+    SortOrder = COALESCE(SortOrder, 0),
+    IsActive = COALESCE(IsActive, 1),
+    IsDeleted = COALESCE(IsDeleted, 0),
+    CreatedDateUtc = COALESCE(CreatedDateUtc, SYSUTCDATETIME())
+WHERE ScoringRuleId IS NULL OR Field IS NULL OR Field = N'''' OR Operator IS NULL OR Operator = N'''' OR Value IS NULL OR Points IS NULL OR PointValue IS NULL OR SortOrder IS NULL OR IsActive IS NULL OR IsDeleted IS NULL OR CreatedDateUtc IS NULL;
+');
+
+EXEC(N'
+UPDATE CRM.LeadScoringRule
+SET RuleDescription = CONCAT(Field, N'' '', Operator, CASE WHEN NULLIF(Value, N'''') IS NULL THEN N'''' ELSE CONCAT(N'' '', Value) END)
+WHERE RuleDescription IS NULL OR RuleDescription = N'''';
+');
+
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'RuleType') IS NOT NULL
+    EXEC(N'
+UPDATE CRM.LeadScoringRule
+SET RuleType = COALESCE(NULLIF(RuleType, N''''), N''Factor'')
+WHERE RuleType IS NULL OR RuleType = N'''';
+');
+
+ALTER TABLE CRM.LeadScoringRule ALTER COLUMN ScoringRuleId UNIQUEIDENTIFIER NOT NULL;
+ALTER TABLE CRM.LeadScoringRule ALTER COLUMN Field NVARCHAR(100) NOT NULL;
+ALTER TABLE CRM.LeadScoringRule ALTER COLUMN Operator NVARCHAR(50) NOT NULL;
+ALTER TABLE CRM.LeadScoringRule ALTER COLUMN Value NVARCHAR(500) NOT NULL;
+ALTER TABLE CRM.LeadScoringRule ALTER COLUMN Points INT NOT NULL;
+ALTER TABLE CRM.LeadScoringRule ALTER COLUMN PointValue INT NOT NULL;
+ALTER TABLE CRM.LeadScoringRule ALTER COLUMN SortOrder INT NOT NULL;
+ALTER TABLE CRM.LeadScoringRule ALTER COLUMN CreatedDateUtc DATETIME2 NOT NULL;
+ALTER TABLE CRM.LeadScoringRule ALTER COLUMN IsDeleted BIT NOT NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadScoringRule') AND name = N'IX_LeadScoringRule_TenantId')
+    CREATE INDEX IX_LeadScoringRule_TenantId ON CRM.LeadScoringRule(TenantId, IsDeleted);
+
+CREATE TABLE #LeadScoringFactors (RuleName NVARCHAR(200), Field NVARCHAR(100), Operator NVARCHAR(50), Value NVARCHAR(500), Points INT, SortOrder INT);
+INSERT INTO #LeadScoringFactors VALUES
+    (N'Company size', N'CompanySize', N'GreaterThan', N'100', 20, 10),
+    (N'Email opened', N'EmailOpened', N'Equals', N'True', 15, 20),
+    (N'Website visits', N'WebsiteVisits', N'GreaterThan', N'3', 8, 30),
+    (N'Title match', N'Title', N'Contains', N'Owner', 12, 40),
+    (N'Stale > 14 d', N'StaleDays', N'OlderThanDays', N'14', -10, 50),
+    (N'Referral Source', N'Source', N'Equals', N'Referral', 25, 60),
+    (N'High Annual Revenue', N'AnnualRevenue', N'GreaterThan', N'1000000', 20, 70);
+
+IF COL_LENGTH(N'CRM.LeadScoringRule', N'RuleType') IS NOT NULL
+    EXEC sp_executesql N'
+INSERT INTO CRM.LeadScoringRule (ScoringRuleId, TenantId, RuleName, RuleDescription, RuleType, Field, Operator, Value, Points, PointValue, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @SeedTenant, f.RuleName, CONCAT(f.Field, N'' '', f.Operator, N'' '', f.Value), N''Factor'', f.Field, f.Operator, f.Value, f.Points, f.Points, 1, f.SortOrder, SYSUTCDATETIME(), 0
+FROM #LeadScoringFactors f
+WHERE NOT EXISTS (SELECT 1 FROM CRM.LeadScoringRule r WHERE r.TenantId = @SeedTenant AND r.IsDeleted = 0 AND (r.RuleName = f.RuleName OR (r.Field = f.Field AND r.Operator = f.Operator AND r.Value = f.Value)));
+', N'@SeedTenant UNIQUEIDENTIFIER', @SeedTenant;
+ELSE
+    EXEC sp_executesql N'
+INSERT INTO CRM.LeadScoringRule (ScoringRuleId, TenantId, RuleName, RuleDescription, Field, Operator, Value, Points, PointValue, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @SeedTenant, f.RuleName, CONCAT(f.Field, N'' '', f.Operator, N'' '', f.Value), f.Field, f.Operator, f.Value, f.Points, f.Points, 1, f.SortOrder, SYSUTCDATETIME(), 0
+FROM #LeadScoringFactors f
+WHERE NOT EXISTS (SELECT 1 FROM CRM.LeadScoringRule r WHERE r.TenantId = @SeedTenant AND r.IsDeleted = 0 AND (r.RuleName = f.RuleName OR (r.Field = f.Field AND r.Operator = f.Operator AND r.Value = f.Value)));
+', N'@SeedTenant UNIQUEIDENTIFIER', @SeedTenant;
+
+DROP TABLE #LeadScoringFactors;
+";
+
+    private const string Migration0118_CrmLeadEngagementFactorCreateSeed = @"
+DECLARE @SeedTenant UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM')
+    EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.LeadEngagementFactor', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadEngagementFactor
+    (
+        EngagementFactorId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadEngagementFactor PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        FactorName NVARCHAR(200) NOT NULL,
+        Metric NVARCHAR(100) NOT NULL,
+        Operator NVARCHAR(50) NOT NULL,
+        Value NVARCHAR(500) NOT NULL CONSTRAINT DF_LeadEngagementFactor_Value DEFAULT N'',
+        Points INT NOT NULL CONSTRAINT DF_LeadEngagementFactor_Points DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_LeadEngagementFactor_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_LeadEngagementFactor_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadEngagementFactor_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadEngagementFactor_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadEngagementFactor') AND name = N'IX_LeadEngagementFactor_TenantId')
+    CREATE INDEX IX_LeadEngagementFactor_TenantId ON CRM.LeadEngagementFactor(TenantId, IsDeleted);
+
+CREATE TABLE #LeadEngagementFactors (FactorName NVARCHAR(200), Metric NVARCHAR(100), Operator NVARCHAR(50), Value NVARCHAR(500), Points INT, SortOrder INT);
+INSERT INTO #LeadEngagementFactors VALUES
+    (N'Emails Sent', N'EmailsSent', N'GreaterThanOrEqual', N'1', 10, 10),
+    (N'Emails Opened', N'EmailsOpened', N'GreaterThanOrEqual', N'1', 20, 20),
+    (N'Links Clicked', N'Clicks', N'GreaterThanOrEqual', N'1', 20, 30),
+    (N'Portal Visits', N'PortalVisits', N'GreaterThanOrEqual', N'1', 10, 40),
+    (N'Activities Logged', N'ActivityCount', N'GreaterThanOrEqual', N'1', 20, 50),
+    (N'No Recent Touch', N'DaysSinceTouch', N'GreaterThan', N'14', -20, 60);
+
+INSERT INTO CRM.LeadEngagementFactor (EngagementFactorId, TenantId, FactorName, Metric, Operator, Value, Points, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @SeedTenant, f.FactorName, f.Metric, f.Operator, f.Value, f.Points, 1, f.SortOrder, SYSUTCDATETIME(), 0
+FROM #LeadEngagementFactors f
+WHERE NOT EXISTS (SELECT 1 FROM CRM.LeadEngagementFactor e WHERE e.TenantId = @SeedTenant AND e.IsDeleted = 0 AND e.FactorName = f.FactorName);
+
+DROP TABLE #LeadEngagementFactors;
+";
+
+    private const string Migration0115_IamEnterpriseRbacNavigationSeed = @"
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+IF OBJECT_ID(N'Master.PermissionAction') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM Master.PermissionAction WHERE UPPER(ActionName) IN ('READ', 'VIEW') OR UPPER(ActionCode) IN ('READ', 'VIEW'))
+        INSERT INTO Master.PermissionAction (ActionCode, ActionName) VALUES ('READ', 'Read');
+
+    IF NOT EXISTS (SELECT 1 FROM Master.PermissionAction WHERE UPPER(ActionName) = 'MANAGE' OR UPPER(ActionCode) = 'MANAGE')
+        INSERT INTO Master.PermissionAction (ActionCode, ActionName) VALUES ('MANAGE', 'Manage');
+END;
+
+DECLARE @ReadActionId INT = (SELECT TOP 1 PermissionActionId FROM Master.PermissionAction WHERE UPPER(ActionName) IN ('READ', 'VIEW') OR UPPER(ActionCode) IN ('READ', 'VIEW') ORDER BY CASE WHEN UPPER(ActionName) = 'READ' OR UPPER(ActionCode) = 'READ' THEN 0 ELSE 1 END, PermissionActionId);
+DECLARE @ManageActionId INT = (SELECT TOP 1 PermissionActionId FROM Master.PermissionAction WHERE UPPER(ActionName) = 'MANAGE' OR UPPER(ActionCode) = 'MANAGE' ORDER BY PermissionActionId);
+
+IF @ReadActionId IS NULL OR @ManageActionId IS NULL
+    THROW 51000, 'Migration 0115 could not resolve required Master.PermissionAction rows for Read/View and Manage.', 1;
+DECLARE @AdminRoleId UNIQUEIDENTIFIER = (SELECT TOP 1 RoleId FROM IAM.Role WHERE TenantId = @TenantId AND RoleCode = 'SYSTEM_ADMIN');
+IF @AdminRoleId IS NULL
+BEGIN
+    SET @AdminRoleId = '10000000-0000-0000-0000-000000000001';
+    IF NOT EXISTS (SELECT 1 FROM IAM.Role WHERE RoleId = @AdminRoleId)
+        INSERT INTO IAM.Role (RoleId, TenantId, RoleCode, RoleName, RoleTypeCode, Description, SortOrder, IsBuiltIn, IsSystemRole, IsActive, CreatedDateUtc, IsDeleted)
+        VALUES (@AdminRoleId, @TenantId, 'SYSTEM_ADMIN', 'System Administrator', 'Internal', 'Full platform, tenant, IAM, and module access', 1, 1, 1, 1, SYSUTCDATETIME(), 0);
+END;
+
+DECLARE @Permissions TABLE (PermissionCode NVARCHAR(200), PermissionName NVARCHAR(200), ResourceCode NVARCHAR(100), ActionCode NVARCHAR(50), ModuleCode NVARCHAR(100), Description NVARCHAR(500));
+INSERT INTO @Permissions VALUES
+('NAV_ALL', 'All navigation', 'Navigation', 'View', 'Platform', 'Access all navigation sections and pages'),
+('PLATFORM_ADMIN', 'Platform administration', 'Platform', 'Manage', 'Platform', 'Full platform administration'),
+('DASHBOARD_VIEW', 'View dashboards', 'Dashboard', 'View', 'Dashboard', 'View agency and executive dashboards'),
+('WORKBENCH_VIEW', 'View workbenches', 'Workbench', 'View', 'Workbench', 'View user workbench pages'),
+('WORKBENCH_PRODUCER', 'Producer workbench', 'Workbench', 'View', 'Workbench', 'View producer workbench'),
+('WORKBENCH_CSR', 'CSR workbench', 'Workbench', 'View', 'Workbench', 'View CSR workbench'),
+('WORKBENCH_SERVICE_MANAGER', 'Service manager workbench', 'Workbench', 'View', 'Workbench', 'View service manager workbench'),
+('WORKBENCH_ACCOUNTING', 'Accounting workbench', 'Workbench', 'View', 'Workbench', 'View accounting workbench'),
+('WORKBENCH_MARKETING', 'Marketing workbench', 'Workbench', 'View', 'Workbench', 'View marketing workbench'),
+('WORKBENCH_OPERATIONS', 'Operations workbench', 'Workbench', 'View', 'Workbench', 'View operations workbench'),
+('CRM_VIEW', 'View CRM', 'CRM', 'View', 'CRM', 'View CRM leads and demand pages'),
+('ACCOUNT_VIEW', 'View accounts', 'Accounts', 'View', 'Accounts', 'View accounts and contacts'),
+('OPPORTUNITY_VIEW', 'View opportunities', 'Opportunities', 'View', 'CRM', 'View opportunities and pipeline'),
+('SUBMISSION_VIEW', 'View submissions', 'Submissions', 'View', 'Submissions', 'View submissions and quotes'),
+('POLICY_VIEW', 'View policies', 'Policies', 'View', 'Policies', 'View policy pages'),
+('RENEWAL_VIEW', 'View renewals', 'Renewals', 'View', 'Renewals', 'View renewal pages'),
+('CLAIM_VIEW', 'View claims', 'Claims', 'View', 'Claims', 'View claim pages'),
+('TASK_VIEW', 'View tasks', 'Tasks', 'View', 'Operations', 'View task and activity pages'),
+('WORKFLOW_VIEW', 'View workflows', 'Workflow', 'View', 'Operations', 'View workflow pages'),
+('COMMUNICATION_VIEW', 'View communications', 'Communications', 'View', 'Communications', 'View communication pages'),
+('DOCUMENT_VIEW', 'View documents', 'Documents', 'View', 'Documents', 'View document pages'),
+('BILLING_VIEW', 'View billing', 'Billing', 'View', 'Billing', 'View billing and AR pages'),
+('FINANCE_VIEW', 'View finance', 'Finance', 'View', 'Finance', 'View finance and GL pages'),
+('COMMISSION_VIEW', 'View commissions', 'Commissions', 'View', 'Commissions', 'View commission pages'),
+('MARKETING_VIEW', 'View marketing', 'Marketing', 'View', 'Marketing', 'View marketing pages'),
+('PORTAL_VIEW', 'View portal', 'Portal', 'View', 'Portal', 'View client portal pages'),
+('AGENCY_SETUP_MANAGE', 'Manage agency setup', 'AgencySetup', 'Manage', 'TenantConfig', 'Manage agency setup'),
+('CRM_CONFIG_MANAGE', 'Manage CRM configuration', 'CRMConfig', 'Manage', 'TenantConfig', 'Manage CRM configuration'),
+('ACCOUNT_CONFIG_MANAGE', 'Manage account configuration', 'AccountConfig', 'Manage', 'TenantConfig', 'Manage account configuration'),
+('POLICY_CONFIG_MANAGE', 'Manage policy configuration', 'PolicyConfig', 'Manage', 'TenantConfig', 'Manage policy configuration'),
+('CARRIER_CONFIG_MANAGE', 'Manage carrier configuration', 'CarrierConfig', 'Manage', 'TenantConfig', 'Manage carriers and market rules'),
+('WORKFLOW_CONFIG_MANAGE', 'Manage workflow configuration', 'WorkflowConfig', 'Manage', 'TenantConfig', 'Manage workflow and SLA configuration'),
+('COMMUNICATION_CONFIG_MANAGE', 'Manage communication configuration', 'CommunicationConfig', 'Manage', 'TenantConfig', 'Manage communication setup'),
+('DOCUMENT_CONFIG_MANAGE', 'Manage document configuration', 'DocumentConfig', 'Manage', 'TenantConfig', 'Manage document setup'),
+('BILLING_CONFIG_MANAGE', 'Manage billing configuration', 'BillingConfig', 'Manage', 'TenantConfig', 'Manage billing setup'),
+('COMMISSION_CONFIG_MANAGE', 'Manage commission configuration', 'CommissionConfig', 'Manage', 'TenantConfig', 'Manage commission setup'),
+('MARKETING_CONFIG_MANAGE', 'Manage marketing configuration', 'MarketingConfig', 'Manage', 'TenantConfig', 'Manage marketing setup'),
+('PORTAL_CONFIG_MANAGE', 'Manage portal configuration', 'PortalConfig', 'Manage', 'TenantConfig', 'Manage portal setup'),
+('INTEGRATION_CONFIG_MANAGE', 'Manage integrations', 'Integrations', 'Manage', 'TenantConfig', 'Manage integrations'),
+('AI_CONFIG_MANAGE', 'Manage AI configuration', 'AIConfig', 'Manage', 'TenantConfig', 'Manage AI settings'),
+('DATA_MANAGE', 'Manage data', 'Data', 'Manage', 'TenantConfig', 'Manage import, export, quality, retention');
+
+INSERT INTO IAM.Permission (PermissionId, TenantId, PermissionCode, PermissionName, ResourceCode, ActionCode, PermissionActionId, ModuleCode, Description, IsBuiltIn, IsActive, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @TenantId, p.PermissionCode, p.PermissionName, p.ResourceCode, p.ActionCode,
+       CASE WHEN p.ActionCode = 'Manage' THEN @ManageActionId ELSE @ReadActionId END,
+       p.ModuleCode, p.Description, 1, 1, SYSUTCDATETIME(), 0
+FROM @Permissions p
+WHERE NOT EXISTS (SELECT 1 FROM IAM.Permission x WHERE x.TenantId = @TenantId AND x.PermissionCode = p.PermissionCode);
+
+DECLARE @Roles TABLE (RoleCode NVARCHAR(100), RoleName NVARCHAR(200), Description NVARCHAR(500), SortOrder INT);
+INSERT INTO @Roles VALUES
+('TENANT_ADMIN', 'Tenant Administrator', 'Administers tenant configuration, IAM, users, roles, security, and all business modules', 2),
+('PRODUCER', 'Producer', 'Producer workspace, CRM, accounts, opportunities, submissions, renewals, claims view, documents, reports', 10),
+('CSR', 'Customer Service Representative', 'CSR workspace, accounts, policies, renewals, claims, documents, communications', 20),
+('SERVICE_MANAGER', 'Service Manager', 'Service operations, workbench, workflows, tasks, claims, reports, and escalations', 30),
+('ACCOUNTING', 'Accounting', 'Accounting workbench, billing, finance, commissions, reports, and documents', 40),
+('MARKETING', 'Marketing', 'Marketing workbench, campaigns, CRM view, account segments, communications, and reports', 50),
+('OPERATIONS', 'Operations', 'Operations workbench, tasks, workflows, data management view, documents, and reports', 60),
+('CLIENT_PORTAL_ADMIN', 'Client Portal Administrator', 'Client portal users, configuration, portal activity, portal documents, and support', 70),
+('COMPLIANCE_AUDITOR', 'Compliance Auditor', 'Read-only compliance, audit, reports, documents, claims, policies, and security audit access', 80);
+
+INSERT INTO IAM.Role (RoleId, TenantId, RoleCode, RoleName, RoleTypeCode, Description, SortOrder, IsBuiltIn, IsSystemRole, IsActive, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @TenantId, r.RoleCode, r.RoleName, 'Internal', r.Description, r.SortOrder, 1, 0, 1, SYSUTCDATETIME(), 0
+FROM @Roles r
+WHERE NOT EXISTS (SELECT 1 FROM IAM.Role x WHERE x.TenantId = @TenantId AND x.RoleCode = r.RoleCode);
+
+DECLARE @RolePerms TABLE (RoleCode NVARCHAR(100), PermissionCode NVARCHAR(200));
+INSERT INTO @RolePerms
+SELECT 'TENANT_ADMIN', PermissionCode FROM @Permissions
+UNION ALL SELECT 'TENANT_ADMIN', 'USER_MANAGE'
+UNION ALL SELECT 'TENANT_ADMIN', 'USER_VIEW'
+UNION ALL SELECT 'TENANT_ADMIN', 'ROLE_MANAGE'
+UNION ALL SELECT 'TENANT_ADMIN', 'ROLE_VIEW'
+UNION ALL SELECT 'TENANT_ADMIN', 'PERMISSION_MANAGE'
+UNION ALL SELECT 'TENANT_ADMIN', 'AUDIT_VIEW'
+UNION ALL SELECT 'TENANT_ADMIN', 'MFA_MANAGE'
+UNION ALL SELECT 'TENANT_ADMIN', 'SECURITY_POLICY_MANAGE'
+UNION ALL SELECT 'TENANT_ADMIN', 'TENANT_MANAGE'
+UNION ALL SELECT 'TENANT_ADMIN', 'SETTINGS_MANAGE'
+UNION ALL SELECT 'PRODUCER', 'DASHBOARD_VIEW'
+UNION ALL SELECT 'PRODUCER', 'WORKBENCH_VIEW'
+UNION ALL SELECT 'PRODUCER', 'WORKBENCH_PRODUCER'
+UNION ALL SELECT 'PRODUCER', 'CRM_VIEW'
+UNION ALL SELECT 'PRODUCER', 'ACCOUNT_VIEW'
+UNION ALL SELECT 'PRODUCER', 'OPPORTUNITY_VIEW'
+UNION ALL SELECT 'PRODUCER', 'SUBMISSION_VIEW'
+UNION ALL SELECT 'PRODUCER', 'POLICY_VIEW'
+UNION ALL SELECT 'PRODUCER', 'RENEWAL_VIEW'
+UNION ALL SELECT 'PRODUCER', 'CLAIM_VIEW'
+UNION ALL SELECT 'PRODUCER', 'DOCUMENT_VIEW'
+UNION ALL SELECT 'PRODUCER', 'REPORT_VIEW'
+UNION ALL SELECT 'CSR', 'WORKBENCH_VIEW'
+UNION ALL SELECT 'CSR', 'WORKBENCH_CSR'
+UNION ALL SELECT 'CSR', 'ACCOUNT_VIEW'
+UNION ALL SELECT 'CSR', 'POLICY_VIEW'
+UNION ALL SELECT 'CSR', 'RENEWAL_VIEW'
+UNION ALL SELECT 'CSR', 'CLAIM_VIEW'
+UNION ALL SELECT 'CSR', 'TASK_VIEW'
+UNION ALL SELECT 'CSR', 'COMMUNICATION_VIEW'
+UNION ALL SELECT 'CSR', 'DOCUMENT_VIEW'
+UNION ALL SELECT 'CSR', 'REPORT_VIEW'
+UNION ALL SELECT 'SERVICE_MANAGER', 'WORKBENCH_VIEW'
+UNION ALL SELECT 'SERVICE_MANAGER', 'WORKBENCH_SERVICE_MANAGER'
+UNION ALL SELECT 'SERVICE_MANAGER', 'WORKFLOW_VIEW'
+UNION ALL SELECT 'SERVICE_MANAGER', 'TASK_VIEW'
+UNION ALL SELECT 'SERVICE_MANAGER', 'CLAIM_VIEW'
+UNION ALL SELECT 'SERVICE_MANAGER', 'REPORT_VIEW'
+UNION ALL SELECT 'ACCOUNTING', 'WORKBENCH_VIEW'
+UNION ALL SELECT 'ACCOUNTING', 'WORKBENCH_ACCOUNTING'
+UNION ALL SELECT 'ACCOUNTING', 'BILLING_VIEW'
+UNION ALL SELECT 'ACCOUNTING', 'FINANCE_VIEW'
+UNION ALL SELECT 'ACCOUNTING', 'COMMISSION_VIEW'
+UNION ALL SELECT 'ACCOUNTING', 'DOCUMENT_VIEW'
+UNION ALL SELECT 'ACCOUNTING', 'REPORT_VIEW'
+UNION ALL SELECT 'MARKETING', 'WORKBENCH_VIEW'
+UNION ALL SELECT 'MARKETING', 'WORKBENCH_MARKETING'
+UNION ALL SELECT 'MARKETING', 'MARKETING_VIEW'
+UNION ALL SELECT 'MARKETING', 'CRM_VIEW'
+UNION ALL SELECT 'MARKETING', 'ACCOUNT_VIEW'
+UNION ALL SELECT 'MARKETING', 'COMMUNICATION_VIEW'
+UNION ALL SELECT 'MARKETING', 'REPORT_VIEW'
+UNION ALL SELECT 'OPERATIONS', 'WORKBENCH_VIEW'
+UNION ALL SELECT 'OPERATIONS', 'WORKBENCH_OPERATIONS'
+UNION ALL SELECT 'OPERATIONS', 'WORKFLOW_VIEW'
+UNION ALL SELECT 'OPERATIONS', 'TASK_VIEW'
+UNION ALL SELECT 'OPERATIONS', 'DOCUMENT_VIEW'
+UNION ALL SELECT 'OPERATIONS', 'DATA_MANAGE'
+UNION ALL SELECT 'OPERATIONS', 'REPORT_VIEW'
+UNION ALL SELECT 'CLIENT_PORTAL_ADMIN', 'PORTAL_VIEW'
+UNION ALL SELECT 'CLIENT_PORTAL_ADMIN', 'PORTAL_CONFIG_MANAGE'
+UNION ALL SELECT 'CLIENT_PORTAL_ADMIN', 'DOCUMENT_VIEW'
+UNION ALL SELECT 'CLIENT_PORTAL_ADMIN', 'REPORT_VIEW'
+UNION ALL SELECT 'COMPLIANCE_AUDITOR', 'REPORT_VIEW'
+UNION ALL SELECT 'COMPLIANCE_AUDITOR', 'AUDIT_VIEW'
+UNION ALL SELECT 'COMPLIANCE_AUDITOR', 'DOCUMENT_VIEW'
+UNION ALL SELECT 'COMPLIANCE_AUDITOR', 'POLICY_VIEW'
+UNION ALL SELECT 'COMPLIANCE_AUDITOR', 'CLAIM_VIEW';
+
+INSERT INTO IAM.RolePermission (RolePermissionId, TenantId, RoleId, PermissionId, PermissionCode, GrantedDateUtc, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @TenantId, r.RoleId, p.PermissionId, p.PermissionCode, SYSUTCDATETIME(), SYSUTCDATETIME(), 0
+FROM @RolePerms rp
+JOIN IAM.Role r ON r.TenantId = @TenantId AND r.RoleCode = rp.RoleCode AND r.IsDeleted = 0
+JOIN IAM.Permission p ON p.TenantId = @TenantId AND p.PermissionCode = rp.PermissionCode
+WHERE NOT EXISTS (SELECT 1 FROM IAM.RolePermission x WHERE x.RoleId = r.RoleId AND x.PermissionCode = p.PermissionCode AND x.IsDeleted = 0);
+
+INSERT INTO IAM.RolePermission (RolePermissionId, TenantId, RoleId, PermissionId, PermissionCode, GrantedDateUtc, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @TenantId, @AdminRoleId, p.PermissionId, p.PermissionCode, SYSUTCDATETIME(), SYSUTCDATETIME(), 0
+FROM IAM.Permission p
+WHERE p.TenantId = @TenantId
+  AND NOT EXISTS (SELECT 1 FROM IAM.RolePermission x WHERE x.RoleId = @AdminRoleId AND x.PermissionCode = p.PermissionCode AND x.IsDeleted = 0);
+";
+
+    private const string Migration0116_IamAdminLoginCredentialsSeed = @"
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @SystemAdminUserId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000002';
+DECLARE @TenantAdminUserId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000005';
+
+UPDATE Core.Tenant
+SET TenantCode = 'DEFAULT',
+    TenantName = COALESCE(NULLIF(TenantName, ''), 'First Agency'),
+    PrimaryDomain = COALESCE(PrimaryDomain, 'demo.agency'),
+    StatusCode = 'Active',
+    IsActive = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId;
+
+DECLARE @SystemAdminRoleId UNIQUEIDENTIFIER = (SELECT TOP 1 RoleId FROM IAM.Role WHERE TenantId = @TenantId AND RoleCode = 'SYSTEM_ADMIN' AND IsDeleted = 0);
+IF @SystemAdminRoleId IS NULL
+BEGIN
+    SET @SystemAdminRoleId = '10000000-0000-0000-0000-000000000001';
+    IF NOT EXISTS (SELECT 1 FROM IAM.Role WHERE RoleId = @SystemAdminRoleId)
+        INSERT INTO IAM.Role (RoleId, TenantId, RoleCode, RoleName, RoleTypeCode, Description, SortOrder, IsBuiltIn, IsSystemRole, IsActive, CreatedDateUtc, IsDeleted)
+        VALUES (@SystemAdminRoleId, @TenantId, 'SYSTEM_ADMIN', 'System Administrator', 'Internal', 'Full platform and tenant administration', 1, 1, 1, 1, SYSUTCDATETIME(), 0);
+END;
+
+DECLARE @TenantAdminRoleId UNIQUEIDENTIFIER = (SELECT TOP 1 RoleId FROM IAM.Role WHERE TenantId = @TenantId AND RoleCode = 'TENANT_ADMIN' AND IsDeleted = 0);
+IF @TenantAdminRoleId IS NULL
+BEGIN
+    SET @TenantAdminRoleId = '10000000-0000-0000-0000-000000000010';
+    IF NOT EXISTS (SELECT 1 FROM IAM.Role WHERE RoleId = @TenantAdminRoleId)
+        INSERT INTO IAM.Role (RoleId, TenantId, RoleCode, RoleName, RoleTypeCode, Description, SortOrder, IsBuiltIn, IsSystemRole, IsActive, CreatedDateUtc, IsDeleted)
+        VALUES (@TenantAdminRoleId, @TenantId, 'TENANT_ADMIN', 'Tenant Administrator', 'Internal', 'Administers tenant configuration, users, roles, and business modules', 2, 1, 0, 1, SYSUTCDATETIME(), 0);
+END;
+
+UPDATE IAM.[User]
+SET TenantId = @TenantId,
+    UserName = 'admin',
+    Email = 'admin@demo.agency',
+    FirstName = COALESCE(NULLIF(FirstName, ''), 'Alex'),
+    LastName = COALESCE(NULLIF(LastName, ''), 'Johnson'),
+    FullName = COALESCE(NULLIF(FullName, ''), 'Alex Johnson'),
+    DisplayName = COALESCE(DisplayName, 'Alex Johnson'),
+    UserTypeCode = 'Internal',
+    StatusCode = 'Active',
+    IsActive = 1,
+    IsLocked = 0,
+    IsLockedOut = 0,
+    FailedLoginAttempts = 0,
+    LockoutEndDateUtc = NULL,
+    MfaEnabled = 0,
+    PasswordSalt = 'AQIDBAUGBwgJCgsMDQ4PEA==',
+    PasswordHash = 'iTdcak1T9kvLBKE/LaQPIv7xNlwL9Y154BzS7S5PfWc=',
+    PasswordChangedDateUtc = COALESCE(PasswordChangedDateUtc, SYSUTCDATETIME()),
+    LocaleCode = COALESCE(LocaleCode, 'en-US'),
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    IsDeleted = 0
+WHERE UserId = @SystemAdminUserId;
+
+IF @@ROWCOUNT = 0
+    INSERT INTO IAM.[User] (UserId, TenantId, UserTypeCode, UserName, Email, FirstName, LastName, FullName, DisplayName, StatusCode, IsActive, IsLocked, IsLockedOut, FailedLoginAttempts, MfaEnabled, PasswordSalt, PasswordHash, PasswordChangedDateUtc, LocaleCode, CreatedDateUtc, IsDeleted)
+    VALUES (@SystemAdminUserId, @TenantId, 'Internal', 'admin', 'admin@demo.agency', 'Alex', 'Johnson', 'Alex Johnson', 'Alex Johnson', 'Active', 1, 0, 0, 0, 0, 'AQIDBAUGBwgJCgsMDQ4PEA==', 'iTdcak1T9kvLBKE/LaQPIv7xNlwL9Y154BzS7S5PfWc=', SYSUTCDATETIME(), 'en-US', SYSUTCDATETIME(), 0);
+
+IF NOT EXISTS (SELECT 1 FROM IAM.UserRole WHERE TenantId = @TenantId AND UserId = @SystemAdminUserId AND RoleId = @SystemAdminRoleId AND IsDeleted = 0)
+    INSERT INTO IAM.UserRole (UserRoleId, TenantId, UserId, RoleId, AssignedByUserId, AssignedDateUtc, EffectiveStartDateUtc, IsActive, Source, Reason, ApproverId, ScopeTypeCode, ScopeValue, CreatedDateUtc, IsDeleted)
+    VALUES (NEWID(), @TenantId, @SystemAdminUserId, @SystemAdminRoleId, @SystemAdminUserId, SYSUTCDATETIME(), SYSUTCDATETIME(), 1, 'Seed', 'Seeded sample SYSTEM_ADMIN credential', @SystemAdminUserId, 'Tenant', CONVERT(NVARCHAR(36), @TenantId), SYSUTCDATETIME(), 0);
+
+UPDATE IAM.[User]
+SET TenantId = @TenantId,
+    UserName = 'tenant.admin',
+    Email = 'tenant.admin@demo.agency',
+    FirstName = COALESCE(NULLIF(FirstName, ''), 'Taylor'),
+    LastName = COALESCE(NULLIF(LastName, ''), 'Admin'),
+    FullName = 'Taylor Admin',
+    DisplayName = 'Taylor Admin',
+    UserTypeCode = 'Internal',
+    StatusCode = 'Active',
+    IsActive = 1,
+    IsLocked = 0,
+    IsLockedOut = 0,
+    FailedLoginAttempts = 0,
+    LockoutEndDateUtc = NULL,
+    MfaEnabled = 0,
+    PasswordSalt = 'ERITFBUWFxgZGhscHR4fIA==',
+    PasswordHash = 'Sjhe7u1iWf6Ou1NKSHRdfsStwKS73cP7V2Ganjcjw40=',
+    PasswordChangedDateUtc = COALESCE(PasswordChangedDateUtc, SYSUTCDATETIME()),
+    LocaleCode = COALESCE(LocaleCode, 'en-US'),
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    IsDeleted = 0
+WHERE UserId = @TenantAdminUserId;
+
+IF @@ROWCOUNT = 0
+    INSERT INTO IAM.[User] (UserId, TenantId, UserTypeCode, UserName, Email, FirstName, LastName, FullName, DisplayName, StatusCode, IsActive, IsLocked, IsLockedOut, FailedLoginAttempts, MfaEnabled, PasswordSalt, PasswordHash, PasswordChangedDateUtc, LocaleCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (@TenantAdminUserId, @TenantId, 'Internal', 'tenant.admin', 'tenant.admin@demo.agency', 'Taylor', 'Admin', 'Taylor Admin', 'Taylor Admin', 'Active', 1, 0, 0, 0, 0, 'ERITFBUWFxgZGhscHR4fIA==', 'Sjhe7u1iWf6Ou1NKSHRdfsStwKS73cP7V2Ganjcjw40=', SYSUTCDATETIME(), 'en-US', SYSUTCDATETIME(), @SystemAdminUserId, 0);
+
+UPDATE IAM.UserRole
+SET IsActive = 0,
+    IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId
+  AND UserId = @TenantAdminUserId
+  AND RoleId <> @TenantAdminRoleId
+  AND IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM IAM.UserRole WHERE TenantId = @TenantId AND UserId = @TenantAdminUserId AND RoleId = @TenantAdminRoleId AND IsDeleted = 0)
+    INSERT INTO IAM.UserRole (UserRoleId, TenantId, UserId, RoleId, AssignedByUserId, AssignedDateUtc, EffectiveStartDateUtc, IsActive, Source, Reason, ApproverId, ScopeTypeCode, ScopeValue, CreatedDateUtc, IsDeleted)
+    VALUES (NEWID(), @TenantId, @TenantAdminUserId, @TenantAdminRoleId, @SystemAdminUserId, SYSUTCDATETIME(), SYSUTCDATETIME(), 1, 'Seed', 'Seeded sample TENANT_ADMIN credential', @SystemAdminUserId, 'Tenant', CONVERT(NVARCHAR(36), @TenantId), SYSUTCDATETIME(), 0);
 ";
 
     // â”€â”€ 0002 â€” Add location columns to Core.Branch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
