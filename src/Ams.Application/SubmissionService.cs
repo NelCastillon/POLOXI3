@@ -26,6 +26,21 @@ public sealed class SubmissionService : ISubmissionService
     public Task AssignAsync(Guid id, AssignSubmissionRequest request, CancellationToken cancellationToken = default)
         => _repository.AssignAsync(id, request, cancellationToken);
 
+    public Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
+        => _repository.SubmitToMarketAsync(id, request, cancellationToken);
+
+    public Task<SubmissionActionResult> RequestQuoteAsync(Guid id, RequestSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+        => _repository.RequestQuoteAsync(id, request, cancellationToken);
+
+    public Task<SubmissionActionResult> CopyAsync(Guid id, CopySubmissionRequest request, CancellationToken cancellationToken = default)
+        => _repository.CopyAsync(id, request, cancellationToken);
+
+    public Task<SubmissionActionResult> DeclineAsync(Guid id, DeclineSubmissionRequest request, CancellationToken cancellationToken = default)
+        => _repository.DeclineAsync(id, request, cancellationToken);
+
+    public Task<SubmissionActionResult> CreatePolicyAsync(Guid id, CreatePolicyFromSubmissionRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreatePolicyAsync(id, request, cancellationToken);
+
     public Task<IReadOnlyList<SubmissionMarketDto>> GetMarketsAsync(Guid submissionId, CancellationToken cancellationToken = default)
         => _repository.GetMarketsAsync(submissionId, cancellationToken);
 

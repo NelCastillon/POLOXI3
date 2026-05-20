@@ -25,5 +25,12 @@ public sealed class MessageThreadDto
     public string   Sentiment       { get; init; } = "Neutral";
     public string?  CsrOwner        { get; init; }
     public string?  AiSummary       { get; init; }
+    public string   QueueName       { get; init; } = "General Inbox";
+    public string   SlaStatus       { get; init; } = "On Track";
+    public int      SlaMinutesRemaining { get; init; }
+    public DateTime? DueDateUtc     { get; init; }
+    public string   ComplianceStatus { get; init; } = "Clear";
+    public string   SourceSystem    { get; init; } = "AMS";
+    public DateTime LastSyncedDateUtc { get; init; }
     public IReadOnlyList<ThreadMessageDto> Messages { get; init; } = [];
 }

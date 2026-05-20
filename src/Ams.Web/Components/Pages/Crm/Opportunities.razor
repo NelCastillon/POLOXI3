@@ -4,6 +4,7 @@
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@using Ams.Application.Features.Opportunities
 
 <PageTitle>Opportunities — CRM</PageTitle>
 
@@ -30,7 +31,7 @@
         <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
             <i class="bi bi-arrow-clockwise @(_loading ? "op-spin" : "")" aria-hidden="true"></i>
         </button>
-        <button class="um-btn um-btn-primary" @onclick='() => _showAdd = true'>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreateAsync">
             <i class="bi bi-plus-lg" aria-hidden="true"></i> New Opportunity
         </button>
     </Actions>
@@ -265,6 +266,64 @@
 }
 
 <!-- ── Dialogs ───────────────────────────────────────────────────────────── -->
+<SfDialog @bind-Visible="_showAdd" Width="640px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header">
+            <i class="bi bi-trophy-fill" aria-hidden="true"></i>
+            <span>New Opportunity</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCreate"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <EditForm Model="_form" OnValidSubmit="CreateOpportunityAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div>
+                        <label class="form-label">Opportunity Name</label>
+                        <InputText class="form-control" @bind-Value="_form.OpportunityName" />
+                        <ValidationMessage For="() => _form.OpportunityName" class="text-danger" />
+                    </div>
+                    <div>
+                        <label class="form-label">Account</label>
+                        <SfDropDownList TValue="Guid" TItem="AccountOption" DataSource="_accountOptions" Placeholder="Select account" Width="100%" @bind-Value="_form.AccountId">
+                            <DropDownListFieldSettings Value="AccountId" Text="AccountName" />
+                        </SfDropDownList>
+                        <ValidationMessage For="() => _form.AccountId" class="text-danger" />
+                    </div>
+                    <div>
+                        <label class="form-label">Estimated Amount</label>
+                        <InputNumber class="form-control" @bind-Value="_form.EstimatedAmount" />
+                        <ValidationMessage For="() => _form.EstimatedAmount" class="text-danger" />
+                    </div>
+                    <div>
+                        <label class="form-label">Win Probability</label>
+                        <InputNumber class="form-control" @bind-Value="_form.WinProbability" />
+                        <ValidationMessage For="() => _form.WinProbability" class="text-danger" />
+                    </div>
+                    <div>
+                        <label class="form-label">Close Date</label>
+                        <InputDate class="form-control" @bind-Value="_form.CloseDate" />
+                        <ValidationMessage For="() => _form.CloseDate" class="text-danger" />
+                    </div>
+                    <div>
+                        <label class="form-label">Forecast</label>
+                        <InputSelect class="form-select" @bind-Value="_form.ForecastCategoryCode">
+                            @foreach (var option in _forecastOptions)
+                            {
+                                <option value="@option.Value">@option.Label</option>
+                            }
+                        </InputSelect>
+                        <ValidationMessage For="() => _form.ForecastCategoryCode" class="text-danger" />
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseCreate">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Create Opportunity</button>
+            </div>
+        </EditForm>
+    </DialogContent>
+</SfDialog>
+
 <SfDialog @bind-Visible="_showAssign" Width="400px" IsModal="true" ShowCloseIcon="true">
     <DialogTemplates>
         <Header><span class="op-dlg-hdr"><i class="bi bi-person-check" aria-hidden="true"></i> Assign Owner</span></Header>
@@ -313,6 +372,9 @@
     private string            _view    = "grid";
     private bool              _loading = false;
     private bool              _showAdd = false;
+    private bool              _saving  = false;
+    private OpportunityFormModel _form = new();
+    private List<AccountOption> _accountOptions = [];
 
     private record ViewDef(string Id, string Label, string Icon);
     private static readonly List<ViewDef> _views =
@@ -387,6 +449,70 @@
             _opps = [];
         }
         finally { _loading = false; }
+    }
+
+    private async Task OpenCreateAsync()
+    {
+        _form = new OpportunityFormModel
+        {
+            OpportunityNumber = $"OPP-{DateTime.UtcNow:yyyyMMddHHmmss}",
+            CloseDate = DateTime.UtcNow.Date.AddDays(30),
+            ForecastCategoryCode = "Pipeline",
+            WinProbability = 25
+        };
+        await LoadAccountOptionsAsync();
+        if (_accountOptions.Count == 1)
+            _form.AccountId = _accountOptions[0].AccountId;
+        _showAdd = true;
+    }
+
+    private void CloseCreate() => _showAdd = false;
+
+    private async Task LoadAccountOptionsAsync()
+    {
+        if (_accountOptions.Count > 0)
+            return;
+
+        var response = await Api.SearchAccountsAsync(_tenantId);
+        _accountOptions = response?.Items?
+            .Select(a => new AccountOption(a.AccountId, a.AccountName))
+            .OrderBy(a => a.AccountName)
+            .ToList() ?? [];
+    }
+
+    private async Task CreateOpportunityAsync()
+    {
+        _saving = true;
+        try
+        {
+            var request = new CreateOpportunityRequest
+            {
+                TenantId = _tenantId,
+                OpportunityNumber = _form.OpportunityNumber,
+                AccountId = _form.AccountId,
+                OpportunityName = _form.OpportunityName,
+                EstimatedAmount = _form.EstimatedAmount,
+                OwnerUserId = _tenantAdminUserId,
+                CloseDate = _form.CloseDate,
+                WinProbability = _form.WinProbability,
+                ForecastCategoryCode = _form.ForecastCategoryCode,
+                CreatedByUserId = _tenantAdminUserId
+            };
+
+            var id = await Api.CreateOpportunityAsync(request);
+            _showAdd = false;
+            await LoadAsync();
+            await _toast!.ShowAsync(new ToastModel { Content = "Opportunity created.", CssClass = "e-toast-success" });
+            Nav.NavigateTo($"/crm/opportunities/{id}");
+        }
+        catch (Exception ex)
+        {
+            await _toast!.ShowAsync(new ToastModel { Content = $"Create failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
     }
 
     private OppRow MapToOppRow(OpportunityDto dto)
@@ -555,6 +681,31 @@
         public double  AvgWinPct      { get; set; }
     }
     private sealed record LV(string Value, string Label);
+    private sealed record AccountOption(Guid AccountId, string AccountName);
+
+    private sealed class OpportunityFormModel
+    {
+        [Required, StringLength(50)]
+        public string OpportunityNumber { get; set; } = string.Empty;
+
+        [Required]
+        public Guid AccountId { get; set; }
+
+        [Required, StringLength(200)]
+        public string OpportunityName { get; set; } = string.Empty;
+
+        [Range(0, 999999999999)]
+        public decimal EstimatedAmount { get; set; }
+
+        [Required]
+        public DateTime? CloseDate { get; set; }
+
+        [Range(0, 100)]
+        public decimal WinProbability { get; set; }
+
+        [Required, StringLength(50)]
+        public string ForecastCategoryCode { get; set; } = "Pipeline";
+    }
 
     async Task ResolveCurrentUserContextAsync()
     {

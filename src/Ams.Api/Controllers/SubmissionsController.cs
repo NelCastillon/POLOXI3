@@ -50,6 +50,26 @@ public sealed class SubmissionsController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("{id:guid}/submit-to-market")]
+    public async Task<IActionResult> SubmitToMarket(Guid id, [FromBody] SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.SubmitToMarketAsync(id, request, cancellationToken));
+
+    [HttpPost("{id:guid}/request-quote")]
+    public async Task<IActionResult> RequestQuote(Guid id, [FromBody] RequestSubmissionQuoteRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.RequestQuoteAsync(id, request, cancellationToken));
+
+    [HttpPost("{id:guid}/copy")]
+    public async Task<IActionResult> Copy(Guid id, [FromBody] CopySubmissionRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.CopyAsync(id, request, cancellationToken));
+
+    [HttpPost("{id:guid}/decline")]
+    public async Task<IActionResult> Decline(Guid id, [FromBody] DeclineSubmissionRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.DeclineAsync(id, request, cancellationToken));
+
+    [HttpPost("{id:guid}/create-policy")]
+    public async Task<IActionResult> CreatePolicy(Guid id, [FromBody] CreatePolicyFromSubmissionRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.CreatePolicyAsync(id, request, cancellationToken));
+
     // ── Markets ───────────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/markets")]
@@ -82,6 +102,10 @@ public sealed class SubmissionsController : ControllerBase
     }
 
     // ── Bound Policy ──────────────────────────────────────────────────
+
+    [HttpGet("{id:guid}/quotes")]
+    public async Task<IActionResult> GetQuotes(Guid id, CancellationToken cancellationToken)
+        => Ok(await _service.GetQuoteComparisonAsync(id, cancellationToken));
 
     [HttpGet("{id:guid}/policy")]
     public async Task<IActionResult> GetPolicy(Guid id, CancellationToken cancellationToken)

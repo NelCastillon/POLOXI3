@@ -3,7 +3,9 @@
 ## Project Guidelines
 - **Number one priority for all pages:** build and verify in `Table/API/UI` order. Confirm the database table/schema first, then align API/backend contracts and persistence, then implement or update the UI.
 - Use the naming convention `ApiClients.CrmConfiguration*.cs` for CRM Configuration ApiClient sealed partial class files.
-- Use existing `enterprise.css` styles for UI; do not add workflow functionality unless explicitly requested.
+- Use existing `enterprise.css` styles for UI; do not add workflow functionality unless explicitly requested. When removing or altering stylesheet rules or other UI dependencies, scope those removals/changes to the specific page requested; do not modify or remove global styles or shared UI dependencies unless the user explicitly requests a global change.
+- Scope stylesheet or UI dependency removals to the specific page requested unless the user explicitly asks for a global change.
+- All pages must use the full available content width by default. Avoid narrow fixed-width page shells, centered max-width containers, or layouts that leave unused horizontal space; align page margins and responsive behavior with the enterprise full-width Submission and Submission Detail patterns unless the user explicitly requests a constrained layout.
 - Before creating DTO, check DB first if already exists; if yes, make DB the source of truth. If not, create a new DTO and add it to the DB. Always add the base fields to the DTO, and if any new fields are added, make sure to add them to the DB as well.
 - **DB is always the source of truth.** When there is a mismatch between code (DTOs, repositories, requests) and the actual database schema, update the C# code to match the DB — never alter the DB to match the code unless explicitly instructed.
 - When writing Dapper SQL for tables that have no `IsDeleted` column, pass `hasSoftDelete: false` to `RepositorySql.BuildPagedSearchSql`.
@@ -19,7 +21,7 @@
 
 ## CRMConfiguration Guidelines
 - CRM Configuration pages are Blazor pages under `TenantConfig/CrmConfig` and should follow the established CRM Configuration page pattern used by Lead Sources, Lead Statuses, Opportunity Stages, Duplicate Rules, Assignment Rules, and CRM Custom Fields. Preserve existing functionality and add or polish features without removing them, following the `/crm/opportunities` layout pattern.
-- Use `enterprise.css` design-system classes for CRM Configuration UI. Do not add one-off page styles unless the class is reusable and belongs in `enterprise.css`.
+- Use `enterprise.css` design-system classes for CRM Configuration UI. Do not add one-off page styles unless the class is reusable and belongs in `enterprise.css`. When removing or altering stylesheet rules or UI dependencies for CRM Configuration pages, scope changes to the specific page requested and avoid global removals unless explicitly requested.
 - Keep the database as the source of truth for CRM Configuration schema, DTOs, requests, repositories, and form models. Update C# code to match the DB schema when mismatches are found.
 - CRM Configuration DTOs, requests, and Blazor form models must include validation consistent with database constraints. Required DB fields must be required in requests and form models.
 - Add `[Required]`, `[StringLength]`, and `[Range]` attributes to CRM Configuration form model properties where applicable. Every input, dropdown, checkbox, and textarea used for user entry must have a matching `<ValidationMessage For="() => _form.Field" class="text-danger" />` when validation applies.

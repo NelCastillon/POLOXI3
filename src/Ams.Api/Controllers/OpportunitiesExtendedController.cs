@@ -70,30 +70,6 @@ public sealed class OpportunitiesExtendedController : ControllerBase
     }
 
     /// <summary>
-    /// Move opportunity to different stage
-    /// </summary>
-    [HttpPut("{id:guid}/stage")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public IActionResult UpdateStage(Guid id, [FromBody] UpdateOpportunityStageRequest request)
-    {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(request.Stage))
-                return BadRequest(new { success = false, message = "Stage is required" });
-
-            // TODO: Implement actual stage update in database
-            return Ok(new { success = true });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error updating opportunity stage");
-            return BadRequest(new { success = false, message = ex.Message });
-        }
-    }
-
-    /// <summary>
     /// Get pipeline metrics and analytics
     /// </summary>
     [HttpGet("metrics")]
@@ -178,8 +154,3 @@ public sealed class OpportunitiesExtendedController : ControllerBase
     }
 }
 
-// ============================================================================
-// DTOs for Extended Endpoints
-// ============================================================================
-
-public record UpdateOpportunityStageRequest(string Stage);

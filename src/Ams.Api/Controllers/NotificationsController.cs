@@ -38,9 +38,16 @@ public sealed class NotificationsController : ControllerBase
     }
 
     [HttpPost("{id:guid}/status")]
-    public async Task<IActionResult> SetStatus(Guid id, [FromQuery] string statusCode, CancellationToken cancellationToken = default)
+    public async Task<IActionResult> SetStatus(Guid id, [FromQuery] string? statusCode, [FromBody] NotificationStatusRequest? request, CancellationToken cancellationToken = default)
     {
-        await _service.SetStatusAsync(id, statusCode, cancellationToken);
+        await _service.SetStatusAsync(id, request?.StatusCode ?? statusCode ?? "Delivered", cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/retry")]
+    public async Task<IActionResult> Retry(Guid id, [FromBody] NotificationRetryRequest? request, CancellationToken cancellationToken = default)
+    {
+        await _service.RetryAsync(id, request?.ProviderName, cancellationToken);
         return NoContent();
     }
 

@@ -1,500 +1,1106 @@
 @page "/policies/endorsements"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.PolicyEndorsements
+@using Microsoft.AspNetCore.Components.Rendering
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Endorsement Workbench — AMS</PageTitle>
+<PageTitle>Policy Endorsements — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<SfContextMenu @ref="_ctx" TValue="CtxItem" Items="_ctxItems"
-               ItemSelected="OnCtxSelected">
-    <MenuFieldSettings Text="Text" IconCss="IconCss" />
-</SfContextMenu>
-
-<AppPageHeader Title="Endorsement Workbench"
-               Subtitle="Tenant admin review of endorsement workflows, approvals, and policy change controls"
-               Icon="bi-pen-fill">
-    <Actions>
-        <div class="ew-filter-row">
-            <select class="e-input ew-filter-sel" @bind="_filterStatus">
-                <option value="">All Statuses</option>
-                <option>Pending</option>
-                <option>Approved</option>
-                <option>Declined</option>
-                <option>Issued</option>
-            </select>
-            <select class="e-input ew-filter-sel" @bind="_filterType">
-                <option value="">All Types</option>
-                <option>Add Coverage</option>
-                <option>Remove Coverage</option>
-                <option>Change Limit</option>
-                <option>Add Insured</option>
-                <option>Address Change</option>
-                <option>Premium Adjustment</option>
-            </select>
-        </div>
-        <button class="um-btn um-btn-primary" @onclick="OpenNew">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Endorsement
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero pol-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant Administration · Endorsements</span>
-        <h2>Tenant Endorsement Administration</h2>
-        <p>Review endorsement requests, approve policy changes, monitor premium impact, and govern tenant-wide issuance workflows.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies")'><i class="bi bi-shield-check"></i> Policies</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies/cancellations")'><i class="bi bi-x-circle"></i> Cancellations</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies/documents")'><i class="bi bi-folder2"></i> Documents</button>
-    </div>
-</section>
-
-@if (_loadError is not null)
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+    <div class="ew-toast ew-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ew-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<!-- KPI strip -->
-<div class="ew-kpi-strip">
-    @KpiCard("bi-hourglass-split", "Pending",       _rows.Count(r => r.Status == "Pending").ToString(),        "ew-kpi-pending")
-    @KpiCard("bi-check-circle",   "Approved",      _rows.Count(r => r.Status == "Approved").ToString(),       "ew-kpi-approved")
-    @KpiCard("bi-x-circle",       "Declined",      _rows.Count(r => r.Status == "Declined").ToString(),       "ew-kpi-declined")
-    @KpiCard("bi-pen",            "Issued",        _rows.Count(r => r.Status == "Issued").ToString(),         "ew-kpi-issued")
-    @KpiCard("bi-cash-stack",     "Premium Impact",PremDelta(_rows).ToString("+$#,##0;-$#,##0;$0"),           "ew-kpi-delta")
-</div>
-
-<!-- Grid -->
-<div class="ew-grid-wrap">
-    <SfGrid DataSource="@Filtered" AllowSorting="true" AllowPaging="true" AllowResizing="true"
-            RowHeight="40" @ref="_grid">
-        <GridPageSettings PageSize="20" />
-        <GridColumns>
-            <GridColumn Field="EndorsementNo" HeaderText="Endorsement #" Width="150" />
-            <GridColumn Field="PolicyNo"      HeaderText="Policy #"      Width="140" />
-            <GridColumn Field="Account"       HeaderText="Account"       Width="180" />
-            <GridColumn Field="Lob"           HeaderText="LOB"           Width="110"
-                        Template="@(ctx => LobBadge(((EndRow)ctx).Lob))" />
-            <GridColumn Field="EndType"       HeaderText="Type"          Width="160" />
-            <GridColumn Field="EffDate"       HeaderText="Effective"     Width="110" Format="MM/dd/yyyy" />
-            <GridColumn Field="PremiumDelta"  HeaderText="Prem Δ"        Width="110"
-                        Template="@(ctx => DeltaCell(((EndRow)ctx).PremiumDelta))" />
-            <GridColumn Field="Carrier"       HeaderText="Carrier"       Width="180" />
-            <GridColumn Field="RequestedBy"   HeaderText="Requested By"  Width="140" />
-            <GridColumn Field="Status"        HeaderText="Status"        Width="110"
-                        Template="@(ctx => StatusChip(((EndRow)ctx).Status))" />
-            <GridColumn HeaderText="" Width="50" AllowSorting="false"
-                        Template="@(ctx => CtxBtn((EndRow)ctx))" />
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<!-- Detail drawer -->
-@if (_drawerRow is not null)
+@if (_showForm)
 {
-    <div class="ew-drawer-backdrop" @onclick="CloseDrawer"></div>
-    <div class="ew-drawer">
-        <div class="ew-drawer-head">
-            <div>
-                <h2 class="ew-drawer-title">@_drawerRow.EndorsementNo</h2>
-                <span class="ew-drawer-sub">@_drawerRow.PolicyNo · @_drawerRow.Account</span>
-            </div>
-            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="CloseDrawer">
-                <i class="bi bi-x-lg" aria-hidden="true"></i>
-            </button>
-        </div>
-        <div class="ew-drawer-body">
-            <div class="ew-drawer-meta">
-                @DrawerField("Type",      _drawerRow.EndType)
-                @DrawerField("LOB",       _drawerRow.Lob)
-                @DrawerField("Carrier",   _drawerRow.Carrier)
-                @DrawerField("Effective", _drawerRow.EffDate.ToString("MM/dd/yyyy"))
-                @DrawerField("Requested By", _drawerRow.RequestedBy)
-                @DrawerField("Status",    _drawerRow.Status)
-            </div>
-
-            <!-- Exposure delta table -->
-            <h3 class="ew-delta-head">
-                <i class="bi bi-arrow-left-right" aria-hidden="true"></i> Exposure Changes
-            </h3>
-            <table class="ew-delta-table">
-                <thead><tr><th>Field</th><th>Before</th><th>After</th><th>Δ</th></tr></thead>
-                <tbody>
-                    @foreach (var d in _drawerRow.Deltas)
-                    {
-                        <tr>
-                            <td>@d.Field</td>
-                            <td class="ew-dt-before">@d.Before</td>
-                            <td class="ew-dt-after">@d.After</td>
-                            <td>@DeltaCell(d.NumericDelta)</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-
-            @if (_drawerRow.Status == "Pending")
-            {
-                <div class="ew-drawer-actions">
-                    <button class="um-btn um-btn-success um-btn-sm" @onclick='() => SetStatus(_drawerRow, "Approved")'>
-                        <i class="bi bi-check-lg" aria-hidden="true"></i> Approve
-                    </button>
-                    <button class="um-btn um-btn-danger  um-btn-sm" @onclick='() => SetStatus(_drawerRow, "Declined")'>
-                        <i class="bi bi-x-lg" aria-hidden="true"></i> Decline
-                    </button>
-                </div>
-            }
-        </div>
-    </div>
-}
-
-<!-- New endorsement dialog -->
-<SfDialog @bind-Visible="_showNew" Width="1120px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="mt-modal ew-action-modal" role="dialog" aria-modal="true" aria-labelledby="ew-form-title" @onclick:stopPropagation="true">
             <div class="um-modal-header">
                 <i class="bi bi-pen-fill" aria-hidden="true"></i>
-                <span>New Endorsement</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseNew">
-                    <i class="bi bi-x-lg" aria-hidden="true"></i>
-                </button>
+                <span id="ew-form-title">@(_form.EndorsementId == Guid.Empty ? "New Endorsement" : $"Edit {_form.EndorsementNumber}")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
             </div>
-            <EditForm Model="_newEnd" OnSubmit="SubmitNewForm">
+            <EditForm Model="_form" OnValidSubmit="SaveEndorsementAsync" OnInvalidSubmit="NotifyValidationAsync">
                 <DataAnnotationsValidator />
                 <div class="um-modal-body">
+                    <div class="ew-modal-intro">
+                        <span class="ew-modal-chip"><i class="bi bi-shield-check" aria-hidden="true"></i> Policy servicing workflow</span>
+                        <p>Create and maintain policy endorsement requests used by underwriting, service, documents, billing, and issuance workflows.</p>
+                    </div>
                     <div class="um-form-grid">
+                        <div class="um-field um-field--full ew-dlg-section">Policy & Account</div>
                         <div class="um-field">
-                            <label>Policy Number <span class="um-required">*</span></label>
-                            <InputText class="um-input" @bind-Value="_newEnd.PolicyNo" placeholder="e.g. POL-2025-00123" />
-                            @if (_newEndSubmitted)
-                            {
-                                <ValidationMessage For="() => _newEnd.PolicyNo" class="text-danger" />
-                            }
+                            <label>Policy Number <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.PolicyNumber" />
+                            <ValidationMessage For="() => _form.PolicyNumber" class="text-danger" />
                         </div>
                         <div class="um-field">
-                            <label>Endorsement Type <span class="um-required">*</span></label>
-                            <SfDropDownList TItem="string" TValue="string" CssClass="um-input"
-                                            DataSource="@_endTypes" @bind-Value="_newEnd.EndType" Placeholder="Select type…" />
-                            @if (_newEndSubmitted)
-                            {
-                                <ValidationMessage For="() => _newEnd.EndType" class="text-danger" />
-                            }
+                            <label>Account <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.AccountName" />
+                            <ValidationMessage For="() => _form.AccountName" class="text-danger" />
                         </div>
                         <div class="um-field">
-                            <label>Effective Date <span class="um-required">*</span></label>
-                            <SfDatePicker TValue="DateTime" CssClass="um-input" @bind-Value="_newEnd.EffDate" Format="MM/dd/yyyy" />
-                            @if (_newEndSubmitted)
-                            {
-                                <ValidationMessage For="() => _newEnd.EffDate" class="text-danger" />
-                            }
+                            <label>Line of Business <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.LineOfBusiness">
+                                <option value="">Select LOB</option>
+                                @foreach (var lob in LinesOfBusiness)
+                                {
+                                    <option value="@lob">@lob</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.LineOfBusiness" class="text-danger" />
                         </div>
                         <div class="um-field">
-                            <label>Premium Adjustment ($)</label>
-                            <SfNumericTextBox TValue="decimal" CssClass="um-input" @bind-Value="_newEnd.PremiumDelta" Format="N0" />
-                            @if (_newEndSubmitted)
-                            {
-                                <ValidationMessage For="() => _newEnd.PremiumDelta" class="text-danger" />
-                            }
+                            <label>Carrier <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.Carrier">
+                                <option value="">Select carrier</option>
+                                @foreach (var carrier in Carriers)
+                                {
+                                    <option value="@carrier">@carrier</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Carrier" class="text-danger" />
+                        </div>
+
+                        <div class="um-field um-field--full ew-dlg-section">Endorsement Detail</div>
+                        <div class="um-field">
+                            <label>Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.EndorsementType">
+                                <option value="">Select type</option>
+                                @foreach (var type in EndorsementTypes)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.EndorsementType" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Effective Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_form.EffectiveDate" />
+                            <ValidationMessage For="() => _form.EffectiveDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Premium Delta</label>
+                            <InputNumber class="form-control" @bind-Value="_form.PremiumDelta" />
+                            <ValidationMessage For="() => _form.PremiumDelta" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Priority</label>
+                            <InputSelect class="form-select" @bind-Value="_form.Priority">
+                                @foreach (var priority in Priorities)
+                                {
+                                    <option value="@priority">@priority</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.Priority" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Assigned To <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.AssignedToName" />
+                            <ValidationMessage For="() => _form.AssignedToName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Underwriter</label>
+                            <InputText class="form-control" @bind-Value="_form.UnderwriterName" />
+                            <ValidationMessage For="() => _form.UnderwriterName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Due Date</label>
+                            <InputDate class="form-control" @bind-Value="_form.DueDate" />
+                            <ValidationMessage For="() => _form.DueDate" class="text-danger" />
+                        </div>
+                        <div class="um-field ew-check-field">
+                            <label class="ew-check-label"><InputCheckbox @bind-Value="_form.IsUrgent" /> Urgent workflow</label>
                         </div>
                         <div class="um-field um-field--full">
-                            <label>Description</label>
-                            <InputTextArea class="um-input" rows="3" @bind-Value="_newEnd.Description" />
-                            @if (_newEndSubmitted)
-                            {
-                                <ValidationMessage For="() => _newEnd.Description" class="text-danger" />
-                            }
+                            <label>Description <span class="text-danger">*</span></label>
+                            <InputTextArea class="form-control" rows="3" @bind-Value="_form.Description" />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Reason</label>
+                            <InputTextArea class="form-control" rows="2" @bind-Value="_form.Reason" />
+                            <ValidationMessage For="() => _form.Reason" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Required Documents</label>
+                            <InputTextArea class="form-control" rows="2" @bind-Value="_form.RequiredDocuments" />
+                            <ValidationMessage For="() => _form.RequiredDocuments" class="text-danger" />
                         </div>
                     </div>
                 </div>
                 <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseNew">Cancel</button>
-                    <button type="submit" class="um-btn um-btn-primary">Submit</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">
+                        @if (_actionBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        Save Endorsement
+                    </button>
                 </div>
             </EditForm>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
+
+@if (_showActionDialog)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseActionDialog">
+        <div class="mt-modal ew-action-modal" role="dialog" aria-modal="true" aria-labelledby="ew-action-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi @_actionIcon" aria-hidden="true"></i>
+                <span id="ew-action-title">@_actionTitle</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActionDialog" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_actionForm" OnValidSubmit="ConfirmActionAsync" OnInvalidSubmit="NotifyActionValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="ew-modal-intro">
+                        <span class="ew-modal-chip"><i class="bi bi-lightning-charge" aria-hidden="true"></i> Workflow action</span>
+                        <p>@_actionHelpText</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Endorsement</label>
+                            <input class="form-control ew-readonly-input" value="@_selected.EndorsementNumber - @_selected.AccountName" disabled />
+                        </div>
+                        @if (_pendingAction == "Add Delta")
+                        {
+                            <div class="um-field">
+                                <label>Field <span class="text-danger">*</span></label>
+                                <InputText class="form-control" @bind-Value="_actionForm.FieldName" />
+                                <ValidationMessage For="() => _actionForm.FieldName" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Premium / Numeric Delta</label>
+                                <InputNumber class="form-control" @bind-Value="_actionForm.NumericDelta" />
+                                <ValidationMessage For="() => _actionForm.NumericDelta" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Before</label>
+                                <InputText class="form-control" @bind-Value="_actionForm.BeforeValue" />
+                            </div>
+                            <div class="um-field">
+                                <label>After</label>
+                                <InputText class="form-control" @bind-Value="_actionForm.AfterValue" />
+                            </div>
+                        }
+                        <div class="um-field um-field--full">
+                            <label>
+                                Notes
+                                @if (_pendingAction is "Decline" or "Request Info" or "Add Note")
+                                {
+                                    <span class="text-danger">*</span>
+                                }
+                            </label>
+                            <InputTextArea class="form-control" rows="4" @bind-Value="_actionForm.Notes" />
+                            <ValidationMessage For="() => _actionForm.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseActionDialog" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn @(_pendingAction == "Decline" || _pendingAction == "Archive" ? "um-btn-danger" : "um-btn-primary")" disabled="@_actionBusy">
+                        @if (_actionBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @_actionButtonText
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_drawerRow is not null)
+{
+    <div class="ew-drawer-backdrop" @onclick="CloseDrawer"></div>
+    <aside class="ew-drawer" aria-label="Endorsement details">
+        <div class="ew-drawer-head">
+            <div>
+                <h2 class="ew-drawer-title">@_drawerRow.EndorsementNumber</h2>
+                <span class="ew-drawer-sub">@_drawerRow.PolicyNumber · @_drawerRow.AccountName</span>
+            </div>
+            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="CloseDrawer"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+        <div class="ew-drawer-body">
+            <div class="ew-drawer-banner @(_drawerRow.IsUrgent ? "ew-drawer-banner--urgent" : null)">
+                <i class="bi @(_drawerRow.IsUrgent ? "bi-exclamation-triangle-fill" : "bi-info-circle")" aria-hidden="true"></i>
+                <span>@_drawerRow.WorkflowStage</span>
+                <strong>@_drawerRow.Priority</strong>
+            </div>
+            <div class="ew-drawer-meta">
+                @DrawerField("Type", _drawerRow.EndorsementType)
+                @DrawerField("Status", _drawerRow.Status)
+                @DrawerField("LOB", _drawerRow.LineOfBusiness)
+                @DrawerField("Carrier", _drawerRow.Carrier)
+                @DrawerField("Effective", _drawerRow.EffectiveDate.ToString("MM/dd/yyyy"))
+                @DrawerField("Premium Delta", _drawerRow.PremiumDelta.ToString("+$#,##0;-$#,##0;$0"))
+                @DrawerField("Requested By", _drawerRow.RequestedByName)
+                @DrawerField("Assigned To", _drawerRow.AssignedToName)
+                @DrawerField("Underwriter", _drawerRow.UnderwriterName ?? "—")
+                @DrawerField("Due", _drawerRow.DueDate?.ToString("MM/dd/yyyy") ?? "—")
+            </div>
+            <section class="ew-drawer-section">
+                <h3><i class="bi bi-card-text" aria-hidden="true"></i> Description</h3>
+                <p>@_drawerRow.Description</p>
+                @if (!string.IsNullOrWhiteSpace(_drawerRow.Reason))
+                {
+                    <strong>Reason</strong>
+                    <p>@_drawerRow.Reason</p>
+                }
+                @if (!string.IsNullOrWhiteSpace(_drawerRow.RequiredDocuments))
+                {
+                    <strong>Required Documents</strong>
+                    <p>@_drawerRow.RequiredDocuments</p>
+                }
+            </section>
+            <section class="ew-drawer-section">
+                <h3><i class="bi bi-arrow-left-right" aria-hidden="true"></i> Exposure Changes</h3>
+                <table class="ew-delta-table">
+                    <thead><tr><th>Field</th><th>Before</th><th>After</th><th>Delta</th></tr></thead>
+                    <tbody>
+                        @foreach (var d in DeltasFor(_drawerRow.EndorsementId))
+                        {
+                            <tr>
+                                <td>@d.FieldName</td>
+                                <td class="ew-dt-before">@d.BeforeValue</td>
+                                <td class="ew-dt-after">@d.AfterValue</td>
+                                <td>@DeltaCell(d.NumericDelta)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+            <section class="ew-drawer-section">
+                <h3><i class="bi bi-clock-history" aria-hidden="true"></i> Activity Timeline</h3>
+                <div class="ew-timeline">
+                    @foreach (var a in ActivitiesFor(_drawerRow.EndorsementId).Take(6))
+                    {
+                        <div class="ew-timeline-item">
+                            <span class="ew-timeline-dot"></span>
+                            <div>
+                                <strong>@a.Subject</strong>
+                                <span>@a.ActivityType · @a.CreatedByName · @a.ActivityDateUtc.ToLocalTime().ToString("MM/dd/yyyy h:mm tt")</span>
+                                @if (!string.IsNullOrWhiteSpace(a.Notes))
+                                {
+                                    <p>@a.Notes</p>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+            <div class="ew-drawer-actions">
+                <button class="um-btn um-btn-success um-btn-sm" @onclick='() => OpenWorkflowAction(_drawerRow, "Approve")' disabled="@IsTerminal(_drawerRow)"><i class="bi bi-check-lg"></i> Approve</button>
+                <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => OpenWorkflowAction(_drawerRow, "Issue")' disabled="@(_drawerRow.Status != "Approved")"><i class="bi bi-patch-check"></i> Issue</button>
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenWorkflowAction(_drawerRow, "Add Note")'><i class="bi bi-chat-left-text"></i> Add Note</button>
+            </div>
+        </div>
+    </aside>
+}
+
+<div class="ew-enterprise-page" @onclick="CloseActionMenu">
+    <div class="ew-header">
+        <div class="ew-header-left">
+            <div class="ew-lob-icon"><i class="bi bi-pen-fill" aria-hidden="true"></i></div>
+            <div class="ew-header-info">
+                <div class="ew-title-row">
+                    <h1 class="ew-page-title">Policy Endorsements</h1>
+                    <span class="ew-status-pill">@FilteredRows.Count() active</span>
+                    @if (HasFilters)
+                    {
+                        <span class="ew-filter-pill">Filtered</span>
+                    }
+                </div>
+                <div class="ew-sub-row">
+                    <span class="ew-sub-chip"><i class="bi bi-stack" aria-hidden="true"></i>@_rows.Count total endorsements</span>
+                    <span class="ew-sub-chip"><i class="bi bi-hourglass-split" aria-hidden="true"></i>@_rows.Count(r => r.Status is "Pending" or "In Review" or "Info Needed") open</span>
+                    <span class="ew-sub-chip"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>@_rows.Count(r => r.IsUrgent) urgent</span>
+                    <span class="ew-sub-chip"><i class="bi bi-cash-stack" aria-hidden="true"></i>@_rows.Sum(r => r.PremiumDelta).ToString("+$#,##0;-$#,##0;$0") premium impact</span>
+                </div>
+            </div>
+        </div>
+        <div class="ew-header-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "ew-spin" : "")"></i> Refresh</button>
+            <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenNew"><i class="bi bi-plus-lg"></i> New Endorsement</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies")'><i class="bi bi-shield-check"></i> Policies</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies/cancellations")'><i class="bi bi-x-circle"></i> Cancellations</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies/documents")'><i class="bi bi-folder2"></i> Documents</button>
+        </div>
+    </div>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger ew-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+    }
+
+    <div class="ew-kpi-strip">
+        @KpiCard("bi-stack", "Total", _rows.Count.ToString(), "ew-kpi-total", null)
+        @KpiCard("bi-hourglass-split", "Open", _rows.Count(r => r.Status is "Pending" or "In Review" or "Info Needed").ToString(), "ew-kpi-open", "__open")
+        @KpiCard("bi-check-circle", "Approved", _rows.Count(r => r.Status == "Approved").ToString(), "ew-kpi-approved", "Approved")
+        @KpiCard("bi-patch-check", "Issued", _rows.Count(r => r.Status == "Issued").ToString(), "ew-kpi-issued", "Issued")
+        @KpiCard("bi-x-circle", "Declined", _rows.Count(r => r.Status == "Declined").ToString(), "ew-kpi-declined", "Declined")
+        @KpiCard("bi-exclamation-triangle", "Urgent", _rows.Count(r => r.IsUrgent).ToString(), "ew-kpi-urgent", "__urgent")
+        @KpiCard("bi-cash-stack", "Premium Impact", _rows.Sum(r => r.PremiumDelta).ToString("+$#,##0;-$#,##0;$0"), "ew-kpi-prem", "__premium")
+    </div>
+
+    <div class="ew-enterprise-search" role="search" aria-label="Search endorsements">
+        <div class="ew-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="ew-search-body">
+            <label for="ew-search-input">Enterprise search</label>
+            <input id="ew-search-input" class="ew-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search endorsement #, policy #, account, carrier, LOB, status, type, assignee, underwriter, notes, dates…" />
+            <div class="ew-search-hint">Searches all visible and workflow fields as you type.</div>
+        </div>
+        <div class="ew-search-result"><strong>@FilteredRows.Count()</strong><span>matches</span></div>
+        @if (HasFilters)
+        {
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ew-search-clear" @onclick="ClearFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        }
+    </div>
+
+    <div class="ew-view-tabs" role="tablist" aria-label="Endorsement views">
+        @foreach (var tab in _tabs)
+        {
+            <button class="ew-view-tab @(_activeTab == tab.Key ? "ew-view-tab--active" : null)" type="button" role="tab" aria-selected="@(_activeTab == tab.Key)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <span class="ew-tab-count">@TabCount(tab.Key)</span>
+            </button>
+        }
+    </div>
+
+    <div class="ew-grid-wrap">
+        @if (_loading)
+        {
+            <div class="ew-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Loading endorsements…</span></div>
+        }
+        else if (!PagedRows.Any())
+        {
+            <div class="ew-empty-state">
+                <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+                <strong>No endorsements found</strong>
+                <span>Adjust the current tab, KPI, or search criteria.</span>
+            </div>
+        }
+        else
+        {
+            <div class="ew-grid-toolbar">
+                <div><strong>@FilteredRows.Count()</strong> endorsements @if (HasFilters) { <span class="ew-filter-note">Filtered</span> }</div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            </div>
+            <div class="ew-table-scroll">
+                <table class="ew-table" aria-label="Policy endorsements register">
+                    <thead>
+                        <tr>
+                            <th>Endorsement #</th>
+                            <th>Policy #</th>
+                            <th>Account</th>
+                            <th>LOB</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                            <th>Effective</th>
+                            <th>Due</th>
+                            <th class="ew-num">Prem Δ</th>
+                            <th>Assigned</th>
+                            <th>Workflow</th>
+                            <th class="ew-actions-col"><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in PagedRows)
+                        {
+                            <tr class="ew-table-row" @onclick="() => OpenDetail(row)">
+                                <td>@EndorsementNoLink(row)</td>
+                                <td>@PolicyNoLink(row)</td>
+                                <td>
+                                    <div class="ew-account-cell">
+                                        <span class="ew-avatar">@Initials(row.AccountName)</span>
+                                        <div><strong>@row.AccountName</strong><span>@row.Carrier</span></div>
+                                    </div>
+                                </td>
+                                <td>@LobChip(row.LineOfBusiness)</td>
+                                <td>@row.EndorsementType</td>
+                                <td>@StatusChip(row.Status)</td>
+                                <td>@row.EffectiveDate.ToString("MM/dd/yyyy")</td>
+                                <td>@DueCell(row)</td>
+                                <td class="ew-num">@DeltaCell(row.PremiumDelta)</td>
+                                <td>@row.AssignedToName</td>
+                                <td><span class="ew-workflow-chip @PriorityClass(row.Priority)">@row.WorkflowStage</span></td>
+                                <td class="ew-actions-col">@CtxBtn(row)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="ew-pager">
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button>
+                <span class="ew-page-chip">@PageSummary</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button>
+            </div>
+        }
+    </div>
+</div>
+
+@if (_openActionMenuFor is not null)
+{
+    <div class="ew-context-menu" style="left:@_menuXpx; top:@_menuYpx" @onclick:stopPropagation="true">
+        @foreach (var action in _actionItems)
+        {
+            <button type="button" @onclick="() => ExecuteMenuAction(action.Label)">
+                <i class="bi @action.Icon" aria-hidden="true"></i>
+                <span>@action.Label</span>
+            </button>
+        }
+    </div>
+}
 
 @code {
-    private Guid DefaultTenantId { get; set; }
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantId;
-    private Guid _tenantAdminUserId;
-    SfToast _toast = default!;
-    SfContextMenu<CtxItem> _ctx = default!;
-    SfGrid<EndRow> _grid = default!;
-
-    string _filterStatus = "";
-    string _filterType   = "";
-    bool   _showNew      = false;
-    bool   _newEndSubmitted = false;
-    EndRow? _drawerRow   = null;
-    EndRow  _selected    = new();
+    Guid _tenantId;
+    Guid _tenantAdminUserId;
+    bool _loading;
+    bool _showForm;
+    bool _showActionDialog;
+    bool _actionBusy;
+    bool _toastVisible;
+    string _activeTab = "all";
+    string _toastMessage = string.Empty;
+    string _toastKind = "success";
+    string? _kpiFilter;
     string? _loadError;
+    string? _searchText;
+    Guid? _openActionMenuFor;
+    string _menuXpx = "0px";
+    string _menuYpx = "0px";
+    int _page = 1;
+    const int PageSize = 20;
 
-    IEnumerable<EndRow> Filtered => _rows
-        .Where(r => (string.IsNullOrEmpty(_filterStatus) || r.Status   == _filterStatus)
-                 && (string.IsNullOrEmpty(_filterType)   || r.EndType  == _filterType));
+    PolicyEndorsementDto _selected = new();
+    PolicyEndorsementDto? _drawerRow;
+    EndorsementForm _form = new();
+    readonly EndorsementActionForm _actionForm = new();
+    string _pendingAction = string.Empty;
+    string _actionTitle = "Endorsement Action";
+    string _actionIcon = "bi-lightning-charge";
+    string _actionButtonText = "Continue";
+    string _actionHelpText = string.Empty;
 
-    readonly string[] _endTypes = new[]
-    { "Add Coverage","Remove Coverage","Change Limit","Add Insured","Address Change","Premium Adjustment","Waiver of Subrogation","Certificate Addition" };
+    readonly List<PolicyEndorsementDto> _rows = [];
+    readonly List<PolicyEndorsementActivityDto> _activities = [];
+    readonly List<PolicyEndorsementDeltaDto> _deltas = [];
 
-    NewEndForm _newEnd = new();
+    static readonly string[] Statuses = ["Pending", "In Review", "Info Needed", "Approved", "Issued", "Declined"];
+    static readonly string[] LinesOfBusiness = ["Commercial Auto", "Commercial Property", "General Liability", "Workers Comp", "Professional Liability", "Umbrella", "Cyber", "Directors & Officers", "Personal Auto", "Homeowners", "Life", "Health", "Flood"];
+    static readonly string[] Carriers = ["Travelers", "Hartford", "CNA", "Liberty Mutual", "Zurich", "AIG", "Nationwide", "Cincinnati", "Chubb", "Berkshire Hathaway"];
+    static readonly string[] EndorsementTypes = ["Add Coverage", "Remove Coverage", "Change Limit", "Add Insured", "Add Vehicle", "Address Change", "Premium Adjustment", "Waiver of Subrogation", "Certificate Addition", "Class Code Change"];
+    static readonly string[] Priorities = ["Low", "Normal", "High", "Critical"];
 
-    sealed class NewEndForm
+    readonly TabDef[] _tabs =
+    [
+        new("all", "All", "bi-stack"),
+        new("open", "Open", "bi-hourglass-split"),
+        new("review", "In Review", "bi-search"),
+        new("approved", "Approved", "bi-check-circle"),
+        new("issued", "Issued", "bi-patch-check"),
+        new("declined", "Declined", "bi-x-circle"),
+        new("urgent", "Urgent", "bi-exclamation-triangle"),
+        new("carrier", "By Carrier", "bi-building"),
+        new("lob", "By LOB", "bi-layers"),
+    ];
+
+    readonly ActionItem[] _actionItems =
+    [
+        new("Review", "bi-eye"),
+        new("Edit", "bi-pencil"),
+        new("Approve", "bi-check-lg"),
+        new("Decline", "bi-x-lg"),
+        new("Issue", "bi-patch-check"),
+        new("Request Info", "bi-question-circle"),
+        new("Add Note", "bi-chat-left-text"),
+        new("Add Delta", "bi-arrow-left-right"),
+        new("View Policy", "bi-shield"),
+        new("Archive", "bi-archive"),
+    ];
+
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || _kpiFilter is not null;
+    string? SearchText
     {
-        [Required]
-        [StringLength(32)]
-        public string   PolicyNo     { get; set; } = "";
-        [Required]
-        [StringLength(80)]
-        public string   EndType      { get; set; } = "";
-        [Required]
-        public DateTime EffDate      { get; set; } = DateTime.Today;
-        [Range(-10000000, 10000000)]
-        public decimal  PremiumDelta { get; set; }
-        [StringLength(1000)]
-        public string   Description  { get; set; } = "";
+        get => _searchText;
+        set { _searchText = value; _page = 1; }
     }
 
-    sealed class DeltaRow(string Field, string Before, string After, decimal NumericDelta)
+    IEnumerable<PolicyEndorsementDto> BaseTabRows => _activeTab switch
     {
-        public string  Field        { get; } = Field;
-        public string  Before       { get; } = Before;
-        public string  After        { get; } = After;
-        public decimal NumericDelta { get; } = NumericDelta;
-    }
-
-    sealed class EndRow
-    {
-        public string     EndorsementNo { get; set; } = "";
-        public string     PolicyNo      { get; set; } = "";
-        public string     Account       { get; set; } = "";
-        public string     Lob           { get; set; } = "";
-        public string     EndType       { get; set; } = "";
-        public DateTime   EffDate       { get; set; }
-        public decimal    PremiumDelta  { get; set; }
-        public string     Carrier       { get; set; } = "";
-        public string     RequestedBy   { get; set; } = "";
-        public string     Status        { get; set; } = "";
-        public List<DeltaRow> Deltas    { get; set; } = new();
-    }
-
-    sealed record CtxItem(string Text, string IconCss);
-
-    List<CtxItem> _ctxItems = new()
-    {
-        new("Review",        "bi bi-eye"        ),
-        new("Approve",       "bi bi-check-lg"   ),
-        new("Decline",       "bi bi-x-lg"       ),
-        new("View Policy",   "bi bi-shield"     ),
+        "open" => _rows.Where(r => r.Status is "Pending" or "In Review" or "Info Needed"),
+        "review" => _rows.Where(r => r.Status == "In Review"),
+        "approved" => _rows.Where(r => r.Status == "Approved"),
+        "issued" => _rows.Where(r => r.Status == "Issued"),
+        "declined" => _rows.Where(r => r.Status == "Declined"),
+        "urgent" => _rows.Where(r => r.IsUrgent),
+        "carrier" => _rows.OrderBy(r => r.Carrier).ThenBy(r => r.DueDate),
+        "lob" => _rows.OrderBy(r => r.LineOfBusiness).ThenBy(r => r.DueDate),
+        _ => _rows,
     };
 
-    readonly List<EndRow> _rows = new();
+    IEnumerable<PolicyEndorsementDto> FilteredRows => ApplyEnterpriseFilters(BaseTabRows);
+    IEnumerable<PolicyEndorsementDto> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize);
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
+    string PageSummary
+    {
+        get
+        {
+            var total = FilteredRows.Count();
+            if (total == 0) return "No endorsements";
+            var start = ((_page - 1) * PageSize) + 1;
+            var end = Math.Min(_page * PageSize, total);
+            return $"Showing {start}-{end} of {total}";
+        }
+    }
 
-    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Policies","/policies"), new("Endorsements","/policies/endorsements"));
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"), new("Endorsements", "/policies/endorsements"));
         await LoadAsync();
     }
 
     async Task LoadAsync()
     {
+        _loading = true;
         _loadError = null;
         try
         {
-            var result = await Api.SearchSubmissionsAsync(DefaultTenantId, pageSize: 100);
+            var center = await Api.GetPolicyEndorsementCenterAsync(_tenantId);
             _rows.Clear();
-            _rows.AddRange((result?.Items ?? []).Where(x => x.Status is "Quoted" or "Bound" or "In Review").Select(MapSubmissionToEndorsement));
-            if (_rows.Count == 0) BuildStub();
+            _activities.Clear();
+            _deltas.Clear();
+            _rows.AddRange(center?.Endorsements ?? []);
+            _activities.AddRange(center?.Activities ?? []);
+            _deltas.AddRange(center?.Deltas ?? []);
+            if (_rows.Count == 0)
+                BuildStubData();
+            _page = Math.Min(_page, TotalPages);
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load endorsements: {ex.Message}";
-            if (_rows.Count == 0) BuildStub();
+            ShowToast($"Load failed: {ex.Message}", "danger");
+            if (_rows.Count == 0)
+                BuildStubData();
+        }
+        finally
+        {
+            _loading = false;
         }
     }
 
-    EndRow MapSubmissionToEndorsement(SubmissionDto s)
+    void BuildStubData()
     {
-        var status = s.Status switch { "Bound" => "Issued", "Quoted" => "Approved", "Declined" => "Declined", _ => "Pending" };
-        var premium = s.TargetPremium ?? 0;
-        return new EndRow
+        var rng = new Random(130);
+        var accounts = new[] { "Sullivan Manufacturing LLC", "Lakeside Medical Group", "Apex Tech Solutions", "Green Valley Foods Inc", "Harbor Logistics Co", "Cascade Retail Group" };
+        var people = new[] { "Amy Scott", "Dan Rivera", "Paula Ngo", "Chris Hall", "Sarah Chen" };
+        _rows.Clear();
+        _activities.Clear();
+        _deltas.Clear();
+        for (var i = 1; i <= 18; i++)
         {
-            EndorsementNo = $"END-{s.SubmissionNumber.Replace("SUB-", string.Empty)}",
-            PolicyNo = $"POL-{s.SubmissionNumber.Replace("SUB-", string.Empty)}",
-            Account = s.AccountName,
-            Lob = s.LineOfBusiness,
-            EndType = "Premium Adjustment",
-            EffDate = s.EffectiveDate,
-            PremiumDelta = Math.Round(premium * 0.05m, 2),
-            Carrier = s.QuoteCount > 0 ? "Quoted Markets" : "Pending Carrier",
-            RequestedBy = s.AssignedToUserName ?? "Unassigned",
-            Status = status,
-            Deltas = [new("Annual Premium", premium.ToString("C0"), (premium * 1.05m).ToString("C0"), Math.Round(premium * 0.05m, 2))]
-        };
-    }
-
-    void BuildStub()
-    {
-        var rng    = new Random(7);
-        var types  = _endTypes;
-        var statuses = new[]{"Pending","Approved","Declined","Issued"};
-        var lobs   = new[]{"General Liability","Commercial Property","Commercial Auto","Workers Comp","Umbrella"};
-        var carriers = new[]{"Travelers","Hartford","Liberty Mutual","Zurich","CNA"};
-        var accounts = new[]{"Sullivan Mfg. LLC","Bridgewater Hotels","Metro Freight Co.","PineCrest Builders","Nguyen, Minh T."};
-        var people  = new[]{"Maria Santos","James Patel","Chen Li","Aisha Williams","Tom Reeves"};
-
-        for (int i = 1; i <= 45; i++)
-        {
-            var type   = types[rng.Next(types.Length)];
-            var status = statuses[rng.Next(statuses.Length)];
-            var delta  = (decimal)(rng.Next(-5000, 12000));
-            var row    = new EndRow
+            var id = Guid.NewGuid();
+            var status = Statuses[rng.Next(Statuses.Length)];
+            var delta = rng.Next(-4000, 12000);
+            var row = new PolicyEndorsementDto
             {
-                EndorsementNo = $"END-2025-{i:D4}",
-                PolicyNo      = $"POL-2025-{rng.Next(10000,99999)}",
-                Account       = accounts[rng.Next(accounts.Length)],
-                Lob           = lobs[rng.Next(lobs.Length)],
-                EndType       = type,
-                EffDate       = DateTime.Today.AddDays(rng.Next(-60,60)),
-                PremiumDelta  = delta,
-                Carrier       = carriers[rng.Next(carriers.Length)],
-                RequestedBy   = people[rng.Next(people.Length)],
-                Status        = status,
-                Deltas        = BuildDeltas(rng, type, delta),
+                EndorsementId = id,
+                TenantId = _tenantId,
+                EndorsementNumber = $"END-2025-{i:D4}",
+                PolicyNumber = $"POL-2025-{rng.Next(10000, 99999)}",
+                AccountName = accounts[rng.Next(accounts.Length)],
+                LineOfBusiness = LinesOfBusiness[rng.Next(0, 7)],
+                Carrier = Carriers[rng.Next(Carriers.Length)],
+                EndorsementType = EndorsementTypes[rng.Next(EndorsementTypes.Length)],
+                Description = "Enterprise endorsement workflow synchronized from policy servicing activity.",
+                EffectiveDate = DateTime.Today.AddDays(rng.Next(-20, 45)),
+                RequestedDateUtc = DateTime.UtcNow.AddDays(-rng.Next(1, 18)),
+                PremiumDelta = delta,
+                Status = status,
+                Priority = rng.Next(0, 5) == 0 ? "High" : "Normal",
+                RequestedByName = people[rng.Next(people.Length)],
+                AssignedToName = people[rng.Next(people.Length)],
+                UnderwriterName = people[rng.Next(people.Length)],
+                Reason = "Policy servicing change requested by client or carrier.",
+                RequiredDocuments = "Signed change request; supporting exposure schedule.",
+                WorkflowStage = StageFor(status),
+                DueDate = DateTime.Today.AddDays(rng.Next(-3, 12)),
+                IsUrgent = rng.Next(0, 5) == 0
             };
             _rows.Add(row);
+            _activities.Add(new PolicyEndorsementActivityDto { ActivityId = Guid.NewGuid(), EndorsementId = id, TenantId = _tenantId, ActivityType = "Created", Subject = "Endorsement request created", Notes = row.Description, CreatedByName = row.RequestedByName, ActivityDateUtc = row.RequestedDateUtc });
+            _deltas.Add(new PolicyEndorsementDeltaDto { DeltaId = Guid.NewGuid(), EndorsementId = id, TenantId = _tenantId, FieldName = "Annual Premium", BeforeValue = "Current premium", AfterValue = delta.ToString("+$#,##0;-$#,##0;$0"), NumericDelta = delta });
         }
     }
 
-    List<DeltaRow> BuildDeltas(Random rng, string type, decimal premDelta)
+    IEnumerable<PolicyEndorsementDto> ApplyEnterpriseFilters(IEnumerable<PolicyEndorsementDto> rows)
     {
-        var deltas = new List<DeltaRow>();
-        if (type == "Change Limit")
+        if (_kpiFilter is not null)
         {
-            var before = rng.Next(5,20) * 100_000m;
-            deltas.Add(new("Occurrence Limit", before.ToString("C0"), (before + rng.Next(1,5)*100_000m).ToString("C0"), rng.Next(1,5)*100_000m));
-            deltas.Add(new("Aggregate Limit", (before*2).ToString("C0"), ((before + rng.Next(1,5)*100_000m)*2).ToString("C0"), rng.Next(2,10)*100_000m));
+            rows = _kpiFilter switch
+            {
+                "__open" => rows.Where(r => r.Status is "Pending" or "In Review" or "Info Needed"),
+                "__urgent" => rows.Where(r => r.IsUrgent),
+                "__premium" => rows.Where(r => r.PremiumDelta != 0),
+                _ => rows.Where(r => r.Status == _kpiFilter)
+            };
         }
-        if (type is "Add Coverage" or "Remove Coverage")
-        {
-            var yn = type == "Add Coverage" ? "N" : "Y";
-            deltas.Add(new("Coverage Active", yn, yn=="N"?"Y":"N", type == "Add Coverage" ? 1 : -1));
-        }
-        deltas.Add(new("Annual Premium", (15_000m + rng.Next(-3000,0)).ToString("C0"), (15_000m + premDelta).ToString("C0"), premDelta));
-        return deltas;
+
+        if (string.IsNullOrWhiteSpace(_searchText)) return rows;
+        var term = _searchText.Trim();
+        return rows.Where(r => SearchBlob(r).Contains(term, StringComparison.OrdinalIgnoreCase));
     }
 
-    decimal PremDelta(IEnumerable<EndRow> rows) => rows.Sum(r => r.PremiumDelta);
+    static string SearchBlob(PolicyEndorsementDto r) => string.Join(' ', r.EndorsementNumber, r.PolicyNumber, r.AccountName, r.LineOfBusiness, r.Carrier, r.EndorsementType, r.Description, r.Status, r.Priority, r.RequestedByName, r.AssignedToName, r.UnderwriterName, r.Reason, r.RequiredDocuments, r.WorkflowStage, r.EffectiveDate.ToString("MM/dd/yyyy"), r.DueDate?.ToString("MM/dd/yyyy"), r.PremiumDelta.ToString());
+
+    void SetActiveTab(string tab) { _activeTab = tab; _kpiFilter = null; _page = 1; }
+    void ApplyKpiFilter(string? filter) { _kpiFilter = _kpiFilter == filter ? null : filter; _page = 1; }
+    void ClearFilters() { _searchText = null; _kpiFilter = null; _page = 1; }
+    void PreviousPage() { if (_page > 1) _page--; }
+    void NextPage() { if (_page < TotalPages) _page++; }
+    int TabCount(string key) => key switch
+    {
+        "open" => _rows.Count(r => r.Status is "Pending" or "In Review" or "Info Needed"),
+        "review" => _rows.Count(r => r.Status == "In Review"),
+        "approved" => _rows.Count(r => r.Status == "Approved"),
+        "issued" => _rows.Count(r => r.Status == "Issued"),
+        "declined" => _rows.Count(r => r.Status == "Declined"),
+        "urgent" => _rows.Count(r => r.IsUrgent),
+        _ => _rows.Count,
+    };
 
     void OpenNew()
     {
-        _newEnd = new();
-        _newEndSubmitted = false;
-        _showNew = true;
+        _form = new EndorsementForm { EffectiveDate = DateTime.Today, DueDate = DateTime.Today.AddDays(5), RequestedByName = "Current User", AssignedToName = "Service Team", Priority = "Normal" };
+        _showForm = true;
     }
 
-    void CloseNew()
+    void OpenEdit(PolicyEndorsementDto row)
     {
-        _newEndSubmitted = false;
-        _showNew = false;
+        _selected = row;
+        _form = EndorsementForm.From(row);
+        _showForm = true;
     }
 
-    void SubmitNewForm(EditContext editContext)
+    void CloseForm() => _showForm = false;
+
+    async Task SaveEndorsementAsync()
     {
-        _newEndSubmitted = true;
-        if (editContext.Validate())
+        _actionBusy = true;
+        try
         {
-            SubmitNew();
+            if (_form.EndorsementId == Guid.Empty)
+            {
+                await Api.CreatePolicyEndorsementAsync(new CreatePolicyEndorsementRequest
+                {
+                    TenantId = _tenantId,
+                    PolicyId = _form.PolicyId,
+                    AccountId = _form.AccountId,
+                    PolicyNumber = _form.PolicyNumber,
+                    AccountName = _form.AccountName,
+                    LineOfBusiness = _form.LineOfBusiness,
+                    Carrier = _form.Carrier,
+                    EndorsementType = _form.EndorsementType,
+                    Description = _form.Description,
+                    EffectiveDate = _form.EffectiveDate,
+                    PremiumDelta = _form.PremiumDelta,
+                    Priority = _form.Priority,
+                    RequestedByName = _form.RequestedByName,
+                    AssignedToName = _form.AssignedToName,
+                    UnderwriterName = _form.UnderwriterName,
+                    Reason = _form.Reason,
+                    RequiredDocuments = _form.RequiredDocuments,
+                    DueDate = _form.DueDate,
+                    IsUrgent = _form.IsUrgent,
+                    CreatedByUserId = _tenantAdminUserId
+                });
+                ShowToast("Endorsement created.");
+            }
+            else
+            {
+                await Api.UpdatePolicyEndorsementAsync(_form.EndorsementId, new UpdatePolicyEndorsementRequest
+                {
+                    EndorsementType = _form.EndorsementType,
+                    Description = _form.Description,
+                    EffectiveDate = _form.EffectiveDate,
+                    PremiumDelta = _form.PremiumDelta,
+                    Priority = _form.Priority,
+                    AssignedToName = _form.AssignedToName,
+                    UnderwriterName = _form.UnderwriterName,
+                    Reason = _form.Reason,
+                    RequiredDocuments = _form.RequiredDocuments,
+                    DueDate = _form.DueDate,
+                    IsUrgent = _form.IsUrgent,
+                    ModifiedByUserId = _tenantAdminUserId
+                });
+                ShowToast("Endorsement updated.");
+            }
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
         }
     }
 
-    void SubmitNew()
-    {
-        _rows.Insert(0, new EndRow
-        {
-            EndorsementNo = $"END-2025-{_rows.Count+1:D4}",
-            PolicyNo      = _newEnd.PolicyNo,
-            Account       = "—",
-            Lob           = "—",
-            EndType       = _newEnd.EndType,
-            EffDate       = _newEnd.EffDate,
-            PremiumDelta  = _newEnd.PremiumDelta,
-            Carrier       = "—",
-            RequestedBy   = "Current User",
-            Status        = "Pending",
-            Deltas        = new(),
-        });
-        _showNew = false;
-        _newEndSubmitted = false;
-        _newEnd  = new();
-    }
-
-    void OnCtxSelected(MenuEventArgs<CtxItem> args)
-    {
-        switch (args.Item.Text)
-        {
-            case "Review":      _drawerRow = _selected; break;
-            case "Approve":     SetStatus(_selected, "Approved"); break;
-            case "Decline":     SetStatus(_selected, "Declined"); break;
-            case "View Policy": Nav.NavigateTo($"/policies/{PoliciesRegister.DemoPolicyId}"); break;
-        }
-    }
-
-    void SetStatus(EndRow row, string status)
-    {
-        row.Status = status;
-        CloseDrawer();
-    }
-
+    void OpenDetail(PolicyEndorsementDto row) => _drawerRow = row;
     void CloseDrawer() => _drawerRow = null;
 
-    RenderFragment LobBadge(string lob) =>
-        @<span class="ew-lob-chip">@lob</span>;
+    void OpenWorkflowAction(PolicyEndorsementDto row, string action)
+    {
+        _selected = row;
+        _pendingAction = action;
+        _actionForm.Reset();
+        (_actionTitle, _actionIcon, _actionButtonText, _actionHelpText) = action switch
+        {
+            "Approve" => ("Approve endorsement", "bi-check-circle", "Approve", "Approve the endorsement and move it to approved pending issue."),
+            "Decline" => ("Decline endorsement", "bi-x-circle", "Decline", "Decline this endorsement and record the reason."),
+            "Issue" => ("Issue endorsement", "bi-patch-check", "Issue", "Mark the approved endorsement as issued to the policy."),
+            "Request Info" => ("Request information", "bi-question-circle", "Request Info", "Move this endorsement to information needed and capture what is missing."),
+            "Add Note" => ("Add workflow note", "bi-chat-left-text", "Add Note", "Add an activity note to the endorsement workflow."),
+            "Add Delta" => ("Add exposure delta", "bi-arrow-left-right", "Add Delta", "Add an exposure, coverage, or premium delta to the endorsement."),
+            "Archive" => ("Archive endorsement", "bi-archive", "Archive", "Archive this endorsement from the active register."),
+            _ => ("Review endorsement", "bi-eye", "Start Review", "Move this endorsement into underwriting review.")
+        };
+        _showActionDialog = true;
+    }
 
-    RenderFragment DeltaCell(decimal d) =>
-    d == 0 ? @<span class="ew-delta-zero">—</span>
-           : d > 0 ? @<span class="ew-delta-pos">+@d.ToString("C0")</span>
-                   : @<span class="ew-delta-neg">@d.ToString("C0")</span>;
+    void CloseActionDialog() => _showActionDialog = false;
 
-    RenderFragment StatusChip(string s) =>
-        @<span class="ew-status ew-status-@s.ToLower()">@s</span>;
+    async Task ConfirmActionAsync()
+    {
+        if (_pendingAction is "Decline" or "Request Info" or "Add Note" && string.IsNullOrWhiteSpace(_actionForm.Notes))
+        {
+            ShowToast("Notes are required for this action.", "danger");
+            return;
+        }
+        if (_pendingAction == "Add Delta" && string.IsNullOrWhiteSpace(_actionForm.FieldName))
+        {
+            ShowToast("Field name is required for exposure delta.", "danger");
+            return;
+        }
 
-    RenderFragment CtxBtn(EndRow row) =>
-        @<button class="um-btn um-btn-ghost um-btn-xs ew-ctx-btn"
-                 @onclick:stopPropagation="true"
-                 @onclick="(e) => { _selected = row; _ctx.Open(e.ClientX, e.ClientY); }">
-            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
-        </button>;
+        _actionBusy = true;
+        try
+        {
+            switch (_pendingAction)
+            {
+                case "Add Note":
+                    await Api.AddPolicyEndorsementActivityAsync(new AddPolicyEndorsementActivityRequest { EndorsementId = _selected.EndorsementId, ActivityType = "Note", Subject = "Workflow note added", Notes = _actionForm.Notes, CreatedByName = "Current User", CreatedByUserId = _tenantAdminUserId });
+                    ShowToast("Note added.");
+                    break;
+                case "Add Delta":
+                    await Api.UpsertPolicyEndorsementDeltaAsync(new UpsertPolicyEndorsementDeltaRequest { EndorsementId = _selected.EndorsementId, FieldName = _actionForm.FieldName, BeforeValue = _actionForm.BeforeValue, AfterValue = _actionForm.AfterValue, NumericDelta = _actionForm.NumericDelta, CreatedByUserId = _tenantAdminUserId });
+                    ShowToast("Exposure delta added.");
+                    break;
+                case "Archive":
+                    await Api.ArchivePolicyEndorsementAsync(_selected.EndorsementId, _tenantAdminUserId);
+                    ShowToast("Endorsement archived.");
+                    break;
+                default:
+                    await UpdateStatusAsync(_selected, StatusForAction(_pendingAction), _actionForm.Notes);
+                    break;
+            }
+            _showActionDialog = false;
+            _drawerRow = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
 
-    RenderFragment DrawerField(string label, string val) =>
-        @<div class="ew-meta-row"><span class="ew-meta-lbl">@label</span><span class="ew-meta-val">@val</span></div>;
+    async Task UpdateStatusAsync(PolicyEndorsementDto row, string status, string? notes = null)
+    {
+        await Api.UpdatePolicyEndorsementStatusAsync(row.EndorsementId, new UpdatePolicyEndorsementStatusRequest { Status = status, Notes = notes, CreatedByName = "Current User", ModifiedByUserId = _tenantAdminUserId });
+        ShowToast($"Endorsement {status.ToLowerInvariant()}.");
+    }
 
-    RenderFragment KpiCard(string icon, string label, string val, string css) =>
-        @<div class="ew-kpi-card @css">
-            <div class="ew-kpi-val">@val</div>
-            <div class="ew-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
-        </div>;
+    static string StatusForAction(string action) => action switch
+    {
+        "Approve" => "Approved",
+        "Decline" => "Declined",
+        "Issue" => "Issued",
+        "Request Info" => "Info Needed",
+        _ => "In Review"
+    };
+
+    static string StageFor(string status) => status switch
+    {
+        "Pending" => "Intake",
+        "In Review" => "Underwriting Review",
+        "Approved" => "Approved Pending Issue",
+        "Declined" => "Closed Declined",
+        "Issued" => "Issued to Policy",
+        "Info Needed" => "Awaiting Information",
+        _ => "Intake"
+    };
+
+    async Task ExecuteMenuAction(string action)
+    {
+        CloseActionMenu();
+        switch (action)
+        {
+            case "Review": OpenWorkflowAction(_selected, "Review"); break;
+            case "Edit": OpenEdit(_selected); break;
+            case "Approve": OpenWorkflowAction(_selected, "Approve"); break;
+            case "Decline": OpenWorkflowAction(_selected, "Decline"); break;
+            case "Issue": OpenWorkflowAction(_selected, "Issue"); break;
+            case "Request Info": OpenWorkflowAction(_selected, "Request Info"); break;
+            case "Add Note": OpenWorkflowAction(_selected, "Add Note"); break;
+            case "Add Delta": OpenWorkflowAction(_selected, "Add Delta"); break;
+            case "View Policy": NavigateToPolicy(_selected); break;
+            case "Archive": OpenWorkflowAction(_selected, "Archive"); break;
+            default: await Task.CompletedTask; break;
+        }
+    }
+
+    void NavigateToPolicy(PolicyEndorsementDto row)
+    {
+        if (row.PolicyId is { } policyId && policyId != Guid.Empty)
+            Nav.NavigateTo($"/policies/{policyId}");
+        else
+            Nav.NavigateTo("/policies");
+    }
+
+    IEnumerable<PolicyEndorsementActivityDto> ActivitiesFor(Guid id) => _activities.Where(a => a.EndorsementId == id).OrderByDescending(a => a.ActivityDateUtc);
+    IEnumerable<PolicyEndorsementDeltaDto> DeltasFor(Guid id) => _deltas.Where(d => d.EndorsementId == id);
+    static bool IsTerminal(PolicyEndorsementDto row) => row.Status is "Issued" or "Declined";
+
+    RenderFragment KpiCard(string icon, string label, string value, string css, string? filter) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "button");
+        builder.AddAttribute(seq++, "type", "button");
+        builder.AddAttribute(seq++, "class", $"ew-kpi-card {css} {(_kpiFilter == filter ? "ew-kpi-card--active" : string.Empty)}");
+        builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, () => ApplyKpiFilter(filter)));
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "ew-kpi-val");
+        builder.AddContent(seq++, value);
+        builder.CloseElement();
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "ew-kpi-lbl");
+        builder.OpenElement(seq++, "i");
+        builder.AddAttribute(seq++, "class", $"bi {icon}");
+        builder.AddAttribute(seq++, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.AddContent(seq++, $" {label}");
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    RenderFragment EndorsementNoLink(PolicyEndorsementDto row) => builder => BuildButtonFragment(builder, row.EndorsementNumber, "ew-link-btn", EventCallback.Factory.Create(this, () => OpenDetail(row)));
+    RenderFragment PolicyNoLink(PolicyEndorsementDto row) => builder => BuildButtonFragment(builder, row.PolicyNumber, "ew-link-btn", EventCallback.Factory.Create(this, () => NavigateToPolicy(row)));
+    RenderFragment LobChip(string lob) => builder => BuildSpanFragment(builder, "ew-lob-chip", lob);
+    RenderFragment StatusChip(string status) => builder => BuildSpanFragment(builder, $"ew-status {StatusClass(status)}", status);
+    RenderFragment DeltaCell(decimal delta) => builder => BuildSpanFragment(builder, delta == 0 ? "ew-delta-zero" : delta > 0 ? "ew-delta-pos" : "ew-delta-neg", delta == 0 ? "$0" : delta.ToString("+$#,##0;-$#,##0"));
+    RenderFragment DueCell(PolicyEndorsementDto row) => builder => BuildSpanFragment(builder, DueClass(row), row.DueDate?.ToString("MM/dd/yyyy") ?? "—");
+    RenderFragment CtxBtn(PolicyEndorsementDto row) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "button");
+        builder.AddAttribute(seq++, "class", "um-btn um-btn-ghost um-btn-xs ew-ctx-btn");
+        builder.AddEventStopPropagationAttribute(seq++, "onclick", true);
+        builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => OpenActionMenu(row, e.ClientX, e.ClientY)));
+        builder.OpenElement(seq++, "i");
+        builder.AddAttribute(seq++, "class", "bi bi-three-dots-vertical");
+        builder.AddAttribute(seq++, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+    RenderFragment DrawerField(string label, string value) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "ew-meta-row");
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", "ew-meta-lbl");
+        builder.AddContent(seq++, label);
+        builder.CloseElement();
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", "ew-meta-val");
+        builder.AddContent(seq++, value);
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    static void BuildButtonFragment(RenderTreeBuilder builder, string text, string css, EventCallback callback)
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "button");
+        builder.AddAttribute(seq++, "type", "button");
+        builder.AddAttribute(seq++, "class", css);
+        builder.AddEventStopPropagationAttribute(seq++, "onclick", true);
+        builder.AddAttribute(seq++, "onclick", callback);
+        builder.AddContent(seq++, text);
+        builder.CloseElement();
+    }
+
+    static void BuildSpanFragment(RenderTreeBuilder builder, string css, string text)
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", css);
+        builder.AddContent(seq++, text);
+        builder.CloseElement();
+    }
+
+    void OpenActionMenu(PolicyEndorsementDto row, double x, double y)
+    {
+        _selected = row;
+        _openActionMenuFor = row.EndorsementId;
+        _menuXpx = $"{x}px";
+        _menuYpx = $"{y}px";
+    }
+
+    void CloseActionMenu() => _openActionMenuFor = null;
+
+    static string StatusClass(string status) => status.ToLowerInvariant().Replace(" ", "-") switch
+    {
+        "pending" => "ew-status-pending",
+        "in-review" => "ew-status-review",
+        "info-needed" => "ew-status-info",
+        "approved" => "ew-status-approved",
+        "issued" => "ew-status-issued",
+        "declined" => "ew-status-declined",
+        _ => "ew-status-pending"
+    };
+
+    static string PriorityClass(string priority) => priority switch
+    {
+        "High" => "ew-workflow-high",
+        "Critical" => "ew-workflow-critical",
+        "Low" => "ew-workflow-low",
+        _ => "ew-workflow-normal"
+    };
+
+    static string DueClass(PolicyEndorsementDto row)
+    {
+        if (row.DueDate is null) return "ew-due-none";
+        var days = (row.DueDate.Value.Date - DateTime.Today).Days;
+        return days < 0 ? "ew-due-overdue" : days <= 3 ? "ew-due-soon" : "ew-due-ok";
+    }
+
+    static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length switch
+        {
+            0 => "?",
+            1 => parts[0][0].ToString().ToUpperInvariant(),
+            _ => string.Concat(parts[0][0], parts[^1][0]).ToUpperInvariant()
+        };
+    }
+
+    void ShowToast(string message, string kind = "success")
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    void HideToast() => _toastVisible = false;
+    Task NotifyValidationAsync() { ShowToast("Please correct the highlighted endorsement fields.", "danger"); return Task.CompletedTask; }
+    Task NotifyActionValidationAsync() { ShowToast("Please correct the highlighted action fields.", "danger"); return Task.CompletedTask; }
 
     async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+    }
+
+    sealed record TabDef(string Key, string Label, string Icon);
+    sealed record ActionItem(string Label, string Icon);
+
+    sealed class EndorsementForm
+    {
+        public Guid EndorsementId { get; set; }
+        public Guid? PolicyId { get; set; }
+        public Guid? AccountId { get; set; }
+        public string EndorsementNumber { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string PolicyNumber { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string LineOfBusiness { get; set; } = string.Empty;
+        [Required, StringLength(160)] public string Carrier { get; set; } = string.Empty;
+        [Required, StringLength(120)] public string EndorsementType { get; set; } = string.Empty;
+        [Required, StringLength(1000)] public string Description { get; set; } = string.Empty;
+        [Required] public DateTime EffectiveDate { get; set; } = DateTime.Today;
+        [Range(-10000000, 10000000)] public decimal PremiumDelta { get; set; }
+        [Required, StringLength(40)] public string Priority { get; set; } = "Normal";
+        [Required, StringLength(160)] public string RequestedByName { get; set; } = "Current User";
+        [Required, StringLength(160)] public string AssignedToName { get; set; } = string.Empty;
+        [StringLength(160)] public string? UnderwriterName { get; set; }
+        [StringLength(1000)] public string? Reason { get; set; }
+        [StringLength(1000)] public string? RequiredDocuments { get; set; }
+        public DateTime? DueDate { get; set; }
+        public bool IsUrgent { get; set; }
+
+        public static EndorsementForm From(PolicyEndorsementDto row) => new()
+        {
+            EndorsementId = row.EndorsementId,
+            PolicyId = row.PolicyId,
+            AccountId = row.AccountId,
+            EndorsementNumber = row.EndorsementNumber,
+            PolicyNumber = row.PolicyNumber,
+            AccountName = row.AccountName,
+            LineOfBusiness = row.LineOfBusiness,
+            Carrier = row.Carrier,
+            EndorsementType = row.EndorsementType,
+            Description = row.Description,
+            EffectiveDate = row.EffectiveDate,
+            PremiumDelta = row.PremiumDelta,
+            Priority = row.Priority,
+            RequestedByName = row.RequestedByName,
+            AssignedToName = row.AssignedToName,
+            UnderwriterName = row.UnderwriterName,
+            Reason = row.Reason,
+            RequiredDocuments = row.RequiredDocuments,
+            DueDate = row.DueDate,
+            IsUrgent = row.IsUrgent
+        };
+    }
+
+    sealed class EndorsementActionForm
+    {
+        [StringLength(1000)] public string? Notes { get; set; }
+        [StringLength(120)] public string FieldName { get; set; } = string.Empty;
+        [StringLength(500)] public string BeforeValue { get; set; } = string.Empty;
+        [StringLength(500)] public string AfterValue { get; set; } = string.Empty;
+        [Range(-10000000, 10000000)] public decimal NumericDelta { get; set; }
+        public void Reset()
+        {
+            Notes = null;
+            FieldName = string.Empty;
+            BeforeValue = string.Empty;
+            AfterValue = string.Empty;
+            NumericDelta = 0;
+        }
     }
 }

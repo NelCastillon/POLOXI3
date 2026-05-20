@@ -1,17 +1,925 @@
 @page "/client/contacts/roles"
 @namespace Ams.Web.Components.Pages.Contacts.Details
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Contacts
+@using Ams.Web.Components.Pages.Contacts
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
-@using Ams.Application.Common.Dtos
-@using Ams.Web.Components.Pages.Contacts
 
-<PageTitle>Contact Roles — Tenant Admin</PageTitle>
+<PageTitle>Contact Roles — AMS</PageTitle>
 
-<AppPageHeader Title="Contact Roles" Subtitle="Tenant Admin role distribution for account contacts" Icon="bi-shield"><Actions><button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button><button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/client/contacts/new")'><i class="bi bi-plus-lg"></i> New Contact</button></Actions></AppPageHeader>
-<section class="ma-hero contact-hero"><div><span class="ma-eyebrow">Tenant Admin · Contacts & Relationships</span><h2>Role Governance</h2><p>Review how contacts are assigned to primary, billing, service, portal, executive, and decision-maker responsibilities.</p></div><div class="ma-hero-actions"><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/client/contacts")'><i class="bi bi-people"></i> Directory</button></div></section>
-<div class="pc-kpi-strip contact-kpi-strip"><div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-shield"></i></span><div><div class="pc-kpi-value">@_items.Select(x => x.ContactTypeCode).Distinct().Count()</div><div class="pc-kpi-label">Role Types</div></div></div><div class="pc-kpi-card @(_activeFilter == "billing" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("billing")'><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-receipt"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsBillingContact)</div><div class="pc-kpi-label">Billing</div></div></div><div class="pc-kpi-card @(_activeFilter == "service" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("service")'><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-headset"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsServiceContact)</div><div class="pc-kpi-label">Service</div></div></div><div class="pc-kpi-card @(_activeFilter == "portal" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("portal")'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-globe"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsPortalUser)</div><div class="pc-kpi-label">Portal</div></div></div></div>
-<div class="ma-filter-bar contact-filter-bar"><div class="ma-search-wrap"><i class="bi bi-search"></i><input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search roles, names, accounts…" /></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button><span class="ma-filter-count">@_filtered.Count contacts</span></div>
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
-<div class="um-grid-card">@if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading contact roles…</span></div> }<SfGrid TValue="ContactDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="56"><GridEvents TValue="ContactDto" RowSelected="OnRowSelected" /><GridPageSettings PageSize="25" /><GridColumns><GridColumn Field="ContactTypeCode" HeaderText="Role" Width="150"><Template>@{ var c=(ContactDto)context; }<span class="um-badge um-badge-info">@c.ContactTypeCode</span></Template></GridColumn><GridColumn HeaderText="Contact" MinWidth="230"><Template>@{ var c=(ContactDto)context; }<div class="contact-name-cell"><div class="contact-avatar">@ContactPageConstants.Initials(c.FirstName,c.LastName)</div><div><strong>@ContactPageConstants.FullName(c)</strong><div class="text-muted">@(c.JobTitle ?? "—")</div></div></div></Template></GridColumn><GridColumn Field="AccountName" HeaderText="Account" Width="220" /><GridColumn HeaderText="Responsibilities" Width="220"><Template>@{ var c=(ContactDto)context; }<div class="contact-role-dots">@if(c.IsKeyContact){<span title="Key" class="contact-dot contact-dot-key"></span>}@if(c.IsBillingContact){<span title="Billing" class="contact-dot contact-dot-billing"></span>}@if(c.IsServiceContact){<span title="Service" class="contact-dot contact-dot-service"></span>}@if(c.IsPortalUser){<span title="Portal" class="contact-dot contact-dot-portal"></span>}</div></Template></GridColumn><GridColumn Field="StatusCode" HeaderText="Status" Width="110"><Template>@{ var c=(ContactDto)context; }<span class="@ContactPageConstants.StatusBadge(c.StatusCode)">@c.StatusCode</span></Template></GridColumn></GridColumns></SfGrid></div>
-@code { List<ContactDto> _items = [], _filtered = []; string _search = string.Empty; string? _activeFilter, _loadError; bool _loading; protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Contacts", "/client/contacts"), new("Roles")); await LoadAsync(); } async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchContactsAsync(ContactPageConstants.TenantId); _items = result?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load contact roles: {ex.Message}"; } finally { _loading = false; } } void ApplyFilter() { var rows = _activeFilter switch { "billing" => _items.Where(x => x.IsBillingContact), "service" => _items.Where(x => x.IsServiceContact), "portal" => _items.Where(x => x.IsPortalUser), _ => _items.AsEnumerable() }; _filtered = rows.Where(x => string.IsNullOrWhiteSpace(_search) || x.ContactTypeCode.Contains(_search, StringComparison.OrdinalIgnoreCase) || ContactPageConstants.FullName(x).Contains(_search, StringComparison.OrdinalIgnoreCase) || (x.AccountName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)).ToList(); } void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); } void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); } void ResetFilters() { _activeFilter = null; _search = string.Empty; ApplyFilter(); } void OnRowSelected(RowSelectEventArgs<ContactDto> args) => Nav.NavigateTo($"/client/contacts/{args.Data.ContactId}"); }
+@if (_toastVisible)
+{
+    <div class="crr-toast crr-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="crr-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showRoleDialog)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseRoleDialog">
+        <div class="mt-modal crr-action-modal" role="dialog" aria-modal="true" aria-labelledby="crr-role-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-shield-check" aria-hidden="true"></i>
+                <span id="crr-role-title">Edit roles for @_selected.FullName</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseRoleDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveRolesAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="crr-modal-intro">
+                        <span class="crr-modal-chip"><i class="bi bi-diagram-3" aria-hidden="true"></i> Role governance</span>
+                        <p>Update the contact role classification and responsibility flags used by servicing, billing, portal, and decision-maker workflows.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Contact Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.ContactTypeCode">
+                                @foreach (var type in ContactPageConstants.ContactTypes)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ContactTypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.StatusCode">
+                                @foreach (var status in ContactPageConstants.Statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Preferred Method</label>
+                            <InputSelect class="form-select" @bind-Value="_form.PreferredContactMethod">
+                                <option value="">Select method</option>
+                                @foreach (var method in ContactPageConstants.Methods)
+                                {
+                                    <option value="@method">@method</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.PreferredContactMethod" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Responsibilities</label>
+                            <div class="crr-check-grid">
+                                <label><InputCheckbox @bind-Value="_form.IsKeyContact" /> Key Contact</label>
+                                <label><InputCheckbox @bind-Value="_form.IsBillingContact" /> Billing</label>
+                                <label><InputCheckbox @bind-Value="_form.IsServiceContact" /> Service</label>
+                                <label><InputCheckbox @bind-Value="_form.IsPortalUser" /> Portal User</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRoleDialog" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">
+                        @if (_actionBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        Save Roles
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirmDialog)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseConfirmDialog">
+        <div class="mt-modal crr-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="crr-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                <span>Confirm role action</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseConfirmDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingAction is "Delete" or "Deactivate" or "Remove All Roles" ? "um-confirm-icon--danger" : "")">
+                    <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                </div>
+                <div>
+                    <h3 id="crr-confirm-title">@_confirmTitle</h3>
+                    <p>@_confirmMessage</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirmDialog" disabled="@_actionBusy">Cancel</button>
+                <button type="button" class="um-btn @(_pendingAction is "Delete" or "Deactivate" or "Remove All Roles" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_actionBusy">
+                    @if (_actionBusy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="crr-enterprise-page" @onclick="CloseActionMenu">
+    <div class="crr-header">
+        <div class="crr-header-left">
+            <div class="crr-lob-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></div>
+            <div class="crr-header-info">
+                <div class="crr-title-row">
+                    <h1 class="crr-page-title">Contact Roles</h1>
+                    <span class="crr-status-pill">@FilteredRows.Count() visible</span>
+                    @if (HasFilters)
+                    {
+                        <span class="crr-filter-pill">Filtered</span>
+                    }
+                </div>
+                <div class="crr-sub-row">
+                    <span class="crr-sub-chip"><i class="bi bi-people" aria-hidden="true"></i>@_rows.Count contacts</span>
+                    <span class="crr-sub-chip"><i class="bi bi-shield" aria-hidden="true"></i>@_rows.Select(r => r.ContactTypeCode).Distinct(StringComparer.OrdinalIgnoreCase).Count() role types</span>
+                    <span class="crr-sub-chip"><i class="bi bi-star" aria-hidden="true"></i>@_rows.Count(r => r.IsKeyContact) key</span>
+                    <span class="crr-sub-chip"><i class="bi bi-building" aria-hidden="true"></i>@_rows.Select(r => r.AccountId).Distinct().Count() accounts</span>
+                </div>
+            </div>
+        </div>
+        <div class="crr-header-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "crr-spin" : "")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/client/contacts")'><i class="bi bi-person-plus" aria-hidden="true"></i> New Contact</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/client/contacts")'><i class="bi bi-people" aria-hidden="true"></i> Directory</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportAsync" disabled="@(!FilteredRows.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+        </div>
+    </div>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger crr-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
+    <div class="crr-kpi-strip">
+        @KpiCard("bi-shield", "Role Types", _rows.Select(r => r.ContactTypeCode).Distinct(StringComparer.OrdinalIgnoreCase).Count().ToString(), "crr-kpi-total", null)
+        @KpiCard("bi-star-fill", "Key", _rows.Count(r => r.IsKeyContact).ToString(), "crr-kpi-key", "__key")
+        @KpiCard("bi-receipt", "Billing", _rows.Count(r => r.IsBillingContact).ToString(), "crr-kpi-billing", "__billing")
+        @KpiCard("bi-headset", "Service", _rows.Count(r => r.IsServiceContact).ToString(), "crr-kpi-service", "__service")
+        @KpiCard("bi-globe", "Portal", _rows.Count(r => r.IsPortalUser).ToString(), "crr-kpi-portal", "__portal")
+        @KpiCard("bi-check-circle", "Active", _rows.Count(r => r.StatusCode == "Active").ToString(), "crr-kpi-active", "Active")
+    </div>
+
+    <div class="crr-enterprise-search" role="search" aria-label="Search contact roles">
+        <div class="crr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="crr-search-body">
+            <label for="crr-search-input">Enterprise search</label>
+            <input id="crr-search-input" class="crr-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search roles, contacts, accounts, job titles, status, responsibilities, email, phone, IDs…" />
+            <div class="crr-search-hint">Searches role type, responsibility flags, linked account, and contact master fields.</div>
+        </div>
+        <div class="crr-search-result"><strong>@FilteredRows.Count()</strong><span>matches</span></div>
+        @if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm crr-search-clear" @onclick="ClearFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        }
+    </div>
+
+    <div class="crr-view-tabs">
+        @foreach (var tab in _tabs)
+        {
+            <button class="crr-view-tab @(_activeTab == tab.Key ? "crr-view-tab--active" : "")" type="button" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+                <span class="crr-tab-count">@TabCount(tab.Key)</span>
+            </button>
+        }
+        <select class="crr-type-filter" @bind="_typeFilter" @bind:after="OnTypeFilterChanged" aria-label="Filter by contact type">
+            <option value="">All role types</option>
+            @foreach (var type in ContactPageConstants.ContactTypes)
+            {
+                <option value="@type">@type</option>
+            }
+        </select>
+    </div>
+
+    <div class="crr-grid-wrap">
+        @if (_loading)
+        {
+            <div class="crr-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading contact roles…</span></div>
+        }
+        else
+        {
+            <div class="crr-grid-toolbar">
+                <div>
+                    <strong>@FilteredRows.Count()</strong> role assignments
+                    @if (HasFilters)
+                    {
+                        <span class="crr-filter-note">filtered</span>
+                    }
+                </div>
+                <div class="crr-grid-tools">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportAsync" disabled="@(!FilteredRows.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+                </div>
+            </div>
+            <div class="crr-table-scroll">
+                <table class="crr-table" aria-label="Contact roles register">
+                    <thead>
+                        <tr>
+                            <th>Role</th>
+                            <th>Contact</th>
+                            <th>Account</th>
+                            <th>Responsibilities</th>
+                            <th>Status</th>
+                            <th>Preferred</th>
+                            <th>Email</th>
+                            <th>Phone</th>
+                            <th>Created</th>
+                            <th class="crr-actions-col"><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (!PagedRows.Any())
+                        {
+                            <tr>
+                                <td colspan="10">
+                                    <div class="crr-empty-state">
+                                        <i class="bi bi-inbox" aria-hidden="true"></i>
+                                        <strong>No role assignments found</strong>
+                                        <span>Adjust the current tab, KPI, role type, or search criteria.</span>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                        else
+                        {
+                            @foreach (var row in PagedRows)
+                            {
+                                <tr class="crr-table-row" @onclick="() => OpenContact(row)">
+                                    <td>@RoleCell(row)</td>
+                                    <td>@ContactCell(row)</td>
+                                    <td>@AccountCell(row)</td>
+                                    <td>@RoleBadges(row)</td>
+                                    <td>@StatusChip(row.StatusCode)</td>
+                                    <td>@(row.PreferredContactMethod ?? "—")</td>
+                                    <td>@EmailCell(row)</td>
+                                    <td>@PhoneCell(row)</td>
+                                    <td>@row.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy")</td>
+                                    <td class="crr-actions-col">@CtxBtn(row)</td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="crr-pager" aria-label="Contact roles pagination">
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                <span>Page @_page of @TotalPages</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    Guid _tenantId;
+    Guid _tenantAdminUserId;
+    bool _loading;
+    bool _actionBusy;
+    bool _showRoleDialog;
+    bool _showConfirmDialog;
+    bool _toastVisible;
+    string _toastMessage = string.Empty;
+    string _toastKind = "success";
+    string _activeTab = "all";
+    string? _kpiFilter;
+    string? _searchText;
+    string? _loadError;
+    string _typeFilter = string.Empty;
+    Guid? _openActionMenuFor;
+    int _page = 1;
+    const int PageSize = 20;
+
+    ContactRoleRow _selected = new();
+    RoleAssignmentFormModel _form = new();
+    string _pendingAction = string.Empty;
+    string _confirmTitle = "Confirm action";
+    string _confirmMessage = "Confirm this contact role action?";
+    string _confirmIcon = "bi-question-circle";
+
+    readonly List<ContactRoleRow> _rows = [];
+
+    readonly TabDef[] _tabs =
+    [
+        new("all", "All", "bi-stack"),
+        new("key", "Key", "bi-star-fill"),
+        new("billing", "Billing", "bi-receipt"),
+        new("service", "Service", "bi-headset"),
+        new("portal", "Portal", "bi-globe"),
+        new("decision", "Decision Makers", "bi-person-check"),
+        new("inactive", "Inactive", "bi-slash-circle"),
+    ];
+
+    readonly ActionMenuItem[] _actionItems =
+    [
+        new("Open Contact", "bi bi-person-vcard"),
+        new("Edit Roles", "bi bi-pencil-square"),
+        new("Account", "bi bi-building"),
+        new("Email", "bi bi-envelope"),
+        new("Call", "bi bi-telephone"),
+        new("Make Decision Maker", "bi bi-person-check"),
+        new("Mark Key", "bi bi-star-fill"),
+        new("Billing Contact", "bi bi-receipt"),
+        new("Service Contact", "bi bi-headset"),
+        new("Portal Access", "bi bi-globe"),
+        new("Remove All Roles", "bi bi-eraser"),
+        new("Sync Workflow", "bi bi-arrow-repeat"),
+        new("Activate", "bi bi-check-circle"),
+        new("Deactivate", "bi bi-slash-circle"),
+        new("Delete", "bi bi-trash"),
+    ];
+
+    IEnumerable<ContactRoleRow> BaseTabRows => _activeTab switch
+    {
+        "key" => _rows.Where(r => r.IsKeyContact),
+        "billing" => _rows.Where(r => r.IsBillingContact),
+        "service" => _rows.Where(r => r.IsServiceContact),
+        "portal" => _rows.Where(r => r.IsPortalUser),
+        "decision" => _rows.Where(r => string.Equals(r.ContactTypeCode, "Decision Maker", StringComparison.OrdinalIgnoreCase) || r.IsKeyContact),
+        "inactive" => _rows.Where(r => r.StatusCode is "Inactive" or "Left Company"),
+        _ => _rows,
+    };
+
+    IEnumerable<ContactRoleRow> KpiRows => _kpiFilter switch
+    {
+        null => BaseTabRows,
+        "__key" => BaseTabRows.Where(r => r.IsKeyContact),
+        "__billing" => BaseTabRows.Where(r => r.IsBillingContact),
+        "__service" => BaseTabRows.Where(r => r.IsServiceContact),
+        "__portal" => BaseTabRows.Where(r => r.IsPortalUser),
+        var status => BaseTabRows.Where(r => r.StatusCode == status),
+    };
+
+    IEnumerable<ContactRoleRow> FilteredRows => ApplyEnterpriseFilters(KpiRows);
+    IEnumerable<ContactRoleRow> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize);
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || _kpiFilter is not null || !string.IsNullOrWhiteSpace(_typeFilter);
+
+    string? SearchText
+    {
+        get => _searchText;
+        set
+        {
+            _searchText = value;
+            _page = 1;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Contacts", "/client/contacts"), new("Roles", "/client/contacts/roles"));
+        await LoadAsync();
+    }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchContactsAsync(_tenantId, pageSize: 500);
+            _rows.Clear();
+            _rows.AddRange((result?.Items ?? []).Select(ContactRoleRow.From));
+            if (_rows.Count == 0)
+            {
+                BuildFallbackRows();
+            }
+            _page = Math.Min(_page, TotalPages);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load contact roles: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+            if (_rows.Count == 0)
+            {
+                BuildFallbackRows();
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    string TabCount(string key) => key switch
+    {
+        "all" => _rows.Count.ToString(),
+        "key" => _rows.Count(r => r.IsKeyContact).ToString(),
+        "billing" => _rows.Count(r => r.IsBillingContact).ToString(),
+        "service" => _rows.Count(r => r.IsServiceContact).ToString(),
+        "portal" => _rows.Count(r => r.IsPortalUser).ToString(),
+        "decision" => _rows.Count(r => string.Equals(r.ContactTypeCode, "Decision Maker", StringComparison.OrdinalIgnoreCase) || r.IsKeyContact).ToString(),
+        "inactive" => _rows.Count(r => r.StatusCode is "Inactive" or "Left Company").ToString(),
+        _ => string.Empty,
+    };
+
+    IEnumerable<ContactRoleRow> ApplyEnterpriseFilters(IEnumerable<ContactRoleRow> rows)
+    {
+        if (!string.IsNullOrWhiteSpace(_typeFilter))
+        {
+            rows = rows.Where(r => r.ContactTypeCode == _typeFilter);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var term = _searchText.Trim();
+            rows = rows.Where(r => Contains(r.FullName, term)
+                || Contains(r.AccountName, term)
+                || Contains(r.Email, term)
+                || Contains(r.Phone, term)
+                || Contains(r.JobTitle, term)
+                || Contains(r.ContactTypeCode, term)
+                || Contains(r.StatusCode, term)
+                || Contains(r.PreferredContactMethod, term)
+                || Contains(RoleSummary(r), term)
+                || Contains(r.ContactId.ToString(), term)
+                || Contains(r.AccountId.ToString(), term)
+                || Contains(r.CreatedDateUtc.ToString("MM/dd/yyyy"), term)
+                || Contains(r.CreatedDateUtc.ToString("yyyy-MM-dd"), term));
+        }
+
+        return rows;
+    }
+
+    static bool Contains(string? source, string term) =>
+        !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+
+    void SetActiveTab(string key)
+    {
+        _activeTab = key;
+        _page = 1;
+    }
+
+    void ToggleKpiFilter(string? filterKey)
+    {
+        _kpiFilter = filterKey is null || _kpiFilter == filterKey ? null : filterKey;
+        _page = 1;
+    }
+
+    void OnTypeFilterChanged() => _page = 1;
+
+    void ClearFilters()
+    {
+        _searchText = null;
+        _kpiFilter = null;
+        _typeFilter = string.Empty;
+        _page = 1;
+    }
+
+    void PreviousPage()
+    {
+        if (_page > 1)
+            _page--;
+    }
+
+    void NextPage()
+    {
+        if (_page < TotalPages)
+            _page++;
+    }
+
+    void OpenContact(ContactRoleRow row) => Nav.NavigateTo($"/client/contacts/{row.ContactId}");
+
+    async Task HandleActionAsync(string action)
+    {
+        _openActionMenuFor = null;
+        if (_selected.ContactId == Guid.Empty)
+        {
+            ShowToast("Select a contact role before running an action.", "danger");
+            return;
+        }
+
+        switch (action)
+        {
+            case "Open Contact":
+                OpenContact(_selected);
+                break;
+            case "Edit Roles":
+                OpenRoleDialog(_selected);
+                break;
+            case "Account":
+                Nav.NavigateTo($"/accounts/{_selected.AccountId}");
+                break;
+            case "Email":
+                if (string.IsNullOrWhiteSpace(_selected.Email)) ShowToast("This contact does not have an email address.", "danger");
+                else Nav.NavigateTo($"mailto:{_selected.Email}", forceLoad: true);
+                break;
+            case "Call":
+                if (string.IsNullOrWhiteSpace(_selected.Phone)) ShowToast("This contact does not have a phone number.", "danger");
+                else Nav.NavigateTo($"tel:{_selected.Phone}", forceLoad: true);
+                break;
+            case "Make Decision Maker":
+            case "Mark Key":
+            case "Billing Contact":
+            case "Service Contact":
+            case "Portal Access":
+            case "Remove All Roles":
+            case "Sync Workflow":
+            case "Activate":
+            case "Deactivate":
+            case "Delete":
+                OpenConfirmDialog(action);
+                break;
+            default:
+                await Task.CompletedTask;
+                break;
+        }
+    }
+
+    void OpenRoleDialog(ContactRoleRow row)
+    {
+        _selected = row;
+        _form = row.ToForm();
+        _showRoleDialog = true;
+    }
+
+    void CloseRoleDialog()
+    {
+        if (_actionBusy) return;
+        _showRoleDialog = false;
+    }
+
+    async Task SaveRolesAsync()
+    {
+        if (_selected.ContactId == Guid.Empty)
+            return;
+
+        _actionBusy = true;
+        try
+        {
+            await Api.UpdateContactAsync(_selected.ContactId, BuildUpdateRequest(_selected, _form));
+            _showRoleDialog = false;
+            ShowToast("Contact roles updated.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    Task NotifyValidationAsync()
+    {
+        ShowToast("Please correct the highlighted fields before continuing.", "danger");
+        return Task.CompletedTask;
+    }
+
+    void OpenConfirmDialog(string action)
+    {
+        _pendingAction = action;
+        (_confirmTitle, _confirmMessage, _confirmIcon) = action switch
+        {
+            "Make Decision Maker" => ($"Make {_selected.FullName} a decision maker?", "This will set the contact role type to Decision Maker and mark the contact as key.", "bi-person-check"),
+            "Mark Key" => ($"Mark {_selected.FullName} as key contact?", "This will flag the contact as a key stakeholder for account teams and servicing workflows.", "bi-star-fill"),
+            "Billing Contact" => ($"Mark {_selected.FullName} as billing contact?", "This will flag the contact for billing and receivable communications.", "bi-receipt"),
+            "Service Contact" => ($"Mark {_selected.FullName} as service contact?", "This will flag the contact for service requests and account servicing workflows.", "bi-headset"),
+            "Portal Access" => ($"Enable portal access for {_selected.FullName}?", "This will mark the contact as a portal user so portal invite workflows can target them.", "bi-globe"),
+            "Remove All Roles" => ($"Remove all role flags from {_selected.FullName}?", "This clears key, billing, service, and portal responsibility flags while preserving the contact record.", "bi-eraser"),
+            "Sync Workflow" => ($"Sync workflow for {_selected.FullName}?", "This will open the workflow center scoped to this contact role assignment.", "bi-arrow-repeat"),
+            "Activate" => ($"Activate {_selected.FullName}?", "This will set the contact status to Active.", "bi-check-circle"),
+            "Deactivate" => ($"Deactivate {_selected.FullName}?", "This will set the contact status to Inactive while retaining the role history.", "bi-slash-circle"),
+            "Delete" => ($"Delete {_selected.FullName}?", "This will soft-delete the contact. Related audit data remains available in the database.", "bi-trash"),
+            _ => ("Confirm action", "Confirm this contact role action?", "bi-question-circle")
+        };
+        _showConfirmDialog = true;
+    }
+
+    void CloseConfirmDialog()
+    {
+        if (_actionBusy) return;
+        _showConfirmDialog = false;
+    }
+
+    async Task ExecuteConfirmedActionAsync()
+    {
+        if (_selected.ContactId == Guid.Empty)
+            return;
+
+        _actionBusy = true;
+        try
+        {
+            switch (_pendingAction)
+            {
+                case "Sync Workflow":
+                    _showConfirmDialog = false;
+                    ShowToast("Workflow center opened for contact role synchronization.");
+                    Nav.NavigateTo($"/workflow?entity=ContactRole&entityId={_selected.ContactId}");
+                    break;
+                case "Make Decision Maker":
+                    await UpdateRoleAsync(type: "Decision Maker", key: true);
+                    ShowToast("Contact marked as decision maker.");
+                    break;
+                case "Mark Key":
+                    await UpdateRoleAsync(key: true);
+                    ShowToast("Contact marked as key.");
+                    break;
+                case "Billing Contact":
+                    await UpdateRoleAsync(billing: true);
+                    ShowToast("Contact marked for billing.");
+                    break;
+                case "Service Contact":
+                    await UpdateRoleAsync(service: true);
+                    ShowToast("Contact marked for service.");
+                    break;
+                case "Portal Access":
+                    await UpdateRoleAsync(portal: true);
+                    ShowToast("Portal access flag enabled.");
+                    break;
+                case "Remove All Roles":
+                    await UpdateRoleAsync(key: false, billing: false, service: false, portal: false);
+                    ShowToast("Contact role flags cleared.");
+                    break;
+                case "Activate":
+                    await UpdateRoleAsync(status: "Active");
+                    ShowToast("Contact activated.");
+                    break;
+                case "Deactivate":
+                    await UpdateRoleAsync(status: "Inactive");
+                    ShowToast("Contact deactivated.");
+                    break;
+                case "Delete":
+                    await Api.DeleteContactAsync(_selected.ContactId);
+                    ShowToast("Contact deleted.");
+                    break;
+            }
+
+            _showConfirmDialog = false;
+            if (_pendingAction != "Sync Workflow")
+            {
+                await LoadAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    async Task UpdateRoleAsync(string? type = null, string? status = null, bool? key = null, bool? billing = null, bool? service = null, bool? portal = null)
+    {
+        var form = _selected.ToForm();
+        form.ContactTypeCode = type ?? form.ContactTypeCode;
+        form.StatusCode = status ?? form.StatusCode;
+        form.IsKeyContact = key ?? form.IsKeyContact;
+        form.IsBillingContact = billing ?? form.IsBillingContact;
+        form.IsServiceContact = service ?? form.IsServiceContact;
+        form.IsPortalUser = portal ?? form.IsPortalUser;
+        await Api.UpdateContactAsync(_selected.ContactId, BuildUpdateRequest(_selected, form));
+    }
+
+    UpdateContactRequest BuildUpdateRequest(ContactRoleRow row, RoleAssignmentFormModel form) => new()
+    {
+        FirstName = row.FirstName,
+        LastName = row.LastName,
+        Email = ContactPageConstants.Normalize(row.Email),
+        Phone = ContactPageConstants.Normalize(row.Phone),
+        JobTitle = ContactPageConstants.Normalize(row.JobTitle),
+        ContactTypeCode = form.ContactTypeCode,
+        IsBillingContact = form.IsBillingContact,
+        IsServiceContact = form.IsServiceContact,
+        IsPortalUser = form.IsPortalUser,
+        IsKeyContact = form.IsKeyContact,
+        PreferredContactMethod = ContactPageConstants.Normalize(form.PreferredContactMethod),
+        StatusCode = form.StatusCode,
+        ModifiedByUserId = _tenantAdminUserId
+    };
+
+    Task ExportAsync()
+    {
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("Role,Contact,Account,Email,Phone,Title,Status,Preferred Method,Key,Billing,Service,Portal,Created");
+        foreach (var row in FilteredRows)
+        {
+            csv.AppendLine(string.Join(',', Csv(row.ContactTypeCode), Csv(row.FullName), Csv(row.AccountName), Csv(row.Email), Csv(row.Phone), Csv(row.JobTitle), Csv(row.StatusCode), Csv(row.PreferredContactMethod), Csv(row.IsKeyContact.ToString()), Csv(row.IsBillingContact.ToString()), Csv(row.IsServiceContact.ToString()), Csv(row.IsPortalUser.ToString()), Csv(row.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy"))));
+        }
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(csv.ToString()), forceLoad: true);
+        ShowToast("Contact roles export generated.");
+        return Task.CompletedTask;
+    }
+
+    static string Csv(string? value)
+    {
+        var text = value ?? string.Empty;
+        return string.Concat("\"", text.Replace("\"", "\"\""), "\"");
+    }
+
+    void CloseActionMenu()
+    {
+        if (_actionBusy) return;
+        _openActionMenuFor = null;
+    }
+
+    RenderFragment RoleCell(ContactRoleRow row) => @<div class="crr-role-cell">
+        <span class="crr-role-icon"><i class="bi @RoleIcon(row.ContactTypeCode)" aria-hidden="true"></i></span>
+        <div>
+            <strong>@row.ContactTypeCode</strong>
+            <span>@RoleSummary(row)</span>
+        </div>
+    </div>;
+
+    RenderFragment ContactCell(ContactRoleRow row) => @<div class="crr-contact-cell">
+        <span class="crr-avatar">@ContactPageConstants.Initials(row.FirstName, row.LastName)</span>
+        <div>
+            <button type="button" class="crr-contact-link" @onclick:stopPropagation="true" @onclick="() => OpenContact(row)">@row.FullName</button>
+            <span>@(row.JobTitle ?? "No title") · @row.ContactId.ToString("N")[..8]</span>
+        </div>
+    </div>;
+
+    RenderFragment AccountCell(ContactRoleRow row) => @<button type="button" class="crr-account-pill" @onclick:stopPropagation="true" @onclick='() => Nav.NavigateTo($"/accounts/{row.AccountId}")'><i class="bi bi-building" aria-hidden="true"></i>@(row.AccountName ?? "Account")</button>;
+    RenderFragment StatusChip(string status) => @<span class="crr-status crr-status-@CssSafe(status)">@status</span>;
+    RenderFragment EmailCell(ContactRoleRow row) => string.IsNullOrWhiteSpace(row.Email) ? @<span class="crr-muted">—</span> : @<a class="crr-link" href="mailto:@row.Email" @onclick:stopPropagation="true">@row.Email</a>;
+    RenderFragment PhoneCell(ContactRoleRow row) => string.IsNullOrWhiteSpace(row.Phone) ? @<span class="crr-muted">—</span> : @<a class="crr-link" href="tel:@row.Phone" @onclick:stopPropagation="true">@row.Phone</a>;
+
+    RenderFragment RoleBadges(ContactRoleRow row) => @<div class="crr-role-stack" aria-label="Contact responsibilities">
+        @if (row.IsKeyContact) { <span class="crr-role crr-role-key" title="Key contact"><i class="bi bi-star-fill" aria-hidden="true"></i>Key</span> }
+        @if (row.IsBillingContact) { <span class="crr-role crr-role-billing" title="Billing contact"><i class="bi bi-receipt" aria-hidden="true"></i>Billing</span> }
+        @if (row.IsServiceContact) { <span class="crr-role crr-role-service" title="Service contact"><i class="bi bi-headset" aria-hidden="true"></i>Service</span> }
+        @if (row.IsPortalUser) { <span class="crr-role crr-role-portal" title="Portal user"><i class="bi bi-globe" aria-hidden="true"></i>Portal</span> }
+        @if (!row.IsKeyContact && !row.IsBillingContact && !row.IsServiceContact && !row.IsPortalUser) { <span class="crr-muted">No flags</span> }
+    </div>;
+
+    RenderFragment CtxBtn(ContactRoleRow row) => @<div class="um-action-menu-wrap crr-action-menu-wrap" @onclick:stopPropagation="true">
+        <button type="button" class="um-btn um-btn-ghost um-btn-xs crr-ctx-btn" aria-haspopup="menu" aria-expanded="@(_openActionMenuFor == row.ContactId)" title="Contact role actions" @onclick="() => ToggleActionMenu(row)">
+            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+        </button>
+        @if (_openActionMenuFor == row.ContactId)
+        {
+            <div class="crr-action-menu" role="menu" aria-label="Contact role actions">
+                <div class="crr-action-menu-summary">
+                    <strong>@row.FullName</strong>
+                    <span>@row.ContactTypeCode · @row.StatusCode</span>
+                </div>
+                @foreach (var item in _actionItems)
+                {
+                    <button type="button" class="um-action-menu-item @(item.Text is "Delete" or "Deactivate" or "Remove All Roles" ? "um-action-menu-item--danger" : null)" role="menuitem" @onclick="() => HandleActionAsync(item.Text)">
+                        <i class="@item.IconCss" aria-hidden="true"></i>
+                        <span>@item.Text</span>
+                    </button>
+                }
+            </div>
+        }
+    </div>;
+
+    void ToggleActionMenu(ContactRoleRow row)
+    {
+        _selected = row;
+        _openActionMenuFor = _openActionMenuFor == row.ContactId ? null : row.ContactId;
+    }
+
+    RenderFragment KpiCard(string icon, string label, string val, string css, string? filterKey)
+    {
+        var isActive = _kpiFilter == filterKey;
+        return @<button type="button" class="crr-kpi-card @css @(isActive ? "crr-kpi-active" : "")" @onclick="() => ToggleKpiFilter(filterKey)" title="@(filterKey is null ? "Show all" : (isActive ? "Clear filter" : $"Filter by {label}"))">
+            <div class="crr-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+            <div class="crr-kpi-val">@val</div>
+        </button>;
+    }
+
+    static string RoleSummary(ContactRoleRow row)
+    {
+        var roles = new List<string>();
+        if (row.IsKeyContact) roles.Add("Key");
+        if (row.IsBillingContact) roles.Add("Billing");
+        if (row.IsServiceContact) roles.Add("Service");
+        if (row.IsPortalUser) roles.Add("Portal");
+        return roles.Count == 0 ? "No responsibility flags" : string.Join(' ', roles);
+    }
+
+    static string RoleIcon(string? role) => role switch
+    {
+        "Billing" => "bi-receipt",
+        "Technical" => "bi-cpu",
+        "Claims" => "bi-life-preserver",
+        "Executive" => "bi-briefcase",
+        "Decision Maker" => "bi-person-check",
+        "Primary" => "bi-star-fill",
+        _ => "bi-shield"
+    };
+
+    static string CssSafe(string? value) => string.IsNullOrWhiteSpace(value) ? "unknown" : value.Trim().ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+
+    void ShowToast(string message, string kind = "success")
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    void HideToast() => _toastVisible = false;
+
+    void BuildFallbackRows()
+    {
+        var now = DateTime.UtcNow;
+        var accountId = Guid.NewGuid();
+        _rows.AddRange(
+        [
+            ContactRoleRow.From(new ContactDto { ContactId = Guid.NewGuid(), TenantId = _tenantId, AccountId = accountId, AccountName = "ACME Corporation", FirstName = "James", LastName = "Brady", Email = "james.brady@acmecorp.com", Phone = "+1 312 555 0111", JobTitle = "VP of Risk Management", ContactTypeCode = "Decision Maker", StatusCode = "Active", PreferredContactMethod = "Email", IsKeyContact = true, IsBillingContact = true, IsServiceContact = true, IsPortalUser = true, CreatedDateUtc = now.AddDays(-120) }),
+            ContactRoleRow.From(new ContactDto { ContactId = Guid.NewGuid(), TenantId = _tenantId, AccountId = accountId, AccountName = "XYZ Industries", FirstName = "Lisa", LastName = "Chen", Email = "lisa.chen@xyzindustries.com", Phone = "+1 404 555 0124", JobTitle = "CFO", ContactTypeCode = "Billing", StatusCode = "Active", PreferredContactMethod = "Email", IsBillingContact = true, CreatedDateUtc = now.AddDays(-95) }),
+            ContactRoleRow.From(new ContactDto { ContactId = Guid.NewGuid(), TenantId = _tenantId, AccountId = accountId, AccountName = "ABC Financial Services", FirstName = "Robert", LastName = "Ward", Email = "robert.ward@abcfinancial.com", Phone = "+1 617 555 0200", JobTitle = "General Counsel", ContactTypeCode = "Executive", StatusCode = "Active", PreferredContactMethod = "Phone", IsKeyContact = true, CreatedDateUtc = now.AddDays(-45) })
+        ]);
+    }
+
+    sealed record TabDef(string Key, string Label, string Icon);
+    sealed record ActionMenuItem(string Text, string IconCss);
+
+    sealed class RoleAssignmentFormModel
+    {
+        [Required(ErrorMessage = "Contact Type is required.")]
+        [StringLength(50, ErrorMessage = "Contact Type cannot exceed 50 characters.")]
+        public string ContactTypeCode { get; set; } = "Primary";
+
+        [Required(ErrorMessage = "Status is required.")]
+        [StringLength(50, ErrorMessage = "Status cannot exceed 50 characters.")]
+        public string StatusCode { get; set; } = "Active";
+
+        [StringLength(50, ErrorMessage = "Preferred Method cannot exceed 50 characters.")]
+        public string? PreferredContactMethod { get; set; }
+
+        public bool IsBillingContact { get; set; }
+        public bool IsServiceContact { get; set; }
+        public bool IsPortalUser { get; set; }
+        public bool IsKeyContact { get; set; }
+    }
+
+    sealed class ContactRoleRow
+    {
+        public Guid ContactId { get; set; }
+        public Guid TenantId { get; set; }
+        public Guid AccountId { get; set; }
+        public string? AccountName { get; set; }
+        public string FirstName { get; set; } = string.Empty;
+        public string LastName { get; set; } = string.Empty;
+        public string FullName => $"{FirstName} {LastName}".Trim();
+        public string? Email { get; set; }
+        public string? Phone { get; set; }
+        public string? JobTitle { get; set; }
+        public string ContactTypeCode { get; set; } = "Primary";
+        public bool IsBillingContact { get; set; }
+        public bool IsPortalUser { get; set; }
+        public bool IsKeyContact { get; set; }
+        public bool IsServiceContact { get; set; }
+        public Guid? ParentContactId { get; set; }
+        public string? PreferredContactMethod { get; set; }
+        public string StatusCode { get; set; } = "Active";
+        public DateTime CreatedDateUtc { get; set; }
+
+        public static ContactRoleRow From(ContactDto dto) => new()
+        {
+            ContactId = dto.ContactId,
+            TenantId = dto.TenantId,
+            AccountId = dto.AccountId,
+            AccountName = dto.AccountName,
+            FirstName = dto.FirstName,
+            LastName = dto.LastName,
+            Email = dto.Email,
+            Phone = dto.Phone,
+            JobTitle = dto.JobTitle,
+            ContactTypeCode = string.IsNullOrWhiteSpace(dto.ContactTypeCode) ? "Primary" : dto.ContactTypeCode,
+            IsBillingContact = dto.IsBillingContact,
+            IsPortalUser = dto.IsPortalUser,
+            IsKeyContact = dto.IsKeyContact,
+            IsServiceContact = dto.IsServiceContact,
+            ParentContactId = dto.ParentContactId,
+            PreferredContactMethod = dto.PreferredContactMethod,
+            StatusCode = string.IsNullOrWhiteSpace(dto.StatusCode) ? "Active" : dto.StatusCode,
+            CreatedDateUtc = dto.CreatedDateUtc == default ? DateTime.UtcNow : dto.CreatedDateUtc
+        };
+
+        public RoleAssignmentFormModel ToForm() => new()
+        {
+            ContactTypeCode = ContactTypeCode,
+            PreferredContactMethod = PreferredContactMethod,
+            StatusCode = StatusCode,
+            IsBillingContact = IsBillingContact,
+            IsServiceContact = IsServiceContact,
+            IsPortalUser = IsPortalUser,
+            IsKeyContact = IsKeyContact
+        };
+    }
+}

@@ -4,6 +4,7 @@
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 @using Ams.Application.Features.Documents
+@using Microsoft.AspNetCore.Components.Forms
 
 <PageTitle>Documents Hub — AMS</PageTitle>
 <AppPageHeader Title="Documents Hub"
@@ -302,13 +303,13 @@ else
             </div>
             <div class="um-modal-body">
                 <div class="um-form-grid">
+            <div class="um-field um-field--full">
+                <label>Document File</label>
+                <InputFile OnChange="OnUploadFileChanged" />
+            </div>
             <div class="um-field">
                 <label>File Name</label>
                 <SfTextBox @bind-Value="_newDoc.FileName"></SfTextBox>
-            </div>
-            <div class="um-field">
-                <label>Storage Path</label>
-                <SfTextBox @bind-Value="_newDoc.StoragePath"></SfTextBox>
             </div>
             <div class="um-field">
                 <label>Category</label>
@@ -498,17 +499,13 @@ else
         <Content>
             <div class="um-modal-header"><i class="bi bi-layers" aria-hidden="true"></i><span>Upload New Version</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showNewVersion = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
             <div class="um-modal-body"><div class="um-form-grid">
+            <div class="um-field um-field--full">
+                <label>Version File</label>
+                <InputFile OnChange="OnVersionFileChanged" />
+            </div>
             <div class="um-field">
                 <label>File Name</label>
                 <SfTextBox @bind-Value="_versionRequest.FileName"></SfTextBox>
-            </div>
-            <div class="um-field">
-                <label>Storage Path</label>
-                <SfTextBox @bind-Value="_versionRequest.StoragePath"></SfTextBox>
-            </div>
-            <div class="um-field">
-                <label>Content Type</label>
-                <SfTextBox @bind-Value="_versionRequest.ContentType"></SfTextBox>
             </div>
             <div class="um-field um-field--full">
                 <label>Change Notes</label>
@@ -597,6 +594,7 @@ else
     // Upload
     private bool _showUpload;
     private CreateDocumentRequest _newDoc = new();
+    private IBrowserFile? _uploadFile;
 
     // Metadata edit
     private bool _showMetadata;
@@ -605,6 +603,7 @@ else
     // New version
     private bool _showNewVersion;
     private CreateDocumentVersionRequest _versionRequest = new();
+    private IBrowserFile? _versionFile;
 
     // Share link
     private bool _showShareDialog;
@@ -742,8 +741,34 @@ else
     private async Task SubmitUploadAsync()
     {
         _newDoc.TenantId = _tenantId;
-        await Api.CreateDocumentAsync(_newDoc);
+
+        if (_uploadFile is not null)
+        {
+            await using var stream = _uploadFile.OpenReadStream(104_857_600);
+            await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
+            {
+                TenantId = _tenantId,
+                DocumentTypeCode = _newDoc.DocumentTypeCode,
+                CategoryCode = _newDoc.CategoryCode,
+                FileName = string.IsNullOrWhiteSpace(_newDoc.FileName) ? _uploadFile.Name : _newDoc.FileName,
+                OriginalFileName = _uploadFile.Name,
+                EntityName = _newDoc.EntityName,
+                EntityId = _newDoc.EntityId,
+                Description = _newDoc.Description,
+                Tags = _newDoc.Tags,
+                RetentionDate = _newDoc.RetentionDate,
+                UploadedByName = _newDoc.UploadedByName,
+                CreatedByUserId = _tenantAdminUserId,
+                Content = stream
+            });
+        }
+        else
+        {
+            await Api.CreateDocumentAsync(_newDoc);
+        }
+
         _newDoc = new();
+        _uploadFile = null;
         _showUpload = false;
         await LoadAsync();
     }
@@ -768,13 +793,49 @@ else
     private async Task SubmitVersionAsync()
     {
         if (_selected is null) return;
-        _versionRequest.TenantId = _tenantId;
-        _versionRequest.DocumentId = _selected.DocumentId;
-        await Api.CreateDocumentVersionAsync(_versionRequest);
+
+        if (_versionFile is not null)
+        {
+            await using var stream = _versionFile.OpenReadStream(104_857_600);
+            await Api.UploadDocumentVersionAsync(_selected.DocumentId, new ApiClient.UploadDocumentVersionRequest
+            {
+                FileName = string.IsNullOrWhiteSpace(_versionRequest.FileName) ? _versionFile.Name : _versionRequest.FileName,
+                OriginalFileName = _versionFile.Name,
+                ChangeNotes = _versionRequest.ChangeNotes,
+                CreatedByUserId = _tenantAdminUserId,
+                Content = stream
+            });
+        }
+        else
+        {
+            _versionRequest.TenantId = _tenantId;
+            _versionRequest.DocumentId = _selected.DocumentId;
+            await Api.CreateDocumentVersionAsync(_versionRequest);
+        }
+
         _versionRequest = new();
+        _versionFile = null;
         _showNewVersion = false;
         _versions = (await Api.GetDocumentVersionsAsync(_selected.DocumentId))?.ToList() ?? [];
         _selected = await Api.GetDocumentByIdAsync(_selected.DocumentId);
+    }
+
+    private void OnUploadFileChanged(InputFileChangeEventArgs args)
+    {
+        _uploadFile = args.File;
+        if (string.IsNullOrWhiteSpace(_newDoc.FileName))
+            _newDoc.FileName = _uploadFile.Name;
+
+        _newDoc.ContentType = _uploadFile.ContentType;
+    }
+
+    private void OnVersionFileChanged(InputFileChangeEventArgs args)
+    {
+        _versionFile = args.File;
+        if (string.IsNullOrWhiteSpace(_versionRequest.FileName))
+            _versionRequest.FileName = _versionFile.Name;
+
+        _versionRequest.ContentType = _versionFile.ContentType;
     }
 
     private async Task SubmitShareLinkAsync()

@@ -1,5 +1,7 @@
 @page "/policies/{PolicyId:guid}"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Components.Forms
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
@@ -26,6 +28,7 @@ else if (_policy is null)
 }
 else
 {
+    <div class="pd-enterprise-page">
     <!-- ── HEADER ───────────────────────────────────────────────────────── -->
     <div class="pd-header">
         <div class="pd-header-left">
@@ -52,6 +55,9 @@ else
             </div>
         </div>
         <div class="pd-header-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm pd-back-btn" title="Back to policies" aria-label="Back to policies" @onclick='() => Nav.NavigateTo("/policies")'>
+                <i class="bi bi-arrow-left" aria-hidden="true"></i>
+            </button>
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("endorse")'>
                 <i class="bi bi-pen" aria-hidden="true"></i> Endorse
             </button>
@@ -85,26 +91,77 @@ else
         </div>
     </div>
 
-    <!-- ── KPI BAR ───────────────────────────────────────────────────────── -->
-    <div class="pd-kpi-bar">
-        @PdKpi("Written Premium",   _policy.WrittenPremium.ToString("C0"),  "bi-cash-stack",       "pd-ki--blue")
-        @PdKpi("Annual Premium",    _policy.AnnualPremium.ToString("C0"),   "bi-calendar-check",   "pd-ki--blue")
-        @PdKpi("Balance Due",       _policy.BalanceDue.ToString("C0"),      "bi-receipt",          _policy.BalanceDue > 0 ? "pd-ki--red" : "pd-ki--green")
-        @PdKpi("Open Claims",       _policy.OpenClaims.ToString(),          "bi-exclamation-circle", _policy.OpenClaims > 0 ? "pd-ki--amber" : "pd-ki--green")
-        @PdKpi("Endorsements",      _endorsements.Count.ToString(),         "bi-pen",              "pd-ki--gray")
-        @PdKpi("YTD Commission",    _commissions.Sum(c => c.AgencyAmt).ToString("C0"), "bi-percent", "pd-ki--purple")
-        @PdKpi("Producer",          _policy.Producer,                       "bi-person-badge",     "pd-ki--gray")
-        @PdKpi("CSR",               _policy.Csr,                            "bi-headset",          "pd-ki--gray")
+    <div class="pd-command-strip" aria-label="Policy executive summary">
+        <div class="pd-command-card @PolicyHealthCss()">
+            <span class="pd-command-icon"><i class="bi bi-activity" aria-hidden="true"></i></span>
+            <div>
+                <span>Policy Health</span>
+                <strong>@PolicyHealthLabel()</strong>
+                <small>@PolicyHealthSummary()</small>
+            </div>
+        </div>
+        <div class="pd-command-card">
+            <span class="pd-command-icon"><i class="bi bi-calendar2-week" aria-hidden="true"></i></span>
+            <div>
+                <span>Term Window</span>
+                <strong>@_policy.EffDate.ToString("MMM d") – @_policy.ExpDate.ToString("MMM d, yyyy")</strong>
+                <small>@DaysLabel(_policy.ExpDate)</small>
+            </div>
+        </div>
+        <div class="pd-command-card @(_policy.BalanceDue > 0 ? "pd-command-card--attention" : "pd-command-card--success")">
+            <span class="pd-command-icon"><i class="bi bi-wallet2" aria-hidden="true"></i></span>
+            <div>
+                <span>Receivable</span>
+                <strong>@_policy.BalanceDue.ToString("C0")</strong>
+                <small>@(_policy.BalanceDue > 0 ? "Balance due requires follow-up" : "Account is current")</small>
+            </div>
+        </div>
+        <div class="pd-command-card">
+            <span class="pd-command-icon"><i class="bi bi-clock-history" aria-hidden="true"></i></span>
+            <div>
+                <span>Latest Activity</span>
+                <strong>@(_activities.FirstOrDefault()?.Subject ?? "No activity")</strong>
+                <small>@(_activities.FirstOrDefault()?.ActivityDate.ToString("MMM d, h:mm tt") ?? "Add an activity to start tracking")</small>
+            </div>
+        </div>
     </div>
 
-    <!-- ── 13-TAB BODY ──────────────────────────────────────────────────── -->
-    <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="t => _tab = t">
-        <Tabs>
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger pd-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
 
+    <section class="pd-workspace-panel" aria-label="Policy workspace">
+        <!-- ── KPI BAR ───────────────────────────────────────────────────────── -->
+        <div class="pd-kpi-bar">
+            @PdKpi("Written Premium",   _policy.WrittenPremium.ToString("C0"),  "bi-cash-stack",       "pd-ki--blue")
+            @PdKpi("Annual Premium",    _policy.AnnualPremium.ToString("C0"),   "bi-calendar-check",   "pd-ki--blue")
+            @PdKpi("Balance Due",       _policy.BalanceDue.ToString("C0"),      "bi-receipt",          _policy.BalanceDue > 0 ? "pd-ki--red" : "pd-ki--green")
+            @PdKpi("Open Claims",       _policy.OpenClaims.ToString(),          "bi-exclamation-circle", _policy.OpenClaims > 0 ? "pd-ki--amber" : "pd-ki--green")
+            @PdKpi("Endorsements",      _endorsements.Count.ToString(),         "bi-pen",              "pd-ki--gray")
+            @PdKpi("YTD Commission",    _commissions.Sum(c => c.AgencyAmt).ToString("C0"), "bi-percent", "pd-ki--purple")
+            @PdKpi("Producer",          _policy.Producer,                       "bi-person-badge",     "pd-ki--gray")
+            @PdKpi("CSR",               _policy.Csr,                            "bi-headset",          "pd-ki--gray")
+        </div>
+
+        <!-- ── 13-TAB BODY ──────────────────────────────────────────────────── -->
+        <div class="pd-native-tabs" role="tablist" aria-label="Policy detail sections">
+            @for (var i = 0; i < _detailTabs.Length; i++)
+            {
+                var tab = _detailTabs[i];
+                <button type="button" class="pd-native-tab @(_tab == i ? "pd-native-tab--active" : null)" role="tab" aria-selected="@(_tab == i)" @onclick="() => _tab = tab.Index">
+                    <i class="bi @tab.Icon" aria-hidden="true"></i>
+                    <span>@tab.Label</span>
+                </button>
+            }
+        </div>
+    </section>
+    @switch (_tab)
+    {
+        case 0:
             <!-- 0 ── SUMMARY ─────────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Summary" IconCss="bi bi-clipboard-data" /></ChildContent>
-                <ContentTemplate>
                     <div class="pd-tab-body">
                         <div class="pd-summary-grid">
 
@@ -192,89 +249,77 @@ else
                             </div>
                         </div>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 1 ── COVERAGES ───────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Coverages" IconCss="bi bi-shield-half" /></ChildContent>
-                <ContentTemplate>
+            break;
+        case 1:
+            <!-- 1 -- COVERAGES --------------------------------------------- -->
                     <div class="pd-tab-body">
                         <div class="pd-tab-toolbar">
                             <span class="pd-tab-count">@_coverages.Count coverage(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _editCov = new(); _showCovForm = true; }">
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenCoverageForm">
                                 <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Coverage
                             </button>
                         </div>
                         <SfGrid TValue="CoverageRow" DataSource="_coverages"
-                                AllowSorting="true" EnableHover="true" RowHeight="50">
+                                AllowSorting="true" EnableHover="true" RowHeight="56" Width="100%">
                             <GridColumns>
-                                <GridColumn Field="@nameof(CoverageRow.CovCode)"    HeaderText="Code"         Width="110" />
-                                <GridColumn Field="@nameof(CoverageRow.CovName)"    HeaderText="Coverage"     MinWidth="180" />
-                                <GridColumn Field="@nameof(CoverageRow.CovType)"    HeaderText="Type"         Width="120">
+                                <GridColumn Field="@nameof(CoverageRow.CovCode)"    HeaderText="Code"         Width="130" MinWidth="120" />
+                                <GridColumn Field="@nameof(CoverageRow.CovName)"    HeaderText="Coverage"     Width="300" MinWidth="260" />
+                                <GridColumn Field="@nameof(CoverageRow.CovType)"    HeaderText="Type"         Width="140" MinWidth="130">
                                     <Template>@{ var c = (CoverageRow)context; }<span class="pd-cov-type">@c.CovType</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(CoverageRow.Limit)"      HeaderText="Limit"        Width="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <GridColumn Field="@nameof(CoverageRow.Limit)"      HeaderText="Limit"        Width="150" MinWidth="140" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                                     <Template>@{ var c = (CoverageRow)context; }<span class="pd-mono">@(c.Limit.HasValue ? c.Limit.Value.ToString("C0") : "Occurrence")</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(CoverageRow.Deductible)" HeaderText="Deductible"   Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <GridColumn Field="@nameof(CoverageRow.Deductible)" HeaderText="Deductible"   Width="145" MinWidth="135" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                                     <Template>@{ var c = (CoverageRow)context; }<span class="pd-mono">@(c.Deductible.HasValue ? c.Deductible.Value.ToString("C0") : "—")</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(CoverageRow.Premium)"    HeaderText="Premium"      Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <GridColumn Field="@nameof(CoverageRow.Premium)"    HeaderText="Premium"      Width="145" MinWidth="135" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                                     <Template>@{ var c = (CoverageRow)context; }<span class="pd-mono">@c.Premium.ToString("C2")</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(CoverageRow.Sublimit)"   HeaderText="Sub-Limit"    Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <GridColumn Field="@nameof(CoverageRow.Sublimit)"   HeaderText="Sub-Limit"    Width="145" MinWidth="135" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                                     <Template>@{ var c = (CoverageRow)context; }<span class="pd-mono">@(c.Sublimit.HasValue ? c.Sublimit.Value.ToString("C0") : "—")</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(CoverageRow.IsIncluded)" HeaderText="Incl." Width="80">
+                                <GridColumn Field="@nameof(CoverageRow.IsIncluded)" HeaderText="Incl." Width="90" MinWidth="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
                                     <Template>@{ var c = (CoverageRow)context; }<i class="bi @(c.IsIncluded ? "bi-check-circle-fill pd-chk-yes" : "bi-dash-circle pd-chk-no")" aria-hidden="true"></i></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(CoverageRow.Notes)"      HeaderText="Notes"        MinWidth="160" />
+                                <GridColumn Field="@nameof(CoverageRow.Notes)"      HeaderText="Notes"        Width="260" MinWidth="220" />
                             </GridColumns>
                         </SfGrid>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 2 ── RISK ITEMS ──────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Risk Items" IconCss="bi bi-boxes" /></ChildContent>
-                <ContentTemplate>
+            break;
+        case 2:
+            <!-- 2 -- RISK ITEMS --------------------------------------------- -->
                     <div class="pd-tab-body">
                         <div class="pd-tab-toolbar">
                             <span class="pd-tab-count">@_riskItems.Count item(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { _editRisk = new(); _showRiskForm = true; }">
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenRiskForm">
                                 <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Item
                             </button>
                         </div>
                         <SfGrid TValue="RiskItem" DataSource="_riskItems"
-                                AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="50">
+                                AllowSorting="true" AllowFiltering="true" AllowResizing="true" EnableHover="true" RowHeight="56" Width="100%" CssClass="pd-risk-items-grid">
                             <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
                             <GridColumns>
-                                <GridColumn Field="@nameof(RiskItem.ItemType)"    HeaderText="Type"       Width="130">
+                                <GridColumn Field="@nameof(RiskItem.ItemType)"    HeaderText="Type"        Width="150" MinWidth="130">
                                     <Template>@{ var r = (RiskItem)context; }<span class="pd-risk-type">@r.ItemType</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(RiskItem.Description)" HeaderText="Description" MinWidth="200" />
-                                <GridColumn Field="@nameof(RiskItem.Year)"        HeaderText="Year"        Width="80" />
-                                <GridColumn Field="@nameof(RiskItem.Make)"        HeaderText="Make/Model"  Width="150" />
-                                <GridColumn Field="@nameof(RiskItem.Vin)"         HeaderText="VIN / Serial" Width="165" />
-                                <GridColumn Field="@nameof(RiskItem.Value)"       HeaderText="Value"       Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <GridColumn Field="@nameof(RiskItem.Description)" HeaderText="Description" Width="260" MinWidth="240" />
+                                <GridColumn Field="@nameof(RiskItem.Year)"        HeaderText="Year"        Width="95"  MinWidth="85" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center" />
+                                <GridColumn Field="@nameof(RiskItem.Make)"        HeaderText="Make / Model" Width="170" MinWidth="150" />
+                                <GridColumn Field="@nameof(RiskItem.Vin)"         HeaderText="VIN / Serial" Width="190" MinWidth="170" />
+                                <GridColumn Field="@nameof(RiskItem.Value)"       HeaderText="Value"       Width="150" MinWidth="135" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                                     <Template>@{ var r = (RiskItem)context; }<span class="pd-mono">@(r.Value.HasValue ? r.Value.Value.ToString("C0") : "—")</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(RiskItem.Location)"    HeaderText="Location"    Width="150" />
-                                <GridColumn Field="@nameof(RiskItem.IsActive)"    HeaderText="Active"      Width="80">
+                                <GridColumn Field="@nameof(RiskItem.Location)"    HeaderText="Location"    Width="160" MinWidth="140" />
+                                <GridColumn Field="@nameof(RiskItem.IsActive)"    HeaderText="Active"      Width="95"  MinWidth="85" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
                                     <Template>@{ var r = (RiskItem)context; }<i class="bi @(r.IsActive ? "bi-check-circle-fill pd-chk-yes" : "bi-x-circle pd-chk-no")" aria-hidden="true"></i></Template>
                                 </GridColumn>
                             </GridColumns>
                         </SfGrid>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 3 ── DRIVERS / LOCATIONS ─────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Drivers / Locations" IconCss="bi bi-geo-alt" /></ChildContent>
-                <ContentTemplate>
+            break;
+        case 3:
+            <!-- 3 -- DRIVERS / LOCATIONS --------------------------------------------- -->
                     <div class="pd-tab-body">
                         <div class="pd-dl-tabs">
                             <button class="pd-dl-tab @(_dlTab=="drivers"?"pd-dl-tab--active":"")" @onclick='()=>_dlTab="drivers"'>
@@ -288,22 +333,22 @@ else
                         @if (_dlTab == "drivers")
                         {
                             <SfGrid TValue="DriverRow" DataSource="_drivers"
-                                    AllowSorting="true" EnableHover="true" RowHeight="50">
+                                    AllowSorting="true" AllowResizing="true" EnableHover="true" RowHeight="56" Width="100%" CssClass="pd-drivers-grid">
                                 <GridColumns>
-                                    <GridColumn Field="@nameof(DriverRow.Name)"        HeaderText="Name"        MinWidth="160" />
-                                    <GridColumn Field="@nameof(DriverRow.LicenseNum)"  HeaderText="License #"   Width="150" />
-                                    <GridColumn Field="@nameof(DriverRow.State)"       HeaderText="State"       Width="80" />
-                                    <GridColumn Field="@nameof(DriverRow.Dob)"         HeaderText="DOB"         Width="115">
+                                    <GridColumn Field="@nameof(DriverRow.Name)"        HeaderText="Driver Name" Width="220" MinWidth="200" />
+                                    <GridColumn Field="@nameof(DriverRow.LicenseNum)"  HeaderText="License #"   Width="165" MinWidth="145" />
+                                    <GridColumn Field="@nameof(DriverRow.State)"       HeaderText="State"       Width="95"  MinWidth="85" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center" />
+                                    <GridColumn Field="@nameof(DriverRow.Dob)"         HeaderText="DOB"         Width="130" MinWidth="120">
                                         <Template>@{ var d = (DriverRow)context; }<span class="pd-mono">@d.Dob.ToString("MM/dd/yyyy")</span></Template>
                                     </GridColumn>
-                                    <GridColumn Field="@nameof(DriverRow.YearsExp)"    HeaderText="Exp (yrs)"   Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-                                    <GridColumn Field="@nameof(DriverRow.Type)"        HeaderText="Driver Type" Width="140" />
-                                    <GridColumn Field="@nameof(DriverRow.Violations)"  HeaderText="Violations"  Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <GridColumn Field="@nameof(DriverRow.YearsExp)"    HeaderText="Exp (yrs)"   Width="115" MinWidth="105" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                                    <GridColumn Field="@nameof(DriverRow.Type)"        HeaderText="Driver Type" Width="160" MinWidth="140" />
+                                    <GridColumn Field="@nameof(DriverRow.Violations)"  HeaderText="Violations"  Width="125" MinWidth="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                                         <Template>@{ var d = (DriverRow)context; }
                                             <span class="@(d.Violations > 0 ? "pd-viol-warn" : "pd-mono")">@d.Violations</span>
                                         </Template>
                                     </GridColumn>
-                                    <GridColumn Field="@nameof(DriverRow.IsExcluded)"  HeaderText="Excluded"    Width="100">
+                                    <GridColumn Field="@nameof(DriverRow.IsExcluded)"  HeaderText="Eligible"    Width="105" MinWidth="95" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
                                         <Template>@{ var d = (DriverRow)context; }<i class="bi @(d.IsExcluded ? "bi-x-circle pd-chk-no" : "bi-check-circle-fill pd-chk-yes")" aria-hidden="true"></i></Template>
                                     </GridColumn>
                                 </GridColumns>
@@ -312,38 +357,34 @@ else
                         else
                         {
                             <SfGrid TValue="LocationRow" DataSource="_locations"
-                                    AllowSorting="true" EnableHover="true" RowHeight="50">
+                                    AllowSorting="true" AllowResizing="true" EnableHover="true" RowHeight="56" Width="100%" CssClass="pd-locations-grid">
                                 <GridColumns>
-                                    <GridColumn Field="@nameof(LocationRow.LocNumber)"  HeaderText="#"           Width="60" />
-                                    <GridColumn Field="@nameof(LocationRow.Description)" HeaderText="Description" MinWidth="180" />
-                                    <GridColumn Field="@nameof(LocationRow.Address)"    HeaderText="Address"     Width="200" />
-                                    <GridColumn Field="@nameof(LocationRow.City)"       HeaderText="City"        Width="130" />
-                                    <GridColumn Field="@nameof(LocationRow.State)"      HeaderText="ST"          Width="60" />
-                                    <GridColumn Field="@nameof(LocationRow.Zip)"        HeaderText="ZIP"         Width="90" />
-                                    <GridColumn Field="@nameof(LocationRow.Building)"   HeaderText="Bldg Value"  Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <GridColumn Field="@nameof(LocationRow.LocNumber)"  HeaderText="Loc #"       Width="90"  MinWidth="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center" />
+                                    <GridColumn Field="@nameof(LocationRow.Description)" HeaderText="Description" Width="220" MinWidth="200" />
+                                    <GridColumn Field="@nameof(LocationRow.Address)"    HeaderText="Address"     Width="240" MinWidth="220" />
+                                    <GridColumn Field="@nameof(LocationRow.City)"       HeaderText="City"        Width="145" MinWidth="130" />
+                                    <GridColumn Field="@nameof(LocationRow.State)"      HeaderText="ST"          Width="75"  MinWidth="65" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center" />
+                                    <GridColumn Field="@nameof(LocationRow.Zip)"        HeaderText="ZIP"         Width="105" MinWidth="95" />
+                                    <GridColumn Field="@nameof(LocationRow.Building)"   HeaderText="Bldg Value"  Width="150" MinWidth="135" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                                         <Template>@{ var l = (LocationRow)context; }<span class="pd-mono">@(l.Building.HasValue ? l.Building.Value.ToString("C0") : "—")</span></Template>
                                     </GridColumn>
-                                    <GridColumn Field="@nameof(LocationRow.Contents)"   HeaderText="Contents"    Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                    <GridColumn Field="@nameof(LocationRow.Contents)"   HeaderText="Contents"    Width="150" MinWidth="135" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                                         <Template>@{ var l = (LocationRow)context; }<span class="pd-mono">@(l.Contents.HasValue ? l.Contents.Value.ToString("C0") : "—")</span></Template>
                                     </GridColumn>
-                                    <GridColumn Field="@nameof(LocationRow.IsPrimary)"  HeaderText="Primary"     Width="90">
+                                    <GridColumn Field="@nameof(LocationRow.IsPrimary)"  HeaderText="Primary"     Width="105" MinWidth="95" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
                                         <Template>@{ var l = (LocationRow)context; }<i class="bi @(l.IsPrimary ? "bi-star-fill pd-star" : "bi-star")" aria-hidden="true"></i></Template>
                                     </GridColumn>
                                 </GridColumns>
                             </SfGrid>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 4 ── DOCUMENTS ───────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Documents" IconCss="bi bi-folder2" /></ChildContent>
-                <ContentTemplate>
+            break;
+        case 4:
+            <!-- 4 -- DOCUMENTS --------------------------------------------- -->
                     <div class="pd-tab-body">
                         <div class="pd-tab-toolbar">
                             <span class="pd-tab-count">@_documents.Count document(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm">
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenDocumentForm">
                                 <i class="bi bi-upload" aria-hidden="true"></i> Upload
                             </button>
                         </div>
@@ -360,20 +401,16 @@ else
                                         <div class="pd-doc-uploader">@doc.UploadedBy</div>
                                     </div>
                                     <div class="pd-doc-actions">
-                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Download"><i class="bi bi-download" aria-hidden="true"></i></button>
-                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Preview"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Download" @onclick="() => DownloadDocumentAsync(doc)"><i class="bi bi-download" aria-hidden="true"></i></button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Preview" @onclick="() => PreviewDocumentAsync(doc)"><i class="bi bi-eye" aria-hidden="true"></i></button>
                                     </div>
                                 </div>
                             }
                         </div>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 5 ── ACTIVITIES ──────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Activities" IconCss="bi bi-lightning" /></ChildContent>
-                <ContentTemplate>
+            break;
+        case 5:
+            <!-- 5 -- ACTIVITIES --------------------------------------------- -->
                     <div class="pd-tab-body">
                         <div class="pd-tab-toolbar">
                             <span class="pd-tab-count">@_activities.Count activity(ies)</span>
@@ -409,13 +446,9 @@ else
                             }
                         </div>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 6 ── COMMUNICATIONS ──────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Communications" IconCss="bi bi-envelope" /></ChildContent>
-                <ContentTemplate>
+            break;
+        case 6:
+            <!-- 6 -- COMMUNICATIONS --------------------------------------------- -->
                     <div class="pd-tab-body">
                         <div class="pd-tab-toolbar">
                             <span class="pd-tab-count">@_comms.Count message(s)</span>
@@ -424,35 +457,31 @@ else
                             </button>
                         </div>
                         <SfGrid TValue="CommRow" DataSource="_comms"
-                                AllowSorting="true" EnableHover="true" RowHeight="52">
+                                AllowSorting="true" AllowResizing="true" EnableHover="true" RowHeight="56" Width="100%" CssClass="pd-communications-grid">
                             <GridColumns>
-                                <GridColumn Field="@nameof(CommRow.SentAt)"    HeaderText="Date"      Width="140">
+                                <GridColumn Field="@nameof(CommRow.SentAt)"    HeaderText="Sent Date" Width="135" MinWidth="125">
                                     <Template>@{ var c = (CommRow)context; }<span class="pd-mono">@c.SentAt.ToString("MM/dd/yyyy")</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(CommRow.Channel)"   HeaderText="Channel"   Width="110">
+                                <GridColumn Field="@nameof(CommRow.Channel)"   HeaderText="Channel"   Width="130" MinWidth="115" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
                                     <Template>@{ var c = (CommRow)context; }<span class="pd-comm-chip pd-comm-@c.Channel.ToLower()">@c.Channel</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(CommRow.Direction)" HeaderText="Dir."      Width="90">
+                                <GridColumn Field="@nameof(CommRow.Direction)" HeaderText="Direction" Width="130" MinWidth="115" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
                                     <Template>@{ var c = (CommRow)context; }
                                         <span class="pd-dir-chip @(c.Direction=="Inbound"?"pd-dir-in":"pd-dir-out")">@c.Direction</span>
                                     </Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(CommRow.Subject)"   HeaderText="Subject"   MinWidth="200" />
-                                <GridColumn Field="@nameof(CommRow.From)"      HeaderText="From"      Width="170" />
-                                <GridColumn Field="@nameof(CommRow.To)"        HeaderText="To"        Width="170" />
-                                <GridColumn Field="@nameof(CommRow.Status)"    HeaderText="Status"    Width="110">
+                                <GridColumn Field="@nameof(CommRow.Subject)"   HeaderText="Subject"   Width="300" MinWidth="260" />
+                                <GridColumn Field="@nameof(CommRow.From)"      HeaderText="From"      Width="230" MinWidth="200" />
+                                <GridColumn Field="@nameof(CommRow.To)"        HeaderText="To"        Width="230" MinWidth="200" />
+                                <GridColumn Field="@nameof(CommRow.Status)"    HeaderText="Status"    Width="135" MinWidth="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
                                     <Template>@{ var c = (CommRow)context; }<span class="pd-comm-status pd-cstat-@c.Status.ToLower()">@c.Status</span></Template>
                                 </GridColumn>
                             </GridColumns>
                         </SfGrid>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 7 ── BILLING ─────────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Billing" IconCss="bi bi-receipt" /></ChildContent>
-                <ContentTemplate>
+            break;
+        case 7:
+            <!-- 7 -- BILLING --------------------------------------------- -->
                     <div class="pd-tab-body">
                         <div class="pd-billing-summary">
                             <div class="pd-bill-kpi pd-bill-kpi--prem">
@@ -475,7 +504,7 @@ else
 
                         <h4 class="pd-section-hdr2">Installment Schedule</h4>
                         <SfGrid TValue="InvoiceRow" DataSource="_invoices"
-                                AllowSorting="true" EnableHover="true" RowHeight="48">
+                                AllowSorting="true" EnableHover="true" RowHeight="56" Width="100%">
                             <GridColumns>
                                 <GridColumn Field="@nameof(InvoiceRow.InvoiceNum)" HeaderText="Invoice #"    Width="130" />
                                 <GridColumn Field="@nameof(InvoiceRow.DueDate)"    HeaderText="Due Date"     Width="120">
@@ -499,53 +528,45 @@ else
                             </GridColumns>
                         </SfGrid>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 8 ── CLAIMS ──────────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Claims" IconCss="bi bi-exclamation-circle" /></ChildContent>
-                <ContentTemplate>
+            break;
+        case 8:
+            <!-- 8 -- CLAIMS --------------------------------------------- -->
                     <div class="pd-tab-body">
                         <div class="pd-tab-toolbar">
                             <span class="pd-tab-count">@_claims.Count claim(s) · @_claims.Count(c => c.Status == "Open") open</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm">
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenClaimForm">
                                 <i class="bi bi-plus-lg" aria-hidden="true"></i> Report Claim
                             </button>
                         </div>
                         <SfGrid TValue="ClaimRow" DataSource="_claims"
-                                AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="52">
+                                AllowSorting="true" AllowFiltering="true" AllowResizing="true" EnableHover="true" RowHeight="56" Width="100%" CssClass="pd-claims-grid">
                             <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
                             <GridColumns>
-                                <GridColumn Field="@nameof(ClaimRow.ClaimNum)"    HeaderText="Claim #"      Width="140" />
-                                <GridColumn Field="@nameof(ClaimRow.LossDate)"    HeaderText="Loss Date"    Width="120">
+                                <GridColumn Field="@nameof(ClaimRow.ClaimNum)"    HeaderText="Claim #"      Width="150" MinWidth="135" />
+                                <GridColumn Field="@nameof(ClaimRow.LossDate)"    HeaderText="Loss Date"    Width="130" MinWidth="120">
                                     <Template>@{ var c = (ClaimRow)context; }<span class="pd-mono">@c.LossDate.ToString("MM/dd/yyyy")</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(ClaimRow.LossType)"    HeaderText="Loss Type"    Width="150" />
-                                <GridColumn Field="@nameof(ClaimRow.Description)" HeaderText="Description"  MinWidth="200" />
-                                <GridColumn Field="@nameof(ClaimRow.Status)"      HeaderText="Status"       Width="110">
+                                <GridColumn Field="@nameof(ClaimRow.LossType)"    HeaderText="Loss Type"    Width="170" MinWidth="150" />
+                                <GridColumn Field="@nameof(ClaimRow.Description)" HeaderText="Description"  Width="320" MinWidth="280" />
+                                <GridColumn Field="@nameof(ClaimRow.Status)"      HeaderText="Status"       Width="130" MinWidth="115" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
                                     <Template>@{ var c = (ClaimRow)context; }<span class="pd-claim-status pd-cs-@c.Status.ToLower()">@c.Status</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(ClaimRow.Reserve)"     HeaderText="Reserve"      Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <GridColumn Field="@nameof(ClaimRow.Reserve)"     HeaderText="Reserve"      Width="145" MinWidth="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                                     <Template>@{ var c = (ClaimRow)context; }<span class="pd-mono">@c.Reserve.ToString("C0")</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(ClaimRow.Paid)"        HeaderText="Paid"         Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <GridColumn Field="@nameof(ClaimRow.Paid)"        HeaderText="Paid"         Width="145" MinWidth="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                                     <Template>@{ var c = (ClaimRow)context; }<span class="pd-mono">@c.Paid.ToString("C0")</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(ClaimRow.Adjuster)"    HeaderText="Adjuster"     Width="150" />
-                                <GridColumn Field="@nameof(ClaimRow.ClosedDate)"  HeaderText="Closed"       Width="115">
+                                <GridColumn Field="@nameof(ClaimRow.Adjuster)"    HeaderText="Adjuster"     Width="170" MinWidth="150" />
+                                <GridColumn Field="@nameof(ClaimRow.ClosedDate)"  HeaderText="Closed Date"  Width="135" MinWidth="125">
                                     <Template>@{ var c = (ClaimRow)context; }<span class="pd-mono">@(c.ClosedDate.HasValue ? c.ClosedDate.Value.ToString("MM/dd/yyyy") : "—")</span></Template>
                                 </GridColumn>
                             </GridColumns>
                         </SfGrid>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 9 ── ENDORSEMENTS ────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Endorsements" IconCss="bi bi-pen" /></ChildContent>
-                <ContentTemplate>
+            break;
+        case 9:
+            <!-- 9 -- ENDORSEMENTS --------------------------------------------- -->
                     <div class="pd-tab-body">
                         <div class="pd-tab-toolbar">
                             <span class="pd-tab-count">@_endorsements.Count endorsement(s)</span>
@@ -554,15 +575,15 @@ else
                             </button>
                         </div>
                         <SfGrid TValue="EndorsementRow" DataSource="_endorsements"
-                                AllowSorting="true" EnableHover="true" RowHeight="50">
+                                AllowSorting="true" AllowResizing="true" EnableHover="true" RowHeight="56" Width="100%" CssClass="pd-endorsements-grid">
                             <GridColumns>
-                                <GridColumn Field="@nameof(EndorsementRow.EndNum)"    HeaderText="Endorse #"   Width="130" />
-                                <GridColumn Field="@nameof(EndorsementRow.EffDate)"   HeaderText="Eff Date"    Width="115">
+                                <GridColumn Field="@nameof(EndorsementRow.EndNum)"    HeaderText="Endorse #"   Width="145" MinWidth="130" />
+                                <GridColumn Field="@nameof(EndorsementRow.EffDate)"   HeaderText="Eff Date"    Width="130" MinWidth="120">
                                     <Template>@{ var e = (EndorsementRow)context; }<span class="pd-mono">@e.EffDate.ToString("MM/dd/yyyy")</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(EndorsementRow.Type)"      HeaderText="Type"        Width="160" />
-                                <GridColumn Field="@nameof(EndorsementRow.Description)" HeaderText="Description" MinWidth="200" />
-                                <GridColumn Field="@nameof(EndorsementRow.PremChange)" HeaderText="Prem Δ"     Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                <GridColumn Field="@nameof(EndorsementRow.Type)"      HeaderText="Type"        Width="190" MinWidth="165" />
+                                <GridColumn Field="@nameof(EndorsementRow.Description)" HeaderText="Description" Width="340" MinWidth="300" />
+                                <GridColumn Field="@nameof(EndorsementRow.PremChange)" HeaderText="Premium Δ"   Width="145" MinWidth="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
                                     <Template>
                                         @{ var e = (EndorsementRow)context; }
                                         <span class="pd-mono @(e.PremChange > 0 ? "pd-prem-up" : e.PremChange < 0 ? "pd-prem-dn" : "")">
@@ -570,20 +591,16 @@ else
                                         </span>
                                     </Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(EndorsementRow.Status)"    HeaderText="Status"      Width="110">
+                                <GridColumn Field="@nameof(EndorsementRow.Status)"    HeaderText="Status"      Width="130" MinWidth="115" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
                                     <Template>@{ var e = (EndorsementRow)context; }<span class="pd-end-status pd-es-@e.Status.ToLower()">@e.Status</span></Template>
                                 </GridColumn>
-                                <GridColumn Field="@nameof(EndorsementRow.IssuedBy)"  HeaderText="Issued By"   Width="140" />
+                                <GridColumn Field="@nameof(EndorsementRow.IssuedBy)"  HeaderText="Issued By"   Width="170" MinWidth="150" />
                             </GridColumns>
                         </SfGrid>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 10 ── RENEWALS ───────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Renewals" IconCss="bi bi-arrow-repeat" /></ChildContent>
-                <ContentTemplate>
+            break;
+        case 10:
+            <!-- 10 -- RENEWALS --------------------------------------------- -->
                     <div class="pd-tab-body">
                         @if (_renewal is not null)
                         {
@@ -596,10 +613,10 @@ else
                                     </div>
                                 </div>
                                 <div class="pd-ren-actions">
-                                    <button class="um-btn um-btn-ghost um-btn-sm">
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("remarket")'>
                                         <i class="bi bi-arrow-left-right" aria-hidden="true"></i> Remarket
                                     </button>
-                                    <button class="um-btn um-btn-primary um-btn-sm">
+                                    <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => OpenAction("bindRenewal")'>
                                         <i class="bi bi-check-lg" aria-hidden="true"></i> Bind Renewal
                                     </button>
                                 </div>
@@ -623,7 +640,7 @@ else
 
                         <h4 class="pd-section-hdr2" style="margin-top:1.5rem">Renewal History</h4>
                         <SfGrid TValue="RenewalHistRow" DataSource="_renewalHistory"
-                                AllowSorting="true" EnableHover="true" RowHeight="48">
+                                AllowSorting="true" EnableHover="true" RowHeight="56" Width="100%">
                             <GridColumns>
                                 <GridColumn Field="@nameof(RenewalHistRow.PolicyNum)"   HeaderText="Policy #"        Width="160" />
                                 <GridColumn Field="@nameof(RenewalHistRow.EffDate)"     HeaderText="Eff Date"        Width="115">
@@ -649,13 +666,9 @@ else
                             </GridColumns>
                         </SfGrid>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 11 ── COMMISSIONS ────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Commissions" IconCss="bi bi-percent" /></ChildContent>
-                <ContentTemplate>
+            break;
+        case 11:
+            <!-- 11 -- COMMISSIONS --------------------------------------------- -->
                     <div class="pd-tab-body">
                         <div class="pd-billing-summary">
                             <div class="pd-bill-kpi pd-bill-kpi--prem">
@@ -677,7 +690,7 @@ else
                         </div>
 
                         <SfGrid TValue="CommissionRow" DataSource="_commissions"
-                                AllowSorting="true" EnableHover="true" RowHeight="50">
+                                AllowSorting="true" EnableHover="true" RowHeight="56" Width="100%">
                             <GridColumns>
                                 <GridColumn Field="@nameof(CommissionRow.Period)"      HeaderText="Period"      Width="120" />
                                 <GridColumn Field="@nameof(CommissionRow.Type)"        HeaderText="Type"        Width="120" />
@@ -703,19 +716,15 @@ else
                             </GridColumns>
                         </SfGrid>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-            <!-- 12 ── AUDIT ──────────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Audit" IconCss="bi bi-journal-text" /></ChildContent>
-                <ContentTemplate>
+            break;
+        case 12:
+            <!-- 12 -- AUDIT --------------------------------------------- -->
                     <div class="pd-tab-body">
                         <div class="pd-tab-toolbar">
                             <span class="pd-tab-count">@_auditLog.Count event(s)</span>
                         </div>
                         <SfGrid TValue="AuditEntry" DataSource="_auditLog"
-                                AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="50">
+                                AllowSorting="true" AllowFiltering="true" EnableHover="true" RowHeight="56" Width="100%">
                             <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
                             <GridColumns>
                                 <GridColumn Field="@nameof(AuditEntry.Timestamp)"  HeaderText="Timestamp"  Width="155">
@@ -732,157 +741,522 @@ else
                             </GridColumns>
                         </SfGrid>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-        </Tabs>
-    </AppDetailTabs>
+            break;
+    }
+    </div>
 }
 
 <!-- ── ACTION DIALOGS ──────────────────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showActionDlg" Width="480px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="pd-dlg-hdr"><i class="bi @_actionIcon" aria-hidden="true"></i> @_actionTitle</span></Header>
-        <Content>
-            <div class="pd-dlg-body">
-                <p class="pd-dlg-lead">@_actionDesc</p>
-                @if (_activeAction is "endorse" or "rewrite" or "remarket" or "cancel" or "reinstate")
-                {
-                    <div class="pd-dlg-grid">
+@if (_showActionDlg)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseActionDialog">
+        <div class="mt-modal pd-form-modal pd-action-modal" role="dialog" aria-modal="true" aria-labelledby="pd-action-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi @_actionIcon" aria-hidden="true"></i>
+                <span id="pd-action-title">@_actionTitle</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActionDialog"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_actionForm" OnValidSubmit="ExecuteActionAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro @(_activeAction == "cancel" ? "pd-modal-intro--danger" : null)">
+                        <span class="pd-modal-chip"><i class="bi @_actionIcon" aria-hidden="true"></i> Policy workflow</span>
+                        <p>@_actionDesc</p>
+                    </div>
+                    <div class="um-form-grid">
+                        @if (_activeAction is "endorse" or "rewrite" or "cancel" or "reinstate" or "certificate" or "bindRenewal")
+                        {
+                            <div class="um-field">
+                                <label>@ActionDateLabel <span class="text-danger">*</span></label>
+                                <InputDate class="form-control" @bind-Value="_actionForm.ActionDate" />
+                                <ValidationMessage For="() => _actionForm.ActionDate" class="text-danger" />
+                            </div>
+                        }
                         @if (_activeAction is "endorse" or "rewrite")
                         {
-                            <SfDatePicker TValue="DateTime" Placeholder="Effective date" @bind-Value="_actionDate" />
-                            <SfNumericTextBox TValue="decimal" Placeholder="Premium change ($)" Format="C2" @bind-Value="_actionPremDelta" />
+                            <div class="um-field">
+                                <label>Premium Change</label>
+                                <InputNumber class="form-control" @bind-Value="_actionForm.PremiumDelta" />
+                                <ValidationMessage For="() => _actionForm.PremiumDelta" class="text-danger" />
+                            </div>
                         }
                         @if (_activeAction == "cancel")
                         {
-                            <SfDatePicker TValue="DateTime" Placeholder="Cancellation date" @bind-Value="_actionDate" />
-                            <SfDropDownList TValue="string" TItem="PdLv" DataSource="_cancelReasonOpts"
-                                            Placeholder="Cancellation reason *" Width="100%" @bind-Value="_actionReason">
-                                <DropDownListFieldSettings Value="Value" Text="Label" />
-                            </SfDropDownList>
+                            <div class="um-field">
+                                <label>Cancellation Reason <span class="text-danger">*</span></label>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.Reason">
+                                    <option value="">Select reason</option>
+                                    @foreach (var opt in _cancelReasonOpts)
+                                    {
+                                        <option value="@opt.Value">@opt.Label</option>
+                                    }
+                                </InputSelect>
+                                <ValidationMessage For="() => _actionForm.Reason" class="text-danger" />
+                            </div>
                         }
-                        @if (_activeAction == "reinstate")
+                        @if (_activeAction == "certificate")
                         {
-                            <SfDatePicker TValue="DateTime" Placeholder="Reinstatement date" @bind-Value="_actionDate" />
+                            <div class="um-field">
+                                <label>Certificate Holder <span class="text-danger">*</span></label>
+                                <InputText class="form-control" @bind-Value="_actionForm.PartyName" />
+                                <ValidationMessage For="() => _actionForm.PartyName" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Certificate Type</label>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.Reason">
+                                    @foreach (var opt in _certTypeOpts)
+                                    {
+                                        <option value="@opt.Value">@opt.Label</option>
+                                    }
+                                </InputSelect>
+                                <ValidationMessage For="() => _actionForm.Reason" class="text-danger" />
+                            </div>
+                            <div class="um-field um-field--full">
+                                <label>Holder Address</label>
+                                <InputText class="form-control" @bind-Value="_actionForm.PartyAddress" />
+                                <ValidationMessage For="() => _actionForm.PartyAddress" class="text-danger" />
+                            </div>
                         }
+                        @if (_activeAction == "esign")
+                        {
+                            <div class="um-field">
+                                <label>Signer Name <span class="text-danger">*</span></label>
+                                <InputText class="form-control" @bind-Value="_actionForm.PartyName" />
+                                <ValidationMessage For="() => _actionForm.PartyName" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Signer Email <span class="text-danger">*</span></label>
+                                <InputText class="form-control" @bind-Value="_actionForm.PartyAddress" />
+                                <ValidationMessage For="() => _actionForm.PartyAddress" class="text-danger" />
+                            </div>
+                            <div class="um-field um-field--full">
+                                <label>Document To Sign <span class="text-danger">*</span></label>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.Reason">
+                                    <option value="">Select document</option>
+                                    @foreach (var opt in _esignDocOpts)
+                                    {
+                                        <option value="@opt.Value">@opt.Label</option>
+                                    }
+                                </InputSelect>
+                                <ValidationMessage For="() => _actionForm.Reason" class="text-danger" />
+                            </div>
+                        }
+                        @if (_activeAction == "message")
+                        {
+                            <div class="um-field">
+                                <label>Channel <span class="text-danger">*</span></label>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.Reason">
+                                    @foreach (var opt in _msgChannelOpts)
+                                    {
+                                        <option value="@opt.Value">@opt.Label</option>
+                                    }
+                                </InputSelect>
+                                <ValidationMessage For="() => _actionForm.Reason" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Recipient <span class="text-danger">*</span></label>
+                                <InputText class="form-control" @bind-Value="_actionForm.PartyName" />
+                                <ValidationMessage For="() => _actionForm.PartyName" class="text-danger" />
+                            </div>
+                            <div class="um-field um-field--full">
+                                <label>Subject</label>
+                                <InputText class="form-control" @bind-Value="_actionForm.PartyAddress" />
+                                <ValidationMessage For="() => _actionForm.PartyAddress" class="text-danger" />
+                            </div>
+                        }
+                        <div class="um-field um-field--full">
+                            <label>Notes / Reason @if (_activeAction is "cancel" or "remarket" or "rewrite") { <span class="text-danger">*</span> }</label>
+                            <InputTextArea class="form-control" rows="4" @bind-Value="_actionForm.Note" />
+                            <ValidationMessage For="() => _actionForm.Note" class="text-danger" />
+                        </div>
                     </div>
-                }
-                @if (_activeAction is "certificate")
-                {
-                    <div class="pd-dlg-grid">
-                        <SfTextBox Placeholder="Certificate holder name *" @bind-Value="_actionCertHolder" />
-                        <SfTextBox Placeholder="Certificate holder address" @bind-Value="_actionCertAddr" />
-                        <SfDropDownList TValue="string" TItem="PdLv" DataSource="_certTypeOpts"
-                                        Placeholder="Certificate type" Width="100%" @bind-Value="_actionReason">
-                            <DropDownListFieldSettings Value="Value" Text="Label" />
-                        </SfDropDownList>
-                        <SfDatePicker TValue="DateTime" Placeholder="Effective date" @bind-Value="_actionDate" />
-                    </div>
-                }
-                @if (_activeAction is "esign")
-                {
-                    <div class="pd-dlg-grid">
-                        <SfTextBox Placeholder="Signer name *" @bind-Value="_actionCertHolder" />
-                        <SfTextBox Placeholder="Signer email *" @bind-Value="_actionCertAddr" />
-                        <SfDropDownList TValue="string" TItem="PdLv" DataSource="_esignDocOpts"
-                                        Placeholder="Document to sign" Width="100%" @bind-Value="_actionReason">
-                            <DropDownListFieldSettings Value="Value" Text="Label" />
-                        </SfDropDownList>
-                    </div>
-                }
-                @if (_activeAction == "message")
-                {
-                    <div class="pd-dlg-grid-1">
-                        <SfDropDownList TValue="string" TItem="PdLv" DataSource="_msgChannelOpts"
-                                        Placeholder="Channel" Width="100%" @bind-Value="_actionReason">
-                            <DropDownListFieldSettings Value="Value" Text="Label" />
-                        </SfDropDownList>
-                        <SfTextBox Placeholder="To (email / phone)" @bind-Value="_actionCertHolder" />
-                        <SfTextBox Placeholder="Subject" @bind-Value="_actionCertAddr" />
-                        <SfTextBox Placeholder="Message body…" Multiline="true"
-                                   HtmlAttributes='@(new() {{"rows","4"}})' @bind-Value="_actionNote" />
-                    </div>
-                }
-                <SfTextBox Placeholder="Notes / reason" Multiline="true"
-                           HtmlAttributes='@(new() {{"rows","2"}})' @bind-Value="_actionNote" />
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseActionDialog">Cancel</button>
+                    <button type="submit" class="um-btn @(_activeAction == "cancel" ? "um-btn-danger" : "um-btn-primary")">
+                        <i class="bi bi-check-lg" aria-hidden="true"></i> Confirm
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showCovForm)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseCoverageForm">
+        <div class="mt-modal pd-form-modal" role="dialog" aria-modal="true" aria-labelledby="pd-coverage-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-shield-half" aria-hidden="true"></i>
+                <span id="pd-coverage-title">Add Coverage</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCoverageForm"><i class="bi bi-x-lg"></i></button>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="pd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showActionDlg = false">Cancel</button>
-                <button class="um-btn @(_activeAction == "cancel" ? "um-btn-danger" : "um-btn-primary")"
-                        @onclick="ExecuteActionAsync">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Confirm
-                </button>
+            <EditForm Model="_coverageForm" OnValidSubmit="SaveCoverageAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro">
+                        <span class="pd-modal-chip"><i class="bi bi-shield-check" aria-hidden="true"></i> Coverage workflow</span>
+                        <p>Add coverage terms to the active policy and keep premium, documents, activity, and audit history in sync.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Coverage Code <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_coverageForm.CovCode" />
+                            <ValidationMessage For="() => _coverageForm.CovCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Coverage Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_coverageForm.CovName" />
+                            <ValidationMessage For="() => _coverageForm.CovName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_coverageForm.CovType">
+                                <option value="Primary">Primary</option>
+                                <option value="Supplemental">Supplemental</option>
+                                <option value="Endorsement">Endorsement</option>
+                                <option value="Excluded">Excluded</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _coverageForm.CovType" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Premium</label>
+                            <InputNumber class="form-control" @bind-Value="_coverageForm.Premium" />
+                            <ValidationMessage For="() => _coverageForm.Premium" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Limit</label>
+                            <InputNumber class="form-control" @bind-Value="_coverageForm.Limit" />
+                            <ValidationMessage For="() => _coverageForm.Limit" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Deductible</label>
+                            <InputNumber class="form-control" @bind-Value="_coverageForm.Deductible" />
+                            <ValidationMessage For="() => _coverageForm.Deductible" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea class="form-control" rows="3" @bind-Value="_coverageForm.Notes" />
+                            <ValidationMessage For="() => _coverageForm.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseCoverageForm">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary"><i class="bi bi-check-lg"></i> Save Coverage</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showRiskForm)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseRiskForm">
+        <div class="mt-modal pd-form-modal" role="dialog" aria-modal="true" aria-labelledby="pd-risk-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-boxes" aria-hidden="true"></i>
+                <span id="pd-risk-title">Add Risk Item</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseRiskForm"><i class="bi bi-x-lg"></i></button>
             </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+            <EditForm Model="_riskForm" OnValidSubmit="SaveRiskItemAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro">
+                        <span class="pd-modal-chip"><i class="bi bi-diagram-3" aria-hidden="true"></i> Risk schedule</span>
+                        <p>Add scheduled property, vehicle, location, or equipment data and create an audit trail.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Item Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_riskForm.ItemType">
+                                <option value="Equipment">Equipment</option>
+                                <option value="Vehicle">Vehicle</option>
+                                <option value="Location">Location</option>
+                                <option value="Property">Property</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _riskForm.ItemType" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Description <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_riskForm.Description" />
+                            <ValidationMessage For="() => _riskForm.Description" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Year</label>
+                            <InputNumber class="form-control" @bind-Value="_riskForm.Year" />
+                            <ValidationMessage For="() => _riskForm.Year" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Make / Model</label>
+                            <InputText class="form-control" @bind-Value="_riskForm.Make" />
+                            <ValidationMessage For="() => _riskForm.Make" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>VIN / Serial</label>
+                            <InputText class="form-control" @bind-Value="_riskForm.Vin" />
+                            <ValidationMessage For="() => _riskForm.Vin" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Value</label>
+                            <InputNumber class="form-control" @bind-Value="_riskForm.Value" />
+                            <ValidationMessage For="() => _riskForm.Value" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Location</label>
+                            <InputText class="form-control" @bind-Value="_riskForm.Location" />
+                            <ValidationMessage For="() => _riskForm.Location" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRiskForm">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary"><i class="bi bi-check-lg"></i> Save Item</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDocForm)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseDocumentForm">
+        <div class="mt-modal pd-form-modal" role="dialog" aria-modal="true" aria-labelledby="pd-doc-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-upload" aria-hidden="true"></i>
+                <span id="pd-doc-title">Upload Policy Document</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDocumentForm"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_docForm" OnValidSubmit="SaveDocumentAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro">
+                        <span class="pd-modal-chip"><i class="bi bi-folder-check" aria-hidden="true"></i> Document governance</span>
+                        <p>Register policy documents, generate an activity entry, and update the audit trail.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Document Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_docForm.Name" />
+                            <ValidationMessage For="() => _docForm.Name" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Category <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_docForm.Category">
+                                <option value="Policy">Policy</option>
+                                <option value="Certificate">Certificate</option>
+                                <option value="Endorsement">Endorsement</option>
+                                <option value="Billing">Billing</option>
+                                <option value="Claims">Claims</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _docForm.Category" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>File Type</label>
+                            <InputSelect class="form-select" @bind-Value="_docForm.FileType">
+                                <option value="PDF">PDF</option>
+                                <option value="DOCX">DOCX</option>
+                                <option value="XLSX">XLSX</option>
+                                <option value="PNG">PNG</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _docForm.FileType" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea class="form-control" rows="3" @bind-Value="_docForm.Notes" />
+                            <ValidationMessage For="() => _docForm.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDocumentForm">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary"><i class="bi bi-check-lg"></i> Upload</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showClaimForm)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseClaimForm">
+        <div class="mt-modal pd-form-modal" role="dialog" aria-modal="true" aria-labelledby="pd-claim-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+                <span id="pd-claim-title">Report Claim</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseClaimForm"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_claimForm" OnValidSubmit="SaveClaimAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro pd-modal-intro--danger">
+                        <span class="pd-modal-chip"><i class="bi bi-shield-exclamation" aria-hidden="true"></i> Claims workflow</span>
+                        <p>Create a claim record, update open claim counts, and add policy activity/audit history.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Loss Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_claimForm.LossDate" />
+                            <ValidationMessage For="() => _claimForm.LossDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Loss Type <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_claimForm.LossType" />
+                            <ValidationMessage For="() => _claimForm.LossType" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Reserve</label>
+                            <InputNumber class="form-control" @bind-Value="_claimForm.Reserve" />
+                            <ValidationMessage For="() => _claimForm.Reserve" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Adjuster</label>
+                            <InputText class="form-control" @bind-Value="_claimForm.Adjuster" />
+                            <ValidationMessage For="() => _claimForm.Adjuster" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description <span class="text-danger">*</span></label>
+                            <InputTextArea class="form-control" rows="4" @bind-Value="_claimForm.Description" />
+                            <ValidationMessage For="() => _claimForm.Description" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseClaimForm">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary"><i class="bi bi-check-lg"></i> Report Claim</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
 <!-- Log Activity Dialog -->
-<SfDialog @bind-Visible="_showActForm" Width="520px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="pd-dlg-hdr"><i class="bi bi-lightning" aria-hidden="true"></i> Log Activity</span></Header>
-        <Content>
-            <div class="pd-dlg-body">
-                <div class="pd-dlg-grid">
-                    <SfTextBox Placeholder="Subject *" @bind-Value="_actForm.Subject" />
-                    <SfDropDownList TValue="string" TItem="PdLv" DataSource="_actCategoryOpts"
-                                    Placeholder="Category" Width="100%" @bind-Value="_actForm.Category">
-                        <DropDownListFieldSettings Value="Value" Text="Label" />
-                    </SfDropDownList>
-                    <SfDropDownList TValue="string" TItem="PdLv" DataSource="_actChannelOpts"
-                                    Placeholder="Channel" Width="100%" @bind-Value="_actForm.Channel">
-                        <DropDownListFieldSettings Value="Value" Text="Label" />
-                    </SfDropDownList>
-                    <SfDropDownList TValue="string" TItem="PdLv" DataSource="_actOutcomeOpts"
-                                    Placeholder="Outcome" Width="100%" @bind-Value="_actForm.Outcome">
-                        <DropDownListFieldSettings Value="Value" Text="Label" />
-                    </SfDropDownList>
-                    <SfDateTimePicker TValue="DateTime" Placeholder="Date / time" @bind-Value="_actForm.ActivityDate" />
+@if (_showActForm)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseActivityForm">
+        <div class="mt-modal pd-form-modal" role="dialog" aria-modal="true" aria-labelledby="pd-activity-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-lightning" aria-hidden="true"></i>
+                <span id="pd-activity-title">Log Activity</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActivityForm"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_actForm" OnValidSubmit="SaveActivityAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro">
+                        <span class="pd-modal-chip"><i class="bi bi-clock-history" aria-hidden="true"></i> Service workflow</span>
+                        <p>Record policy service activity and synchronize the timeline.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Subject <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_actForm.Subject" />
+                            <ValidationMessage For="() => _actForm.Subject" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Category <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_actForm.Category">
+                                @foreach (var opt in _actCategoryOpts)
+                                {
+                                    <option value="@opt.Value">@opt.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _actForm.Category" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Channel <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_actForm.Channel">
+                                @foreach (var opt in _actChannelOpts)
+                                {
+                                    <option value="@opt.Value">@opt.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _actForm.Channel" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Outcome <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_actForm.Outcome">
+                                @foreach (var opt in _actOutcomeOpts)
+                                {
+                                    <option value="@opt.Value">@opt.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _actForm.Outcome" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Date / Time <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_actForm.ActivityDate" />
+                            <ValidationMessage For="() => _actForm.ActivityDate" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea class="form-control" rows="4" @bind-Value="_actForm.Notes" />
+                            <ValidationMessage For="() => _actForm.Notes" class="text-danger" />
+                        </div>
+                    </div>
                 </div>
-                <SfTextBox Placeholder="Notes" Multiline="true" HtmlAttributes='@(new() {{"rows","3"}})' @bind-Value="_actForm.Notes" />
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="pd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showActForm = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SaveActivityAsync">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseActivityForm">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
 <!-- Compose Message Dialog -->
-<SfDialog @bind-Visible="_showCommForm" Width="520px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="pd-dlg-hdr"><i class="bi bi-envelope" aria-hidden="true"></i> New Message</span></Header>
-        <Content>
-            <div class="pd-dlg-body">
-                <div class="pd-dlg-grid">
-                    <SfDropDownList TValue="string" TItem="PdLv" DataSource="_msgChannelOpts"
-                                    Placeholder="Channel" Width="100%" @bind-Value="_commForm.Channel">
-                        <DropDownListFieldSettings Value="Value" Text="Label" />
-                    </SfDropDownList>
-                    <SfTextBox Placeholder="To" @bind-Value="_commForm.To" />
-                    <SfTextBox Placeholder="Subject" @bind-Value="_commForm.Subject" />
+@if (_showCommForm)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseCommunicationForm">
+        <div class="mt-modal pd-form-modal" role="dialog" aria-modal="true" aria-labelledby="pd-message-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-envelope" aria-hidden="true"></i>
+                <span id="pd-message-title">New Message</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCommunicationForm"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_commForm" OnValidSubmit="SendMessageAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro">
+                        <span class="pd-modal-chip"><i class="bi bi-send" aria-hidden="true"></i> Communication workflow</span>
+                        <p>Send a policy communication and keep the communication log synchronized.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Channel <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_commForm.Channel">
+                                @foreach (var opt in _msgChannelOpts)
+                                {
+                                    <option value="@opt.Value">@opt.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _commForm.Channel" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>To <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_commForm.To" />
+                            <ValidationMessage For="() => _commForm.To" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Subject <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_commForm.Subject" />
+                            <ValidationMessage For="() => _commForm.Subject" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Message</label>
+                            <InputTextArea class="form-control" rows="5" @bind-Value="_commForm.Body" />
+                            <ValidationMessage For="() => _commForm.Body" class="text-danger" />
+                        </div>
+                    </div>
                 </div>
-                <SfTextBox Placeholder="Message…" Multiline="true" HtmlAttributes='@(new() {{"rows","5"}})' @bind-Value="_commForm.Body" />
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="pd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showCommForm = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SendMessageAsync">
-                    <i class="bi bi-send" aria-hidden="true"></i> Send
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseCommunicationForm">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary"><i class="bi bi-send" aria-hidden="true"></i> Send</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
 @code {
     [Parameter] public Guid PolicyId { get; set; }
@@ -890,6 +1264,7 @@ else
     // ── Component refs & state ──────────────────────────────────────────────
     private SfToast? _toast;
     private bool     _loading = true;
+    private string?  _loadError;
     private int      _tab     = 0;
     private string   _dlTab   = "drivers";
 
@@ -910,6 +1285,23 @@ else
     private List<CommissionRow>     _commissions    = [];
     private List<AuditEntry>        _auditLog       = [];
 
+    private readonly DetailTab[] _detailTabs =
+    [
+        new(0, "Summary", "bi-clipboard-data"),
+        new(1, "Coverages", "bi-shield-half"),
+        new(2, "Risk Items", "bi-boxes"),
+        new(3, "Drivers / Locations", "bi-geo-alt"),
+        new(4, "Documents", "bi-folder2"),
+        new(5, "Activities", "bi-lightning"),
+        new(6, "Communications", "bi-envelope"),
+        new(7, "Billing", "bi-receipt"),
+        new(8, "Claims", "bi-exclamation-circle"),
+        new(9, "Endorsements", "bi-pen"),
+        new(10, "Renewals", "bi-arrow-repeat"),
+        new(11, "Commissions", "bi-percent"),
+        new(12, "Audit", "bi-journal-text"),
+    ];
+
     // ── Action dialog ───────────────────────────────────────────────────────
     private bool    _showActionDlg  = false;
     private string  _activeAction   = string.Empty;
@@ -922,14 +1314,19 @@ else
     private string  _actionCertAddr   = string.Empty;
     private decimal _actionPremDelta  = 0m;
     private DateTime _actionDate      = DateTime.Today;
+    private PolicyActionForm _actionForm = new();
 
     // ── Sub-form state ──────────────────────────────────────────────────────
     private bool         _showCovForm  = false;
     private bool         _showRiskForm = false;
     private bool         _showActForm  = false;
     private bool         _showCommForm = false;
-    private CoverageRow  _editCov      = new();
-    private RiskItem     _editRisk     = new();
+    private bool         _showDocForm  = false;
+    private bool         _showClaimForm = false;
+    private CoverageForm _coverageForm = new();
+    private RiskItemForm _riskForm     = new();
+    private DocumentForm _docForm      = new();
+    private ClaimForm    _claimForm    = new();
     private ActivityForm _actForm      = new();
     private CommForm     _commForm     = new();
 
@@ -980,10 +1377,23 @@ else
 
     private async Task LoadAsync()
     {
-        _loading = true; StateHasChanged();
-        await Task.Delay(0);
-        BuildStubData();
-        _loading = false;
+        _loading = true;
+        _loadError = null;
+        StateHasChanged();
+        try
+        {
+            await Task.Delay(0);
+            BuildStubData();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load policy detail: {ex.Message}";
+            await ShowErrorToast($"Load failed: {ex.Message}");
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     // ── Action handling ─────────────────────────────────────────────────────
@@ -996,6 +1406,7 @@ else
         _actionCertAddr  = string.Empty;
         _actionPremDelta = 0m;
         _actionDate      = DateTime.Today;
+        _actionForm = new PolicyActionForm { Action = action, ActionDate = DateTime.Today, Reason = action == "message" ? "Email" : string.Empty };
 
         (_actionTitle, _actionDesc, _actionIcon) = action switch
         {
@@ -1007,39 +1418,288 @@ else
             "certificate" => ("Issue Certificate",   $"Generate an ACORD certificate for {_policy?.PolicyNumber}.",         "bi-award"),
             "esign"       => ("Request E-Signature", $"Send a document for electronic signature.",                          "bi-pen-fill"),
             "message"     => ("Send Message",        $"Send a message related to policy {_policy?.PolicyNumber}.",          "bi-chat"),
+            "bindRenewal" => ("Bind Renewal",        $"Bind the renewal terms for {_policy?.PolicyNumber}.",                 "bi-check-circle"),
             _             => (action, string.Empty, "bi-lightning"),
         };
         _showActionDlg = true;
     }
 
+    private void CloseActionDialog() => _showActionDlg = false;
+
+    private string ActionDateLabel => _activeAction switch
+    {
+        "cancel" => "Cancellation Date",
+        "reinstate" => "Reinstatement Date",
+        "certificate" => "Certificate Effective Date",
+        "bindRenewal" => "Renewal Effective Date",
+        _ => "Effective Date",
+    };
+
     private async Task ExecuteActionAsync()
     {
         if (_policy is null) return;
+        _actionDate = _actionForm.ActionDate;
+        _actionReason = _actionForm.Reason ?? string.Empty;
+        _actionCertHolder = _actionForm.PartyName ?? string.Empty;
+        _actionCertAddr = _actionForm.PartyAddress ?? string.Empty;
+        _actionPremDelta = _actionForm.PremiumDelta;
+        _actionNote = _actionForm.Note ?? string.Empty;
+        var toastMessage = $"{_actionTitle} — recorded successfully.";
         switch (_activeAction)
         {
             case "cancel":
+                if (string.IsNullOrWhiteSpace(_actionReason))
+                {
+                    await ShowErrorToast("Cancellation reason is required.");
+                    return;
+                }
                 _policy.Status     = "Cancelled";
                 _policy.CancelDate = _actionDate;
+                _activities.Insert(0, NewActivity("Policy cancellation recorded", "Endorsement", "Portal", "Completed", $"Reason: {_actionReason}. {_actionNote}"));
                 AddAuditEntry("Policy Cancelled", "Status", "Active", "Cancelled");
                 break;
             case "reinstate":
                 _policy.Status        = "Active";
                 _policy.ReinstateDate = _actionDate;
+                _activities.Insert(0, NewActivity("Policy reinstated", "Endorsement", "Portal", "Completed", _actionNote));
                 AddAuditEntry("Policy Reinstated", "Status", "Cancelled", "Active");
                 break;
             case "endorse":
-                _endorsements.Insert(0, new EndorsementRow
+                AddEndorsement("Change Endorsement", string.IsNullOrWhiteSpace(_actionNote) ? "Policy endorsement" : _actionNote, _actionPremDelta, _actionDate);
+                break;
+            case "rewrite":
+                AddEndorsement("Rewrite Request", string.IsNullOrWhiteSpace(_actionNote) ? "Policy rewrite requested" : _actionNote, _actionPremDelta, _actionDate, "Pending");
+                _activities.Insert(0, NewActivity("Policy rewrite workflow started", "Renewal", "Portal", "Pending", _actionNote));
+                AddAuditEntry("Rewrite Started", "Workflow", "—", "Pending");
+                break;
+            case "remarket":
+                EnsureRenewalPipeline();
+                _renewal!.Status = "Remarketing";
+                _renewal.Remarketed = true;
+                _renewal.CarriersQuoted = Math.Max(_renewal.CarriersQuoted, 3);
+                _renewal.QuotedPremium ??= Math.Round(_policy.WrittenPremium * 1.04m, 2);
+                _renewal.FollowUpDate = DateTime.Today.AddDays(7);
+                _activities.Insert(0, NewActivity("Remarket workflow started", "Renewal", "Portal", "Pending", _actionNote));
+                AddAuditEntry("Remarket Started", "Renewal Status", "In Progress", _renewal.Status);
+                break;
+            case "bindRenewal":
+                EnsureRenewalPipeline();
+                var oldPolicy = _policy.PolicyNumber;
+                var oldPremium = _policy.WrittenPremium;
+                var renewedPremium = _renewal!.QuotedPremium ?? Math.Round(_policy.WrittenPremium * 1.04m, 2);
+                _renewalHistory.Insert(0, new RenewalHistRow
                 {
-                    EndNum = $"END-{_endorsements.Count + 1:000}",
-                    EffDate = _actionDate, Type = "Change Endorsement",
-                    Description = string.IsNullOrWhiteSpace(_actionNote) ? "Policy endorsement" : _actionNote,
-                    PremChange = _actionPremDelta, Status = "Issued", IssuedBy = "System User",
+                    PolicyNum = oldPolicy,
+                    EffDate = _policy.EffDate,
+                    ExpDate = _policy.ExpDate,
+                    Carrier = _policy.Carrier,
+                    Premium = _policy.WrittenPremium,
+                    Change = 0m,
+                    Outcome = "Renewed",
                 });
-                AddAuditEntry("Endorsement Issued", "Endorsement", "—", $"END-{_endorsements.Count:000}");
+                _policy.PolicyNumber = NextPolicyNumber(oldPolicy);
+                _policy.EffDate = _policy.ExpDate;
+                _policy.ExpDate = _policy.EffDate.AddMonths(_policy.TermMonths == 0 ? 12 : _policy.TermMonths);
+                _policy.WrittenPremium = renewedPremium;
+                _policy.AnnualPremium = renewedPremium;
+                _policy.BalanceDue = Math.Round(renewedPremium / 10m, 2);
+                _policy.Status = "Active";
+                _renewal.Status = "Bound";
+                _renewal.QuotedPremium = renewedPremium;
+                _renewal.FollowUpDate = null;
+                _documents.Insert(0, NewDocument($"Renewal Binder — {_policy.PolicyNumber}", "Bind", "PDF", "156 KB"));
+                _activities.Insert(0, NewActivity("Renewal bound", "Renewal", "Portal", "Completed", $"Renewed from {oldPolicy} at {renewedPremium:C0}."));
+                AddAuditEntry("Renewal Bound", "Written Premium", oldPremium.ToString("C0"), renewedPremium.ToString("C0"));
+                toastMessage = $"Renewal bound as {_policy.PolicyNumber}.";
+                break;
+            case "certificate":
+                if (string.IsNullOrWhiteSpace(_actionCertHolder))
+                {
+                    await ShowErrorToast("Certificate holder name is required.");
+                    return;
+                }
+                var certName = $"Certificate of Insurance — {_actionCertHolder}";
+                _documents.Insert(0, NewDocument(certName, "Certificate", "PDF", "144 KB"));
+                _activities.Insert(0, NewActivity(certName, "Endorsement", "Portal", "Completed", _actionCertAddr));
+                AddAuditEntry("Certificate Issued", "Documents", "—", certName);
+                break;
+            case "esign":
+                if (string.IsNullOrWhiteSpace(_actionCertHolder) || string.IsNullOrWhiteSpace(_actionCertAddr))
+                {
+                    await ShowErrorToast("Signer name and email are required.");
+                    return;
+                }
+                _comms.Insert(0, new CommRow
+                {
+                    SentAt = DateTime.Now,
+                    Channel = "Email",
+                    Direction = "Outbound",
+                    Subject = "E-signature request",
+                    From = "Agency",
+                    To = _actionCertAddr,
+                    Status = "Sent",
+                });
+                _activities.Insert(0, NewActivity($"E-sign request sent to {_actionCertHolder}", "Email", "Email", "Pending", _actionReason));
+                AddAuditEntry("E-Sign Requested", "Communications", "—", _actionCertAddr);
+                break;
+            case "message":
+                if (string.IsNullOrWhiteSpace(_actionCertHolder))
+                {
+                    await ShowErrorToast("Recipient is required.");
+                    return;
+                }
+                _comms.Insert(0, new CommRow
+                {
+                    SentAt = DateTime.Now,
+                    Channel = string.IsNullOrWhiteSpace(_actionReason) ? "Email" : _actionReason,
+                    Direction = "Outbound",
+                    Subject = string.IsNullOrWhiteSpace(_actionCertAddr) ? $"Policy {_policy.PolicyNumber}" : _actionCertAddr,
+                    From = "Agency",
+                    To = _actionCertHolder,
+                    Status = "Sent",
+                });
+                _activities.Insert(0, NewActivity("Policy message sent", "Email", string.IsNullOrWhiteSpace(_actionReason) ? "Email" : _actionReason, "Completed", _actionNote));
+                AddAuditEntry("Message Sent", "Communications", "—", _actionCertHolder);
                 break;
         }
         _showActionDlg = false;
-        await ShowToast($"{_actionTitle} — recorded successfully.");
+        await ShowToast(toastMessage);
+    }
+
+    private void OpenCoverageForm()
+    {
+        _coverageForm = new CoverageForm();
+        _showCovForm = true;
+    }
+
+    private void CloseCoverageForm() => _showCovForm = false;
+
+    private async Task SaveCoverageAsync()
+    {
+        if (_policy is null) return;
+        var coverage = new CoverageRow
+        {
+            CovCode = _coverageForm.CovCode.Trim().ToUpperInvariant(),
+            CovName = _coverageForm.CovName.Trim(),
+            CovType = _coverageForm.CovType,
+            Limit = _coverageForm.Limit,
+            Deductible = _coverageForm.Deductible,
+            Premium = _coverageForm.Premium,
+            IsIncluded = true,
+            Notes = _coverageForm.Notes,
+        };
+
+        _coverages.Insert(0, coverage);
+        if (coverage.Premium != 0m)
+        {
+            _policy.WrittenPremium += coverage.Premium;
+            _policy.AnnualPremium += coverage.Premium;
+            _policy.BalanceDue += Math.Round(coverage.Premium / 10m, 2);
+        }
+        AddEndorsement("Coverage Added", $"Added {coverage.CovName}", coverage.Premium, DateTime.Today);
+        _documents.Insert(0, NewDocument($"Coverage Change — {coverage.CovCode}", "Endorsement", "PDF", "118 KB"));
+        _showCovForm = false;
+        await ShowToast("Coverage added and policy premium synchronized.");
+    }
+
+    private void OpenRiskForm()
+    {
+        _riskForm = new RiskItemForm();
+        _showRiskForm = true;
+    }
+
+    private void CloseRiskForm() => _showRiskForm = false;
+
+    private async Task SaveRiskItemAsync()
+    {
+        var item = new RiskItem
+        {
+            ItemType = _riskForm.ItemType,
+            Description = _riskForm.Description.Trim(),
+            Year = _riskForm.Year,
+            Make = _riskForm.Make,
+            Vin = _riskForm.Vin,
+            Value = _riskForm.Value,
+            Location = _riskForm.Location,
+            IsActive = true,
+        };
+        _riskItems.Insert(0, item);
+        _activities.Insert(0, NewActivity($"Risk item added: {item.Description}", "Endorsement", "Portal", "Completed", item.Location ?? string.Empty));
+        AddAuditEntry("Risk Item Added", "Risk Schedule", "—", item.Description);
+        _showRiskForm = false;
+        await ShowToast("Risk item added.");
+    }
+
+    private void OpenDocumentForm()
+    {
+        _docForm = new DocumentForm();
+        _showDocForm = true;
+    }
+
+    private void CloseDocumentForm() => _showDocForm = false;
+
+    private async Task SaveDocumentAsync()
+    {
+        var doc = NewDocument(_docForm.Name.Trim(), _docForm.Category, _docForm.FileType, EstimateFileSize(_docForm.FileType));
+        _documents.Insert(0, doc);
+        _activities.Insert(0, NewActivity($"Document uploaded: {doc.Name}", "Note", "Portal", "Completed", _docForm.Notes));
+        AddAuditEntry("Document Uploaded", "Documents", "—", doc.Name);
+        _showDocForm = false;
+        await ShowToast("Document uploaded.");
+    }
+
+    private async Task DownloadDocumentAsync(DocRow doc)
+    {
+        _activities.Insert(0, NewActivity($"Document downloaded: {doc.Name}", "Note", "Portal", "Completed", doc.Category));
+        AddAuditEntry("Document Downloaded", "Documents", doc.Name, "Downloaded");
+        await ShowToast($"Download queued for {doc.Name}.");
+    }
+
+    private async Task PreviewDocumentAsync(DocRow doc)
+    {
+        _activities.Insert(0, NewActivity($"Document previewed: {doc.Name}", "Note", "Portal", "Completed", doc.Category));
+        AddAuditEntry("Document Previewed", "Documents", doc.Name, "Previewed");
+        await ShowToast($"Preview opened for {doc.Name}.");
+    }
+
+    private void OpenClaimForm()
+    {
+        _claimForm = new ClaimForm();
+        _showClaimForm = true;
+    }
+
+    private void CloseClaimForm() => _showClaimForm = false;
+
+    private void CloseActivityForm() => _showActForm = false;
+
+    private void CloseCommunicationForm() => _showCommForm = false;
+
+    private async Task SaveClaimAsync()
+    {
+        if (_policy is null) return;
+        var claim = new ClaimRow
+        {
+            ClaimNum = $"CLM-{DateTime.Today:yyyy}-{_claims.Count + 1:0000}",
+            LossDate = _claimForm.LossDate,
+            LossType = _claimForm.LossType.Trim(),
+            Description = _claimForm.Description.Trim(),
+            Status = "Open",
+            Reserve = _claimForm.Reserve,
+            Paid = 0m,
+            Adjuster = string.IsNullOrWhiteSpace(_claimForm.Adjuster) ? "Pending assignment" : _claimForm.Adjuster.Trim(),
+        };
+        _claims.Insert(0, claim);
+        _policy.OpenClaims = _claims.Count(c => c.Status == "Open");
+        _documents.Insert(0, NewDocument($"First Notice of Loss — {claim.ClaimNum}", "Claims", "PDF", "132 KB"));
+        _activities.Insert(0, NewActivity($"Claim reported: {claim.ClaimNum}", "Claim", "Portal", "Pending", claim.Description));
+        AddAuditEntry("Claim Reported", "Open Claims", (_policy.OpenClaims - 1).ToString(), _policy.OpenClaims.ToString());
+        _showClaimForm = false;
+        await ShowToast($"Claim {claim.ClaimNum} reported.");
+    }
+
+    private async Task NotifyValidationAsync(EditContext _)
+    {
+        await ShowErrorToast("Please correct the highlighted validation errors.");
     }
 
     private async Task SaveActivityAsync()
@@ -1076,9 +1736,85 @@ else
         });
     }
 
+    private void AddEndorsement(string type, string description, decimal premiumChange, DateTime effectiveDate, string status = "Issued")
+    {
+        if (_policy is not null && status == "Issued" && premiumChange != 0m)
+        {
+            _policy.WrittenPremium += premiumChange;
+            _policy.AnnualPremium += premiumChange;
+            _policy.BalanceDue += Math.Round(premiumChange / 10m, 2);
+        }
+
+        var nextNumber = $"END-{_endorsements.Count + 1:000}";
+        _endorsements.Insert(0, new EndorsementRow
+        {
+            EndNum = nextNumber,
+            EffDate = effectiveDate,
+            Type = type,
+            Description = description,
+            PremChange = premiumChange,
+            Status = status,
+            IssuedBy = "Current User",
+        });
+        _activities.Insert(0, NewActivity($"{type}: {nextNumber}", "Endorsement", "Portal", status == "Issued" ? "Completed" : "Pending", description));
+        AddAuditEntry(status == "Issued" ? "Endorsement Issued" : "Endorsement Started", "Endorsement", "—", nextNumber);
+    }
+
+    private ActivityRow NewActivity(string subject, string category, string channel, string outcome, string? notes) => new()
+    {
+        Subject = subject,
+        Category = category,
+        Channel = channel,
+        Outcome = outcome,
+        ActivityDate = DateTime.Now,
+        Notes = notes,
+        CreatedBy = "Current User",
+    };
+
+    private DocRow NewDocument(string name, string category, string fileType, string fileSize) => new()
+    {
+        Name = name,
+        Category = category,
+        FileType = fileType,
+        FileSize = fileSize,
+        UploadedAt = DateTime.Now,
+        UploadedBy = "Current User",
+    };
+
+    private void EnsureRenewalPipeline()
+    {
+        _renewal ??= new RenewalPipeline
+        {
+            Status = "In Progress",
+            AssignedTo = _policy?.Csr ?? "Current User",
+            FollowUpDate = DateTime.Today.AddDays(14),
+        };
+    }
+
+    private static string NextPolicyNumber(string policyNumber)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(policyNumber, @"^(.*?)(\d{4})(.*)$");
+        return match.Success
+            ? $"{match.Groups[1].Value}{int.Parse(match.Groups[2].Value) + 1:0000}{match.Groups[3].Value}"
+            : $"{policyNumber}-R";
+    }
+
+    private static string EstimateFileSize(string fileType) => fileType switch
+    {
+        "XLSX" => "92 KB",
+        "DOCX" => "128 KB",
+        "PNG" => "840 KB",
+        _ => "186 KB",
+    };
+
     private async Task ShowToast(string msg)
     {
         if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "e-toast-success" });
+    }
+
+    private async Task ShowErrorToast(string msg)
+    {
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "e-toast-danger" });
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
@@ -1129,6 +1865,36 @@ else
         "Claim"       => "bi-exclamation-circle",
         "Endorsement" => "bi-pen",
         _             => "bi-lightning",
+    };
+
+    private string PolicyHealthLabel()
+    {
+        if (_policy is null) return "Unknown";
+        if (_policy.Status == "Cancelled") return "Cancelled";
+        if (_policy.ExpDate < DateTime.Today) return "Expired";
+        if (_policy.OpenClaims > 0) return "Claims Active";
+        if (_policy.BalanceDue > 0) return "Billing Attention";
+        if ((_policy.ExpDate - DateTime.Today).TotalDays <= 60) return "Renewal Focus";
+        return "Healthy";
+    }
+
+    private string PolicyHealthSummary()
+    {
+        if (_policy is null) return "Policy record is unavailable.";
+        if (_policy.Status == "Cancelled") return "Policy is cancelled; review reinstatement options.";
+        if (_policy.ExpDate < DateTime.Today) return "Policy term has expired.";
+        if (_policy.OpenClaims > 0) return $"{_policy.OpenClaims} open claim(s) need monitoring.";
+        if (_policy.BalanceDue > 0) return $"{_policy.BalanceDue:C0} open receivable.";
+        if ((_policy.ExpDate - DateTime.Today).TotalDays <= 60) return "Renewal workflow should stay active.";
+        return "No immediate exceptions detected.";
+    }
+
+    private string PolicyHealthCss() => PolicyHealthLabel() switch
+    {
+        "Healthy" => "pd-command-card--success",
+        "Renewal Focus" => "pd-command-card--info",
+        "Billing Attention" or "Claims Active" => "pd-command-card--attention",
+        _ => "pd-command-card--danger",
     };
 
     // Field label helper
@@ -1570,21 +2336,132 @@ else
 
     private sealed class ActivityForm
     {
+        [Required, StringLength(160)]
         public string   Subject      { get; set; } = string.Empty;
+        [Required, StringLength(40)]
         public string   Category     { get; set; } = "Call";
+        [Required, StringLength(40)]
         public string   Channel      { get; set; } = "Phone";
+        [Required, StringLength(60)]
         public string   Outcome      { get; set; } = "Completed";
         public DateTime ActivityDate { get; set; } = DateTime.Now;
+        [StringLength(1000)]
         public string   Notes        { get; set; } = string.Empty;
     }
 
     private sealed class CommForm
     {
+        [Required, StringLength(40)]
         public string Channel { get; set; } = "Email";
+        [Required, StringLength(160)]
         public string To      { get; set; } = string.Empty;
+        [Required, StringLength(180)]
         public string Subject { get; set; } = string.Empty;
+        [StringLength(2000)]
         public string Body    { get; set; } = string.Empty;
     }
 
+    private sealed class PolicyActionForm : IValidatableObject
+    {
+        public string Action { get; set; } = string.Empty;
+        [Required]
+        public DateTime ActionDate { get; set; } = DateTime.Today;
+        [StringLength(80)]
+        public string? Reason { get; set; }
+        [StringLength(180)]
+        public string? PartyName { get; set; }
+        [StringLength(240)]
+        public string? PartyAddress { get; set; }
+        [Range(-999999999, 999999999)]
+        public decimal PremiumDelta { get; set; }
+        [StringLength(2000)]
+        public string? Note { get; set; }
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            if (Action == "cancel" && string.IsNullOrWhiteSpace(Reason))
+                yield return new ValidationResult("Cancellation reason is required.", [nameof(Reason)]);
+            if (Action is "cancel" or "remarket" or "rewrite" && string.IsNullOrWhiteSpace(Note))
+                yield return new ValidationResult("Notes are required for this workflow.", [nameof(Note)]);
+            if (Action == "certificate" && string.IsNullOrWhiteSpace(PartyName))
+                yield return new ValidationResult("Certificate holder is required.", [nameof(PartyName)]);
+            if (Action == "esign" && string.IsNullOrWhiteSpace(PartyName))
+                yield return new ValidationResult("Signer name is required.", [nameof(PartyName)]);
+            if (Action == "esign" && string.IsNullOrWhiteSpace(PartyAddress))
+                yield return new ValidationResult("Signer email is required.", [nameof(PartyAddress)]);
+            if (Action == "esign" && string.IsNullOrWhiteSpace(Reason))
+                yield return new ValidationResult("Document to sign is required.", [nameof(Reason)]);
+            if (Action == "message" && string.IsNullOrWhiteSpace(PartyName))
+                yield return new ValidationResult("Recipient is required.", [nameof(PartyName)]);
+            if (Action == "message" && string.IsNullOrWhiteSpace(Reason))
+                yield return new ValidationResult("Channel is required.", [nameof(Reason)]);
+        }
+    }
+
+    private sealed class CoverageForm
+    {
+        [Required, StringLength(32)]
+        public string CovCode { get; set; } = string.Empty;
+        [Required, StringLength(160)]
+        public string CovName { get; set; } = string.Empty;
+        [Required, StringLength(40)]
+        public string CovType { get; set; } = "Primary";
+        [Range(0, 999999999)]
+        public decimal? Limit { get; set; }
+        [Range(0, 999999999)]
+        public decimal? Deductible { get; set; }
+        [Range(-999999999, 999999999)]
+        public decimal Premium { get; set; }
+        [StringLength(1000)]
+        public string? Notes { get; set; }
+    }
+
+    private sealed class RiskItemForm
+    {
+        [Required, StringLength(40)]
+        public string ItemType { get; set; } = "Equipment";
+        [Required, StringLength(180)]
+        public string Description { get; set; } = string.Empty;
+        [Range(1900, 2200)]
+        public int? Year { get; set; }
+        [StringLength(120)]
+        public string? Make { get; set; }
+        [StringLength(80)]
+        public string? Vin { get; set; }
+        [Range(0, 999999999)]
+        public decimal? Value { get; set; }
+        [StringLength(180)]
+        public string? Location { get; set; }
+    }
+
+    private sealed class DocumentForm
+    {
+        [Required, StringLength(180)]
+        public string Name { get; set; } = string.Empty;
+        [Required, StringLength(60)]
+        public string Category { get; set; } = "Policy";
+        [Required, StringLength(12)]
+        public string FileType { get; set; } = "PDF";
+        [StringLength(1000)]
+        public string? Notes { get; set; }
+    }
+
+    private sealed class ClaimForm
+    {
+        [Required]
+        public DateTime LossDate { get; set; } = DateTime.Today;
+        [Required, StringLength(100)]
+        public string LossType { get; set; } = string.Empty;
+        [Required, StringLength(500)]
+        public string Description { get; set; } = string.Empty;
+        [Range(0, 999999999)]
+        public decimal Reserve { get; set; }
+        [StringLength(120)]
+        public string? Adjuster { get; set; }
+    }
+
     private sealed record PdLv(string Value, string Label);
+    private sealed record DetailTab(int Index, string Label, string Icon);
 }
+
+

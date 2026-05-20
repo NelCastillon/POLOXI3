@@ -28,4 +28,12 @@ public sealed class CreateNotificationRequest
     public DateTime? SentDateUtc { get; set; }
     public string? ErrorMessage { get; set; }
     public Guid? CreatedByUserId { get; set; }
+    [StringLength(40)]
+    public string Priority { get; set; } = "Normal";
+    [StringLength(80)]
+    public string Category { get; set; } = "General";
 }
+
+public sealed record NotificationStatusRequest(string StatusCode, string? Reason = null);
+
+public sealed record NotificationRetryRequest(string? ProviderName = null);

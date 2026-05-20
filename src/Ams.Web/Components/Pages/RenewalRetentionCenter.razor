@@ -1,0 +1,533 @@
+@page "/renewals/retention-center"
+@namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.RenewalRetention
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Enterprise Renewal Retention Center — AMS</PageTitle>
+
+<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4500" NewestOnTop="true">
+    <ToastPosition X="Right" Y="Bottom" />
+</SfToast>
+
+<AppPageHeader Title="Enterprise Renewal Retention Center"
+               Subtitle="Orchestrate at-risk renewals, save offers, executive escalations, client outreach, and retained premium from one command center"
+               Icon="bi-shield-check">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+        </button>
+        <button class="um-btn um-btn-primary" @onclick="OpenNewCase">
+            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Retention Case
+        </button>
+    </Actions>
+</AppPageHeader>
+
+<section class="rrc-hero">
+    <div>
+        <span class="rrc-eyebrow">Enterprise Retention · Renewal Workflow</span>
+        <h2>Protect premium before it walks out the door.</h2>
+        <p>Use existing renewal, policy, producer, service, billing, and activity signals to focus outreach, present save offers, and track retained revenue through bind.</p>
+    </div>
+    <div class="rrc-hero-actions">
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/renewals")'><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Renewals</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/renewals/risk")'><i class="bi bi-shield-exclamation" aria-hidden="true"></i> Risk Workbench</button>
+        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies")'><i class="bi bi-shield-check" aria-hidden="true"></i> Policies</button>
+    </div>
+</section>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+    </div>
+}
+
+@if (_loading)
+{
+    <div class="rrc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading retention center…</span></div>
+}
+else
+{
+    <div class="rrc-kpi-strip">
+        @Kpi("Premium at Risk", Filtered.Where(c => !c.IsSaved).Sum(c => c.CurrentPremium).ToString("C0"), "bi-cash-stack", "risk", "Show at-risk premium", () => SetFilter("At Risk"))
+        @Kpi("Critical Cases", _cases.Count(c => c.Priority == "Critical" || c.IsEscalated).ToString(), "bi-exclamation-octagon", "critical", "Show escalated/critical cases", () => SetFilter("Critical"))
+        @Kpi("Save Rate", SaveRate, "bi-graph-up-arrow", "saved", "Show saved cases", () => SetFilter("Saved"))
+        @Kpi("30-Day Expiry", _cases.Count(c => c.DaysToExpiration is >= 0 and <= 30 && !c.IsSaved).ToString(), "bi-alarm", "warning", "Show renewals expiring within 30 days", () => SetFilter("30 Days"))
+        @Kpi("Open Offers", _offers.Count(o => o.Status is "Draft" or "Presented").ToString(), "bi-gift", "offer", "Show cases with open offers", () => SetFilter("Offers"))
+        @Kpi("Projected Saved", _cases.Where(c => c.IsSaved || c.RetentionProbability >= 75).Sum(c => c.ProposedPremium ?? c.CurrentPremium).ToString("C0"), "bi-piggy-bank", "projected", "Show high-probability saves", () => SetFilter("High Probability"))
+    </div>
+
+    <div class="rrc-filter-panel">
+        <div class="rrc-search-wrap">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="form-control" placeholder="Search account, policy, carrier, producer, risk driver…" @bind="_search" @bind:event="oninput" />
+        </div>
+        <select class="form-select" @bind="_stageFilter">
+            <option value="">All Stages</option>
+            @foreach (var stage in _cases.Select(c => c.Stage).Distinct().OrderBy(x => x))
+            {
+                <option value="@stage">@stage</option>
+            }
+        </select>
+        <select class="form-select" @bind="_producerFilter">
+            <option value="">All Producers</option>
+            @foreach (var producer in _cases.Select(c => c.Producer).Distinct().OrderBy(x => x))
+            {
+                <option value="@producer">@producer</option>
+            }
+        </select>
+        <select class="form-select" @bind="_priorityFilter">
+            <option value="">All Priorities</option>
+            <option>Critical</option>
+            <option>High</option>
+            <option>Normal</option>
+            <option>Low</option>
+        </select>
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        <span class="rrc-count">@Filtered.Count() case(s)</span>
+    </div>
+
+    <div class="rrc-workspace">
+        <section class="rrc-board">
+            @foreach (var group in StageGroups)
+            {
+                var groupCases = Filtered.Where(c => c.Stage == group).OrderBy(c => c.ExpirationDate).ThenByDescending(c => c.RiskScore).ToList();
+                <article class="rrc-stage-column">
+                    <header>
+                        <span>@group</span>
+                        <strong>@groupCases.Count</strong>
+                    </header>
+                    <div class="rrc-stage-list">
+                        @foreach (var item in groupCases)
+                        {
+                            <button type="button" class="rrc-case-card @(_selected?.RetentionCaseId == item.RetentionCaseId ? "rrc-case-card--active" : null)" @onclick="() => SelectCase(item)">
+                                <div class="rrc-card-top">
+                                    <span class="rrc-priority rrc-priority-@item.Priority.ToLower()">@item.Priority</span>
+                                    <span class="rrc-days @DaysCss(item.DaysToExpiration)">@DaysLabel(item.DaysToExpiration)</span>
+                                </div>
+                                <strong>@item.AccountName</strong>
+                                <span class="rrc-policy">@item.PolicyNumber · @item.LineOfBusiness</span>
+                                <div class="rrc-card-meta">
+                                    <span><i class="bi bi-building" aria-hidden="true"></i>@item.Carrier</span>
+                                    <span><i class="bi bi-person-badge" aria-hidden="true"></i>@item.Producer</span>
+                                </div>
+                                <div class="rrc-score-row">
+                                    <div>
+                                        <span>Risk</span>
+                                        <strong class="@RiskCss(item.RiskScore)">@item.RiskScore</strong>
+                                    </div>
+                                    <div>
+                                        <span>Retain</span>
+                                        <strong>@item.RetentionProbability%</strong>
+                                    </div>
+                                    <div>
+                                        <span>Premium</span>
+                                        <strong>@item.CurrentPremium.ToString("C0")</strong>
+                                    </div>
+                                </div>
+                                <div class="rrc-progress"><span style="width:@item.RetentionProbability%"></span></div>
+                            </button>
+                        }
+                    </div>
+                </article>
+            }
+        </section>
+
+        <aside class="rrc-detail-panel">
+            @if (_selected is null)
+            {
+                <div class="rrc-empty">
+                    <i class="bi bi-shield-check" aria-hidden="true"></i>
+                    <h3>Select a retention case</h3>
+                    <p>Choose a case to view the workflow timeline, retention offers, and next-best actions.</p>
+                </div>
+            }
+            else
+            {
+                var activities = CaseActivities(_selected.RetentionCaseId).ToList();
+                var offers = CaseOffers(_selected.RetentionCaseId).ToList();
+                <div class="rrc-detail-head">
+                    <div>
+                        <span class="rrc-eyebrow">Selected Case</span>
+                        <h3>@_selected.AccountName</h3>
+                        <p>@_selected.PolicyNumber · @_selected.LineOfBusiness · @_selected.Carrier</p>
+                    </div>
+                    <span class="rrc-stage-chip">@_selected.Stage</span>
+                </div>
+
+                <div class="rrc-detail-metrics">
+                    <div><span>Current</span><strong>@_selected.CurrentPremium.ToString("C0")</strong></div>
+                    <div><span>Proposed</span><strong>@((_selected.ProposedPremium ?? _selected.CurrentPremium).ToString("C0"))</strong></div>
+                    <div><span>Delta</span><strong class="@(_selected.PremiumDelta > 0 ? "rrc-bad" : "rrc-good")">@_selected.PremiumDelta.ToString("+#,##0;-#,##0;$0")</strong></div>
+                    <div><span>Retain</span><strong>@_selected.RetentionProbability%</strong></div>
+                </div>
+
+                <div class="rrc-next-action">
+                    <i class="bi bi-stars" aria-hidden="true"></i>
+                    <div>
+                        <span>Next Best Action</span>
+                        <strong>@(_selected.NextBestAction ?? "No action assigned")</strong>
+                        <small>Due @(_selected.NextActionDueDate?.ToString("MM/dd/yyyy") ?? "—") · @_selected.AssignedToName</small>
+                    </div>
+                </div>
+
+                <div class="rrc-action-row">
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenStageDialog"><i class="bi bi-arrow-up-right-circle" aria-hidden="true"></i> Advance Stage</button>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenActivityDialog"><i class="bi bi-lightning" aria-hidden="true"></i> Log Activity</button>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenOfferDialog"><i class="bi bi-gift" aria-hidden="true"></i> Add Offer</button>
+                </div>
+
+                <section class="rrc-panel-section">
+                    <h4>Retention Offers</h4>
+                    @foreach (var offer in offers)
+                    {
+                        <div class="rrc-offer-card">
+                            <div>
+                                <strong>@offer.OfferName</strong>
+                                <span>@offer.OfferType · @offer.PremiumImpact.ToString("+#,##0;-#,##0;$0") · +@offer.RetentionLift% lift</span>
+                            </div>
+                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => AcceptOfferAsync(offer)" disabled="@(offer.Status == "Accepted")">@offer.Status</button>
+                        </div>
+                    }
+                </section>
+
+                <section class="rrc-panel-section">
+                    <h4>Workflow Timeline</h4>
+                    @foreach (var act in activities)
+                    {
+                        <div class="rrc-timeline-item">
+                            <span class="rrc-timeline-icon"><i class="bi @ActivityIcon(act.ActivityType)" aria-hidden="true"></i></span>
+                            <div>
+                                <strong>@act.Subject</strong>
+                                <span>@act.Outcome · @act.CreatedByName · @act.ActivityDateUtc.ToLocalTime().ToString("MM/dd/yyyy h:mm tt")</span>
+                                @if (!string.IsNullOrWhiteSpace(act.Notes))
+                                {
+                                    <p>@act.Notes</p>
+                                }
+                            </div>
+                        </div>
+                    }
+                </section>
+            }
+        </aside>
+    </div>
+}
+
+@if (_showStageDialog && _selected is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseDialogs">
+        <div class="mt-modal rrc-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-arrow-up-right-circle" aria-hidden="true"></i>
+                <span>Advance Retention Stage</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialogs"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_stageForm" OnValidSubmit="SaveStageAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Stage <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_stageForm.Stage">@foreach (var s in StageOptions){<option>@s</option>}</InputSelect><ValidationMessage For="() => _stageForm.Stage" class="text-danger" /></div>
+                    <div class="um-field"><label>Outreach Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_stageForm.OutreachStatus">@foreach (var s in OutreachOptions){<option>@s</option>}</InputSelect><ValidationMessage For="() => _stageForm.OutreachStatus" class="text-danger" /></div>
+                    <div class="um-field"><label>Sentiment <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_stageForm.Sentiment">@foreach (var s in SentimentOptions){<option>@s</option>}</InputSelect><ValidationMessage For="() => _stageForm.Sentiment" class="text-danger" /></div>
+                    <div class="um-field"><label>Next Action Due</label><InputDate class="form-control" @bind-Value="_stageForm.NextActionDueDate" /><ValidationMessage For="() => _stageForm.NextActionDueDate" class="text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Next Best Action</label><InputTextArea class="form-control" rows="3" @bind-Value="_stageForm.NextBestAction" /><ValidationMessage For="() => _stageForm.NextBestAction" class="text-danger" /></div>
+                    <div class="um-field"><label><InputCheckbox @bind-Value="_stageForm.IsEscalated" /> Escalated</label><ValidationMessage For="() => _stageForm.IsEscalated" class="text-danger" /></div>
+                    <div class="um-field"><label><InputCheckbox @bind-Value="_stageForm.IsAtRisk" /> At Risk</label><ValidationMessage For="() => _stageForm.IsAtRisk" class="text-danger" /></div>
+                    <div class="um-field"><label><InputCheckbox @bind-Value="_stageForm.IsSaved" /> Saved</label><ValidationMessage For="() => _stageForm.IsSaved" class="text-danger" /></div>
+                </div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs">Cancel</button><button type="submit" class="um-btn um-btn-primary">Save Stage</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showActivityDialog && _selected is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseDialogs">
+        <div class="mt-modal rrc-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-lightning" aria-hidden="true"></i><span>Log Retention Activity</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialogs"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_activityForm" OnValidSubmit="SaveActivityAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_activityForm.ActivityType">@foreach (var s in ActivityOptions){<option>@s</option>}</InputSelect><ValidationMessage For="() => _activityForm.ActivityType" class="text-danger" /></div>
+                    <div class="um-field"><label>Outcome <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_activityForm.Outcome" /><ValidationMessage For="() => _activityForm.Outcome" class="text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Subject <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_activityForm.Subject" /><ValidationMessage For="() => _activityForm.Subject" class="text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Notes</label><InputTextArea class="form-control" rows="4" @bind-Value="_activityForm.Notes" /><ValidationMessage For="() => _activityForm.Notes" class="text-danger" /></div>
+                </div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs">Cancel</button><button type="submit" class="um-btn um-btn-primary">Log Activity</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showOfferDialog && _selected is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseDialogs">
+        <div class="mt-modal rrc-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-gift" aria-hidden="true"></i><span>Add Save Offer</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialogs"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_offerForm" OnValidSubmit="SaveOfferAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field um-field--full"><label>Offer Name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_offerForm.OfferName" /><ValidationMessage For="() => _offerForm.OfferName" class="text-danger" /></div>
+                    <div class="um-field"><label>Offer Type <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_offerForm.OfferType" /><ValidationMessage For="() => _offerForm.OfferType" class="text-danger" /></div>
+                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_offerForm.Status"><option>Draft</option><option>Presented</option><option>Accepted</option><option>Declined</option></InputSelect><ValidationMessage For="() => _offerForm.Status" class="text-danger" /></div>
+                    <div class="um-field"><label>Premium Impact</label><InputNumber class="form-control" @bind-Value="_offerForm.PremiumImpact" /><ValidationMessage For="() => _offerForm.PremiumImpact" class="text-danger" /></div>
+                    <div class="um-field"><label>Retention Lift</label><InputNumber class="form-control" @bind-Value="_offerForm.RetentionLift" /><ValidationMessage For="() => _offerForm.RetentionLift" class="text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Notes</label><InputTextArea class="form-control" rows="3" @bind-Value="_offerForm.Notes" /><ValidationMessage For="() => _offerForm.Notes" class="text-danger" /></div>
+                </div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs">Cancel</button><button type="submit" class="um-btn um-btn-primary">Save Offer</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showNewCaseDialog)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseDialogs">
+        <div class="mt-modal rrc-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-plus-lg" aria-hidden="true"></i><span>New Retention Case</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialogs"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_caseForm" OnValidSubmit="SaveCaseAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field"><label>Account <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_caseForm.AccountName" /><ValidationMessage For="() => _caseForm.AccountName" class="text-danger" /></div>
+                    <div class="um-field"><label>Policy # <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_caseForm.PolicyNumber" /><ValidationMessage For="() => _caseForm.PolicyNumber" class="text-danger" /></div>
+                    <div class="um-field"><label>Line <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_caseForm.LineOfBusiness" /><ValidationMessage For="() => _caseForm.LineOfBusiness" class="text-danger" /></div>
+                    <div class="um-field"><label>Carrier <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_caseForm.Carrier" /><ValidationMessage For="() => _caseForm.Carrier" class="text-danger" /></div>
+                    <div class="um-field"><label>Producer <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_caseForm.Producer" /><ValidationMessage For="() => _caseForm.Producer" class="text-danger" /></div>
+                    <div class="um-field"><label>CSR <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_caseForm.Csr" /><ValidationMessage For="() => _caseForm.Csr" class="text-danger" /></div>
+                    <div class="um-field"><label>Expiration <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_caseForm.ExpirationDate" /><ValidationMessage For="() => _caseForm.ExpirationDate" class="text-danger" /></div>
+                    <div class="um-field"><label>Current Premium</label><InputNumber class="form-control" @bind-Value="_caseForm.CurrentPremium" /><ValidationMessage For="() => _caseForm.CurrentPremium" class="text-danger" /></div>
+                    <div class="um-field"><label>Risk Score</label><InputNumber class="form-control" @bind-Value="_caseForm.RiskScore" /><ValidationMessage For="() => _caseForm.RiskScore" class="text-danger" /></div>
+                    <div class="um-field"><label>Retention %</label><InputNumber class="form-control" @bind-Value="_caseForm.RetentionProbability" /><ValidationMessage For="() => _caseForm.RetentionProbability" class="text-danger" /></div>
+                    <div class="um-field um-field--full"><label>Risk Drivers</label><InputTextArea class="form-control" rows="3" @bind-Value="_caseForm.RiskDrivers" /><ValidationMessage For="() => _caseForm.RiskDrivers" class="text-danger" /></div>
+                </div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs">Cancel</button><button type="submit" class="um-btn um-btn-primary">Create Case</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private SfToast? _toast;
+    private bool _loading = true;
+    private string? _loadError;
+    private string _search = string.Empty;
+    private string _activeFilter = "All";
+    private string _stageFilter = string.Empty;
+    private string _producerFilter = string.Empty;
+    private string _priorityFilter = string.Empty;
+    private List<RenewalRetentionCaseDto> _cases = [];
+    private List<RenewalRetentionActivityDto> _activities = [];
+    private List<RenewalRetentionOfferDto> _offers = [];
+    private RenewalRetentionCaseDto? _selected;
+    private bool _showStageDialog;
+    private bool _showActivityDialog;
+    private bool _showOfferDialog;
+    private bool _showNewCaseDialog;
+    private StageForm _stageForm = new();
+    private ActivityForm _activityForm = new();
+    private OfferForm _offerForm = new();
+    private CaseForm _caseForm = new();
+
+    private static readonly string[] StageOptions = ["Intake", "Retention Desk", "Offer Strategy", "Proposal Ready", "Remarket", "Executive Escalation", "Saved", "Lost"];
+    private static readonly string[] OutreachOptions = ["Not Started", "Needs Outreach", "Client Contacted", "Producer Follow-Up", "Proposal Sent", "Executive Review", "Accepted", "Declined"];
+    private static readonly string[] SentimentOptions = ["Promoter", "Positive", "Neutral", "Concerned", "Frustrated", "At Risk"];
+    private static readonly string[] ActivityOptions = ["Call", "Email", "Meeting", "Remarket", "Escalation", "Offer", "Bind", "Note"];
+    private static readonly string[] StageGroups = ["Intake", "Retention Desk", "Offer Strategy", "Proposal Ready", "Remarket", "Executive Escalation", "Saved", "Lost"];
+
+    private System.Collections.Generic.IEnumerable<RenewalRetentionCaseDto> Filtered => _cases.Where(c =>
+        (string.IsNullOrWhiteSpace(_search) || c.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase) || (c.RiskDrivers?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)) &&
+        (string.IsNullOrWhiteSpace(_stageFilter) || c.Stage == _stageFilter) &&
+        (string.IsNullOrWhiteSpace(_producerFilter) || c.Producer == _producerFilter) &&
+        (string.IsNullOrWhiteSpace(_priorityFilter) || c.Priority == _priorityFilter) &&
+        (_activeFilter == "All" ||
+         (_activeFilter == "At Risk" && c.IsAtRisk && !c.IsSaved) ||
+         (_activeFilter == "Critical" && (c.Priority == "Critical" || c.IsEscalated)) ||
+         (_activeFilter == "Saved" && c.IsSaved) ||
+         (_activeFilter == "30 Days" && c.DaysToExpiration is >= 0 and <= 30 && !c.IsSaved) ||
+         (_activeFilter == "Offers" && CaseOffers(c.RetentionCaseId).Any(o => o.Status is "Draft" or "Presented")) ||
+         (_activeFilter == "High Probability" && c.RetentionProbability >= 75)));
+
+    private string SaveRate => _cases.Count == 0 ? "0%" : $"{(_cases.Count(c => c.IsSaved) * 100m / _cases.Count):0}%";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Renewals", "/renewals"), new("Retention Center", "/renewals/retention-center"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var data = await Api.GetRenewalRetentionCenterAsync(TenantId) ?? new RenewalRetentionCenterDto();
+            _cases = data.Cases.ToList();
+            _activities = data.Activities.ToList();
+            _offers = data.Offers.ToList();
+            _selected = _selected is null ? _cases.OrderBy(c => c.ExpirationDate).FirstOrDefault() : _cases.FirstOrDefault(c => c.RetentionCaseId == _selected.RetentionCaseId) ?? _cases.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load retention center: {ex.Message}";
+            await ShowErrorToast($"Load failed: {ex.Message}");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void SelectCase(RenewalRetentionCaseDto item) => _selected = item;
+    private System.Collections.Generic.IEnumerable<RenewalRetentionActivityDto> CaseActivities(Guid id) => _activities.Where(a => a.RetentionCaseId == id).OrderByDescending(a => a.ActivityDateUtc);
+    private System.Collections.Generic.IEnumerable<RenewalRetentionOfferDto> CaseOffers(Guid id) => _offers.Where(o => o.RetentionCaseId == id).OrderByDescending(o => o.PresentedDateUtc ?? DateTime.MinValue);
+    private void SetFilter(string filter) => _activeFilter = _activeFilter == filter ? "All" : filter;
+    private void ResetFilters() { _search = string.Empty; _activeFilter = "All"; _stageFilter = string.Empty; _producerFilter = string.Empty; _priorityFilter = string.Empty; }
+
+    private void OpenStageDialog()
+    {
+        if (_selected is null) return;
+        _stageForm = new StageForm { Stage = _selected.Stage, OutreachStatus = _selected.OutreachStatus, Sentiment = _selected.Sentiment, NextBestAction = _selected.NextBestAction, NextActionDueDate = _selected.NextActionDueDate, IsEscalated = _selected.IsEscalated, IsAtRisk = _selected.IsAtRisk, IsSaved = _selected.IsSaved };
+        _showStageDialog = true;
+    }
+
+    private void OpenActivityDialog() { _activityForm = new ActivityForm { CreatedByName = "Tenant Admin" }; _showActivityDialog = true; }
+    private void OpenOfferDialog() { _offerForm = new OfferForm(); _showOfferDialog = true; }
+    private void OpenNewCase() { _caseForm = new CaseForm(); _showNewCaseDialog = true; }
+    private void CloseDialogs() { _showStageDialog = _showActivityDialog = _showOfferDialog = _showNewCaseDialog = false; }
+
+    private async Task SaveStageAsync()
+    {
+        if (_selected is null) return;
+        try
+        {
+            await Api.UpdateRenewalRetentionStageAsync(_selected.RetentionCaseId, new UpdateRenewalRetentionStageRequest { Stage = _stageForm.Stage, OutreachStatus = _stageForm.OutreachStatus, Sentiment = _stageForm.Sentiment, NextBestAction = _stageForm.NextBestAction, NextActionDueDate = _stageForm.NextActionDueDate, IsEscalated = _stageForm.IsEscalated, IsAtRisk = _stageForm.IsAtRisk, IsSaved = _stageForm.IsSaved });
+            CloseDialogs();
+            await ShowSuccessToast("Retention stage updated.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowErrorToast($"Stage update failed: {ex.Message}"); }
+    }
+
+    private async Task SaveActivityAsync()
+    {
+        if (_selected is null) return;
+        try
+        {
+            await Api.AddRenewalRetentionActivityAsync(new CreateRenewalRetentionActivityRequest { RetentionCaseId = _selected.RetentionCaseId, ActivityType = _activityForm.ActivityType, Subject = _activityForm.Subject, Outcome = _activityForm.Outcome, Notes = _activityForm.Notes, ActivityDateUtc = DateTime.UtcNow, CreatedByName = _activityForm.CreatedByName });
+            CloseDialogs();
+            await ShowSuccessToast("Retention activity logged.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowErrorToast($"Activity save failed: {ex.Message}"); }
+    }
+
+    private async Task SaveOfferAsync()
+    {
+        if (_selected is null) return;
+        try
+        {
+            await Api.AddRenewalRetentionOfferAsync(new CreateRenewalRetentionOfferRequest { RetentionCaseId = _selected.RetentionCaseId, OfferName = _offerForm.OfferName, OfferType = _offerForm.OfferType, PremiumImpact = _offerForm.PremiumImpact, RetentionLift = _offerForm.RetentionLift, Status = _offerForm.Status, Notes = _offerForm.Notes });
+            CloseDialogs();
+            await ShowSuccessToast("Save offer added.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowErrorToast($"Offer save failed: {ex.Message}"); }
+    }
+
+    private async Task SaveCaseAsync()
+    {
+        try
+        {
+            var id = await Api.CreateRenewalRetentionCaseAsync(new CreateRenewalRetentionCaseRequest { TenantId = TenantId, AccountName = _caseForm.AccountName, PolicyNumber = _caseForm.PolicyNumber, LineOfBusiness = _caseForm.LineOfBusiness, Carrier = _caseForm.Carrier, Producer = _caseForm.Producer, Csr = _caseForm.Csr, ExpirationDate = _caseForm.ExpirationDate, CurrentPremium = _caseForm.CurrentPremium, ProposedPremium = _caseForm.CurrentPremium, RiskScore = _caseForm.RiskScore, RetentionProbability = _caseForm.RetentionProbability, Stage = "Intake", Priority = _caseForm.RiskScore >= 80 ? "Critical" : _caseForm.RiskScore >= 60 ? "High" : "Normal", OutreachStatus = "Not Started", Sentiment = "Neutral", RiskDrivers = _caseForm.RiskDrivers, NextBestAction = "Complete retention discovery and assign outreach owner.", NextActionDueDate = DateTime.Today.AddDays(2), AssignedToName = _caseForm.Csr, IsAtRisk = _caseForm.RiskScore >= 60, IsEscalated = _caseForm.RiskScore >= 80 });
+            CloseDialogs();
+            await ShowSuccessToast("Retention case created.");
+            await LoadAsync();
+            _selected = _cases.FirstOrDefault(c => c.RetentionCaseId == id) ?? _selected;
+        }
+        catch (Exception ex) { await ShowErrorToast($"Case create failed: {ex.Message}"); }
+    }
+
+    private async Task AcceptOfferAsync(RenewalRetentionOfferDto offer)
+    {
+        try
+        {
+            await Api.UpdateRenewalRetentionOfferStatusAsync(offer.RetentionOfferId, new UpdateRenewalRetentionOfferStatusRequest { Status = "Accepted" });
+            await ShowSuccessToast("Offer accepted and case marked saved.");
+            await LoadAsync();
+        }
+        catch (Exception ex) { await ShowErrorToast($"Offer update failed: {ex.Message}"); }
+    }
+
+    private async Task NotifyValidationAsync() => await ShowErrorToast("Please fix validation errors before continuing.");
+
+    private Task ShowSuccessToast(string content) => _toast?.ShowAsync(new ToastModel { Content = content, CssClass = "e-toast-success", Icon = "bi bi-check-circle" }) ?? Task.CompletedTask;
+    private Task ShowErrorToast(string content) => _toast?.ShowAsync(new ToastModel { Content = content, CssClass = "e-toast-danger", Icon = "bi bi-exclamation-triangle" }) ?? Task.CompletedTask;
+
+    private RenderFragment Kpi(string label, string value, string icon, string tone, string title, System.Action onClick) => __builder =>
+    {
+        __builder.OpenElement(0, "button"); __builder.AddAttribute(1, "type", "button"); __builder.AddAttribute(2, "class", $"rrc-kpi rrc-kpi-{tone} {(_activeFilter == label.Replace("Premium at Risk", "At Risk").Replace("Critical Cases", "Critical").Replace("Save Rate", "Saved").Replace("30-Day Expiry", "30 Days").Replace("Open Offers", "Offers").Replace("Projected Saved", "High Probability") ? "rrc-kpi--active" : "")}"); __builder.AddAttribute(3, "title", title); __builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, onClick));
+        __builder.OpenElement(5, "i"); __builder.AddAttribute(6, "class", $"bi {icon}"); __builder.CloseElement();
+        __builder.OpenElement(7, "div");
+        __builder.OpenElement(8, "strong"); __builder.AddContent(9, value); __builder.CloseElement();
+        __builder.OpenElement(10, "span"); __builder.AddContent(11, label); __builder.CloseElement();
+        __builder.CloseElement(); __builder.CloseElement();
+    };
+
+    private static string DaysLabel(int days) => days < 0 ? $"Expired {Math.Abs(days)}d" : days == 0 ? "Expires today" : $"{days}d left";
+    private static string DaysCss(int days) => days < 0 ? "rrc-days-expired" : days <= 30 ? "rrc-days-red" : days <= 60 ? "rrc-days-amber" : "rrc-days-green";
+    private static string RiskCss(int score) => score >= 75 ? "rrc-risk-high" : score >= 50 ? "rrc-risk-med" : "rrc-risk-low";
+    private static string ActivityIcon(string type) => type switch { "Call" => "bi-telephone", "Email" => "bi-envelope", "Meeting" => "bi-people", "Remarket" => "bi-arrow-left-right", "Escalation" => "bi-exclamation-octagon", "Offer" => "bi-gift", "Bind" => "bi-check-circle", _ => "bi-sticky" };
+
+    private sealed class StageForm
+    {
+        [Required, StringLength(40)] public string Stage { get; set; } = "Retention Desk";
+        [Required, StringLength(40)] public string OutreachStatus { get; set; } = "Client Contacted";
+        [Required, StringLength(40)] public string Sentiment { get; set; } = "Neutral";
+        [StringLength(500)] public string? NextBestAction { get; set; }
+        public DateTime? NextActionDueDate { get; set; } = DateTime.Today.AddDays(3);
+        public bool IsEscalated { get; set; }
+        public bool IsAtRisk { get; set; }
+        public bool IsSaved { get; set; }
+    }
+
+    private sealed class ActivityForm
+    {
+        [Required, StringLength(40)] public string ActivityType { get; set; } = "Call";
+        [Required, StringLength(180)] public string Subject { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string Outcome { get; set; } = "Completed";
+        [StringLength(2000)] public string? Notes { get; set; }
+        [Required, StringLength(160)] public string CreatedByName { get; set; } = "Tenant Admin";
+    }
+
+    private sealed class OfferForm
+    {
+        [Required, StringLength(160)] public string OfferName { get; set; } = string.Empty;
+        [Required, StringLength(60)] public string OfferType { get; set; } = "Coverage Strategy";
+        [Range(-999999999, 999999999)] public decimal PremiumImpact { get; set; }
+        [Range(0, 100)] public int RetentionLift { get; set; } = 5;
+        [Required, StringLength(40)] public string Status { get; set; } = "Draft";
+        [StringLength(1000)] public string? Notes { get; set; }
+    }
+
+    private sealed class CaseForm
+    {
+        [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty;
+        [Required, StringLength(60)] public string PolicyNumber { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string LineOfBusiness { get; set; } = string.Empty;
+        [Required, StringLength(160)] public string Carrier { get; set; } = string.Empty;
+        [Required, StringLength(160)] public string Producer { get; set; } = string.Empty;
+        [Required, StringLength(160)] public string Csr { get; set; } = string.Empty;
+        [Required] public DateTime ExpirationDate { get; set; } = DateTime.Today.AddDays(60);
+        [Range(0, 999999999)] public decimal CurrentPremium { get; set; }
+        [Range(0, 100)] public int RiskScore { get; set; } = 50;
+        [Range(0, 100)] public int RetentionProbability { get; set; } = 65;
+        [StringLength(1000)] public string? RiskDrivers { get; set; }
+    }
+}

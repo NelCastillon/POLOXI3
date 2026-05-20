@@ -1,280 +1,145 @@
 @page "/communications/templates"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Communications
+@using System.ComponentModel.DataAnnotations
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
-@inject ApiClient Api
-@using Ams.Application.Features.Communications
-@using System.ComponentModel.DataAnnotations
 
-<PageTitle>Communication Templates — AMS</PageTitle>
+<PageTitle>Tenant Template Governance Center — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<!-- ── CREATE / EDIT DIALOG ──────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showDlg" Width="680px" ShowCloseIcon="false" IsModal="true">
-    <DialogContent>
-        <div class="um-modal-header">
-            <i class="bi bi-layout-text-sidebar" aria-hidden="true"></i>
-            <span>@(_edit?.Id == Guid.Empty ? "New Template" : "Edit Template")</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showDlg = false"><i class="bi bi-x-lg"></i></button>
-        </div>
-        @if (_edit is not null)
-        {
-            <EditForm Model="_edit" OnValidSubmit="SaveTemplate">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body">
-                    <div class="um-form-grid">
-                        <div class="um-field um-field--full">
-                            <label>Template Name <span class="text-danger">*</span></label>
-                            <InputText @bind-Value="_edit.Name" class="um-input" placeholder="e.g. Policy Renewal Reminder — Email" />
-                            <ValidationMessage For="() => _edit.Name" class="text-danger" />
-                        </div>
-                        <div class="um-field">
-                            <label>Channel <span class="text-danger">*</span></label>
-                            <InputSelect @bind-Value="_edit.Channel" class="um-input">
-                                <option value="">Select channel</option>
-                                @foreach (var channel in _channels) { <option value="@channel">@channel</option> }
-                            </InputSelect>
-                            <ValidationMessage For="() => _edit.Channel" class="text-danger" />
-                        </div>
-                        <div class="um-field">
-                            <label>Category <span class="text-danger">*</span></label>
-                            <InputSelect @bind-Value="_edit.Category" class="um-input">
-                                <option value="">Select category</option>
-                                @foreach (var category in _categories) { <option value="@category">@category</option> }
-                            </InputSelect>
-                            <ValidationMessage For="() => _edit.Category" class="text-danger" />
-                        </div>
-                        <div class="um-field">
-                            <label>Language</label>
-                            <InputSelect @bind-Value="_edit.Language" class="um-input">
-                                @foreach (var language in _languages) { <option value="@language">@language</option> }
-                            </InputSelect>
-                            <ValidationMessage For="() => _edit.Language" class="text-danger" />
-                        </div>
-                        <div class="um-field">
-                            <label>Status</label>
-                            <InputSelect @bind-Value="_edit.Status" class="um-input">
-                                @foreach (var status in _statuses) { <option value="@status">@status</option> }
-                            </InputSelect>
-                            <ValidationMessage For="() => _edit.Status" class="text-danger" />
-                        </div>
-                        @if (_edit.Channel is "Email" or "Portal Message")
-                        {
-                            <div class="um-field um-field--full">
-                                <label>Subject Line <span class="text-danger">*</span></label>
-                                <InputText @bind-Value="_edit.Subject" class="um-input" placeholder="Email subject — use [variables] for merge fields" />
-                                <ValidationMessage For="() => _edit.Subject" class="text-danger" />
-                            </div>
-                        }
-                        <div class="um-field um-field--full">
-                            <label>Body <span class="text-danger">*</span></label>
-                            <InputTextArea @bind-Value="_edit.Body" class="um-input" rows="8" placeholder="Template body — use [Client Name], [Policy #], [Agent Name], [Date], [Amount] etc." />
-                            <ValidationMessage For="() => _edit.Body" class="text-danger" />
-                        </div>
-                        <div class="um-field um-field--full">
-                            <label>Merge Variables in Use</label>
-                            <div class="tpl-var-chips">
-                                @foreach (var v in DetectVariables(_edit.Body))
-                                {
-                                    <span class="tpl-var-chip"><i class="bi bi-braces" aria-hidden="true"></i>@v</span>
-                                }
-                                @if (!DetectVariables(_edit.Body).Any())
-                                {
-                                    <span style="font-size:.72rem;color:var(--um-muted,#94a3b8)">No variables detected — use [Variable Name] syntax</span>
-                                }
-                            </div>
-                        </div>
-                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_edit.IncludeOptOutFooter" /> Append unsubscribe / opt-out footer</label></div>
-                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_edit.TcpaNotice" /> Include TCPA consent notice (SMS)</label></div>
-                    </div>
-                </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDlg = false">Cancel</button>
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="PreviewTemplate">
-                        <i class="bi bi-eye" aria-hidden="true"></i> Preview
-                    </button>
-                    <button type="submit" class="um-btn um-btn-primary">
-                        <i class="bi bi-check-lg" aria-hidden="true"></i>
-                        @(_edit?.Id == Guid.Empty ? "Create Template" : "Save Changes")
-                    </button>
-                </div>
-            </EditForm>
-        }
-    </DialogContent>
-</SfDialog>
-
-<!-- ── PREVIEW DIALOG ────────────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showPreviewDlg" Width="560px" ShowCloseIcon="false" IsModal="true">
-    <DialogContent>
-        <div class="um-modal-header"><i class="bi bi-eye" aria-hidden="true"></i><span>Template Preview</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showPreviewDlg = false"><i class="bi bi-x-lg"></i></button></div>
-        <div class="um-modal-body">
-            @if (_previewTemplate is not null)
-            {
-                <div>
-                    <div class="tpl-preview-meta">
-                        <span class="ci-ch-icon ci-ch-@ChannelCss(_previewTemplate.Channel)">
-                            <i class="bi @ChannelIcon(_previewTemplate.Channel)" aria-hidden="true"></i>
-                        </span>
-                        <div>
-                            <div style="font-weight:800;font-size:.85rem">@_previewTemplate.Name</div>
-                            <div style="font-size:.72rem;color:var(--um-muted,#64748b)">@_previewTemplate.Channel · @_previewTemplate.Category · @_previewTemplate.Language</div>
-                        </div>
-                    </div>
-                    @if (!string.IsNullOrEmpty(_previewTemplate.Subject))
-                    {
-                        <div class="tpl-preview-subject"><strong>Subject:</strong> @_previewTemplate.Subject</div>
-                    }
-                    <div class="tpl-preview-body">@_previewTemplate.Body</div>
-                    @if (_previewTemplate.IncludeOptOutFooter)
-                    {
-                        <div class="tpl-preview-footer">
-                            <i class="bi bi-slash-circle" aria-hidden="true"></i>
-                            To opt out of these communications, reply STOP or click Unsubscribe.
-                        </div>
-                    }
-                </div>
-            }
-        </div>
-        <div class="um-modal-footer">
-            <button class="um-btn um-btn-ghost" @onclick="() => _showPreviewDlg = false">Close</button>
-            <button class="um-btn um-btn-primary" @onclick="UseInCompose">
-                <i class="bi bi-send" aria-hidden="true"></i> Use in Compose
-            </button>
-        </div>
-    </DialogContent>
-</SfDialog>
-
-<AppPageHeader Title="Communication Templates Administration"
-               Subtitle="Tenant admin template governance for email, SMS, portal messages, internal notes, opt-out language, and merge fields"
-               Icon="bi-layout-text-sidebar">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/inbox")'>
-            <i class="bi bi-inbox" aria-hidden="true"></i> Inbox
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Template
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero comm-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant Administration · Templates</span>
-        <h2>Tenant Template Governance Center</h2>
-        <p>Administer reusable message templates, merge variables, channel rules, opt-out footers, TCPA notices, language versions, and approval-ready content.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/inbox")'><i class="bi bi-inbox"></i> Inbox</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/campaigns")'><i class="bi bi-megaphone"></i> Campaigns</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/appointments")'><i class="bi bi-calendar-event"></i> Appointments</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/outreach")'><i class="bi bi-telephone-outbound"></i> Outreach Queue</button>
-    </div>
-</section>
-
-<!-- ── FILTER BAR ─────────────────────────────────────────────────── -->
-<div class="tpl-toolbar">
-    <input class="e-input tpl-search" @bind="_search" @bind:event="oninput" placeholder="Search templates…" />
-    <select class="e-input tpl-sel" @bind="_channelFilter">
-        <option value="">All Channels</option>
-        <option>Email</option><option>SMS</option><option>Portal Message</option><option>Internal Note</option>
-    </select>
-    <select class="e-input tpl-sel" @bind="_categoryFilter">
-        <option value="">All Categories</option>
-        @foreach (var cat in _categories) { <option>@cat</option> }
-    </select>
-    <select class="e-input tpl-sel" @bind="_statusFilter">
-        <option value="">All Status</option>
-        <option>Active</option><option>Draft</option><option>Archived</option>
-    </select>
-    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters">
-        <i class="bi bi-x" aria-hidden="true"></i>
-    </button>
-    <div style="margin-left:auto;font-size:.75rem;color:var(--um-muted,#64748b);">
-        <strong>@Filtered.Count()</strong> template(s)
-    </div>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    <div class="tpl-toast tpl-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : _toastKind == "info" ? "bi-info-circle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <div><strong>@_toastTitle</strong><span>@_toastMessage</span></div>
+        <button type="button" class="tpl-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
     </div>
 }
 
-<!-- ── TEMPLATE GRID ─────────────────────────────────────────────── -->
-<div class="tpl-grid-wrap">
-    <div class="tpl-grid">
-        @if (!Filtered.Any())
-        {
-            <div class="tpl-empty">
-                <i class="bi bi-layout-text-sidebar tpl-empty-icon" aria-hidden="true"></i>
-                <span>No templates match your filters.</span>
+@if (_showDlg && _edit is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseEditor">
+        <div class="mt-modal tpl-action-modal" role="dialog" aria-modal="true" aria-labelledby="tpl-editor-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-layout-text-sidebar" aria-hidden="true"></i>
+                <span id="tpl-editor-title">@(_edit.Id == Guid.Empty ? "New Template" : "Edit Template")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEditor" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
             </div>
-        }
-        @foreach (var t in Filtered.OrderBy(x => x.Category).ThenBy(x => x.Name))
-        {
-            <div class="tpl-card @(t.Status=="Archived" ? "tpl-card-archived" : "")">
-                <div class="tpl-card-header">
-                    <span class="ci-ch-icon ci-ch-@ChannelCss(t.Channel) tpl-ch-icon">
-                        <i class="bi @ChannelIcon(t.Channel)" aria-hidden="true"></i>
-                    </span>
-                    <div class="tpl-card-title-col">
-                        <div class="tpl-card-name">@t.Name</div>
-                        <div class="tpl-card-meta">
-                            <span class="tpl-cat-chip">@t.Category</span>
-                            @if (t.Language != "English")
-                            {
-                                <span class="tpl-lang-chip"><i class="bi bi-globe2" aria-hidden="true"></i>@t.Language</span>
-                            }
-                            <span class="tpl-status-badge tpl-st-@t.Status.ToLower()">@t.Status</span>
-                        </div>
+            <EditForm Model="_edit" OnValidSubmit="SaveTemplate" OnInvalidSubmit="NotifyValidation">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="tpl-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Template governance</span>
+                        <p>Manage channel-ready language, required compliance notices, merge variables, approvals, and tenant-level ownership.</p>
                     </div>
-                    <div class="tpl-card-actions">
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => PreviewById(t)" title="Preview">
-                            <i class="bi bi-eye" aria-hidden="true"></i>
-                        </button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(t)" title="Edit">
-                            <i class="bi bi-pencil" aria-hidden="true"></i>
-                        </button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => CloneTemplate(t)" title="Clone">
-                            <i class="bi bi-copy" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                </div>
-
-                @if (!string.IsNullOrEmpty(t.Subject))
-                {
-                    <div class="tpl-subject-row"><i class="bi bi-chat-square-quote" aria-hidden="true"></i> @t.Subject</div>
-                }
-
-                <div class="tpl-body-preview">@t.Body[..Math.Min(180, t.Body.Length)]@(t.Body.Length > 180 ? "…" : "")</div>
-
-                <div class="tpl-footer-row">
-                    <div class="tpl-vars">
-                        @foreach (var v in DetectVariables(t.Body + " " + t.Subject).Take(4))
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full"><label>Template Name <span class="text-danger">*</span></label><InputText @bind-Value="_edit.Name" class="um-input" placeholder="Policy Renewal Reminder — Email" /><ValidationMessage For="() => _edit.Name" class="text-danger" /></div>
+                        <div class="um-field"><label>Channel <span class="text-danger">*</span></label><InputSelect @bind-Value="_edit.Channel" class="um-input"><option value="">Select channel</option>@foreach (var channel in _channels) { <option value="@channel">@channel</option> }</InputSelect><ValidationMessage For="() => _edit.Channel" class="text-danger" /></div>
+                        <div class="um-field"><label>Category <span class="text-danger">*</span></label><InputSelect @bind-Value="_edit.Category" class="um-input"><option value="">Select category</option>@foreach (var category in _categories) { <option value="@category">@category</option> }</InputSelect><ValidationMessage For="() => _edit.Category" class="text-danger" /></div>
+                        <div class="um-field"><label>Language</label><InputSelect @bind-Value="_edit.Language" class="um-input">@foreach (var language in _languages) { <option value="@language">@language</option> }</InputSelect><ValidationMessage For="() => _edit.Language" class="text-danger" /></div>
+                        <div class="um-field"><label>Status</label><InputSelect @bind-Value="_edit.Status" class="um-input">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _edit.Status" class="text-danger" /></div>
+                        @if (_edit.Channel is "Email" or "Portal Message")
                         {
-                            <span class="tpl-var-chip tpl-var-sm"><i class="bi bi-braces" aria-hidden="true"></i>@v</span>
+                            <div class="um-field um-field--full"><label>Subject Line <span class="text-danger">*</span></label><InputText @bind-Value="_edit.Subject" class="um-input" placeholder="Use [variables] for merge fields" /><ValidationMessage For="() => _edit.Subject" class="text-danger" /></div>
                         }
-                    </div>
-                    <div class="tpl-compliance-row">
-                        @if (t.IncludeOptOutFooter)
-                        { <span class="tpl-comp-chip tpl-cc-ok"><i class="bi bi-check" aria-hidden="true"></i>Opt-Out</span> }
-                        @if (t.TcpaNotice)
-                        { <span class="tpl-comp-chip tpl-cc-ok"><i class="bi bi-check" aria-hidden="true"></i>TCPA</span> }
-                    </div>
-                    <div class="tpl-usage-row">
-                        <i class="bi bi-send" aria-hidden="true"></i> Used @t.UsageCount× &nbsp;
-                        <i class="bi bi-clock" aria-hidden="true"></i> @FormatAge(t.UpdatedAt)
+                        <div class="um-field um-field--full"><label>Body <span class="text-danger">*</span></label><InputTextArea @bind-Value="_edit.Body" class="um-input tpl-editor-body" rows="9" placeholder="Template body — use [Client Name], [Policy #], [Agent Name], [Date], [Amount]…" /><ValidationMessage For="() => _edit.Body" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Merge Variables</label><div class="tpl-var-chips">@foreach (var variable in DetectVariables((_edit.Body ?? string.Empty) + " " + (_edit.Subject ?? string.Empty))) { <span class="tpl-var-chip"><i class="bi bi-braces" aria-hidden="true"></i>@variable</span> } @if (!DetectVariables((_edit.Body ?? string.Empty) + " " + (_edit.Subject ?? string.Empty)).Any()) { <span class="tpl-muted-note">No variables detected — use [Variable Name] syntax.</span> }</div></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_edit.IncludeOptOutFooter" /> Append unsubscribe / opt-out footer</label><ValidationMessage For="() => _edit.IncludeOptOutFooter" class="text-danger" /></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_edit.TcpaNotice" /> Include TCPA consent notice for SMS</label><ValidationMessage For="() => _edit.TcpaNotice" class="text-danger" /></div>
                     </div>
                 </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseEditor" disabled="@_actionBusy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="PreviewTemplate"><i class="bi bi-eye" aria-hidden="true"></i> Preview</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_edit.Id == Guid.Empty ? "Create Template" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showPreviewDlg && _previewTemplate is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="ClosePreview">
+        <div class="mt-modal tpl-preview-modal" role="dialog" aria-modal="true" aria-labelledby="tpl-preview-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-eye" aria-hidden="true"></i><span id="tpl-preview-title">Template Preview</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="ClosePreview"><i class="bi bi-x-lg"></i></button></div>
+            <div class="um-modal-body">
+                <div class="tpl-preview-meta"><span class="tpl-channel-icon tpl-ch-@ChannelCss(_previewTemplate.Channel)"><i class="bi @ChannelIcon(_previewTemplate.Channel)" aria-hidden="true"></i></span><div><strong>@_previewTemplate.Name</strong><span>@_previewTemplate.Channel · @_previewTemplate.Category · @_previewTemplate.Language · v@_previewTemplate.VersionNumber</span></div></div>
+                @if (!string.IsNullOrWhiteSpace(_previewTemplate.Subject)) { <div class="tpl-preview-subject"><strong>Subject:</strong> @_previewTemplate.Subject</div> }
+                <div class="tpl-preview-body">@_previewTemplate.Body</div>
+                @if (_previewTemplate.IncludeOptOutFooter) { <div class="tpl-preview-footer"><i class="bi bi-slash-circle" aria-hidden="true"></i> To opt out of these communications, reply STOP or click Unsubscribe.</div> }
+                @if (_previewTemplate.TcpaNotice) { <div class="tpl-preview-footer"><i class="bi bi-phone-vibrate" aria-hidden="true"></i> Message and data rates may apply. Consent can be withdrawn at any time.</div> }
+            </div>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="ClosePreview">Close</button><button class="um-btn um-btn-primary" @onclick="UseInCompose"><i class="bi bi-send" aria-hidden="true"></i> Use in Compose</button></div>
+        </div>
+    </div>
+}
+
+@if (_showDeleteConfirm && _deleteTarget is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseDeleteConfirm">
+        <div class="mt-modal tpl-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="tpl-delete-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash" aria-hidden="true"></i></div><div><h3 id="tpl-delete-title">Delete template?</h3><p>Delete <strong>@_deleteTarget.Name</strong>? This keeps an audit record and removes it from active governance views.</p></div></div>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseDeleteConfirm">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDelete"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+        </div>
+    </div>
+}
+
+@if (_showCloneConfirm && _cloneTarget is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseCloneConfirm">
+        <div class="mt-modal tpl-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="tpl-clone-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog"><div class="um-confirm-icon um-confirm-icon--info"><i class="bi bi-copy" aria-hidden="true"></i></div><div><h3 id="tpl-clone-title">Clone template?</h3><p>Create a draft copy of <strong>@_cloneTarget.Name</strong> with the same channel, category, body, merge variables, and compliance settings.</p></div></div>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseCloneConfirm" disabled="@_actionBusy">Cancel</button><button class="um-btn um-btn-primary" @onclick="ExecuteClone" disabled="@_actionBusy"><i class="bi bi-copy" aria-hidden="true"></i> Clone as Draft</button></div>
+        </div>
+    </div>
+}
+
+<section class="tpl-enterprise-page">
+    <div class="tpl-hero">
+        <div class="tpl-hero-left"><div class="tpl-hero-icon"><i class="bi bi-layout-text-sidebar" aria-hidden="true"></i></div><div><div class="tpl-eyebrow">Tenant Communications · Template Governance</div><div class="tpl-title-row"><h1>Tenant Template Governance Center</h1><span class="tpl-status-pill">@Filtered.Count() templates</span></div><p>Govern reusable email, SMS, portal, and internal templates with merge variables, compliance controls, approval status, versioning, and tenant-wide sync.</p><div class="tpl-hero-chips"><span><i class="bi bi-shield-check" aria-hidden="true"></i> @ComplianceClearRate.ToString("0")% compliant</span><span><i class="bi bi-check-circle" aria-hidden="true"></i> @ApprovedCount approved</span><span><i class="bi bi-diagram-3" aria-hidden="true"></i> @OwnerTeamCount owner teams</span><span><i class="bi bi-arrow-repeat" aria-hidden="true"></i> @LastSyncLabel</span></div></div></div>
+        <div class="tpl-hero-actions"><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/inbox")'><i class="bi bi-inbox" aria-hidden="true"></i> Inbox</button><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/campaigns")'><i class="bi bi-megaphone" aria-hidden="true"></i> Campaigns</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Template</button></div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger tpl-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+    }
+
+    <div class="tpl-kpi-strip">
+        @KpiCard("bi-layout-text-sidebar", "Total", _templates.Count.ToString(), "tpl-kpi-blue", "all")
+        @KpiCard("bi-check-circle", "Active", _templates.Count(t => t.Status == "Active").ToString(), "tpl-kpi-green", "status-active")
+        @KpiCard("bi-hourglass-split", "Review", _templates.Count(t => t.ApprovalStatus != "Approved" || t.ComplianceStatus != "Clear").ToString(), "tpl-kpi-amber", "review")
+        @KpiCard("bi-phone", "SMS/TCPA", _templates.Count(t => t.Channel == "SMS").ToString(), "tpl-kpi-purple", "ch-sms")
+        @KpiCard("bi-send", "Usage", _templates.Sum(t => t.UsageCount).ToString(), "tpl-kpi-cyan", "used")
+    </div>
+
+    <div class="tpl-toolbar"><div class="tpl-search-wrap"><i class="bi bi-search" aria-hidden="true"></i><input class="tpl-search" @bind="_search" @bind:event="oninput" placeholder="Search templates, body, subject, owner…" /></div><select class="tpl-sel" @bind="_channelFilter"><option value="">All Channels</option>@foreach (var channel in _channels) { <option>@channel</option> }</select><select class="tpl-sel" @bind="_categoryFilter"><option value="">All Categories</option>@foreach (var cat in _categories) { <option>@cat</option> }</select><select class="tpl-sel" @bind="_statusFilter"><option value="">All Status</option>@foreach (var status in _statuses) { <option>@status</option> }</select><button class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-x" aria-hidden="true"></i> Clear</button></div>
+
+    <div class="tpl-grid-wrap">
+        @if (_loading) { <div class="tpl-empty"><i class="bi bi-arrow-repeat tpl-spin tpl-empty-icon" aria-hidden="true"></i><span>Loading synced tenant templates...</span></div> }
+        else if (!Filtered.Any()) { <div class="tpl-empty"><i class="bi bi-layout-text-sidebar tpl-empty-icon" aria-hidden="true"></i><span>No templates match your filters.</span></div> }
+        else
+        {
+            <div class="tpl-grid">
+                @foreach (var template in Filtered.OrderBy(t => t.Category).ThenBy(t => t.Name))
+                {
+                    <article class="tpl-card @(template.Status == "Archived" ? "tpl-card-archived" : "")">
+                        <div class="tpl-card-header"><span class="tpl-channel-icon tpl-ch-@ChannelCss(template.Channel)"><i class="bi @ChannelIcon(template.Channel)" aria-hidden="true"></i></span><div class="tpl-card-title-col"><h2>@template.Name</h2><div class="tpl-card-meta"><span class="tpl-cat-chip">@template.Category</span><span class="tpl-status-badge tpl-st-@template.Status.ToLower()">@template.Status</span><span class="tpl-approval-chip tpl-ap-@ApprovalCss(template.ApprovalStatus)">@template.ApprovalStatus</span></div></div><div class="tpl-card-actions"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => PreviewById(template)" title="Preview"><i class="bi bi-eye" aria-hidden="true"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(template)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfirmClone(template)" title="Clone"><i class="bi bi-copy" aria-hidden="true"></i></button></div></div>
+                        @if (!string.IsNullOrWhiteSpace(template.Subject)) { <div class="tpl-subject-row"><i class="bi bi-chat-square-quote" aria-hidden="true"></i>@template.Subject</div> }
+                        <div class="tpl-body-preview">@PreviewBody(template.Body)</div>
+                        <div class="tpl-governance-row"><span><i class="bi bi-shield-check" aria-hidden="true"></i>@template.ComplianceStatus</span><span><i class="bi bi-person-badge" aria-hidden="true"></i>@template.OwnerTeam</span><span><i class="bi bi-layers" aria-hidden="true"></i>v@template.VersionNumber</span><span><i class="bi bi-arrow-repeat" aria-hidden="true"></i>@FormatAge(template.LastSyncedDateUtc)</span></div>
+                        <div class="tpl-footer-row"><div class="tpl-vars">@foreach (var variable in DetectVariables(template.Body + " " + template.Subject).Take(4)) { <span class="tpl-var-chip tpl-var-sm"><i class="bi bi-braces" aria-hidden="true"></i>@variable</span> }</div><div class="tpl-compliance-row">@if (template.IncludeOptOutFooter) { <span class="tpl-comp-chip tpl-cc-ok"><i class="bi bi-check" aria-hidden="true"></i>Opt-Out</span> } @if (template.TcpaNotice) { <span class="tpl-comp-chip tpl-cc-ok"><i class="bi bi-check" aria-hidden="true"></i>TCPA</span> }</div><div class="tpl-usage-row"><i class="bi bi-send" aria-hidden="true"></i> Used @template.UsageCount×</div></div>
+                        <div class="tpl-action-row"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => UseTemplate(template)"><i class="bi bi-send" aria-hidden="true"></i> Use</button><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ArchiveTemplate(template)" disabled="@(template.Status == "Archived")"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button><button class="um-btn um-btn-ghost um-btn-xs um-action-menu-item--danger" @onclick="() => ConfirmDelete(template)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+                    </article>
+                }
             </div>
         }
     </div>
-</div>
+</section>
 
 @code {
     Guid TenantId { get; set; }
@@ -282,167 +147,221 @@
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
     private Guid _tenantAdminUserId;
-    SfToast _toast = default!;
-    string _search         = "";
-    string _channelFilter  = "";
-    string _categoryFilter = "";
-    string _statusFilter   = "";
-    string? _loadError;
-
-    bool      _showDlg        = false;
-    bool      _showPreviewDlg = false;
-    Template? _edit;
-    Template? _previewTemplate;
-
-    readonly string[] _categories = { "Renewal","Claims","Billing / Payment","Policy Service","CAT / Emergency","Compliance","Marketing","Welcome / Onboarding","Internal / Staff" };
-    readonly string[] _channels = { "Email", "SMS", "Portal Message", "Internal Note" };
-    readonly string[] _languages = { "English", "Spanish", "Bilingual" };
-    readonly string[] _statuses = { "Active", "Draft", "Archived" };
-
-    sealed class Template
-    {
-        public Guid     Id                 { get; set; }
-        [Required, StringLength(160)]
-        public string   Name               { get; set; } = "";
-        [Required, StringLength(40)]
-        public string   Channel            { get; set; } = "";
-        [Required, StringLength(80)]
-        public string   Category           { get; set; } = "";
-        [StringLength(40)]
-        public string   Language           { get; set; } = "English";
-        [StringLength(40)]
-        public string   Status             { get; set; } = "Active";
-        [StringLength(200)]
-        public string   Subject            { get; set; } = "";
-        [Required, StringLength(4000)]
-        public string   Body               { get; set; } = "";
-        public bool     IncludeOptOutFooter{ get; set; }
-        public bool     TcpaNotice         { get; set; }
-        public int      UsageCount         { get; set; }
-        public DateTime UpdatedAt          { get; set; }
-    }
-
-    List<Template> _templates = new();
-
-    IEnumerable<Template> Filtered => _templates.Where(t =>
-        (string.IsNullOrEmpty(_search)         || t.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || t.Body.Contains(_search, StringComparison.OrdinalIgnoreCase))
-     && (string.IsNullOrEmpty(_channelFilter)  || t.Channel  == _channelFilter)
-     && (string.IsNullOrEmpty(_categoryFilter) || t.Category == _categoryFilter)
-     && (string.IsNullOrEmpty(_statusFilter)   || t.Status   == _statusFilter));
-
+    private string _search = string.Empty;
+    private string _channelFilter = string.Empty;
+    private string _categoryFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string? _loadError;
+    private bool _loading;
+    private bool _actionBusy;
+    private bool _toastVisible;
+    private string _toastTitle = string.Empty;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private bool _showDlg;
+    private bool _showPreviewDlg;
+    private bool _showDeleteConfirm;
+    private bool _showCloneConfirm;
+    private Template? _edit;
+    private Template? _previewTemplate;
+    private Template? _deleteTarget;
+    private Template? _cloneTarget;
+    private readonly string[] _categories = ["Renewal", "Claims", "Billing / Payment", "Policy Service", "CAT / Emergency", "Compliance", "Marketing", "Welcome / Onboarding", "Internal / Staff"];
+    private readonly string[] _channels = ["Email", "SMS", "Portal Message", "Internal Note"];
+    private readonly string[] _languages = ["English", "Spanish", "Bilingual"];
+    private readonly string[] _statuses = ["Active", "Draft", "Archived"];
+    private List<Template> _templates = [];
     private Guid _tenantId;
+
+    private IEnumerable<Template> Filtered => _templates.Where(t =>
+        (string.IsNullOrEmpty(_search) || t.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || t.Body.Contains(_search, StringComparison.OrdinalIgnoreCase) || t.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase) || t.OwnerTeam.Contains(_search, StringComparison.OrdinalIgnoreCase))
+     && (string.IsNullOrEmpty(_channelFilter) || t.Channel == _channelFilter)
+     && (string.IsNullOrEmpty(_categoryFilter) || t.Category == _categoryFilter)
+     && (string.IsNullOrEmpty(_statusFilter) || t.Status == _statusFilter));
+
+    private int ApprovedCount => _templates.Count(t => t.ApprovalStatus == "Approved");
+    private int OwnerTeamCount => _templates.Select(t => t.OwnerTeam).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    private decimal ComplianceClearRate => _templates.Count == 0 ? 100 : (decimal)_templates.Count(t => t.ComplianceStatus == "Clear") / _templates.Count * 100;
+    private string LastSyncLabel => _templates.Count == 0 ? "No sync" : $"Synced {FormatAge(_templates.Max(t => t.LastSyncedDateUtc))}";
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Communications","/communications/inbox"), new("Templates",""));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Communications", "/communications/inbox"), new("Templates", ""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
+        _loading = true;
         _loadError = null;
         try
         {
             var dtos = await Api.GetCommTemplatesAsync(_tenantId);
-            _templates = (dtos ?? []).Select(d => new Template
-            {
-                Id                  = d.TemplateId,
-                Name                = d.Name,
-                Channel             = d.Channel,
-                Category            = d.Category,
-                Language            = d.Language,
-                Status              = d.Status,
-                Subject             = d.Subject ?? string.Empty,
-                Body                = d.Body,
-                IncludeOptOutFooter = d.IncludeOptOutFooter,
-                TcpaNotice          = d.TcpaNotice,
-                UsageCount          = d.UsageCount,
-                UpdatedAt           = d.UpdatedAt
-            }).ToList();
+            _templates = (dtos ?? []).Select(MapTemplate).ToList();
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load templates: {ex.Message}";
+            ShowToast("Load failed", $"Failed to load templates: {ex.Message}", "danger");
             _templates = [];
         }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    void OpenCreate()
+    private static Template MapTemplate(CommTemplateDto d) => new()
     {
-        _edit    = new Template { Id = Guid.Empty, Channel = "Email", Category = "Policy Service", Language = "English", Status = "Active" };
+        Id = d.TemplateId,
+        Name = d.Name,
+        Channel = d.Channel,
+        Category = d.Category,
+        Language = d.Language,
+        Status = d.Status,
+        Subject = d.Subject ?? string.Empty,
+        Body = d.Body,
+        IncludeOptOutFooter = d.IncludeOptOutFooter,
+        TcpaNotice = d.TcpaNotice,
+        UsageCount = d.UsageCount,
+        ApprovalStatus = d.ApprovalStatus,
+        ApprovedBy = d.ApprovedBy,
+        ApprovedDateUtc = d.ApprovedDateUtc,
+        ComplianceStatus = d.ComplianceStatus,
+        OwnerTeam = d.OwnerTeam,
+        SourceSystem = d.SourceSystem,
+        VersionNumber = d.VersionNumber,
+        LastSyncedDateUtc = d.LastSyncedDateUtc == default ? d.UpdatedAt : d.LastSyncedDateUtc,
+        CreatedDateUtc = d.CreatedDateUtc,
+        UpdatedAt = d.UpdatedAt
+    };
+
+    private void OpenCreate()
+    {
+        _edit = new Template { Id = Guid.Empty, Channel = "Email", Category = "Policy Service", Language = "English", Status = "Active", IncludeOptOutFooter = true, ApprovalStatus = "Approved", ComplianceStatus = "Clear", OwnerTeam = "Communications", SourceSystem = "AMS", VersionNumber = 1, LastSyncedDateUtc = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
         _showDlg = true;
     }
 
-    void OpenEdit(Template t)
+    private void OpenEdit(Template t)
     {
-        _edit    = new Template { Id=t.Id, Name=t.Name, Channel=t.Channel, Category=t.Category, Language=t.Language, Status=t.Status, Subject=t.Subject, Body=t.Body, IncludeOptOutFooter=t.IncludeOptOutFooter, TcpaNotice=t.TcpaNotice };
+        _edit = t.Clone();
         _showDlg = true;
     }
 
-    async Task SaveTemplate()
+    private async Task SaveTemplate()
     {
-        if (_edit is null || string.IsNullOrWhiteSpace(_edit.Name) || string.IsNullOrWhiteSpace(_edit.Body)) return;
-        if (_edit.Id == Guid.Empty)
+        if (_edit is null) return;
+        await ExecuteActionAsync("Template saved", async () =>
         {
-            await Api.CreateCommTemplateAsync(new CreateCommTemplateRequest(
-                _tenantId, _edit.Name, _edit.Channel, _edit.Category, _edit.Language, _edit.Status,
-                string.IsNullOrEmpty(_edit.Subject) ? null : _edit.Subject,
-                _edit.Body, _edit.IncludeOptOutFooter, _edit.TcpaNotice));
-        }
-        else
+            if (_edit.Id == Guid.Empty)
+            {
+                await Api.CreateCommTemplateAsync(new CreateCommTemplateRequest(_tenantId, _edit.Name, _edit.Channel, _edit.Category, _edit.Language, _edit.Status, string.IsNullOrWhiteSpace(_edit.Subject) ? null : _edit.Subject, _edit.Body, _edit.IncludeOptOutFooter, _edit.TcpaNotice));
+            }
+            else
+            {
+                await Api.UpdateCommTemplateAsync(_edit.Id, new UpdateCommTemplateRequest(_edit.Id, _edit.Name, _edit.Channel, _edit.Category, _edit.Language, _edit.Status, string.IsNullOrWhiteSpace(_edit.Subject) ? null : _edit.Subject, _edit.Body, _edit.IncludeOptOutFooter, _edit.TcpaNotice));
+            }
+            _showDlg = false;
+            await LoadAsync();
+        }, $"Template '{_edit.Name}' synced.");
+    }
+
+    private void PreviewTemplate() { _previewTemplate = _edit; _showPreviewDlg = true; }
+    private void PreviewById(Template t) { _previewTemplate = t; _showPreviewDlg = true; }
+
+    private void ConfirmClone(Template t) { _cloneTarget = t; _showCloneConfirm = true; }
+
+    private async Task ExecuteClone()
+    {
+        if (_cloneTarget is null) return;
+        var template = _cloneTarget;
+        await ExecuteActionAsync("Template cloned", async () =>
         {
-            await Api.UpdateCommTemplateAsync(_edit.Id, new UpdateCommTemplateRequest(
-                _edit.Id, _edit.Name, _edit.Channel, _edit.Category, _edit.Language, _edit.Status,
-                string.IsNullOrEmpty(_edit.Subject) ? null : _edit.Subject,
-                _edit.Body, _edit.IncludeOptOutFooter, _edit.TcpaNotice));
+            await Api.CreateCommTemplateAsync(new CreateCommTemplateRequest(_tenantId, $"Copy of {template.Name}", template.Channel, template.Category, template.Language, "Draft", string.IsNullOrWhiteSpace(template.Subject) ? null : template.Subject, template.Body, template.IncludeOptOutFooter, template.TcpaNotice));
+            _showCloneConfirm = false;
+            _cloneTarget = null;
+            await LoadAsync();
+        }, $"Draft copy of '{template.Name}' created.", "info");
+    }
+
+    private async Task ArchiveTemplate(Template t)
+    {
+        var archived = t.Clone();
+        archived.Status = "Archived";
+        await ExecuteActionAsync("Template archived", async () =>
+        {
+            await Api.UpdateCommTemplateAsync(archived.Id, new UpdateCommTemplateRequest(archived.Id, archived.Name, archived.Channel, archived.Category, archived.Language, archived.Status, string.IsNullOrWhiteSpace(archived.Subject) ? null : archived.Subject, archived.Body, archived.IncludeOptOutFooter, archived.TcpaNotice));
+            await LoadAsync();
+        }, $"'{t.Name}' archived.", "warning");
+    }
+
+    private void ConfirmDelete(Template t) { _deleteTarget = t; _showDeleteConfirm = true; }
+
+    private async Task ExecuteDelete()
+    {
+        if (_deleteTarget is null) return;
+        var name = _deleteTarget.Name;
+        await ExecuteActionAsync("Template deleted", async () =>
+        {
+            await Api.DeleteCommTemplateAsync(_deleteTarget.Id);
+            _showDeleteConfirm = false;
+            _deleteTarget = null;
+            await LoadAsync();
+        }, $"'{name}' deleted.", "warning");
+    }
+
+    private async Task UseTemplate(Template t)
+    {
+        await ExecuteActionAsync("Template selected", async () =>
+        {
+            await Api.IncrementCommTemplateUsageAsync(t.Id);
+            Nav.NavigateTo("/communications/inbox");
+        }, $"'{t.Name}' usage recorded.", "info");
+    }
+
+    private async Task UseInCompose()
+    {
+        if (_previewTemplate is not null) await UseTemplate(_previewTemplate);
+    }
+
+    private async Task ExecuteActionAsync(string title, Func<Task> action, string? message = null, string kind = "success")
+    {
+        _actionBusy = true;
+        try
+        {
+            await action();
+            ShowToast(title, message ?? title, kind);
         }
-        var name = _edit.Name;
-        _showDlg = false;
-        await LoadAsync();
-        await _toast.ShowAsync(new ToastModel { Title = "Saved", Content = $"Template '{name}' saved.", CssClass = "e-toast-success" });
+        catch (Exception ex)
+        {
+            ShowToast("Action failed", $"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
     }
 
-    void PreviewTemplate()    { _previewTemplate = _edit; _showPreviewDlg = true; }
-    void PreviewById(Template t) { _previewTemplate = t; _showPreviewDlg = true; }
+    private void NotifyValidation() => ShowToast("Validation required", "Please correct the highlighted template fields.", "warning");
+    private void CloseEditor() => _showDlg = false;
+    private void ClosePreview() => _showPreviewDlg = false;
+    private void CloseDeleteConfirm() => _showDeleteConfirm = false;
+    private void CloseCloneConfirm() { if (_actionBusy) return; _showCloneConfirm = false; _cloneTarget = null; }
+    private void ResetFilters() { _search = string.Empty; _channelFilter = string.Empty; _categoryFilter = string.Empty; _statusFilter = string.Empty; }
+    private void ShowToast(string title, string message, string kind = "success") { _toastTitle = title; _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
 
-    void UseInCompose()
-    {
-        _showPreviewDlg = false;
-        Nav.NavigateTo("/communications/inbox");
-    }
+    private static IEnumerable<string> DetectVariables(string text) => System.Text.RegularExpressions.Regex.Matches(text ?? string.Empty, @"\[([^\[\]]+)\]").Select(m => m.Groups[1].Value).Distinct().Take(8);
+    private static string PreviewBody(string text) => string.IsNullOrWhiteSpace(text) ? string.Empty : text.Length > 190 ? text[..190] + "…" : text;
+    private static string FormatAge(DateTime dt) { var d = DateTime.Now - dt; if (d.TotalMinutes < 60) return $"{(int)d.TotalMinutes}m ago"; if (d.TotalDays < 1) return "Today"; if (d.TotalDays < 7) return $"{(int)d.TotalDays}d ago"; if (d.TotalDays < 30) return $"{(int)(d.TotalDays / 7)}w ago"; return dt.ToString("MM/dd/yyyy"); }
+    private static string ChannelIcon(string ch) => ch switch { "Email" => "bi-envelope", "SMS" => "bi-phone", "Internal Note" => "bi-sticky", "Portal Message" => "bi-globe", _ => "bi-chat-dots" };
+    private static string ChannelCss(string ch) => ch switch { "Email" => "email", "SMS" => "sms", "Internal Note" => "note", "Portal Message" => "portal", _ => "gen" };
+    private static string ApprovalCss(string status) => status.ToLower().Replace(" ", "-");
+    private RenderFragment KpiCard(string icon, string label, string value, string css, string key) => @<button type="button" class="tpl-kpi-card @css" @onclick="() => ApplyKpi(key)"><span><i class="bi @icon" aria-hidden="true"></i>@label</span><strong>@value</strong></button>;
+    private void ApplyKpi(string key) { ResetFilters(); if (key == "status-active") _statusFilter = "Active"; else if (key == "ch-sms") _channelFilter = "SMS"; else if (key == "review") _statusFilter = "Draft"; }
 
-    async Task CloneTemplate(Template t)
-    {
-        await Api.CreateCommTemplateAsync(new CreateCommTemplateRequest(
-            _tenantId, $"Copy of {t.Name}", t.Channel, t.Category, t.Language, "Draft",
-            string.IsNullOrEmpty(t.Subject) ? null : t.Subject,
-            t.Body, t.IncludeOptOutFooter, t.TcpaNotice));
-        await LoadAsync();
-        await _toast.ShowAsync(new ToastModel { Title = "Cloned", Content = $"Draft copy of '{t.Name}' created.", CssClass = "e-toast-info" });
-    }
-
-    void ResetFilters() { _search = ""; _channelFilter = ""; _categoryFilter = ""; _statusFilter = ""; }
-
-    static IEnumerable<string> DetectVariables(string text)
-    {
-        var matches = System.Text.RegularExpressions.Regex.Matches(text ?? "", @"\[([^\[\]]+)\]");
-        return matches.Select(m => m.Groups[1].Value).Distinct().Take(8);
-    }
-
-    static string FormatAge(DateTime dt)
-    {
-        var d = DateTime.Now - dt;
-        if (d.TotalDays < 1)   return "Today";
-        if (d.TotalDays < 7)   return $"{(int)d.TotalDays}d ago";
-        if (d.TotalDays < 30)  return $"{(int)(d.TotalDays/7)}w ago";
-        return dt.ToString("MM/dd/yyyy");
-    }
-
-    static string ChannelIcon(string ch) => ch switch { "Email" => "bi-envelope", "SMS" => "bi-phone", "Internal Note" => "bi-sticky", "Portal Message" => "bi-globe", _ => "bi-chat-dots" };
-    static string ChannelCss(string ch)  => ch switch { "Email" => "email", "SMS" => "sms", "Internal Note" => "note", "Portal Message" => "portal", _ => "gen" };
-
-    async Task ResolveCurrentUserContextAsync()
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;
@@ -451,5 +370,31 @@
         _tenantAdminUserId = context.UserId;
         DevTenantId = context.TenantId;
         DevUserId = context.UserId;
+    }
+
+    private sealed class Template
+    {
+        public Guid Id { get; set; }
+        [Required, StringLength(160)] public string Name { get; set; } = string.Empty;
+        [Required, StringLength(40)] public string Channel { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string Category { get; set; } = string.Empty;
+        [StringLength(40)] public string Language { get; set; } = "English";
+        [StringLength(40)] public string Status { get; set; } = "Active";
+        [StringLength(200)] public string Subject { get; set; } = string.Empty;
+        [Required, StringLength(4000)] public string Body { get; set; } = string.Empty;
+        public bool IncludeOptOutFooter { get; set; }
+        public bool TcpaNotice { get; set; }
+        public int UsageCount { get; set; }
+        public string ApprovalStatus { get; set; } = "Approved";
+        public string ApprovedBy { get; set; } = string.Empty;
+        public DateTime? ApprovedDateUtc { get; set; }
+        public string ComplianceStatus { get; set; } = "Clear";
+        public string OwnerTeam { get; set; } = "Communications";
+        public string SourceSystem { get; set; } = "AMS";
+        public int VersionNumber { get; set; } = 1;
+        public DateTime LastSyncedDateUtc { get; set; }
+        public DateTime CreatedDateUtc { get; set; }
+        public DateTime UpdatedAt { get; set; }
+        public Template Clone() => (Template)MemberwiseClone();
     }
 }

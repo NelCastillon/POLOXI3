@@ -31,6 +31,48 @@ public sealed record UpdateSubmissionRequest(
 
 public sealed record AssignSubmissionRequest(Guid AssignedToUserId);
 
+public sealed record SubmissionActionResult(Guid Id, string Message);
+
+public sealed record SubmitSubmissionToMarketRequest(
+    Guid TenantId,
+    Guid? CarrierId,
+    [property: StringLength(500)]
+    string? Notes);
+
+public sealed record RequestSubmissionQuoteRequest(
+    Guid TenantId,
+    Guid? CarrierId,
+    [property: Range(0, 999999999999)]
+    decimal? AnnualPremium,
+    [property: Range(0, 999999999999)]
+    decimal? Deductible,
+    [property: Range(0, 999999999999)]
+    decimal? Limit,
+    [property: StringLength(1000)]
+    string? CoverageNotes);
+
+public sealed record CopySubmissionRequest(
+    Guid TenantId,
+    DateTime? EffectiveDate,
+    [property: StringLength(100)]
+    string? LineOfBusiness,
+    [property: StringLength(50)]
+    string? Priority);
+
+public sealed record DeclineSubmissionRequest(
+    Guid TenantId,
+    [property: Required, StringLength(500)]
+    string Reason);
+
+public sealed record CreatePolicyFromSubmissionRequest(
+    Guid TenantId,
+    Guid? QuoteId,
+    Guid? CarrierId,
+    [property: Range(0, 999999999999)]
+    decimal? AnnualPremium,
+    DateTime? EffectiveDate,
+    DateTime? ExpirationDate);
+
 public sealed record AddSubmissionMarketRequest(
     Guid SubmissionId,
     Guid CarrierId);

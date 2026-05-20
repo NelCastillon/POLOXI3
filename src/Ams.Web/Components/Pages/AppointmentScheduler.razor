@@ -1,370 +1,187 @@
 @page "/communications/appointments"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using System.ComponentModel.DataAnnotations
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Appointment Scheduler — AMS</PageTitle>
+<PageTitle>Tenant Appointment Control Center — AMS</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<!-- ── SCHEDULE / EDIT DIALOG ────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showDlg" Width="1120px" ShowCloseIcon="false" IsModal="true">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header">
-                <i class="bi bi-calendar-plus" aria-hidden="true"></i>
-                <span>@(_edit?.Id == Guid.Empty ? "Schedule Appointment" : "Edit Appointment")</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showDlg = false">
-                    <i class="bi bi-x-lg" aria-hidden="true"></i>
-                </button>
-            </div>
-            @if (_edit is not null)
-            {
-                <div class="um-modal-body">
-                    <div class="um-form-grid">
-                        <div class="um-field"><label>Account *</label>
-                            <SfDropDownList TValue="string" TItem="string" DataSource="@_accountNames" @bind-Value="_edit.AccountName" Placeholder="Select account" />
-                        </div>
-                        <div class="um-field"><label>Contact Name *</label>
-                            <SfTextBox @bind-Value="_edit.ContactName" Placeholder="Insured contact name" />
-                        </div>
-                        <div class="um-field"><label>Appointment Type *</label>
-                            <SfDropDownList TValue="string" TItem="string" DataSource="@_apptTypes" @bind-Value="_edit.Type" Placeholder="Select type" />
-                        </div>
-                        <div class="um-field"><label>Channel</label>
-                            <SfDropDownList TValue="string" TItem="string"
-                                            DataSource="@(new[]{"Phone Call","Video Call","In-Person","Email Follow-Up","SMS Reminder"})"
-                                            @bind-Value="_edit.Channel" Placeholder="Phone Call" />
-                        </div>
-                        <div class="um-field"><label>Date *</label>
-                            <SfDatePicker TValue="DateTime?" @bind-Value="_edit.ScheduledDate" Placeholder="MM/DD/YYYY" Min="DateTime.Today" />
-                        </div>
-                        <div class="um-field"><label>Time *</label>
-                            <SfTimePicker TValue="DateTime?" @bind-Value="_edit.ScheduledTime" Placeholder="HH:MM AM/PM" />
-                        </div>
-                        <div class="um-field"><label>Duration</label>
-                            <SfDropDownList TValue="string" TItem="string"
-                                            DataSource="@(new[]{"15 min","30 min","45 min","60 min","90 min","2 hours"})"
-                                            @bind-Value="_edit.Duration" Placeholder="30 min" />
-                        </div>
-                        <div class="um-field"><label>Assigned Producer</label>
-                            <SfDropDownList TValue="string" TItem="string" DataSource="@_producers" @bind-Value="_edit.Producer" Placeholder="Select producer" />
-                        </div>
-                        <div class="um-field"><label>Assigned CSR</label>
-                            <SfDropDownList TValue="string" TItem="string" DataSource="@_csrs" @bind-Value="_edit.CsrOwner" Placeholder="Select CSR" />
-                        </div>
-                        <div class="um-field"><label>Branch</label>
-                            <SfDropDownList TValue="string" TItem="string" DataSource="@_branches" @bind-Value="_edit.Branch" Placeholder="Select branch" />
-                        </div>
-                        <div class="um-field um-field--full"><label>Notes</label>
-                            <SfTextBox @bind-Value="_edit.Notes" Placeholder="Agenda, prep notes, context…" Multiline="true" />
-                        </div>
-                        <div class="um-field"><label>Send Confirmation</label>
-                            <SfCheckBox @bind-Checked="_edit.SendConfirmation" Label="Send confirmation message to client" />
-                        </div>
-                        <div class="um-field"><label>Send Reminder</label>
-                            <SfCheckBox @bind-Checked="_edit.SendReminder" Label="Send reminder 24 hours before" />
-                        </div>
-                    </div>
-                </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDlg = false">Cancel</button>
-                    <button type="button" class="um-btn um-btn-primary" @onclick="SaveAppointment">
-                        <i class="bi bi-check-lg" aria-hidden="true"></i>
-                        @(_edit?.Id == Guid.Empty ? "Schedule" : "Save Changes")
-                    </button>
-                </div>
-            }
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-<!-- ── LOG OUTCOME DIALOG ─────────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showLogDlg" Width="720px" ShowCloseIcon="false" IsModal="true">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header">
-                <i class="bi bi-clipboard-check" aria-hidden="true"></i>
-                <span>Log Outcome</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showLogDlg = false">
-                    <i class="bi bi-x-lg" aria-hidden="true"></i>
-                </button>
-            </div>
-            @if (_logTarget is not null)
-            {
-                <div class="um-modal-body">
-                    <div class="um-form-grid">
-                        <div class="um-field">
-                            <label>Outcome *</label>
-                            <SfDropDownList TValue="string" TItem="string"
-                                            DataSource="@(new[]{"Completed — Client Reached","Completed — No Decision","Rescheduled","No Answer — Voicemail Left","No Answer — No Voicemail","Cancelled by Client","Cancelled by Agent"})"
-                                            @bind-Value="_logOutcome" Placeholder="Select outcome" />
-                        </div>
-                        <div class="um-field">
-                            <label>Follow-Up Required</label>
-                            <SfDropDownList TValue="string" TItem="string"
-                                            DataSource="@(new[]{"None","Call Back","Send Proposal","Schedule Another Meeting","Send Certificate","File Claim"})"
-                                            @bind-Value="_logFollowUp" Placeholder="None" />
-                        </div>
-                        <div class="um-field um-field--full">
-                            <label>Notes</label>
-                            <SfTextBox @bind-Value="_logNotes" Placeholder="Summary of the conversation / outcome…" Multiline="true" />
-                        </div>
-                    </div>
-                </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showLogDlg = false">Cancel</button>
-                    <button type="button" class="um-btn um-btn-primary" @onclick="ConfirmLog">
-                        <i class="bi bi-check-lg" aria-hidden="true"></i> Log Outcome
-                    </button>
-                </div>
-            }
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-<AppPageHeader Title="Appointments Administration"
-               Subtitle="Tenant admin scheduling for client calls, meetings, follow-ups, reminders, outcomes, producers, and CSR ownership"
-               Icon="bi-calendar-event">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/outreach")'>
-            <i class="bi bi-telephone-outbound" aria-hidden="true"></i> Outreach Queue
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> Schedule Appointment
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero comm-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant Administration · Appointments</span>
-        <h2>Tenant Appointment Control Center</h2>
-        <p>Administer appointment scheduling, confirmations, reminders, owner assignments, outcome logging, reschedules, and follow-up workflow readiness.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/inbox")'><i class="bi bi-inbox"></i> Inbox</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/outreach")'><i class="bi bi-telephone-outbound"></i> Outreach Queue</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/templates")'><i class="bi bi-layout-text-sidebar"></i> Templates</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/notifications")'><i class="bi bi-bell"></i> Notifications</button>
-    </div>
-</section>
-
-<!-- ── KPI STRIP ─────────────────────────────────────────────────── -->
-<div class="as-kpi-strip">
-    @Kpi("bi-calendar-check","Today",        _appts.Count(a => a.ScheduledDate.HasValue && a.ScheduledDate.Value.Date == DateTime.Today).ToString(),              "as-ki-blue")
-    @Kpi("bi-calendar-week", "This Week",    _appts.Count(a => IsThisWeek(a)).ToString(),                                                                         "as-ki-blue")
-    @Kpi("bi-clock",         "Pending",      _appts.Count(a => a.Status == "Scheduled").ToString(),                                                               "as-ki-amber")
-    @Kpi("bi-hourglass",     "Awaiting Conf",_appts.Count(a => a.Status == "Awaiting Confirmation").ToString(),                                                   "as-ki-amber")
-    @Kpi("bi-check-circle",  "Completed",    _appts.Count(a => a.Status == "Completed").ToString(),                                                               "as-ki-green")
-    @Kpi("bi-x-circle",      "Cancelled",    _appts.Count(a => a.Status == "Cancelled").ToString(),                                                               "as-ki-red")
-    @Kpi("bi-arrow-repeat",  "Rescheduled",  _appts.Count(a => a.Status == "Rescheduled").ToString(),                                                             "as-ki-gray")
-    @Kpi("bi-graph-up",      "Show Rate",    $"{(_appts.Count(a=>a.Status is "Completed" or "Cancelled") > 0 ? _appts.Count(a=>a.Status=="Completed")*100/_appts.Count(a=>a.Status is "Completed" or "Cancelled") : 0)}%","as-ki-green")
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    <div class="as-toast as-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <div><strong>@_toastTitle</strong><span>@_toastMessage</span></div>
+        <button type="button" class="as-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
     </div>
 }
 
-<!-- ── TWO-PANEL LAYOUT ───────────────────────────────────────────── -->
-<div class="as-layout">
-
-    <!-- TODAY / UPCOMING STRIP -->
-    <div class="as-today-panel">
-
-        <!-- Tabs -->
-        <div class="as-tabs">
-            @Tab("today",    "Today",    _appts.Count(a => a.ScheduledDate?.Date == DateTime.Today))
-            @Tab("upcoming", "Upcoming", _appts.Count(a => a.ScheduledDate.HasValue && a.ScheduledDate.Value.Date > DateTime.Today && a.Status == "Scheduled"))
-            @Tab("all",      "All",      _appts.Count)
+@if (_showForm && _form is not null)
+{
+    <div class="as-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="as-modal as-form-modal" role="dialog" aria-modal="true" aria-labelledby="as-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-calendar-plus" aria-hidden="true"></i>
+                <span id="as-form-title">@(_form.Id == Guid.Empty ? "Schedule Appointment" : "Edit Appointment")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAppointment" OnInvalidSubmit="NotifyValidation">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="as-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Appointment governance</span>
+                        <p>Schedule client appointments, assign ownership, control reminders, and sync the tenant calendar workflow.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Account <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountName" class="um-input" placeholder="Account or insured name" /><ValidationMessage For="() => _form.AccountName" class="text-danger" /></div>
+                        <div class="um-field"><label>Contact Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.ContactName" class="um-input" placeholder="Primary contact" /><ValidationMessage For="() => _form.ContactName" class="text-danger" /></div>
+                        <div class="um-field"><label>Appointment Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.Type" class="um-input"><option value="">Select type</option>@foreach (var type in _apptTypes) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.Type" class="text-danger" /></div>
+                        <div class="um-field"><label>Channel <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.Channel" class="um-input">@foreach (var channel in _channels) { <option value="@channel">@channel</option> }</InputSelect><ValidationMessage For="() => _form.Channel" class="text-danger" /></div>
+                        <div class="um-field"><label>Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.ScheduledDate" class="um-input" /><ValidationMessage For="() => _form.ScheduledDate" class="text-danger" /></div>
+                        <div class="um-field"><label>Time <span class="text-danger">*</span></label><InputText type="time" @bind-Value="_form.ScheduledTimeText" class="um-input" /><ValidationMessage For="() => _form.ScheduledTimeText" class="text-danger" /></div>
+                        <div class="um-field"><label>Duration <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.Duration" class="um-input">@foreach (var duration in _durations) { <option value="@duration">@duration</option> }</InputSelect><ValidationMessage For="() => _form.Duration" class="text-danger" /></div>
+                        <div class="um-field"><label>Status</label><InputSelect @bind-Value="_form.Status" class="um-input">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.Status" class="text-danger" /></div>
+                        <div class="um-field"><label>Assigned Producer</label><InputSelect @bind-Value="_form.Producer" class="um-input"><option value="">Unassigned</option>@foreach (var producer in _producers) { <option value="@producer">@producer</option> }</InputSelect><ValidationMessage For="() => _form.Producer" class="text-danger" /></div>
+                        <div class="um-field"><label>Assigned CSR</label><InputSelect @bind-Value="_form.CsrOwner" class="um-input"><option value="">Unassigned</option>@foreach (var csr in _csrs) { <option value="@csr">@csr</option> }</InputSelect><ValidationMessage For="() => _form.CsrOwner" class="text-danger" /></div>
+                        <div class="um-field"><label>Branch</label><InputSelect @bind-Value="_form.Branch" class="um-input"><option value="">Select branch</option>@foreach (var branch in _branches) { <option value="@branch">@branch</option> }</InputSelect><ValidationMessage For="() => _form.Branch" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_form.Notes" class="um-input as-notes-input" placeholder="Agenda, prep notes, policy context, claim number, or follow-up expectations" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.SendConfirmation" /> Send confirmation message</label><ValidationMessage For="() => _form.SendConfirmation" class="text-danger" /></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.SendReminder" /> Send reminder 24 hours before</label><ValidationMessage For="() => _form.SendReminder" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_form.Id == Guid.Empty ? "Schedule Appointment" : "Save Changes")</button>
+                </div>
+            </EditForm>
         </div>
+    </div>
+}
 
-        <!-- Filters -->
-        <div class="as-list-toolbar">
-            <input class="e-input as-search" @bind="_search" @bind:event="oninput" placeholder="Search…" />
-            <select class="e-input as-sel" @bind="_typeFilter">
-                <option value="">All Types</option>
-                @foreach (var t in _apptTypes) { <option>@t</option> }
-            </select>
-            <select class="e-input as-sel" @bind="_statusFilter">
-                <option value="">All Status</option>
-                <option>Scheduled</option><option>Awaiting Confirmation</option>
-                <option>Completed</option><option>Cancelled</option><option>Rescheduled</option><option>No Answer</option>
-            </select>
+@if (_showOutcome && _outcomeTarget is not null)
+{
+    <div class="as-modal-backdrop" role="presentation" @onclick="CloseOutcome">
+        <div class="as-modal as-outcome-modal" role="dialog" aria-modal="true" aria-labelledby="as-outcome-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-clipboard-check" aria-hidden="true"></i><span id="as-outcome-title">Log Outcome</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseOutcome" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button></div>
+            <div class="um-modal-body">
+                <div class="as-outcome-context"><strong>@_outcomeTarget.AccountName</strong><span>@_outcomeTarget.Type · @_outcomeTarget.ScheduleLabel</span></div>
+                <div class="um-form-grid">
+                    <div class="um-field"><label>Outcome <span class="text-danger">*</span></label><select class="um-input" @bind="_logOutcome"><option value="">Select outcome</option>@foreach (var outcome in _outcomes) { <option value="@outcome">@outcome</option> }</select></div>
+                    <div class="um-field"><label>Follow-Up</label><select class="um-input" @bind="_logFollowUp">@foreach (var followUp in _followUps) { <option value="@followUp">@followUp</option> }</select></div>
+                    <div class="um-field um-field--full"><label>Outcome Notes</label><textarea class="um-input as-notes-input" @bind="_logNotes" placeholder="Summary, client decision, next steps, or service handoff"></textarea></div>
+                </div>
+            </div>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseOutcome" disabled="@_actionBusy">Cancel</button><button class="um-btn um-btn-primary" @onclick="ConfirmLogOutcome" disabled="@_actionBusy"><i class="bi bi-check-lg" aria-hidden="true"></i> Log Outcome</button></div>
         </div>
+    </div>
+}
 
-        <!-- List -->
-        <div class="as-appt-list">
-            @{
-                var list = FilteredAppts.ToList();
-                if (!list.Any())
+@if (_confirmTarget is not null)
+{
+    <div class="as-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="as-modal as-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="as-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog"><div class="um-confirm-icon @ConfirmIconClass"><i class="bi @ConfirmIcon" aria-hidden="true"></i></div><div><h3 id="as-confirm-title">@_confirmTitle</h3><p>@((MarkupString)_confirmMessage)</p></div></div>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseConfirm" disabled="@_actionBusy">Cancel</button><button class="um-btn @_confirmButtonClass" @onclick="ExecuteConfirm" disabled="@_actionBusy"><i class="bi @ConfirmIcon" aria-hidden="true"></i> @_confirmButtonText</button></div>
+        </div>
+    </div>
+}
+
+<section class="as-page">
+    <div class="as-hero">
+        <div class="as-hero-left">
+            <div class="as-hero-icon"><i class="bi bi-calendar-event" aria-hidden="true"></i></div>
+            <div>
+                <div class="as-eyebrow">Tenant Communications · Appointment Governance</div>
+                <div class="as-title-row"><h1>Tenant Appointment Control Center</h1><span>@FilteredAppts.Count() synced appointments</span></div>
+                <p>Administer client calls, meetings, reminders, confirmations, ownership, outcomes, reschedules, and calendar sync from one enterprise tenant control plane.</p>
+                <div class="as-hero-chips"><span><i class="bi bi-shield-check"></i>@ShowRate.ToString("0")% show rate</span><span><i class="bi bi-clock-history"></i>@AtRiskCount at risk</span><span><i class="bi bi-arrow-repeat"></i>@LastSyncLabel</span></div>
+            </div>
+        </div>
+        <div class="as-hero-actions"><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/inbox")'><i class="bi bi-inbox"></i> Inbox</button><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/templates")'><i class="bi bi-layout-text-sidebar"></i> Templates</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Schedule Appointment</button></div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger as-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+    }
+
+    <div class="as-kpi-strip">
+        @Kpi("bi-calendar-check", "Today", _appts.Count(a => a.ScheduledDate?.Date == DateTime.Today).ToString(), "as-ki-blue", "today")
+        @Kpi("bi-calendar-week", "This Week", _appts.Count(IsThisWeek).ToString(), "as-ki-indigo", "week")
+        @Kpi("bi-clock", "Scheduled", _appts.Count(a => a.Status == "Scheduled").ToString(), "as-ki-cyan", "scheduled")
+        @Kpi("bi-hourglass-split", "At Risk", AtRiskCount.ToString(), "as-ki-amber", "risk")
+        @Kpi("bi-check-circle", "Completed", _appts.Count(a => a.Status == "Completed").ToString(), "as-ki-green", "completed")
+        @Kpi("bi-send", "Reminders", _appts.Count(a => a.ReminderStatus == "Sent").ToString(), "as-ki-purple", "reminders")
+    </div>
+
+    <div class="as-toolbar">
+        <div class="as-search-wrap"><i class="bi bi-search" aria-hidden="true"></i><input class="as-search" @bind="_search" @bind:event="oninput" placeholder="Search accounts, contacts, owners, types…" /></div>
+        <select class="as-sel" @bind="_typeFilter"><option value="">All Types</option>@foreach (var type in _apptTypes) { <option>@type</option> }</select>
+        <select class="as-sel" @bind="_statusFilter"><option value="">All Status</option>@foreach (var status in _statuses) { <option>@status</option> }</select>
+        <select class="as-sel" @bind="_ownerFilter"><option value="">All Owners</option>@foreach (var owner in Owners) { <option>@owner</option> }</select>
+        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-x"></i> Clear</button>
+    </div>
+
+    <div class="as-layout">
+        <aside class="as-list-panel">
+            <div class="as-tabs">@Tab("today", "Today", _appts.Count(a => a.ScheduledDate?.Date == DateTime.Today))@Tab("upcoming", "Upcoming", _appts.Count(a => a.ScheduledDate?.Date > DateTime.Today && a.Status == "Scheduled"))@Tab("all", "All", _appts.Count)</div>
+            <div class="as-list">
+                @if (_loading)
                 {
-                    <div class="as-empty">
-                        <i class="bi bi-calendar2-x as-empty-icon" aria-hidden="true"></i>
-                        <span>No appointments in this view.</span>
-                        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-                            <i class="bi bi-plus-lg" aria-hidden="true"></i> Schedule One
+                    <div class="as-empty"><i class="bi bi-arrow-repeat as-spin as-empty-icon"></i><span>Loading tenant appointments…</span></div>
+                }
+                else if (!FilteredAppts.Any())
+                {
+                    <div class="as-empty"><i class="bi bi-calendar2-x as-empty-icon"></i><span>No appointments match this view.</span><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Schedule One</button></div>
+                }
+                else
+                {
+                    @foreach (var appt in FilteredAppts.OrderBy(a => a.ScheduledDate).ThenBy(a => a.ScheduledTime))
+                    {
+                        <button type="button" class="as-appt-row @(_selectedAppt?.Id == appt.Id ? "as-appt-selected" : "") @(appt.ScheduledDate?.Date == DateTime.Today ? "as-appt-today" : "")" @onclick="() => SelectAppointment(appt)">
+                            <div class="as-appt-time-col"><div class="as-appt-date">@(appt.ScheduledDate?.ToString("MM/dd") ?? "TBD")</div><div class="as-appt-tod">@(appt.ScheduledTime?.ToString("h:mm tt") ?? "—")</div><div class="as-appt-dur">@appt.Duration</div></div>
+                            <div class="as-appt-body-col"><div class="as-appt-account">@appt.AccountName</div><div class="as-appt-contact"><i class="bi bi-person"></i>@appt.ContactName</div><div class="as-appt-type-row"><span class="as-type-chip">@appt.Type</span><span class="as-ch-chip"><i class="bi @ApptChannelIcon(appt.Channel)"></i>@appt.Channel</span></div><div class="as-appt-meta">@if (!string.IsNullOrEmpty(appt.CsrOwner)) { <span><i class="bi bi-headset"></i>@appt.CsrOwner</span> } @if (!string.IsNullOrEmpty(appt.Producer)) { <span><i class="bi bi-person-badge"></i>@appt.Producer</span> }</div></div>
+                            <div class="as-appt-status-col"><span class="as-status-badge as-st-@StatusCss(appt.Status)">@appt.Status</span><span class="as-sla as-sla-@StatusCss(appt.SlaStatus)">@appt.SlaStatus</span></div>
                         </button>
-                    </div>
+                    }
                 }
-                @foreach (var a in list.OrderBy(x => x.ScheduledDate).ThenBy(x => x.ScheduledTime))
-                {
-                    <div class="as-appt-row @(_selectedAppt?.Id == a.Id ? "as-appt-selected" : "") @(a.ScheduledDate?.Date == DateTime.Today ? "as-appt-today" : "")"
-                         @onclick="() => _selectedAppt = a">
+            </div>
+        </aside>
 
-                        <div class="as-appt-time-col">
-                            <div class="as-appt-date">@(a.ScheduledDate?.ToString("MM/dd") ?? "TBD")</div>
-                            <div class="as-appt-tod">@(a.ScheduledTime?.ToString("h:mm tt") ?? "—")</div>
-                            <div class="as-appt-dur">@a.Duration</div>
-                        </div>
-
-                        <div class="as-appt-body-col">
-                            <div class="as-appt-account">@a.AccountName</div>
-                            <div class="as-appt-contact"><i class="bi bi-person" aria-hidden="true"></i>@a.ContactName</div>
-                            <div class="as-appt-type-row">
-                                <span class="as-type-chip">@a.Type</span>
-                                <span class="as-ch-chip">
-                                    <i class="bi @ApptChannelIcon(a.Channel)" aria-hidden="true"></i>@a.Channel
-                                </span>
-                            </div>
-                            <div class="as-appt-meta">
-                                @if (!string.IsNullOrEmpty(a.CsrOwner))
-                                { <span class="ci-meta-chip ci-mc-csr"><i class="bi bi-headset" aria-hidden="true"></i>@a.CsrOwner</span> }
-                                @if (!string.IsNullOrEmpty(a.Producer))
-                                { <span class="ci-meta-chip"><i class="bi bi-person-badge" aria-hidden="true"></i>@a.Producer</span> }
-                            </div>
-                        </div>
-
-                        <div class="as-appt-status-col">
-                            <span class="as-status-badge as-st-@StatusCss(a.Status)">@a.Status</span>
-                        </div>
-
-                    </div>
-                }
+        <section class="@DetailPanelClass">
+            @if (_selectedAppt is null)
+            {
+                <div class="as-detail-placeholder"><i class="bi bi-calendar-event as-dp-icon"></i><h3>Select an appointment</h3><p>Choose an appointment to view governance data and take action.</p></div>
             }
-        </div>
+            else
+            {
+                var a = _selectedAppt;
+                <div class="as-detail-header">
+                    <div>
+                        <div class="as-detail-title">@a.Type</div>
+                        <div class="as-detail-sub">@a.AccountName · @a.ContactName</div>
+                    </div>
+                    <div class="as-detail-actions">
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="OpenSelectedEdit" title="Edit"><i class="bi bi-pencil"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="OpenSelectedOutcome" title="Log outcome"><i class="bi bi-clipboard-check"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="ConfirmSelectedReschedule" title="Mark rescheduled"><i class="bi bi-arrow-repeat"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-xs um-action-menu-item--danger" @onclick="ConfirmSelectedCancel" title="Cancel"><i class="bi bi-x-circle"></i></button>
+                    </div>
+                </div>
+                <div class="as-detail-body">
+                    <div class="as-command-strip"><span><i class="bi bi-arrow-repeat"></i>@a.SyncStatus</span><span><i class="bi bi-calendar-check"></i>@a.ConfirmationStatus</span><span><i class="bi bi-bell"></i>@a.ReminderStatus</span><span><i class="bi bi-cloud-check"></i>@a.SourceSystem</span></div>
+                    <div class="as-detail-grid"><div class="as-dg-cell"><div class="as-dg-lbl">Date</div><div class="as-dg-val">@(a.ScheduledDate?.ToString("dddd, MMMM d, yyyy") ?? "TBD")</div></div><div class="as-dg-cell"><div class="as-dg-lbl">Time</div><div class="as-dg-val">@(a.ScheduledTime?.ToString("h:mm tt") ?? "TBD")</div></div><div class="as-dg-cell"><div class="as-dg-lbl">Duration</div><div class="as-dg-val">@a.Duration</div></div><div class="as-dg-cell"><div class="as-dg-lbl">Channel</div><div class="as-dg-val"><i class="bi @ApptChannelIcon(a.Channel)"></i>@a.Channel</div></div><div class="as-dg-cell"><div class="as-dg-lbl">Status</div><span class="as-status-badge as-st-@StatusCss(a.Status)">@a.Status</span></div><div class="as-dg-cell"><div class="as-dg-lbl">SLA</div><span class="as-sla as-sla-@StatusCss(a.SlaStatus)">@a.SlaStatus</span></div><div class="as-dg-cell"><div class="as-dg-lbl">CSR</div><div class="as-dg-val">@(string.IsNullOrEmpty(a.CsrOwner) ? "—" : a.CsrOwner)</div></div><div class="as-dg-cell"><div class="as-dg-lbl">Producer</div><div class="as-dg-val">@(string.IsNullOrEmpty(a.Producer) ? "—" : a.Producer)</div></div><div class="as-dg-cell"><div class="as-dg-lbl">Branch</div><div class="as-dg-val">@(string.IsNullOrEmpty(a.Branch) ? "—" : a.Branch)</div></div></div>
+                    @if (!string.IsNullOrEmpty(a.Notes)) { <div class="as-notes-box"><div class="as-notes-lbl"><i class="bi bi-sticky"></i> Notes</div><div class="as-notes-body">@a.Notes</div></div> }
+                    @if (!string.IsNullOrEmpty(a.Outcome)) { <div class="as-outcome-box"><div class="as-notes-lbl"><i class="bi bi-clipboard-check"></i> Outcome</div><div class="as-outcome-val">@a.Outcome</div><div class="as-outcome-notes">@a.OutcomeNotes</div>@if (!string.IsNullOrEmpty(a.FollowUp) && a.FollowUp != "None") { <div class="as-followup-row"><i class="bi bi-arrow-return-right"></i> Follow-up: @a.FollowUp</div> }</div> }
+                    <div class="as-confirm-row"><span class="@(a.SendConfirmation ? "as-conf-ok" : "as-conf-no")"><i class="bi @(a.SendConfirmation ? "bi-check-circle" : "bi-x-circle")"></i>Confirmation @(a.SendConfirmation ? "enabled" : "disabled")</span><span class="@(a.SendReminder ? "as-conf-ok" : "as-conf-no")"><i class="bi @(a.SendReminder ? "bi-check-circle" : "bi-x-circle")"></i>Reminder @(a.SendReminder ? "enabled" : "disabled")</span><span class="as-conf-ok"><i class="bi bi-arrow-repeat"></i>Synced @FormatAge(a.LastSyncedDateUtc ?? DateTime.UtcNow)</span></div>
+                    <div class="as-quick-actions"><button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmReminder(a)" disabled="@IsClosed(a)"><i class="bi bi-bell"></i> Send Reminder Now</button><button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/communications/inbox")'><i class="bi bi-chat-dots"></i> Open Inbox</button><button class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenOutcome(a)" disabled="@IsClosed(a)"><i class="bi bi-clipboard-check"></i> Log Outcome</button></div>
+                </div>
+            }
+        </section>
     </div>
-
-    <!-- DETAIL PANEL -->
-    <div class="as-detail-panel @(_selectedAppt is null ? "as-detail-empty" : "")">
-        @if (_selectedAppt is null)
-        {
-            <div class="as-detail-placeholder">
-                <i class="bi bi-calendar-event as-dp-icon" aria-hidden="true"></i>
-                <h3>Select an appointment</h3>
-                <p>Choose an appointment on the left to view details and take action.</p>
-            </div>
-        }
-        else
-        {
-            var a = _selectedAppt;
-            <div class="as-detail-header">
-                <div>
-                    <div class="as-detail-title">@a.Type</div>
-                    <div class="as-detail-sub">@a.AccountName · @a.ContactName</div>
-                </div>
-                <div class="as-detail-actions">
-                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenEdit(a)" title="Edit">
-                        <i class="bi bi-pencil" aria-hidden="true"></i>
-                    </button>
-                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenLog(a)" title="Log outcome">
-                        <i class="bi bi-clipboard-check" aria-hidden="true"></i>
-                    </button>
-                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Reschedule(a)" title="Reschedule">
-                        <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
-                    </button>
-                    <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => CancelAppt(a)" title="Cancel">
-                        <i class="bi bi-x-circle" aria-hidden="true"></i>
-                    </button>
-                </div>
-            </div>
-
-            <div class="as-detail-body">
-
-                <div class="as-detail-grid">
-                    <div class="as-dg-cell"><div class="as-dg-lbl">Date</div><div class="as-dg-val">@(a.ScheduledDate?.ToString("dddd, MMMM d, yyyy") ?? "TBD")</div></div>
-                    <div class="as-dg-cell"><div class="as-dg-lbl">Time</div><div class="as-dg-val">@(a.ScheduledTime?.ToString("h:mm tt") ?? "TBD")</div></div>
-                    <div class="as-dg-cell"><div class="as-dg-lbl">Duration</div><div class="as-dg-val">@a.Duration</div></div>
-                    <div class="as-dg-cell"><div class="as-dg-lbl">Channel</div>
-                        <div class="as-dg-val"><i class="bi @ApptChannelIcon(a.Channel)" aria-hidden="true"></i> @a.Channel</div>
-                    </div>
-                    <div class="as-dg-cell"><div class="as-dg-lbl">Status</div>
-                        <span class="as-status-badge as-st-@StatusCss(a.Status)">@a.Status</span>
-                    </div>
-                    <div class="as-dg-cell"><div class="as-dg-lbl">CSR</div>
-                        <div class="as-dg-val">@(string.IsNullOrEmpty(a.CsrOwner) ? "—" : a.CsrOwner)</div>
-                    </div>
-                    <div class="as-dg-cell"><div class="as-dg-lbl">Producer</div>
-                        <div class="as-dg-val">@(string.IsNullOrEmpty(a.Producer) ? "—" : a.Producer)</div>
-                    </div>
-                    <div class="as-dg-cell"><div class="as-dg-lbl">Branch</div>
-                        <div class="as-dg-val">@(string.IsNullOrEmpty(a.Branch) ? "—" : a.Branch)</div>
-                    </div>
-                </div>
-
-                @if (!string.IsNullOrEmpty(a.Notes))
-                {
-                    <div class="as-notes-box">
-                        <div class="as-notes-lbl"><i class="bi bi-sticky" aria-hidden="true"></i> Notes</div>
-                        <div class="as-notes-body">@a.Notes</div>
-                    </div>
-                }
-
-                <div class="as-confirm-row">
-                    <span class="@(a.SendConfirmation ? "as-conf-ok" : "as-conf-no")">
-                        <i class="bi @(a.SendConfirmation ? "bi-check-circle" : "bi-x-circle")" aria-hidden="true"></i>
-                        Confirmation @(a.SendConfirmation ? "will be sent" : "not sent")
-                    </span>
-                    <span class="@(a.SendReminder ? "as-conf-ok" : "as-conf-no")">
-                        <i class="bi @(a.SendReminder ? "bi-check-circle" : "bi-x-circle")" aria-hidden="true"></i>
-                        Reminder 24h @(a.SendReminder ? "enabled" : "disabled")
-                    </span>
-                </div>
-
-                @if (!string.IsNullOrEmpty(a.Outcome))
-                {
-                    <div class="as-outcome-box">
-                        <div class="as-notes-lbl"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Outcome</div>
-                        <div class="as-outcome-val">@a.Outcome</div>
-                        @if (!string.IsNullOrEmpty(a.OutcomeNotes))
-                        {
-                            <div class="as-outcome-notes">@a.OutcomeNotes</div>
-                        }
-                        @if (!string.IsNullOrEmpty(a.FollowUp) && a.FollowUp != "None")
-                        {
-                            <div class="as-followup-row">
-                                <i class="bi bi-arrow-return-right" aria-hidden="true"></i>
-                                Follow-up: @a.FollowUp
-                            </div>
-                        }
-                    </div>
-                }
-
-                <!-- Quick actions -->
-                <div class="as-quick-actions">
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="SendReminderNow">
-                        <i class="bi bi-bell" aria-hidden="true"></i> Send Reminder Now
-                    </button>
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/communications/inbox")'>
-                        <i class="bi bi-chat-dots" aria-hidden="true"></i> Open Inbox Thread
-                    </button>
-                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenLog(a)"
-                            disabled="@(a.Status is "Completed" or "Cancelled")">
-                        <i class="bi bi-clipboard-check" aria-hidden="true"></i> Log Outcome
-                    </button>
-                </div>
-            </div>
-        }
-    </div>
-
-</div>
+</section>
 
 @code {
     Guid TenantId { get; set; }
@@ -373,218 +190,292 @@
     Guid DevUserId { get; set; }
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    SfToast _toast = default!;
-    string _tab          = "today";
-    string _search       = "";
-    string _typeFilter   = "";
-    string _statusFilter = "";
-    string? _loadError;
+    private bool _loading;
+    private bool _actionBusy;
+    private bool _toastVisible;
+    private string _toastTitle = string.Empty;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string _tab = "today";
+    private string _search = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _ownerFilter = string.Empty;
+    private string? _loadError;
+    private bool _showForm;
+    private bool _showOutcome;
+    private AppointmentForm? _form;
+    private Appointment? _selectedAppt;
+    private Appointment? _outcomeTarget;
+    private Appointment? _confirmTarget;
+    private Func<Task>? _confirmAction;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmButtonText = string.Empty;
+    private string _confirmButtonClass = "um-btn-primary";
+    private string _confirmKind = "info";
+    private string _logOutcome = string.Empty;
+    private string _logFollowUp = "None";
+    private string _logNotes = string.Empty;
+    private readonly string[] _apptTypes = ["Coverage Review", "Renewal Discussion", "Claims Follow-Up", "New Business Quote", "Policy Service", "Audit Prep", "CAT Site Visit", "Welcome Call", "Risk Assessment", "Payment Arrangement"];
+    private readonly string[] _channels = ["Phone Call", "Video Call", "In-Person", "Email Follow-Up", "SMS Reminder"];
+    private readonly string[] _durations = ["15 min", "30 min", "45 min", "60 min", "90 min", "2 hours"];
+    private readonly string[] _statuses = ["Scheduled", "Awaiting Confirmation", "Completed", "Cancelled", "Rescheduled", "No Answer"];
+    private readonly string[] _producers = ["Maria Santos", "Robert Yamamoto", "Diana Perez", "James Park"];
+    private readonly string[] _csrs = ["Sarah Kim", "Kevin Obi", "Lisa Chen", "James Park"];
+    private readonly string[] _branches = ["Gulf Coast", "North Texas", "Northeast", "Central TX", "Southwest"];
+    private readonly string[] _outcomes = ["Completed — Client Reached", "Completed — No Decision", "Rescheduled", "No Answer — Voicemail Left", "No Answer — No Voicemail", "Cancelled by Client", "Cancelled by Agent"];
+    private readonly string[] _followUps = ["None", "Call Back", "Send Proposal", "Schedule Another Meeting", "Send Certificate", "File Claim"];
+    private List<Appointment> _appts = [];
 
-    bool         _showDlg  = false;
-    bool         _showLogDlg = false;
-    Appointment? _edit;
-    Appointment? _logTarget;
-    Appointment? _selectedAppt;
-    string       _logOutcome  = "";
-    string       _logFollowUp = "";
-    string       _logNotes    = "";
-
-    readonly string[] _apptTypes    = { "Coverage Review","Renewal Discussion","Claims Follow-Up","New Business Quote","Policy Service","Audit Prep","CAT Site Visit","Welcome Call","Risk Assessment","Payment Arrangement" };
-    readonly string[] _accountNames = { "Sullivan Mfg. LLC","Bridgewater Hotels","Metro Freight Co.","Apex Medical Group","Dallas Roofing LLC","Harbor View Marina","Greenleaf Nurseries","Sunrise Healthcare","Pacific Coast Builders","Harbor Logistics" };
-    readonly string[] _producers    = { "Maria Santos","Robert Yamamoto","Diana Perez","James Park" };
-    readonly string[] _csrs         = { "Sarah Kim","Kevin Obi","Lisa Chen","James Park" };
-    readonly string[] _branches     = { "Gulf Coast","North Texas","Northeast","Central TX","Southwest" };
-
-    sealed class Appointment
-    {
-        public Guid      Id                { get; set; }
-        public string    AccountName       { get; set; } = "";
-        public string    ContactName       { get; set; } = "";
-        public string    Type              { get; set; } = "";
-        public string    Channel           { get; set; } = "Phone Call";
-        public string    Status            { get; set; } = "Scheduled";
-        public string    Duration          { get; set; } = "30 min";
-        public string    Producer          { get; set; } = "";
-        public string    CsrOwner          { get; set; } = "";
-        public string    Branch            { get; set; } = "";
-        public string    Notes             { get; set; } = "";
-        public string    Outcome           { get; set; } = "";
-        public string    OutcomeNotes      { get; set; } = "";
-        public string    FollowUp          { get; set; } = "";
-        public bool      SendConfirmation  { get; set; } = true;
-        public bool      SendReminder      { get; set; } = true;
-        public DateTime? ScheduledDate     { get; set; }
-        public DateTime? ScheduledTime     { get; set; }
-    }
-
-    List<Appointment> _appts = new();
-
-    IEnumerable<Appointment> FilteredAppts => _appts.Where(a =>
-        MatchTab(a)
-     && (string.IsNullOrEmpty(_search)      || a.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || a.ContactName.Contains(_search, StringComparison.OrdinalIgnoreCase) || a.Type.Contains(_search, StringComparison.OrdinalIgnoreCase))
-     && (string.IsNullOrEmpty(_typeFilter)  || a.Type   == _typeFilter)
-     && (string.IsNullOrEmpty(_statusFilter)|| a.Status == _statusFilter));
-
-    bool MatchTab(Appointment a) => _tab switch
-    {
-        "today"    => a.ScheduledDate?.Date == DateTime.Today,
-        "upcoming" => a.ScheduledDate.HasValue && a.ScheduledDate.Value.Date > DateTime.Today && a.Status == "Scheduled",
-        _          => true
-    };
+    private IEnumerable<string> Owners => _appts.SelectMany(a => new[] { a.Producer, a.CsrOwner }).Where(o => !string.IsNullOrWhiteSpace(o)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(o => o);
+    private IEnumerable<Appointment> FilteredAppts => _appts.Where(a => MatchTab(a) && (string.IsNullOrWhiteSpace(_search) || a.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || a.ContactName.Contains(_search, StringComparison.OrdinalIgnoreCase) || a.Type.Contains(_search, StringComparison.OrdinalIgnoreCase) || a.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase) || a.CsrOwner.Contains(_search, StringComparison.OrdinalIgnoreCase)) && (string.IsNullOrEmpty(_typeFilter) || a.Type == _typeFilter) && (string.IsNullOrEmpty(_statusFilter) || a.Status == _statusFilter) && (string.IsNullOrEmpty(_ownerFilter) || a.Producer == _ownerFilter || a.CsrOwner == _ownerFilter));
+    private int AtRiskCount => _appts.Count(a => a.SlaStatus == "At Risk" || (a.ScheduledDate?.Date < DateTime.Today && a.Status == "Scheduled"));
+    private decimal ShowRate => _appts.Count(a => a.Status is "Completed" or "Cancelled" or "No Answer") == 0 ? 100 : (decimal)_appts.Count(a => a.Status == "Completed") / _appts.Count(a => a.Status is "Completed" or "Cancelled" or "No Answer") * 100;
+    private string LastSyncLabel => _appts.Count == 0 ? "No sync" : $"Synced {FormatAge(_appts.Max(a => a.LastSyncedDateUtc) ?? DateTime.UtcNow)}";
+    private string ToastIcon => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : _toastKind == "info" ? "bi-info-circle-fill" : "bi-check-circle-fill";
+    private string ConfirmIcon => _confirmKind == "danger" ? "bi-x-circle" : _confirmKind == "warning" ? "bi-arrow-repeat" : "bi-bell";
+    private string ConfirmIconClass => _confirmKind == "danger" ? "um-confirm-icon--danger" : _confirmKind == "warning" ? "um-confirm-icon--warning" : "um-confirm-icon--info";
+    private string DetailPanelClass => _selectedAppt is null ? "as-detail-panel as-detail-empty" : "as-detail-panel";
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Communications","/communications/inbox"), new("Appointments",""));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Communications", "/communications/inbox"), new("Appointments", ""));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
+        _loading = true;
         _loadError = null;
         try
         {
             var result = await Api.SearchCommunicationAppointmentsAsync(_tenantId, _search);
-            _appts = result?.Items.Select(a => new Appointment
-            {
-                Id = a.AppointmentId,
-                AccountName = a.AccountName,
-                ContactName = a.ContactName,
-                Type = a.Type,
-                Channel = a.Channel,
-                Status = a.Status,
-                Duration = a.Duration,
-                Producer = a.Producer,
-                CsrOwner = a.CsrOwner,
-                Branch = a.Branch,
-                Notes = a.Notes,
-                Outcome = a.Outcome,
-                OutcomeNotes = a.OutcomeNotes,
-                FollowUp = a.FollowUp,
-                SendConfirmation = a.SendConfirmation,
-                SendReminder = a.SendReminder,
-                ScheduledDate = a.ScheduledDate,
-                ScheduledTime = a.ScheduledTime
-            }).ToList() ?? [];
-            _selectedAppt ??= _appts.FirstOrDefault(a => a.ScheduledDate?.Date == DateTime.Today) ?? _appts.FirstOrDefault();
+            _appts = result?.Items.Select(MapAppointment).ToList() ?? [];
+            _selectedAppt = _selectedAppt is null ? _appts.FirstOrDefault(a => a.ScheduledDate?.Date == DateTime.Today) ?? _appts.FirstOrDefault() : _appts.FirstOrDefault(a => a.Id == _selectedAppt.Id) ?? _appts.FirstOrDefault();
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load appointments: {ex.Message}";
+            ShowToast("Load failed", $"Failed to load appointments: {ex.Message}", "danger");
             _appts = [];
             _selectedAppt = null;
         }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    void BuildStub()
+    private static Appointment MapAppointment(CommunicationAppointmentDto dto) => new()
     {
-        var d = DateTime.Today;
-        _appts = new List<Appointment>
+        Id = dto.AppointmentId,
+        AccountName = dto.AccountName,
+        ContactName = dto.ContactName,
+        Type = dto.Type,
+        Channel = dto.Channel,
+        Status = dto.Status,
+        Duration = dto.Duration,
+        Producer = dto.Producer,
+        CsrOwner = dto.CsrOwner,
+        Branch = dto.Branch,
+        Notes = dto.Notes,
+        Outcome = dto.Outcome,
+        OutcomeNotes = dto.OutcomeNotes,
+        FollowUp = dto.FollowUp,
+        SendConfirmation = dto.SendConfirmation,
+        SendReminder = dto.SendReminder,
+        ScheduledDate = dto.ScheduledDate,
+        ScheduledTime = dto.ScheduledTime,
+        ConfirmationStatus = string.IsNullOrWhiteSpace(dto.ConfirmationStatus) ? "Pending" : dto.ConfirmationStatus,
+        ReminderStatus = string.IsNullOrWhiteSpace(dto.ReminderStatus) ? "Scheduled" : dto.ReminderStatus,
+        SlaStatus = string.IsNullOrWhiteSpace(dto.SlaStatus) ? "On Track" : dto.SlaStatus,
+        SourceSystem = string.IsNullOrWhiteSpace(dto.SourceSystem) ? "AMS" : dto.SourceSystem,
+        SyncStatus = string.IsNullOrWhiteSpace(dto.SyncStatus) ? "Synced" : dto.SyncStatus,
+        LastReminderSentUtc = dto.LastReminderSentUtc,
+        LastSyncedDateUtc = dto.LastSyncedDateUtc,
+        CreatedDateUtc = dto.CreatedDateUtc,
+        ModifiedDateUtc = dto.ModifiedDateUtc
+    };
+
+    private void OpenCreate() { _form = new AppointmentForm { Id = Guid.Empty, Type = "Coverage Review", Channel = "Phone Call", Status = "Scheduled", Duration = "30 min", SendConfirmation = true, SendReminder = true, ScheduledDate = DateTime.Today, ScheduledTimeText = DateTime.Now.AddHours(1).ToString("HH:mm") }; _showForm = true; }
+    private void OpenEdit(Appointment appt) { _form = AppointmentForm.From(appt); _showForm = true; }
+    private void SelectAppointment(Appointment appt) => _selectedAppt = appt;
+    private void OpenSelectedEdit() { if (_selectedAppt is not null) OpenEdit(_selectedAppt); }
+    private void OpenSelectedOutcome() { if (_selectedAppt is not null) OpenOutcome(_selectedAppt); }
+    private void ConfirmSelectedReschedule() { if (_selectedAppt is not null) ConfirmReschedule(_selectedAppt); }
+    private void ConfirmSelectedCancel() { if (_selectedAppt is not null) ConfirmCancel(_selectedAppt); }
+
+    private async Task SaveAppointment()
+    {
+        if (_form is null) return;
+        await ExecuteActionAsync(_form.Id == Guid.Empty ? "Appointment scheduled" : "Appointment updated", async () =>
         {
-            new() { Id=Guid.NewGuid(), AccountName="Sullivan Mfg. LLC",     ContactName="Robert Sullivan", Type="Renewal Discussion",     Channel="Phone Call",    Status="Scheduled",              Duration="30 min", Producer="Maria Santos",   CsrOwner="Sarah Kim",  Branch="Gulf Coast",  SendConfirmation=true, SendReminder=true, ScheduledDate=d, ScheduledTime=d.AddHours(9), Notes="Discuss split-limit GL structure. Client CFO will be on the call. Review aggregate options." },
-            new() { Id=Guid.NewGuid(), AccountName="Apex Medical Group",    ContactName="Sandra Kim",      Type="Renewal Discussion",     Channel="Video Call",    Status="Awaiting Confirmation",  Duration="45 min", Producer="Maria Santos",   CsrOwner="Sarah Kim",  Branch="Gulf Coast",  SendConfirmation=true, SendReminder=true, ScheduledDate=d, ScheduledTime=d.AddHours(11), Notes="28% premium increase concern. Discuss remarketing options. Dr. Chen may join." },
-            new() { Id=Guid.NewGuid(), AccountName="Bridgewater Hotels",    ContactName="Patricia Howe",   Type="Claims Follow-Up",       Channel="Phone Call",    Status="Scheduled",              Duration="30 min", Producer="Diana Perez",    CsrOwner="Maria Santos",Branch="Northeast",   SendConfirmation=true, SendReminder=true, ScheduledDate=d, ScheduledTime=d.AddHours(14), Notes="CLM-2025-00131 status update. Adjuster report expected by EOD." },
-            new() { Id=Guid.NewGuid(), AccountName="Dallas Roofing LLC",    ContactName="Marcus Webb",     Type="Policy Service",         Channel="Phone Call",    Status="Completed",              Duration="15 min", Producer="James Park",     CsrOwner="Kevin Obi",  Branch="North Texas", SendConfirmation=true, SendReminder=false, ScheduledDate=d.AddDays(-1), ScheduledTime=d.AddDays(-1).AddHours(10), Notes="COI follow-up.", Outcome="Completed — Client Reached", OutcomeNotes="COI delivered. Marcus confirmed the certificate holder name.", FollowUp="None" },
-            new() { Id=Guid.NewGuid(), AccountName="Metro Freight Co.",     ContactName="Dale Foster",     Type="Coverage Review",        Channel="In-Person",     Status="Scheduled",              Duration="60 min", Producer="Robert Yamamoto",CsrOwner="James Park", Branch="North Texas", SendConfirmation=true, SendReminder=true, ScheduledDate=d.AddDays(1), ScheduledTime=d.AddDays(1).AddHours(10), Notes="Annual coverage review. Fleet has grown to 22 units. Discuss inland marine for cargo." },
-            new() { Id=Guid.NewGuid(), AccountName="Harbor View Marina",    ContactName="Tony Marcellis",  Type="CAT Site Visit",         Channel="In-Person",     Status="Scheduled",              Duration="90 min", Producer="Diana Perez",    CsrOwner="Lisa Chen",  Branch="Gulf Coast",  SendConfirmation=true, SendReminder=true, ScheduledDate=d.AddDays(2), ScheduledTime=d.AddDays(2).AddHours(9), Notes="CAT field inspection with Ramirez. Estimated damage $115K. Call insured morning of." },
-            new() { Id=Guid.NewGuid(), AccountName="Greenleaf Nurseries",   ContactName="Amy Torres",      Type="Claims Follow-Up",       Channel="Phone Call",    Status="Scheduled",              Duration="30 min", Producer="Maria Santos",   CsrOwner="Lisa Chen",  Branch="Central TX",  SendConfirmation=true, SendReminder=true, ScheduledDate=d.AddDays(1), ScheduledTime=d.AddDays(1).AddHours(14), Notes="Equipment breakdown claim update. Confirm adjuster assignment." },
-            new() { Id=Guid.NewGuid(), AccountName="Pacific Coast Builders",ContactName="Jorge Medina",    Type="Audit Prep",             Channel="Video Call",    Status="Scheduled",              Duration="45 min", Producer="Robert Yamamoto",CsrOwner="Robert Yamamoto",Branch="Southwest", SendConfirmation=true, SendReminder=true, ScheduledDate=d.AddDays(3), ScheduledTime=d.AddDays(3).AddHours(13), Notes="WC audit preparation. Help Jorge understand required documents — payroll, 1099s, subcontractor COIs." },
-            new() { Id=Guid.NewGuid(), AccountName="Sunrise Healthcare",    ContactName="Nadia Patel",     Type="Claims Follow-Up",       Channel="Phone Call",    Status="Cancelled",              Duration="30 min", Producer="Diana Perez",    CsrOwner="Kevin Obi",  Branch="Gulf Coast",  SendConfirmation=false, SendReminder=false, ScheduledDate=d.AddDays(-2), ScheduledTime=d.AddDays(-2).AddHours(9), Notes="Cancelled — attorney representation. All contact through John Cruz (832) 555-1111.", Outcome="Cancelled by Client", OutcomeNotes="Client has retained legal counsel.", FollowUp="None" },
-            new() { Id=Guid.NewGuid(), AccountName="Harbor Logistics",      ContactName="Chris Navarro",   Type="New Business Quote",     Channel="Phone Call",    Status="No Answer",              Duration="30 min", Producer="Maria Santos",   CsrOwner="Sarah Kim",  Branch="Gulf Coast",  SendConfirmation=true, SendReminder=false, ScheduledDate=d.AddDays(-1), ScheduledTime=d.AddDays(-1).AddHours(15), Notes="New prospect — commercial GL + WC + commercial auto.", Outcome="No Answer — Voicemail Left", OutcomeNotes="Left voicemail. Will retry tomorrow.", FollowUp="Call Back" },
+            var request = _form.ToRequest(_tenantId);
+            if (_form.Id == Guid.Empty)
+            {
+                await Api.CreateCommunicationAppointmentAsync(request);
+            }
+            else
+            {
+                await Api.UpdateCommunicationAppointmentAsync(_form.Id, request);
+            }
+            _showForm = false;
+            await LoadAsync();
+        }, $"Appointment for {_form.AccountName} synced.");
+    }
+
+    private void OpenOutcome(Appointment appt) { _outcomeTarget = appt; _logOutcome = string.Empty; _logFollowUp = "None"; _logNotes = string.Empty; _showOutcome = true; }
+    private void CloseOutcome() { if (_actionBusy) return; _showOutcome = false; _outcomeTarget = null; }
+
+    private void ConfirmReschedule(Appointment appt) => ConfirmStatus(appt, "Rescheduled");
+    private void ConfirmCancel(Appointment appt) => ConfirmStatus(appt, "Cancelled");
+
+    private async Task ConfirmLogOutcome()
+    {
+        if (_outcomeTarget is null || string.IsNullOrWhiteSpace(_logOutcome)) { ShowToast("Outcome required", "Select an outcome before logging.", "warning"); return; }
+        var target = _outcomeTarget;
+        await ExecuteActionAsync("Outcome logged", async () =>
+        {
+            await Api.LogCommunicationAppointmentOutcomeAsync(_tenantId, target.Id, new AppointmentOutcomeRequest(_logOutcome, _logFollowUp, _logNotes));
+            _showOutcome = false;
+            _outcomeTarget = null;
+            await LoadAsync();
+        }, $"Outcome recorded for {target.AccountName}.");
+    }
+
+    private void ConfirmStatus(Appointment appt, string status)
+    {
+        _confirmTarget = appt;
+        _confirmKind = status == "Cancelled" ? "danger" : "warning";
+        _confirmTitle = status == "Cancelled" ? "Cancel appointment?" : "Mark appointment as rescheduled?";
+        _confirmMessage = status == "Cancelled" ? $"Cancel <strong>{appt.Type}</strong> for <strong>{appt.AccountName}</strong>? Confirmation and reminder workflow will be stopped." : $"Mark <strong>{appt.Type}</strong> for <strong>{appt.AccountName}</strong> as rescheduled? You can then schedule the replacement appointment.";
+        _confirmButtonText = status == "Cancelled" ? "Cancel Appointment" : "Mark Rescheduled";
+        _confirmButtonClass = status == "Cancelled" ? "um-btn-danger" : "um-btn-primary";
+        _confirmAction = async () =>
+        {
+            await Api.UpdateCommunicationAppointmentStatusAsync(_tenantId, appt.Id, new AppointmentStatusRequest(status, status == "Cancelled" ? "Cancelled from Tenant Appointment Control Center" : "Marked for reschedule"));
+            await LoadAsync();
+            if (status == "Rescheduled")
+            {
+                OpenCreate();
+                if (_form is not null)
+                {
+                    _form.AccountName = appt.AccountName;
+                    _form.ContactName = appt.ContactName;
+                    _form.Type = appt.Type;
+                    _form.Channel = appt.Channel;
+                    _form.Duration = appt.Duration;
+                    _form.Producer = appt.Producer;
+                    _form.CsrOwner = appt.CsrOwner;
+                    _form.Branch = appt.Branch;
+                    _form.Notes = appt.Notes;
+                }
+            }
         };
     }
 
-    void OpenCreate() { _edit = new Appointment { Id = Guid.Empty, SendConfirmation = true, SendReminder = true, Duration = "30 min", Channel = "Phone Call" }; _showDlg = true; }
-    void OpenEdit(Appointment a) { _edit = Clone(a); _showDlg = true; }
-    void OpenLog(Appointment a)  { _logTarget = a; _logOutcome = ""; _logFollowUp = "None"; _logNotes = ""; _showLogDlg = true; }
-
-    static Appointment Clone(Appointment a) => new()
+    private void ConfirmReminder(Appointment appt)
     {
-        Id=a.Id, AccountName=a.AccountName, ContactName=a.ContactName, Type=a.Type,
-        Channel=a.Channel, Status=a.Status, Duration=a.Duration, Producer=a.Producer,
-        CsrOwner=a.CsrOwner, Branch=a.Branch, Notes=a.Notes,
-        SendConfirmation=a.SendConfirmation, SendReminder=a.SendReminder,
-        ScheduledDate=a.ScheduledDate, ScheduledTime=a.ScheduledTime
-    };
+        _confirmTarget = appt;
+        _confirmKind = "info";
+        _confirmTitle = "Send reminder now?";
+        _confirmMessage = $"Send an immediate appointment reminder for <strong>{appt.Type}</strong> to <strong>{appt.ContactName}</strong>?";
+        _confirmButtonText = "Send Reminder";
+        _confirmButtonClass = "um-btn-primary";
+        _confirmAction = async () => { await Api.SendCommunicationAppointmentReminderAsync(_tenantId, appt.Id); await LoadAsync(); };
+    }
 
-    async Task SaveAppointment()
+    private async Task ExecuteConfirm()
     {
-        if (_edit is null || string.IsNullOrWhiteSpace(_edit.AccountName)) return;
-        if (_edit.Id == Guid.Empty)
+        if (_confirmTarget is null || _confirmAction is null) return;
+        var title = _confirmTitle.Replace("?", string.Empty);
+        await ExecuteActionAsync(title, async () =>
         {
-            _edit.Id = Guid.NewGuid();
-            _edit.Status = "Scheduled";
-            _appts.Insert(0, _edit);
-        }
-        else
+            await _confirmAction();
+            CloseConfirm();
+        }, "Appointment workflow synced.", _confirmKind == "danger" ? "warning" : "info");
+    }
+
+    private void CloseConfirm() { if (_actionBusy) return; _confirmTarget = null; _confirmAction = null; }
+    private void CloseForm() { if (_actionBusy) return; _showForm = false; _form = null; }
+    private void NotifyValidation() => ShowToast("Validation required", "Please correct the highlighted appointment fields.", "warning");
+    private void ResetFilters() { _search = string.Empty; _typeFilter = string.Empty; _statusFilter = string.Empty; _ownerFilter = string.Empty; }
+    private void ShowToast(string title, string message, string kind = "success") { _toastTitle = title; _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private async Task ExecuteActionAsync(string title, Func<Task> action, string message, string kind = "success")
+    {
+        _actionBusy = true;
+        try
         {
-            var idx = _appts.FindIndex(a => a.Id == _edit.Id);
-            if (idx >= 0) _appts[idx] = _edit;
+            await action();
+            ShowToast(title, message, kind);
         }
-        _showDlg = false;
-        await _toast.ShowAsync(new ToastModel { Title = "Saved", Content = $"Appointment for {_edit.AccountName} saved.", CssClass = "e-toast-success" });
+        catch (Exception ex)
+        {
+            ShowToast("Action failed", $"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
     }
 
-    async Task ConfirmLog()
-    {
-        if (_logTarget is null || string.IsNullOrEmpty(_logOutcome)) return;
-        _logTarget.Status       = _logOutcome.StartsWith("Completed") ? "Completed" : _logOutcome.StartsWith("No Answer") ? "No Answer" : _logOutcome.StartsWith("Rescheduled") ? "Rescheduled" : "Cancelled";
-        _logTarget.Outcome      = _logOutcome;
-        _logTarget.OutcomeNotes = _logNotes;
-        _logTarget.FollowUp     = _logFollowUp;
-        _showLogDlg = false;
-        await _toast.ShowAsync(new ToastModel { Title = "Outcome Logged", Content = $"Outcome recorded for {_logTarget.AccountName}.", CssClass = "e-toast-success" });
-    }
+    private bool MatchTab(Appointment a) => _tab switch { "today" => a.ScheduledDate?.Date == DateTime.Today, "upcoming" => a.ScheduledDate?.Date > DateTime.Today && a.Status == "Scheduled", _ => true };
+    private static bool IsClosed(Appointment a) => a.Status is "Completed" or "Cancelled";
+    private static bool IsThisWeek(Appointment a) { if (!a.ScheduledDate.HasValue) return false; var today = DateTime.Today; var monday = today.AddDays(-(int)today.DayOfWeek + (today.DayOfWeek == DayOfWeek.Sunday ? -6 : 1)); return a.ScheduledDate.Value.Date >= monday && a.ScheduledDate.Value.Date < monday.AddDays(7); }
+    private static string StatusCss(string value) => value.ToLowerInvariant().Replace(" ", "-");
+    private static string ApptChannelIcon(string channel) => channel switch { "Phone Call" => "bi-telephone", "Video Call" => "bi-camera-video", "In-Person" => "bi-geo-alt", "Email Follow-Up" => "bi-envelope", "SMS Reminder" => "bi-phone", _ => "bi-chat-dots" };
+    private static string FormatAge(DateTime date) { var d = DateTime.UtcNow - date.ToUniversalTime(); if (d.TotalMinutes < 60) return $"{Math.Max(0, (int)d.TotalMinutes)}m ago"; if (d.TotalDays < 1) return "Today"; if (d.TotalDays < 7) return $"{(int)d.TotalDays}d ago"; return date.ToString("MM/dd/yyyy"); }
 
-    async Task Reschedule(Appointment a)
+    private RenderFragment Kpi(string icon, string label, string value, string color, string filter) => builder =>
     {
-        a.Status = "Rescheduled";
-        _edit    = Clone(a);
-        _edit.Id = Guid.Empty;
-        _edit.Status = "Scheduled";
-        _showDlg = true;
-        await _toast.ShowAsync(new ToastModel { Title = "Reschedule", Content = "Original appointment marked as Rescheduled. Set a new time below.", CssClass = "e-toast-info" });
-    }
-
-    async Task CancelAppt(Appointment a)
-    {
-        a.Status = "Cancelled";
-        await _toast.ShowAsync(new ToastModel { Title = "Cancelled", Content = $"Appointment with {a.AccountName} cancelled.", CssClass = "e-toast-warning" });
-    }
-
-    async Task SendReminderNow()
-    {
-        if (_selectedAppt is null) return;
-        await _toast.ShowAsync(new ToastModel { Title = "Reminder Sent", Content = $"Reminder sent to {_selectedAppt.ContactName}.", CssClass = "e-toast-info" });
-    }
-
-    static bool IsThisWeek(Appointment a)
-    {
-        if (!a.ScheduledDate.HasValue) return false;
-        var today = DateTime.Today;
-        var monday = today.AddDays(-(int)today.DayOfWeek + (today.DayOfWeek == DayOfWeek.Sunday ? -6 : 1));
-        return a.ScheduledDate.Value.Date >= monday && a.ScheduledDate.Value.Date < monday.AddDays(7);
-    }
-
-    static string StatusCss(string s) => s.ToLower().Replace(" ", "-");
-    static string ApptChannelIcon(string ch) => ch switch { "Phone Call" => "bi-telephone", "Video Call" => "bi-camera-video", "In-Person" => "bi-geo-alt", "Email Follow-Up" => "bi-envelope", "SMS Reminder" => "bi-phone", _ => "bi-chat-dots" };
-
-    RenderFragment Kpi(string icon, string label, string val, string color) => __builder =>
-    {
-        <div class="as-kpi-card @color">
-            <i class="bi @icon as-kpi-icon" aria-hidden="true"></i>
-            <div><div class="as-kpi-val">@val</div><div class="as-kpi-lbl">@label</div></div>
-        </div>
+        builder.OpenElement(0, "button");
+        builder.AddAttribute(1, "type", "button");
+        builder.AddAttribute(2, "class", $"as-kpi-card {color}");
+        builder.AddAttribute(3, "onclick", EventCallback.Factory.Create(this, () => ApplyKpi(filter)));
+        builder.OpenElement(4, "span");
+        builder.AddAttribute(5, "class", "as-kpi-icon");
+        builder.OpenElement(6, "i");
+        builder.AddAttribute(7, "class", $"bi {icon}");
+        builder.AddAttribute(8, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.OpenElement(9, "span");
+        builder.AddAttribute(10, "class", "as-kpi-content");
+        builder.OpenElement(11, "span");
+        builder.AddAttribute(12, "class", "as-kpi-label");
+        builder.AddContent(13, label);
+        builder.CloseElement();
+        builder.OpenElement(14, "strong");
+        builder.AddAttribute(15, "class", "as-kpi-value");
+        builder.AddContent(16, value);
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.CloseElement();
     };
 
-    RenderFragment Tab(string id, string label, int count) => __builder =>
+    private RenderFragment Tab(string id, string label, int count) => builder =>
     {
-        <button class="as-tab @(_tab == id ? "as-tab-active" : "")" @onclick='() => { _tab = id; _selectedAppt = null; }'>
-            @label @if (count > 0) { <span class="as-tab-badge">@count</span> }
-        </button>
+        builder.OpenElement(0, "button");
+        builder.AddAttribute(1, "type", "button");
+        builder.AddAttribute(2, "class", $"as-tab {(_tab == id ? "as-tab-active" : string.Empty)}");
+        builder.AddAttribute(3, "onclick", EventCallback.Factory.Create(this, () => { _tab = id; _selectedAppt = null; }));
+        builder.AddContent(4, label);
+        if (count > 0)
+        {
+            builder.OpenElement(5, "span");
+            builder.AddAttribute(6, "class", "as-tab-badge");
+            builder.AddContent(7, count);
+            builder.CloseElement();
+        }
+        builder.CloseElement();
     };
+    private void ApplyKpi(string filter) { ResetFilters(); _tab = filter is "today" ? "today" : filter == "week" ? "all" : _tab; if (filter == "scheduled") _statusFilter = "Scheduled"; if (filter == "completed") _statusFilter = "Completed"; if (filter == "risk") _statusFilter = string.Empty; }
 
-    async Task ResolveCurrentUserContextAsync()
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;
@@ -593,5 +484,67 @@
         _tenantAdminUserId = context.UserId;
         DevTenantId = context.TenantId;
         DevUserId = context.UserId;
+    }
+
+    private sealed class Appointment
+    {
+        public Guid Id { get; set; }
+        public string AccountName { get; set; } = string.Empty;
+        public string ContactName { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Channel { get; set; } = "Phone Call";
+        public string Status { get; set; } = "Scheduled";
+        public string Duration { get; set; } = "30 min";
+        public string Producer { get; set; } = string.Empty;
+        public string CsrOwner { get; set; } = string.Empty;
+        public string Branch { get; set; } = string.Empty;
+        public string Notes { get; set; } = string.Empty;
+        public string Outcome { get; set; } = string.Empty;
+        public string OutcomeNotes { get; set; } = string.Empty;
+        public string FollowUp { get; set; } = string.Empty;
+        public bool SendConfirmation { get; set; }
+        public bool SendReminder { get; set; }
+        public DateTime? ScheduledDate { get; set; }
+        public DateTime? ScheduledTime { get; set; }
+        public string ConfirmationStatus { get; set; } = "Pending";
+        public string ReminderStatus { get; set; } = "Scheduled";
+        public string SlaStatus { get; set; } = "On Track";
+        public string SourceSystem { get; set; } = "AMS";
+        public string SyncStatus { get; set; } = "Synced";
+        public DateTime? LastReminderSentUtc { get; set; }
+        public DateTime? LastSyncedDateUtc { get; set; }
+        public DateTime CreatedDateUtc { get; set; }
+        public DateTime? ModifiedDateUtc { get; set; }
+        public string ScheduleLabel => $"{ScheduledDate?.ToString("MM/dd/yyyy") ?? "TBD"} · {ScheduledTime?.ToString("h:mm tt") ?? "TBD"}";
+    }
+
+    private sealed class AppointmentForm
+    {
+        public Guid Id { get; set; }
+        [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty;
+        [Required, StringLength(160)] public string ContactName { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string Type { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string Channel { get; set; } = "Phone Call";
+        [Required, StringLength(50)] public string Status { get; set; } = "Scheduled";
+        [Required, StringLength(40)] public string Duration { get; set; } = "30 min";
+        [StringLength(160)] public string Producer { get; set; } = string.Empty;
+        [StringLength(160)] public string CsrOwner { get; set; } = string.Empty;
+        [StringLength(120)] public string Branch { get; set; } = string.Empty;
+        [StringLength(2000)] public string Notes { get; set; } = string.Empty;
+        public bool SendConfirmation { get; set; }
+        public bool SendReminder { get; set; }
+        [Required] public DateTime? ScheduledDate { get; set; }
+        [Required] public string ScheduledTimeText { get; set; } = string.Empty;
+
+        public static AppointmentForm From(Appointment a) => new() { Id = a.Id, AccountName = a.AccountName, ContactName = a.ContactName, Type = a.Type, Channel = a.Channel, Status = a.Status, Duration = a.Duration, Producer = a.Producer, CsrOwner = a.CsrOwner, Branch = a.Branch, Notes = a.Notes, SendConfirmation = a.SendConfirmation, SendReminder = a.SendReminder, ScheduledDate = a.ScheduledDate, ScheduledTimeText = a.ScheduledTime?.ToString("HH:mm") ?? string.Empty };
+        public UpsertCommunicationAppointmentRequest ToRequest(Guid tenantId)
+        {
+            DateTime? scheduledTime = null;
+            if (ScheduledDate.HasValue && TimeOnly.TryParse(ScheduledTimeText, out var time))
+            {
+                scheduledTime = ScheduledDate.Value.Date.Add(time.ToTimeSpan());
+            }
+            return new UpsertCommunicationAppointmentRequest { AppointmentId = Id, TenantId = tenantId, AccountName = AccountName, ContactName = ContactName, Type = Type, Channel = Channel, Status = Status, Duration = Duration, Producer = Producer, CsrOwner = CsrOwner, Branch = Branch, Notes = Notes, SendConfirmation = SendConfirmation, SendReminder = SendReminder, ScheduledDate = ScheduledDate, ScheduledTime = scheduledTime };
+        }
     }
 }

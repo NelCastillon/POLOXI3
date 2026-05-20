@@ -12,6 +12,11 @@ public interface ISubmissionRepository
     Task<Guid> CreateAsync(CreateSubmissionRequest request, CancellationToken cancellationToken = default);
     Task UpdateAsync(Guid id, UpdateSubmissionRequest request, CancellationToken cancellationToken = default);
     Task AssignAsync(Guid id, AssignSubmissionRequest request, CancellationToken cancellationToken = default);
+    Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default);
+    Task<SubmissionActionResult> RequestQuoteAsync(Guid id, RequestSubmissionQuoteRequest request, CancellationToken cancellationToken = default);
+    Task<SubmissionActionResult> CopyAsync(Guid id, CopySubmissionRequest request, CancellationToken cancellationToken = default);
+    Task<SubmissionActionResult> DeclineAsync(Guid id, DeclineSubmissionRequest request, CancellationToken cancellationToken = default);
+    Task<SubmissionActionResult> CreatePolicyAsync(Guid id, CreatePolicyFromSubmissionRequest request, CancellationToken cancellationToken = default);
 
     // Markets
     Task<IReadOnlyList<SubmissionMarketDto>> GetMarketsAsync(Guid submissionId, CancellationToken cancellationToken = default);

@@ -1,480 +1,165 @@
 @page "/compliance/policies"
+@using System.ComponentModel.DataAnnotations
+@using System.Text
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Compliance
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Web
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Policy Documents — Compliance</PageTitle>
+<PageTitle>Compliance Policies — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Policy Documents"
-               Subtitle="Tenant admin library for compliance policy versioning, publishing, retirement, and acknowledgement governance"
-               Icon="bi-file-earmark-text">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="ExportAsync">
-            <i class="bi bi-download" aria-hidden="true"></i> Export
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Policy
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero pol-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant Administration · Compliance Policies</span>
-        <h2>Tenant Compliance Policy Library</h2>
-        <p>Administer compliance policy lifecycle, version control, publishing, retirement, audiences, and acknowledgement readiness.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies")'><i class="bi bi-shield-check"></i> Policy Ops</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/compliance/acknowledgements")'><i class="bi bi-check2-circle"></i> Acknowledgements</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies/documents")'><i class="bi bi-folder2"></i> Documents</button>
-    </div>
-</section>
-
-<!-- KPI strip -->
-<div class="pol-kpi-strip">
-    <div class="@KpiClassTotal" @onclick="() => SetKpiFilter(1)" role="button" tabindex="0" aria-label="Filter: Total Policies">
-        <span class="pol-kpi-icon pol-kpi-icon--total"><i class="bi bi-file-earmark-text-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="pol-kpi-value">@_totalCount</div>
-            <div class="pol-kpi-label">Total</div>
-        </div>
-        @if (_kpiActive == 1) { <span class="pol-kpi-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClassDraft" @onclick="() => SetKpiFilter(2)" role="button" tabindex="0" aria-label="Filter: Draft">
-        <span class="pol-kpi-icon pol-kpi-icon--draft"><i class="bi bi-pencil-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="pol-kpi-value">@_draftCount</div>
-            <div class="pol-kpi-label">Draft</div>
-        </div>
-        @if (_kpiActive == 2) { <span class="pol-kpi-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClassPublished" @onclick="() => SetKpiFilter(3)" role="button" tabindex="0" aria-label="Filter: Published">
-        <span class="pol-kpi-icon pol-kpi-icon--published"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="pol-kpi-value">@_publishedCount</div>
-            <div class="pol-kpi-label">Published</div>
-        </div>
-        @if (_kpiActive == 3) { <span class="pol-kpi-dot" aria-hidden="true"></span> }
-    </div>
-    <div class="@KpiClassRetired" @onclick="() => SetKpiFilter(4)" role="button" tabindex="0" aria-label="Filter: Retired">
-        <span class="pol-kpi-icon pol-kpi-icon--retired"><i class="bi bi-archive-fill" aria-hidden="true"></i></span>
-        <div>
-            <div class="pol-kpi-value">@_retiredCount</div>
-            <div class="pol-kpi-label">Retired</div>
-        </div>
-        @if (_kpiActive == 4) { <span class="pol-kpi-dot" aria-hidden="true"></span> }
-    </div>
-</div>
-
-<!-- Filter toolbar -->
-<AppFilterPanel @bind-SearchValue="_search"
-                OnSearch="OnSearchAsync"
-                SearchPlaceholder="Search policy code or title…">
-    <Filters>
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_typeOptions"
-                        Placeholder="All Types"
-                        ShowClearButton="true"
-                        Width="170px"
-                        Value="_filterType"
-                        ValueChanged="@((string v) => { _filterType = v; ApplyFilters(); })">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
-        <SfDropDownList TValue="string" TItem="LabelValue"
-                        DataSource="_statusOptions"
-                        Placeholder="All Statuses"
-                        ShowClearButton="true"
-                        Width="150px"
-                        Value="_filterStatus"
-                        ValueChanged="@((string v) => { _filterStatus = v; ApplyFilters(); })">
-            <DropDownListFieldSettings Value="Value" Text="Label" />
-        </SfDropDownList>
-    </Filters>
-    <Actions>
-        @if (_selected.Count > 0)
-        {
-            <span class="rbl-sel-count">
-                <i class="bi bi-check2-square" aria-hidden="true"></i> @_selected.Count selected
-            </span>
-            @if (_selected.Count == 1)
-            {
-                var sel = _selected[0];
-                @if (sel.StatusCode == "Draft")
-                {
-                    <button class="um-btn um-btn-sm um-btn-success" @onclick="() => OpenPublish(sel)">
-                        <i class="bi bi-send" aria-hidden="true"></i> Publish
-                    </button>
-                }
-                @if (sel.StatusCode == "Published")
-                {
-                    <button class="um-btn um-btn-sm um-btn-warning" @onclick="() => OpenRetire(sel)">
-                        <i class="bi bi-archive" aria-hidden="true"></i> Retire
-                    </button>
-                }
-            }
-        }
-    </Actions>
-</AppFilterPanel>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    <div class="cp-toast cp-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="cp-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<!-- Grid -->
-<div class="um-grid-card app-datagrid">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay" aria-live="polite" aria-label="Loading policies…">
-            <div class="um-spinner" aria-hidden="true"></div>
-            <span>Loading policies…</span>
-        </div>
-    }
-    <SfGrid @ref="_grid"
-            TValue="PolicyDocumentDto"
-            DataSource="@_policies"
-            AllowPaging="true"
-            AllowSorting="true"
-            EnableHover="true"
-            RowHeight="56">
-        <GridPageSettings PageSize="25" PageSizes="@(new int[] { 10, 25, 50, 100 })" />
-        <GridSelectionSettings Mode="Syncfusion.Blazor.Grids.SelectionMode.Row"
-                               Type="Syncfusion.Blazor.Grids.SelectionType.Multiple" />
-        <GridEvents TValue="PolicyDocumentDto"
-                    RowSelected="OnRowSelected"
-                    RowDeselected="OnRowDeselected" />
-        <GridColumns>
-
-            <GridColumn Type="ColumnType.CheckBox" Width="48" />
-
-            <GridColumn Field="@nameof(PolicyDocumentDto.PolicyCode)"
-                        HeaderText="Policy Code"
-                        Width="140">
-                <Template>
-                    @{ var r = (PolicyDocumentDto)context; }
-                    <span class="pol-code">@r.PolicyCode</span>
-                </Template>
-            </GridColumn>
-
-            <GridColumn Field="@nameof(PolicyDocumentDto.PolicyTitle)"
-                        HeaderText="Title"
-                        Width="280">
-                <Template>
-                    @{ var r = (PolicyDocumentDto)context; }
-                    <div class="pol-title-cell">
-                        <div class="pol-title-text">@r.PolicyTitle</div>
-                        @if (!string.IsNullOrEmpty(r.OwnedByFullName))
-                        {
-                            <div class="pol-title-owner">
-                                <i class="bi bi-person" aria-hidden="true"></i> @r.OwnedByFullName
-                            </div>
-                        }
-                    </div>
-                </Template>
-            </GridColumn>
-
-            <GridColumn Field="@nameof(PolicyDocumentDto.PolicyTypeCode)"
-                        HeaderText="Type"
-                        Width="150">
-                <Template>
-                    @{ var r = (PolicyDocumentDto)context; }
-                    <span class="pol-type-badge pol-type-badge--@r.PolicyTypeCode.ToLower().Replace(" ", "-")">
-                        @r.PolicyTypeCode
-                    </span>
-                </Template>
-            </GridColumn>
-
-            <GridColumn Field="@nameof(PolicyDocumentDto.Version)"
-                        HeaderText="Version"
-                        Width="90">
-                <Template>
-                    @{ var r = (PolicyDocumentDto)context; }
-                    <span class="pol-version">v@r.Version</span>
-                </Template>
-            </GridColumn>
-
-            <GridColumn Field="@nameof(PolicyDocumentDto.EffectiveDateUtc)"
-                        HeaderText="Effective Date"
-                        Width="140">
-                <Template>
-                    @{ var r = (PolicyDocumentDto)context; }
-                    @if (r.EffectiveDateUtc.HasValue)
-                    {
-                        <span title="@r.EffectiveDateUtc.Value.ToString("g")">
-                            @r.EffectiveDateUtc.Value.ToString("MMM d, yyyy")
-                        </span>
-                    }
-                    else
-                    {
-                        <span class="pol-no-date">—</span>
-                    }
-                </Template>
-            </GridColumn>
-
-            <GridColumn Field="@nameof(PolicyDocumentDto.StatusCode)"
-                        HeaderText="Status"
-                        Width="120">
-                <Template>
-                    @{ var r = (PolicyDocumentDto)context; }
-                    <AppStatusBadge Status="@r.StatusCode" />
-                </Template>
-            </GridColumn>
-
-            <GridColumn Field="@nameof(PolicyDocumentDto.IsActive)"
-                        HeaderText="Active"
-                        Width="90">
-                <Template>
-                    @{ var r = (PolicyDocumentDto)context; }
-                    <AppStatusBadge Status="@(r.IsActive ? "Active" : "Inactive")" />
-                </Template>
-            </GridColumn>
-
-            <GridColumn HeaderText=""
-                        Width="120"
-                        AllowSorting="false"
-                        AllowFiltering="false">
-                <Template>
-                    @{ var r = (PolicyDocumentDto)context; }
-                    <div class="um-row-actions">
-                        <button class="um-btn um-btn-xs um-btn-ghost"
-                                @onclick="() => OpenEdit(r)"
-                                title="Edit"
-                                disabled="@(r.StatusCode == "Retired")">
-                            <i class="bi bi-pencil" aria-hidden="true"></i>
-                        </button>
-                        <button class="um-btn um-btn-xs um-btn-ghost"
-                                @onclick="() => OpenVersion(r)"
-                                title="New version"
-                                disabled="@(r.StatusCode == "Retired")">
-                            <i class="bi bi-layers" aria-hidden="true"></i>
-                        </button>
-                        @if (r.StatusCode == "Draft")
-                        {
-                            <button class="um-btn um-btn-xs um-btn-ghost pol-btn-publish"
-                                    @onclick="() => OpenPublish(r)"
-                                    title="Publish">
-                                <i class="bi bi-send" aria-hidden="true"></i>
-                            </button>
-                        }
-                        @if (r.StatusCode == "Published")
-                        {
-                            <button class="um-btn um-btn-xs um-btn-ghost pol-btn-retire"
-                                    @onclick="() => OpenRetire(r)"
-                                    title="Retire">
-                                <i class="bi bi-archive" aria-hidden="true"></i>
-                            </button>
-                        }
-                        <button class="um-btn um-btn-xs um-btn-ghost"
-                                @onclick="() => OpenAcknowledgements(r)"
-                                title="View acknowledgements (@r.AcknowledgementCount)">
-                            <i class="bi bi-people" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                </Template>
-            </GridColumn>
-
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<!-- ── Create / Edit dialog ─────────────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showForm"
-          Width="1120px"
-          IsModal="true"
-          ShowCloseIcon="false"
-          CloseOnEscape="true">
-    <DialogTemplates>
-        <Content>
+@if (_showForm)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseFormDialog">
+        <div class="mt-modal cp-action-modal" role="dialog" aria-modal="true" aria-labelledby="cp-form-title" @onclick:stopPropagation="true">
             <div class="um-modal-header">
-                <i class="bi @(_editTarget is null ? "bi-plus-lg" : "bi-pencil")" aria-hidden="true"></i>
-                <span>@(_editTarget is null ? "New Policy Document" : "Edit Policy Document")</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseFormDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                <i class="bi @(_editTarget is null ? "bi-plus-lg" : "bi-pencil-square")" aria-hidden="true"></i>
+                <span id="cp-form-title">@(_editTarget is null ? "New Compliance Policy" : "Edit Compliance Policy")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseFormDialog" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
-            <div class="um-modal-body pol-form">
-                @if (!string.IsNullOrEmpty(_formError))
-                {
-                    <div class="form-alert" role="alert">
-                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_formError
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="cp-modal-intro">
+                        <span class="cp-modal-chip"><i class="bi bi-shield-check" aria-hidden="true"></i> Compliance governance</span>
+                        <p>Create and maintain controlled policies with ownership, versioning, publishing, retirement, and acknowledgement workflow.</p>
                     </div>
-                }
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>Policy Code <span class="req" aria-hidden="true">*</span></label>
-                        <SfTextBox @bind-Value="_form.PolicyCode" Placeholder="e.g. POL-001" />
-                        @if (_validate && string.IsNullOrWhiteSpace(_form.PolicyCode))
-                        {
-                            <span class="pol-validation">Policy code is required.</span>
-                        }
-                    </div>
-                    <div class="um-field">
-                        <label>Version <span class="req" aria-hidden="true">*</span></label>
-                        <SfTextBox @bind-Value="_form.Version" Placeholder="e.g. 1.0" />
-                        @if (_validate && string.IsNullOrWhiteSpace(_form.Version))
-                        {
-                            <span class="pol-validation">Version is required.</span>
-                        }
-                    </div>
-                    <div class="um-field um-field--full">
-                        <label>Title <span class="req" aria-hidden="true">*</span></label>
-                        <SfTextBox @bind-Value="_form.PolicyTitle" Placeholder="Full policy title…" />
-                        @if (_validate && string.IsNullOrWhiteSpace(_form.PolicyTitle))
-                        {
-                            <span class="pol-validation">Title is required.</span>
-                        }
-                    </div>
-                    <div class="um-field">
-                        <label>Type <span class="req" aria-hidden="true">*</span></label>
-                        <SfDropDownList TValue="string" TItem="LabelValue"
-                                        DataSource="_typeOptions"
-                                        @bind-Value="_form.PolicyTypeCode"
-                                        Placeholder="Select type…">
-                            <DropDownListFieldSettings Value="Value" Text="Label" />
-                        </SfDropDownList>
-                        @if (_validate && string.IsNullOrEmpty(_form.PolicyTypeCode))
-                        {
-                            <span class="pol-validation">Type is required.</span>
-                        }
-                    </div>
-                    <div class="um-field">
-                        <label>Effective Date</label>
-                        <SfDatePicker TValue="DateTime?" @bind-Value="_form.EffectiveDateUtc"
-                                      Placeholder="Select date…" Format="MMM d, yyyy" />
-                    </div>
-                    <div class="um-field um-field--full">
-                        <label>Description</label>
-                        <SfTextBox @bind-Value="_form.Description"
-                                   Multiline="true"
-                                   Placeholder="Brief description of this policy…" />
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Policy Code <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.PolicyCode" />
+                            <ValidationMessage For="() => _form.PolicyCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Version <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.Version" />
+                            <ValidationMessage For="() => _form.Version" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Policy Title <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.PolicyTitle" />
+                            <ValidationMessage For="() => _form.PolicyTitle" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Policy Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.PolicyTypeCode">
+                                <option value="">Select type…</option>
+                                @foreach (var type in PolicyTypes)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.PolicyTypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Effective Date</label>
+                            <InputDate class="form-control" @bind-Value="_form.EffectiveDateUtc" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description</label>
+                            <InputTextArea class="form-control" rows="3" @bind-Value="_form.Description" />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Policy Content</label>
+                            <InputTextArea class="form-control cp-content-editor" rows="7" @bind-Value="_form.Content" />
+                            <ValidationMessage For="() => _form.Content" class="text-danger" />
+                        </div>
                     </div>
                 </div>
-            </div>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="CloseFormDialog" disabled="@_saving">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">
-                    @if (_saving) { <span class="um-spinner-xs" aria-hidden="true"></span> }
-                    @(_editTarget is null ? "Create Policy" : "Save Changes")
-                </button>
-            </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseFormDialog" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @(_editTarget is null ? "Create Policy" : "Save Changes")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
-<!-- ── New Version dialog ────────────────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showVersion"
-          Width="760px"
-          IsModal="true"
-          ShowCloseIcon="false"
-          CloseOnEscape="true">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-layers" aria-hidden="true"></i><span>New Version — @_versionTarget?.PolicyCode</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showVersion = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
-            <div class="um-modal-body pol-form">
-                @if (!string.IsNullOrEmpty(_versionError))
-                {
-                    <div class="form-alert" role="alert">
-                        <i class="bi bi-exclamation-circle" aria-hidden="true"></i> @_versionError
-                    </div>
-                }
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>New Version <span class="req" aria-hidden="true">*</span></label>
-                        <SfTextBox @bind-Value="_versionForm.NewVersion" Placeholder="e.g. 2.0" />
-                        @if (_validate && string.IsNullOrWhiteSpace(_versionForm.NewVersion))
-                        {
-                            <span class="pol-validation">Version is required.</span>
-                        }
-                    </div>
-                    <div class="um-field">
-                        <label>Effective Date</label>
-                        <SfDatePicker TValue="DateTime?" @bind-Value="_versionForm.EffectiveDateUtc"
-                                      Placeholder="Select date…" Format="MMM d, yyyy" />
-                    </div>
-                    <div class="um-field um-field--full">
-                        <label>Description Override</label>
-                        <SfTextBox @bind-Value="_versionForm.Description"
-                                   Multiline="true"
-                                   Placeholder="Leave blank to inherit from current version…" />
+@if (_showVersion)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseVersion">
+        <div class="mt-modal cp-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="cp-version-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-layers" aria-hidden="true"></i>
+                <span id="cp-version-title">New Version — @_versionTarget?.PolicyCode</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseVersion" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_versionForm" OnValidSubmit="ExecuteVersionAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>New Version <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_versionForm.NewVersion" />
+                            <ValidationMessage For="() => _versionForm.NewVersion" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Effective Date</label>
+                            <InputDate class="form-control" @bind-Value="_versionForm.EffectiveDateUtc" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description Override</label>
+                            <InputTextArea class="form-control" rows="4" @bind-Value="_versionForm.Description" />
+                        </div>
                     </div>
                 </div>
-            </div>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showVersion = false" disabled="@_saving">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="ExecuteVersionAsync" disabled="@_saving">
-                    @if (_saving) { <span class="um-spinner-xs" aria-hidden="true"></span> }
-                    Create Version
-                </button>
-            </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseVersion" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">Create Version</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
-<!-- ── Acknowledgements panel ────────────────────────────────────────────── -->
-<SfDialog @bind-Visible="_showAck"
-          Width="920px"
-          IsModal="true"
-          ShowCloseIcon="false"
-          CloseOnEscape="true">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-people" aria-hidden="true"></i><span>Acknowledgements — @_ackTarget?.PolicyCode v@_ackTarget?.Version</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showAck = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
-            <div class="um-modal-body pol-ack-panel">
+@if (_showAck)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseAcknowledgements">
+        <div class="mt-modal cp-action-modal" role="dialog" aria-modal="true" aria-labelledby="cp-ack-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-people-fill" aria-hidden="true"></i>
+                <span id="cp-ack-title">Acknowledgements — @_ackTarget?.PolicyCode v@_ackTarget?.Version</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseAcknowledgements"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="um-modal-body">
                 @if (_ackLoading)
                 {
-                    <div class="pol-ack-loading">
-                        <span class="um-spinner-xs" aria-hidden="true"></span> Loading…
-                    </div>
+                    <div class="cp-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Loading acknowledgements…</span></div>
                 }
-                else if (_acknowledgements.Count == 0)
+                else if (!_acknowledgements.Any())
                 {
-                    <div class="pol-ack-empty">
-                        <i class="bi bi-people pol-ack-empty-icon" aria-hidden="true"></i>
-                        <p>No acknowledgements recorded for this policy.</p>
-                    </div>
+                    <div class="cp-empty-inline"><i class="bi bi-people" aria-hidden="true"></i><strong>No acknowledgements recorded</strong><span>Publish the policy and assign audiences to begin acknowledgement tracking.</span></div>
                 }
                 else
                 {
-                    <div class="pol-ack-count">
-                        <strong>@_acknowledgements.Count</strong> acknowledgement@(_acknowledgements.Count == 1 ? "" : "s")
-                    </div>
-                    <div class="pol-ack-table-wrap">
-                        <table class="pol-ack-table">
-                            <thead>
-                                <tr>
-                                    <th>User</th>
-                                    <th>Acknowledged</th>
-                                    <th>Channel</th>
-                                </tr>
-                            </thead>
+                    <div class="cp-mini-table-wrap">
+                        <table class="cp-mini-table" aria-label="Policy acknowledgements">
+                            <thead><tr><th>User</th><th>Acknowledged</th><th>Channel</th><th>IP</th></tr></thead>
                             <tbody>
-                                @foreach (var a in _acknowledgements)
+                                @foreach (var ack in _acknowledgements)
                                 {
                                     <tr>
-                                        <td>
-                                            <div class="pol-ack-user">
-                                                <span class="pol-ack-avatar" aria-hidden="true">
-                                                    <i class="bi bi-person-fill"></i>
-                                                </span>
-                                                <div>
-                                                    <div class="pol-ack-name">@a.UserFullName</div>
-                                                    <div class="pol-ack-email">@a.UserEmail</div>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td>
-                                            <span title="@a.AcknowledgedDateUtc.ToString("g")">
-                                                @FormatRelative(a.AcknowledgedDateUtc)
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <span class="pol-ack-channel">@(a.Channel ?? "—")</span>
-                                        </td>
+                                        <td><strong>@ack.UserFullName</strong><span>@ack.UserEmail</span></td>
+                                        <td>@ack.AcknowledgedDateUtc.ToLocalTime().ToString("MM/dd/yyyy h:mm tt")</td>
+                                        <td>@(ack.Channel ?? "—")</td>
+                                        <td>@(ack.IpAddress ?? "—")</td>
                                     </tr>
                                 }
                             </tbody>
@@ -483,155 +168,344 @@
                 }
             </div>
             <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showAck = false">Close</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseAcknowledgements">Close</button>
             </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
-<!-- Publish confirmation -->
-<AppConfirmActionDialog @bind-Visible="_showPublish"
-                        Title="Publish Policy"
-                        Message="@($"Publish '{_actionTarget?.PolicyTitle}' (v{_actionTarget?.Version})?")"
-                        Detail="The policy will become active and visible to all users. This action cannot be undone without retiring the policy."
-                        Variant="success"
-                        ConfirmText="Publish"
-                        IsBusy="_confirming"
-                        OnConfirm="ExecutePublishAsync" />
+@if (_confirmAction is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="mt-modal cp-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="cp-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_confirmAction == "Retire" ? "um-confirm-icon--warning" : "um-confirm-icon--success")"><i class="bi @(_confirmAction == "Retire" ? "bi-archive-fill" : "bi-send-check-fill")" aria-hidden="true"></i></div>
+                <div class="um-confirm-message">
+                    <h6 id="cp-confirm-title">@_confirmAction Policy?</h6>
+                    <p>@ConfirmMessage</p>
+                </div>
+                <div class="um-modal-footer w-100">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirm" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_confirmAction == "Retire" ? "um-btn-warning" : "um-btn-success")" @onclick="ExecuteConfirmAsync" disabled="@_busy">@_confirmAction</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
 
-<!-- Retire confirmation -->
-<AppConfirmActionDialog @bind-Visible="_showRetire"
-                        Title="Retire Policy"
-                        Message="@($"Retire '{_actionTarget?.PolicyTitle}' (v{_actionTarget?.Version})?")"
-                        Detail="The policy will be marked inactive and no longer available for new acknowledgements."
-                        Variant="warning"
-                        ConfirmText="Retire"
-                        IsBusy="_confirming"
-                        OnConfirm="ExecuteRetireAsync" />
+@if (_drawerRow is not null)
+{
+    <div class="cp-drawer-backdrop" @onclick="CloseDrawer"></div>
+    <aside class="cp-drawer" aria-label="Compliance policy details">
+        <div class="cp-drawer-head">
+            <div>
+                <h2 class="cp-drawer-title">@_drawerRow.PolicyTitle</h2>
+                <span class="cp-drawer-sub">@_drawerRow.PolicyCode · @_drawerRow.PolicyTypeCode · v@_drawerRow.Version</span>
+            </div>
+            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="CloseDrawer"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+        <div class="cp-drawer-body">
+            <div class="cp-drawer-banner cp-drawer-banner--@CssSafe(_drawerRow.StatusCode)">
+                <i class="bi @StatusIcon(_drawerRow.StatusCode)" aria-hidden="true"></i>
+                <span>@_drawerRow.StatusCode</span>
+                <strong>@LifecycleLabel(_drawerRow)</strong>
+            </div>
+            <div class="cp-drawer-meta">
+                @DrawerField("Type", _drawerRow.PolicyTypeCode)
+                @DrawerField("Version", _drawerRow.Version)
+                @DrawerField("Effective", _drawerRow.EffectiveDateUtc?.ToLocalTime().ToString("MM/dd/yyyy") ?? "—")
+                @DrawerField("Owner", _drawerRow.OwnedByFullName ?? "—")
+                @DrawerField("Created", _drawerRow.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy"))
+                @DrawerField("Modified", _drawerRow.ModifiedDateUtc?.ToLocalTime().ToString("MM/dd/yyyy") ?? "—")
+                @DrawerField("Published", _drawerRow.PublishedDateUtc?.ToLocalTime().ToString("MM/dd/yyyy") ?? "—")
+                @DrawerField("Retired", _drawerRow.RetiredDateUtc?.ToLocalTime().ToString("MM/dd/yyyy") ?? "—")
+            </div>
+            <section class="cp-drawer-section">
+                <h3><i class="bi bi-card-text" aria-hidden="true"></i> Description</h3>
+                <p>@(string.IsNullOrWhiteSpace(_drawerRow.Description) ? "No description has been provided." : _drawerRow.Description)</p>
+            </section>
+            <section class="cp-drawer-section">
+                <h3><i class="bi bi-file-text" aria-hidden="true"></i> Policy Content</h3>
+                <p>@(string.IsNullOrWhiteSpace(_drawerRow.Content) ? "No policy content has been added yet." : _drawerRow.Content)</p>
+            </section>
+            <section class="cp-drawer-section">
+                <h3><i class="bi bi-layers" aria-hidden="true"></i> Version History</h3>
+                @if (_versions.Any())
+                {
+                    <div class="cp-mini-list">
+                        @foreach (var version in _versions.Take(6))
+                        {
+                            <div class="cp-mini-item">
+                                <strong>@version.PolicyCode v@version.Version · @version.StatusCode</strong>
+                                <span>@version.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy h:mm tt") · @(version.EffectiveDateUtc?.ToLocalTime().ToString("MM/dd/yyyy") ?? "No effective date")</span>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <p>No version history is available.</p>
+                }
+            </section>
+            <section class="cp-drawer-section">
+                <h3><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Audience</h3>
+                @if (_audience.Any())
+                {
+                    <div class="cp-tag-list">
+                        @foreach (var audience in _audience.Take(8))
+                        {
+                            <span>@audience.TargetTypeCode: @audience.TargetName</span>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <p>No audience has been assigned.</p>
+                }
+            </section>
+            <div class="cp-drawer-actions">
+                <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_drawerRow)"><i class="bi bi-pencil-square" aria-hidden="true"></i> Edit</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenVersion(_drawerRow)"><i class="bi bi-layers" aria-hidden="true"></i> New Version</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenAcknowledgementsAsync(_drawerRow)"><i class="bi bi-people" aria-hidden="true"></i> Acknowledgements</button>
+                @if (_drawerRow.StatusCode == "Draft")
+                {
+                    <button type="button" class="um-btn um-btn-success um-btn-sm" @onclick="OpenDrawerPublish"><i class="bi bi-send-check" aria-hidden="true"></i> Publish</button>
+                }
+                @if (_drawerRow.StatusCode == "Published")
+                {
+                    <button type="button" class="um-btn um-btn-warning um-btn-sm" @onclick="OpenDrawerRetire"><i class="bi bi-archive" aria-hidden="true"></i> Retire</button>
+                }
+            </div>
+        </div>
+    </aside>
+}
 
-<!-- Toast -->
-<SfToast @ref="_toast"
-         ShowCloseButton="true"
-         Timeout="4000"
-         NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+<div class="cp-enterprise-page" @onclick="CloseActionMenu">
+    <div class="cp-header">
+        <div class="cp-header-left">
+            <div class="cp-lob-icon"><i class="bi bi-file-earmark-text" aria-hidden="true"></i></div>
+            <div class="cp-header-info">
+                <div class="cp-title-row">
+                    <h1 class="cp-page-title">Compliance Policies</h1>
+                    <span class="cp-status-pill">@FilteredRows.Count() visible</span>
+                    @if (HasFilters)
+                    {
+                        <span class="cp-filter-pill">Filtered</span>
+                    }
+                </div>
+                <div class="cp-sub-row">
+                    <span class="cp-sub-chip"><i class="bi bi-stack" aria-hidden="true"></i>@_rows.Count total policies</span>
+                    <span class="cp-sub-chip"><i class="bi bi-pencil" aria-hidden="true"></i>@_rows.Count(r => r.StatusCode == "Draft") drafts</span>
+                    <span class="cp-sub-chip"><i class="bi bi-check-circle" aria-hidden="true"></i>@_rows.Count(r => r.StatusCode == "Published") published</span>
+                    <span class="cp-sub-chip"><i class="bi bi-people" aria-hidden="true"></i>@_rows.Sum(r => r.AcknowledgementCount) acknowledgements</span>
+                </div>
+            </div>
+        </div>
+        <div class="cp-header-actions">
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "cp-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Policy</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies")'><i class="bi bi-shield-check" aria-hidden="true"></i> Policies</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/compliance/acknowledgements")'><i class="bi bi-check2-circle" aria-hidden="true"></i> Acknowledgements</button>
+        </div>
+    </div>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger cp-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError</div>
+    }
+
+    <div class="cp-kpi-strip">
+        @KpiCard("bi-file-earmark-text", "Total", _rows.Count.ToString(), "cp-kpi-total", null)
+        @KpiCard("bi-pencil-fill", "Draft", _rows.Count(r => r.StatusCode == "Draft").ToString(), "cp-kpi-draft", "Draft")
+        @KpiCard("bi-check-circle-fill", "Published", _rows.Count(r => r.StatusCode == "Published").ToString(), "cp-kpi-published", "Published")
+        @KpiCard("bi-archive-fill", "Retired", _rows.Count(r => r.StatusCode == "Retired").ToString(), "cp-kpi-retired", "Retired")
+        @KpiCard("bi-people-fill", "Acknowledged", _rows.Sum(r => r.AcknowledgementCount).ToString(), "cp-kpi-ack", "__ack")
+        @KpiCard("bi-calendar-check", "Effective", _rows.Count(r => r.EffectiveDateUtc is not null).ToString(), "cp-kpi-effective", "__effective")
+    </div>
+
+    <div class="cp-enterprise-search" role="search" aria-label="Search compliance policies">
+        <div class="cp-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="cp-search-body">
+            <label for="cp-search-input">Enterprise search</label>
+            <input id="cp-search-input" class="cp-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search code, title, type, status, owner, content, dates…" />
+            <div class="cp-search-hint">Searches policy metadata, lifecycle state, ownership, content, and dates as you type.</div>
+        </div>
+        <div class="cp-search-result"><strong>@FilteredRows.Count()</strong><span>matches</span></div>
+        @if (HasFilters)
+        {
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm cp-search-clear" @onclick="ClearFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        }
+    </div>
+
+    <div class="cp-view-tabs" role="tablist" aria-label="Compliance policy views">
+        @foreach (var tab in _tabs)
+        {
+            <button class="cp-view-tab @(_activeTab == tab.Key ? "cp-view-tab--active" : null)" type="button" role="tab" aria-selected="@(_activeTab == tab.Key)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <span class="cp-tab-count">@TabCount(tab.Key)</span>
+            </button>
+        }
+    </div>
+
+    <div class="cp-grid-wrap">
+        @if (_loading)
+        {
+            <div class="cp-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Loading compliance policies…</span></div>
+        }
+        else if (!PagedRows.Any())
+        {
+            <div class="cp-empty-state">
+                <i class="bi bi-file-earmark-x" aria-hidden="true"></i>
+                <strong>No compliance policies found</strong>
+                <span>Create a policy or adjust the current tab, KPI, or search criteria.</span>
+            </div>
+        }
+        else
+        {
+            <div class="cp-grid-toolbar">
+                <div><strong>@FilteredRows.Count()</strong> policies @if (HasFilters) { <span class="cp-filter-note">Filtered</span> }</div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            </div>
+            <div class="cp-table-scroll">
+                <table class="cp-table" aria-label="Compliance policies register">
+                    <thead>
+                        <tr>
+                            <th>Policy</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                            <th>Version</th>
+                            <th>Effective</th>
+                            <th>Owner</th>
+                            <th class="cp-num">Acknowledgements</th>
+                            <th>Lifecycle</th>
+                            <th class="cp-actions-col"><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in PagedRows)
+                        {
+                            <tr class="cp-table-row" @onclick="() => OpenDetailAsync(row)">
+                                <td>
+                                    <div class="cp-policy-cell">
+                                        <span class="cp-avatar"><i class="bi @TypeIcon(row.PolicyTypeCode)" aria-hidden="true"></i></span>
+                                        <div><strong>@row.PolicyTitle</strong><span>@row.PolicyCode · @(row.Description ?? "Compliance policy")</span></div>
+                                    </div>
+                                </td>
+                                <td>@TypeChip(row.PolicyTypeCode)</td>
+                                <td>@StatusChip(row.StatusCode)</td>
+                                <td><span class="cp-version">v@row.Version</span></td>
+                                <td>@(row.EffectiveDateUtc?.ToLocalTime().ToString("MM/dd/yyyy") ?? "—")</td>
+                                <td>@(row.OwnedByFullName ?? "—")</td>
+                                <td class="cp-num"><span class="cp-doc-count">@row.AcknowledgementCount</span></td>
+                                <td>@LifecycleCell(row)</td>
+                                <td class="cp-actions-col">@CtxBtn(row)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="cp-pager">
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                <span class="cp-page-chip">@PageSummary</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+            </div>
+        }
+    </div>
+</div>
+
+@if (_openActionMenuFor is not null)
+{
+    <div class="cp-context-menu" style="left:@_menuXpx; top:@_menuYpx" @onclick:stopPropagation="true">
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("View")'><i class="bi bi-eye" aria-hidden="true"></i><span>View details</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Edit")' disabled="@IsSelectedRetired"><i class="bi bi-pencil-square" aria-hidden="true"></i><span>Edit policy</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Version")' disabled="@IsSelectedRetired"><i class="bi bi-layers" aria-hidden="true"></i><span>Create new version</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Acknowledgements")'><i class="bi bi-people" aria-hidden="true"></i><span>Acknowledgements</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("History")'><i class="bi bi-clock-history" aria-hidden="true"></i><span>Version history</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Publish")' disabled="@(!IsSelectedDraft)"><i class="bi bi-send-check" aria-hidden="true"></i><span>Publish</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Retire")' disabled="@(!IsSelectedPublished)"><i class="bi bi-archive" aria-hidden="true"></i><span>Retire</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("OpenDetailPage")'><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i><span>Open full detail</span></button>
+    </div>
+}
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    // ── Constants ──────────────────────────────────────────────────────────────
     private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private bool _loading;
+    private bool _busy;
+    private bool _toastVisible;
+    private bool _showForm;
+    private bool _showVersion;
+    private bool _showAck;
+    private bool _ackLoading;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _searchText;
+    private string? _kpiFilter;
+    private string? _confirmAction;
+    private string _activeTab = "all";
+    private Guid? _openActionMenuFor;
+    private string _menuXpx = "0px";
+    private string _menuYpx = "0px";
+    private int _page = 1;
+    private const int PageSize = 20;
 
-    // ── Refs ───────────────────────────────────────────────────────────────────
-    private SfGrid<PolicyDocumentDto>? _grid;
-    private SfToast?                   _toast;
+    private readonly List<PolicyDocumentDto> _rows = [];
+    private readonly List<PolicyDocumentDto> _versions = [];
+    private readonly List<PolicyAcknowledgementDto> _acknowledgements = [];
+    private readonly List<PolicyAudienceDto> _audience = [];
 
-    // ── Data ───────────────────────────────────────────────────────────────────
-    private List<PolicyDocumentDto>          _all              = [];
-    private List<PolicyDocumentDto>          _policies         = [];
-    private List<PolicyDocumentDto>          _selected         = [];
-    private List<PolicyAcknowledgementDto>   _acknowledgements = [];
-
-    // ── Flags ──────────────────────────────────────────────────────────────────
-    private bool _loading    = false;
-    private bool _saving     = false;
-    private bool _confirming = false;
-    private bool _ackLoading = false;
-    private bool _validate   = false;
-
-    // ── Dialog visibility ──────────────────────────────────────────────────────
-    private bool _showForm    = false;
-    private bool _showVersion = false;
-    private bool _showAck     = false;
-    private bool _showPublish = false;
-    private bool _showRetire  = false;
-
-    // ── Targets ────────────────────────────────────────────────────────────────
+    private PolicyDocumentDto? _selected;
+    private PolicyDocumentDto? _drawerRow;
     private PolicyDocumentDto? _editTarget;
     private PolicyDocumentDto? _versionTarget;
     private PolicyDocumentDto? _ackTarget;
-    private PolicyDocumentDto? _actionTarget;
+    private PolicyDocumentDto? _confirmTarget;
+    private FormModel _form = new();
+    private VersionFormModel _versionForm = new();
 
-    // ── Form state ─────────────────────────────────────────────────────────────
-    private FormModel          _form        = new();
-    private VersionFormModel   _versionForm = new();
-    private string             _formError   = string.Empty;
-    private string             _versionError = string.Empty;
-    private string?            _loadError;
+    private static readonly string[] PolicyTypes = ["Information Security", "Privacy", "Human Resources", "Finance", "Operations", "Compliance", "IT Governance"];
 
-    // ── Filters ────────────────────────────────────────────────────────────────
-    private string _search       = string.Empty;
-    private string _filterType   = string.Empty;
-    private string _filterStatus = string.Empty;
-
-    // ── KPI state ──────────────────────────────────────────────────────────────
-    private int _kpiActive = 0; // 0=none 1=total 2=draft 3=published 4=retired
-
-    private string KpiClassTotal     => "pol-kpi-card pol-kpi-card--total"     + (_kpiActive == 1 ? " pol-kpi-card--sel" : "");
-    private string KpiClassDraft     => "pol-kpi-card pol-kpi-card--draft"     + (_kpiActive == 2 ? " pol-kpi-card--sel" : "");
-    private string KpiClassPublished => "pol-kpi-card pol-kpi-card--published" + (_kpiActive == 3 ? " pol-kpi-card--sel" : "");
-    private string KpiClassRetired   => "pol-kpi-card pol-kpi-card--retired"   + (_kpiActive == 4 ? " pol-kpi-card--sel" : "");
-
-    // ── KPI counters ───────────────────────────────────────────────────────────
-    private int _totalCount;
-    private int _draftCount;
-    private int _publishedCount;
-    private int _retiredCount;
-
-    // ── Static options ─────────────────────────────────────────────────────────
-    private static readonly List<LabelValue> _typeOptions =
+    private readonly TabDef[] _tabs =
     [
-        new("Information Security",  "Information Security"),
-        new("Privacy",               "Privacy"),
-        new("Human Resources",       "Human Resources"),
-        new("Finance",               "Finance"),
-        new("Operations",            "Operations"),
-        new("Compliance",            "Compliance"),
-        new("IT Governance",         "IT Governance"),
+        new("all", "All", "bi-stack"),
+        new("draft", "Draft", "bi-pencil"),
+        new("published", "Published", "bi-check-circle"),
+        new("retired", "Retired", "bi-archive"),
+        new("effective", "Effective", "bi-calendar-check"),
+        new("ack", "Acknowledged", "bi-people")
     ];
 
-    private static readonly List<LabelValue> _statusOptions =
-    [
-        new("Draft",     "Draft"),
-        new("Published", "Published"),
-        new("Retired",   "Retired"),
-    ];
-
-    // ── Lifecycle ──────────────────────────────────────────────────────────────
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home",              "/"),
-            new("Compliance",        "/compliance"),
-            new("Policy Documents",  "/compliance/policies"));
-
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Compliance", "/compliance"), new("Compliance Policies", "/compliance/policies"));
         await LoadAsync();
     }
 
-    // ── Data loading ───────────────────────────────────────────────────────────
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
+
     private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
-        StateHasChanged();
         try
         {
-            var result = await Api.SearchPolicyDocumentsAsync(_tenantId);
-            _all = result?.Items.ToList() ?? [];
-            _selected.Clear();
-            ComputeKpi();
-            ApplyFilters();
+            var result = await Api.SearchPolicyDocumentsAsync(_tenantId, pageNumber: 1, pageSize: 500);
+            _rows.Clear();
+            _rows.AddRange((result?.Items ?? []).OrderBy(x => x.PolicyCode).ThenByDescending(x => x.CreatedDateUtc));
+            _page = 1;
         }
         catch (Exception ex)
         {
-            _all = [];
-            _policies = [];
-            _loadError = $"Failed to load policy documents: {ex.Message}";
+            _loadError = $"Failed to load compliance policies: {ex.Message}";
         }
         finally
         {
@@ -639,248 +513,288 @@
         }
     }
 
-    private async Task OnSearchAsync(string _) => await LoadAsync();
-
-    private void ApplyFilters()
+    private string? SearchText
     {
-        var term = _search.Trim();
-        _policies = _all.Where(p =>
-            (string.IsNullOrEmpty(_filterType)   || p.PolicyTypeCode == _filterType) &&
-            (string.IsNullOrEmpty(_filterStatus) || p.StatusCode     == _filterStatus) &&
-            (string.IsNullOrEmpty(term) ||
-                (p.PolicyCode?.Contains(term,  StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (p.PolicyTitle?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false))
-        ).ToList();
-        StateHasChanged();
-    }
-
-    private void SetKpiFilter(int n)
-    {
-        _kpiActive    = _kpiActive == n ? 0 : n;
-        _filterStatus = string.Empty;
-        _filterType   = string.Empty;
-        _filterStatus = _kpiActive switch
+        get => _searchText;
+        set
         {
-            2 => "Draft",
-            3 => "Published",
-            4 => "Retired",
-            _ => string.Empty,
-        };
-        ApplyFilters();
+            _searchText = value;
+            _page = 1;
+        }
     }
 
-    private void ComputeKpi()
+    private IEnumerable<PolicyDocumentDto> FilteredRows => _rows.Where(MatchesActiveTab).Where(MatchesKpiFilter).Where(MatchesSearch).ToList();
+    private IEnumerable<PolicyDocumentDto> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
+    private bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || _activeTab != "all" || _kpiFilter is not null;
+    private bool IsSelectedDraft => _selected?.StatusCode == "Draft";
+    private bool IsSelectedPublished => _selected?.StatusCode == "Published";
+    private bool IsSelectedRetired => _selected?.StatusCode == "Retired";
+    private string PageSummary => $"Page {_page} of {TotalPages} · {FilteredRows.Count()} records";
+    private string ConfirmMessage => _confirmTarget is null ? string.Empty : _confirmAction == "Retire"
+        ? $"Retire '{_confirmTarget.PolicyTitle}' v{_confirmTarget.Version}? The policy will be inactive and retained for audit history."
+        : $"Publish '{_confirmTarget.PolicyTitle}' v{_confirmTarget.Version}? The policy will become active for acknowledgement governance.";
+
+    private bool MatchesActiveTab(PolicyDocumentDto row) => _activeTab switch
     {
-        _totalCount     = _all.Count;
-        _draftCount     = _all.Count(p => p.StatusCode == "Draft");
-        _publishedCount = _all.Count(p => p.StatusCode == "Published");
-        _retiredCount   = _all.Count(p => p.StatusCode == "Retired");
-    }
+        "draft" => row.StatusCode == "Draft",
+        "published" => row.StatusCode == "Published",
+        "retired" => row.StatusCode == "Retired",
+        "effective" => row.EffectiveDateUtc is not null,
+        "ack" => row.AcknowledgementCount > 0,
+        _ => true
+    };
 
-    // ── Row selection ──────────────────────────────────────────────────────────
-    private void OnRowSelected(RowSelectEventArgs<PolicyDocumentDto> args)
+    private bool MatchesKpiFilter(PolicyDocumentDto row) => _kpiFilter switch
     {
-        if (!_selected.Contains(args.Data))
-            _selected.Add(args.Data);
-    }
+        null => true,
+        "__ack" => row.AcknowledgementCount > 0,
+        "__effective" => row.EffectiveDateUtc is not null,
+        _ => row.StatusCode == _kpiFilter
+    };
 
-    private void OnRowDeselected(RowDeselectEventArgs<PolicyDocumentDto> args)
+    private bool MatchesSearch(PolicyDocumentDto row)
     {
-        _selected.Remove(args.Data);
+        if (string.IsNullOrWhiteSpace(_searchText)) return true;
+        var s = _searchText.Trim();
+        return Contains(row.PolicyCode, s)
+            || Contains(row.PolicyTitle, s)
+            || Contains(row.PolicyTypeCode, s)
+            || Contains(row.StatusCode, s)
+            || Contains(row.Description, s)
+            || Contains(row.Content, s)
+            || Contains(row.OwnedByFullName, s)
+            || Contains(row.Version, s)
+            || Contains(row.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy"), s)
+            || Contains(row.EffectiveDateUtc?.ToLocalTime().ToString("MM/dd/yyyy"), s);
     }
 
-    // ── Create / Edit ──────────────────────────────────────────────────────────
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+
+    private void SetActiveTab(string key)
+    {
+        _activeTab = key;
+        _page = 1;
+    }
+
+    private void SetKpiFilter(string? key)
+    {
+        _kpiFilter = Equals(_kpiFilter, key) ? null : key;
+        _page = 1;
+    }
+
+    private void ClearFilters()
+    {
+        _searchText = null;
+        _kpiFilter = null;
+        _activeTab = "all";
+        _page = 1;
+    }
+
+    private void PreviousPage() => _page = Math.Max(1, _page - 1);
+    private void NextPage() => _page = Math.Min(TotalPages, _page + 1);
+
+    private int TabCount(string key) => key switch
+    {
+        "draft" => _rows.Count(r => r.StatusCode == "Draft"),
+        "published" => _rows.Count(r => r.StatusCode == "Published"),
+        "retired" => _rows.Count(r => r.StatusCode == "Retired"),
+        "effective" => _rows.Count(r => r.EffectiveDateUtc is not null),
+        "ack" => _rows.Count(r => r.AcknowledgementCount > 0),
+        _ => _rows.Count
+    };
+
     private void OpenCreate()
     {
-        _editTarget  = null;
-        _form        = new();
-        _formError   = string.Empty;
-        _validate    = false;
-        _showForm    = true;
+        _editTarget = null;
+        _form = new FormModel { EffectiveDateUtc = DateTime.Today.AddDays(30) };
+        _showForm = true;
     }
 
-    private void OpenEdit(PolicyDocumentDto p)
+    private void OpenEdit(PolicyDocumentDto row)
     {
-        _editTarget = p;
+        _editTarget = row;
         _form = new FormModel
         {
-            PolicyCode      = p.PolicyCode,
-            PolicyTitle     = p.PolicyTitle,
-            PolicyTypeCode  = p.PolicyTypeCode,
-            Version         = p.Version,
-            EffectiveDateUtc = p.EffectiveDateUtc,
-            Description     = p.Description,
+            PolicyCode = row.PolicyCode,
+            PolicyTitle = row.PolicyTitle,
+            PolicyTypeCode = row.PolicyTypeCode,
+            Version = row.Version,
+            EffectiveDateUtc = row.EffectiveDateUtc,
+            Description = row.Description,
+            Content = row.Content
         };
-        _formError = string.Empty;
-        _validate  = false;
-        _showForm  = true;
+        _showForm = true;
     }
 
-    private void CloseFormDialog()
-    {
-        _showForm = false;
-        _validate = false;
-    }
+    private void CloseFormDialog() => _showForm = false;
 
     private async Task SaveAsync()
     {
-        _validate = true;
-        if (string.IsNullOrWhiteSpace(_form.PolicyCode) ||
-            string.IsNullOrWhiteSpace(_form.PolicyTitle) ||
-            string.IsNullOrWhiteSpace(_form.Version) ||
-            string.IsNullOrEmpty(_form.PolicyTypeCode))
-            return;
-
-        _saving = true;
+        _busy = true;
         try
         {
             if (_editTarget is null)
             {
                 await Api.CreatePolicyDocumentAsync(new CreatePolicyDocumentRequest
                 {
-                    TenantId         = _tenantId,
-                    PolicyCode       = _form.PolicyCode,
-                    PolicyTitle      = _form.PolicyTitle,
-                    PolicyTypeCode   = _form.PolicyTypeCode,
-                    Version          = _form.Version,
+                    TenantId = _tenantId,
+                    PolicyCode = _form.PolicyCode,
+                    PolicyTitle = _form.PolicyTitle,
+                    PolicyTypeCode = _form.PolicyTypeCode,
+                    Version = _form.Version,
                     EffectiveDateUtc = _form.EffectiveDateUtc,
-                    Description      = _form.Description,
+                    Description = _form.Description,
+                    OwnedByUserId = _tenantAdminUserId,
+                    CreatedByUserId = _tenantAdminUserId
                 });
-                await ShowToastAsync("Policy document created.", "e-toast-success");
+                ShowToast("Compliance policy created.");
             }
             else
             {
                 await Api.UpdatePolicyDocumentAsync(_editTarget.PolicyDocumentId, new UpdatePolicyDocumentRequest
                 {
-                    PolicyCode       = _form.PolicyCode,
-                    PolicyTitle      = _form.PolicyTitle,
-                    PolicyTypeCode   = _form.PolicyTypeCode,
-                    Version          = _form.Version,
+                    PolicyCode = _form.PolicyCode,
+                    PolicyTitle = _form.PolicyTitle,
+                    PolicyTypeCode = _form.PolicyTypeCode,
+                    Version = _form.Version,
                     EffectiveDateUtc = _form.EffectiveDateUtc,
-                    Description      = _form.Description,
+                    Description = _form.Description,
+                    Content = _form.Content,
+                    OwnedByUserId = _editTarget.OwnedByUserId,
+                    ModifiedByUserId = _tenantAdminUserId
                 });
-                await ShowToastAsync("Policy document updated.", "e-toast-success");
+                ShowToast("Compliance policy updated.");
             }
+
             _showForm = false;
             await LoadAsync();
+            if (_editTarget is not null)
+            {
+                await RefreshDrawerAsync(_editTarget.PolicyDocumentId);
+            }
         }
         catch (Exception ex)
         {
-            _formError = ex.Message;
-            await ShowToastAsync($"Save failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Save failed: {ex.Message}", "danger");
         }
         finally
         {
-            _saving   = false;
-            _validate = false;
+            _busy = false;
         }
     }
 
-    // ── New Version ────────────────────────────────────────────────────────────
-    private void OpenVersion(PolicyDocumentDto p)
+    private void OpenVersion(PolicyDocumentDto row)
     {
-        _versionTarget = p;
-        _versionForm   = new();
-        _versionError  = string.Empty;
-        _validate      = false;
-        _showVersion   = true;
+        _versionTarget = row;
+        _versionForm = new VersionFormModel { NewVersion = NextVersion(row.Version), EffectiveDateUtc = row.EffectiveDateUtc?.AddMonths(12) ?? DateTime.Today.AddMonths(12) };
+        _showVersion = true;
     }
+
+    private void CloseVersion() => _showVersion = false;
 
     private async Task ExecuteVersionAsync()
     {
-        _validate = true;
-        if (string.IsNullOrWhiteSpace(_versionForm.NewVersion)) return;
-
-        _saving = true;
+        if (_versionTarget is null) return;
+        _busy = true;
         try
         {
-            var newId = await Api.CreatePolicyDocumentVersionAsync(_versionTarget!.PolicyDocumentId, new VersionPolicyDocumentRequest
+            await Api.CreatePolicyDocumentVersionAsync(_versionTarget.PolicyDocumentId, new VersionPolicyDocumentRequest
             {
-                NewVersion        = _versionForm.NewVersion,
-                EffectiveDateUtc  = _versionForm.EffectiveDateUtc,
-                Description       = _versionForm.Description,
+                NewVersion = _versionForm.NewVersion,
+                EffectiveDateUtc = _versionForm.EffectiveDateUtc,
+                Description = _versionForm.Description,
+                CreatedByUserId = _tenantAdminUserId
             });
             _showVersion = false;
-            await ShowToastAsync($"Version {_versionForm.NewVersion} created as Draft.", "e-toast-success");
+            ShowToast($"Version {_versionForm.NewVersion} created as Draft.");
             await LoadAsync();
+            await RefreshDrawerAsync(_versionTarget.PolicyDocumentId);
         }
         catch (Exception ex)
         {
-            _versionError = ex.Message;
-            await ShowToastAsync($"Version failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Version creation failed: {ex.Message}", "danger");
         }
         finally
         {
-            _saving   = false;
-            _validate = false;
+            _busy = false;
         }
     }
 
-    // ── Publish ────────────────────────────────────────────────────────────────
-    private void OpenPublish(PolicyDocumentDto p)  { _actionTarget = p; _showPublish = true; }
-
-    private async Task ExecutePublishAsync()
+    private void OpenConfirm(PolicyDocumentDto row, string action)
     {
-        if (_actionTarget is null) return;
-        _confirming = true;
+        _confirmTarget = row;
+        _confirmAction = action;
+    }
+
+    private void OpenDrawerPublish()
+    {
+        if (_drawerRow is not null)
+        {
+            OpenConfirm(_drawerRow, "Publish");
+        }
+    }
+
+    private void OpenDrawerRetire()
+    {
+        if (_drawerRow is not null)
+        {
+            OpenConfirm(_drawerRow, "Retire");
+        }
+    }
+
+    private void CloseConfirm()
+    {
+        _confirmTarget = null;
+        _confirmAction = null;
+    }
+
+    private async Task ExecuteConfirmAsync()
+    {
+        if (_confirmTarget is null || _confirmAction is null) return;
+        _busy = true;
         try
         {
-            await Api.PublishPolicyDocumentAsync(_actionTarget.PolicyDocumentId);
-            await ShowToastAsync($"'{_actionTarget.PolicyTitle}' published.", "e-toast-success");
+            if (_confirmAction == "Publish")
+            {
+                await Api.PublishPolicyDocumentAsync(_confirmTarget.PolicyDocumentId, _tenantAdminUserId);
+                ShowToast($"'{_confirmTarget.PolicyTitle}' published.");
+            }
+            else
+            {
+                await Api.RetirePolicyDocumentAsync(_confirmTarget.PolicyDocumentId, _tenantAdminUserId);
+                ShowToast($"'{_confirmTarget.PolicyTitle}' retired.", "warning");
+            }
+
+            var id = _confirmTarget.PolicyDocumentId;
+            CloseConfirm();
             await LoadAsync();
+            await RefreshDrawerAsync(id);
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Publish failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Workflow action failed: {ex.Message}", "danger");
         }
         finally
         {
-            _confirming  = false;
-            _actionTarget = null;
+            _busy = false;
         }
     }
 
-    // ── Retire ─────────────────────────────────────────────────────────────────
-    private void OpenRetire(PolicyDocumentDto p)  { _actionTarget = p; _showRetire = true; }
-
-    private async Task ExecuteRetireAsync()
+    private async Task OpenAcknowledgementsAsync(PolicyDocumentDto row)
     {
-        if (_actionTarget is null) return;
-        _confirming = true;
+        _ackTarget = row;
+        _acknowledgements.Clear();
+        _showAck = true;
+        _ackLoading = true;
         try
         {
-            await Api.RetirePolicyDocumentAsync(_actionTarget.PolicyDocumentId);
-            await ShowToastAsync($"'{_actionTarget.PolicyTitle}' retired.", "e-toast-warning");
-            await LoadAsync();
+            var result = await Api.GetPolicyAcknowledgementsAsync(row.PolicyDocumentId);
+            _acknowledgements.AddRange(result ?? []);
         }
         catch (Exception ex)
         {
-            await ShowToastAsync($"Retire failed: {ex.Message}", "e-toast-danger");
-        }
-        finally
-        {
-            _confirming  = false;
-            _actionTarget = null;
-        }
-    }
-
-    // ── Acknowledgements ───────────────────────────────────────────────────────
-    private async Task OpenAcknowledgements(PolicyDocumentDto p)
-    {
-        _ackTarget       = p;
-        _acknowledgements = [];
-        _showAck         = true;
-        _ackLoading      = true;
-        StateHasChanged();
-        try
-        {
-            var items = await Api.GetPolicyAcknowledgementsAsync(p.PolicyDocumentId);
-            _acknowledgements = items?.ToList() ?? [];
-        }
-        catch (Exception ex)
-        {
-            _acknowledgements = [];
-            await ShowToastAsync($"Acknowledgements load failed: {ex.Message}", "e-toast-danger");
+            ShowToast($"Acknowledgements load failed: {ex.Message}", "danger");
         }
         finally
         {
@@ -888,65 +802,246 @@
         }
     }
 
-    // ── Export stub ────────────────────────────────────────────────────────────
-    private Task ExportAsync() => ShowToastAsync("Export: not yet implemented.", "e-toast-info");
+    private void CloseAcknowledgements() => _showAck = false;
 
-    // ── Toast helper ───────────────────────────────────────────────────────────
-    private async Task ShowToastAsync(string msg, string cssClass = "e-toast-info")
+    private async Task OpenDetailAsync(PolicyDocumentDto row)
     {
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = cssClass });
+        _selected = row;
+        _drawerRow = row;
+        await LoadRelatedAsync(row.PolicyDocumentId);
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────────
-    private static string FormatRelative(DateTime dt)
+    private void CloseDrawer() => _drawerRow = null;
+
+    private async Task RefreshDrawerAsync(Guid documentId)
     {
-        var diff = DateTime.UtcNow - dt;
-        return diff.TotalDays switch
+        if (_drawerRow is null) return;
+        _drawerRow = _rows.FirstOrDefault(r => r.PolicyDocumentId == documentId) ?? await Api.GetPolicyDocumentByIdAsync(documentId);
+        if (_drawerRow is not null)
         {
-            < 1   => diff.TotalHours < 1 ? "Just now" : $"{(int)diff.TotalHours}h ago",
-            < 7   => $"{(int)diff.TotalDays}d ago",
-            < 30  => $"{(int)(diff.TotalDays / 7)}w ago",
-            < 365 => $"{(int)(diff.TotalDays / 30)}mo ago",
-            _     => dt.ToString("d"),
-        };
+            await LoadRelatedAsync(documentId);
+        }
     }
 
-    // ── Inner models ───────────────────────────────────────────────────────────
-    private sealed record LabelValue(string Value, string Label);
+    private async Task LoadRelatedAsync(Guid documentId)
+    {
+        _versions.Clear();
+        _audience.Clear();
+        var versions = await Api.GetPolicyVersionHistoryAsync(documentId);
+        var audience = await Api.GetPolicyAudienceAsync(documentId);
+        _versions.AddRange(versions ?? []);
+        _audience.AddRange(audience ?? []);
+    }
+
+    private void OpenActionMenu(PolicyDocumentDto row, MouseEventArgs args)
+    {
+        _selected = row;
+        _openActionMenuFor = row.PolicyDocumentId;
+        _menuXpx = $"{Math.Min(args.ClientX, 1420)}px";
+        _menuYpx = $"{Math.Min(args.ClientY, 820)}px";
+    }
+
+    private void CloseActionMenu() => _openActionMenuFor = null;
+
+    private async Task ExecuteMenuActionAsync(string action)
+    {
+        var row = _selected;
+        CloseActionMenu();
+        if (row is null) return;
+
+        switch (action)
+        {
+            case "View":
+            case "History":
+                await OpenDetailAsync(row);
+                break;
+            case "Edit":
+                OpenEdit(row);
+                break;
+            case "Version":
+                OpenVersion(row);
+                break;
+            case "Acknowledgements":
+                await OpenAcknowledgementsAsync(row);
+                break;
+            case "Publish":
+                OpenConfirm(row, "Publish");
+                break;
+            case "Retire":
+                OpenConfirm(row, "Retire");
+                break;
+            case "OpenDetailPage":
+                Nav.NavigateTo($"/compliance/policies/{row.PolicyDocumentId}");
+                break;
+        }
+    }
+
+    private Task ExportAsync()
+    {
+        var csv = new StringBuilder();
+        csv.AppendLine("Policy Code,Title,Type,Version,Status,Effective Date,Owner,Acknowledgements");
+        foreach (var row in FilteredRows)
+        {
+            csv.AppendLine(string.Join(',', Csv(row.PolicyCode), Csv(row.PolicyTitle), Csv(row.PolicyTypeCode), Csv(row.Version), Csv(row.StatusCode), Csv(row.EffectiveDateUtc?.ToLocalTime().ToString("MM/dd/yyyy")), Csv(row.OwnedByFullName), row.AcknowledgementCount.ToString()));
+        }
+
+        var url = "data:text/csv;charset=utf-8," + Uri.EscapeDataString(csv.ToString());
+        Nav.NavigateTo(url, forceLoad: true);
+        ShowToast("Compliance policy export generated.");
+        return Task.CompletedTask;
+    }
+
+    private RenderFragment KpiCard(string icon, string label, string value, string cssClass, string? filterKey) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "button");
+        builder.AddAttribute(seq++, "type", "button");
+        builder.AddAttribute(seq++, "class", $"cp-kpi-card {cssClass} {(Equals(_kpiFilter, filterKey) ? "cp-kpi-card--active" : string.Empty)}");
+        builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, () => SetKpiFilter(filterKey)));
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "cp-kpi-val");
+        builder.AddContent(seq++, value);
+        builder.CloseElement();
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "cp-kpi-lbl");
+        builder.OpenElement(seq++, "i");
+        builder.AddAttribute(seq++, "class", $"bi {icon}");
+        builder.AddAttribute(seq++, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.AddContent(seq++, label);
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment CtxBtn(PolicyDocumentDto row) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "button");
+        builder.AddAttribute(seq++, "type", "button");
+        builder.AddAttribute(seq++, "class", "um-btn um-btn-ghost um-btn-sm cp-ctx-btn");
+        builder.AddAttribute(seq++, "title", "Actions");
+        builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, args => OpenActionMenu(row, args)));
+        builder.AddEventStopPropagationAttribute(seq++, "onclick", true);
+        builder.OpenElement(seq++, "i");
+        builder.AddAttribute(seq++, "class", "bi bi-three-dots-vertical");
+        builder.AddAttribute(seq++, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment DrawerField(string label, string value) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "cp-meta-row");
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", "cp-meta-lbl");
+        builder.AddContent(seq++, label);
+        builder.CloseElement();
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", "cp-meta-val");
+        builder.AddContent(seq++, value);
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment TypeChip(string type) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", $"cp-type-chip cp-type-{CssSafe(type)}");
+        builder.AddContent(seq++, string.IsNullOrWhiteSpace(type) ? "Other" : type);
+        builder.CloseElement();
+    };
+
+    private RenderFragment StatusChip(string status) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", $"cp-status cp-status-{CssSafe(status)}");
+        builder.AddContent(seq++, string.IsNullOrWhiteSpace(status) ? "Draft" : status);
+        builder.CloseElement();
+    };
+
+    private RenderFragment LifecycleCell(PolicyDocumentDto row) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", $"cp-lifecycle cp-lifecycle-{CssSafe(row.StatusCode)}");
+        builder.AddContent(seq++, LifecycleLabel(row));
+        builder.CloseElement();
+    };
+
+    private static string LifecycleLabel(PolicyDocumentDto row) => row.StatusCode switch
+    {
+        "Published" => row.PublishedDateUtc.HasValue ? $"Published {row.PublishedDateUtc.Value.ToLocalTime():MM/dd/yyyy}" : "Published",
+        "Retired" => row.RetiredDateUtc.HasValue ? $"Retired {row.RetiredDateUtc.Value.ToLocalTime():MM/dd/yyyy}" : "Retired",
+        "Draft" => "Draft",
+        _ => row.EffectiveDateUtc.HasValue ? $"Effective {row.EffectiveDateUtc.Value.ToLocalTime():MM/dd/yyyy}" : "Draft workflow"
+    };
+
+    private static string TypeIcon(string type) => type switch
+    {
+        "Information Security" => "bi-shield-lock",
+        "Privacy" => "bi-incognito",
+        "Human Resources" => "bi-people-fill",
+        "Finance" => "bi-cash-coin",
+        "Operations" => "bi-gear-wide-connected",
+        "IT Governance" => "bi-diagram-3",
+        _ => "bi-file-earmark-text"
+    };
+
+    private static string StatusIcon(string status) => status switch
+    {
+        "Published" => "bi-check-circle-fill",
+        "Retired" => "bi-archive-fill",
+        _ => "bi-pencil-fill"
+    };
+
+    private static string CssSafe(string? value) => string.IsNullOrWhiteSpace(value) ? "unknown" : value.Trim().ToLowerInvariant().Replace(" ", "-");
+
+    private static string NextVersion(string current)
+    {
+        if (decimal.TryParse(current, out var version))
+        {
+            return (version + 1m).ToString("0.0");
+        }
+        return "2.0";
+    }
+
+    private static string Csv(string? value)
+    {
+        var text = value ?? string.Empty;
+        return string.Concat("\"", text.Replace("\"", "\"\""), "\"");
+    }
+
+    private void ShowToast(string message, string kind = "success")
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    private void HideToast() => _toastVisible = false;
+    private Task NotifyValidationAsync() { ShowToast("Review required fields before continuing.", "danger"); return Task.CompletedTask; }
+
+    private sealed record TabDef(string Key, string Label, string Icon);
 
     private sealed class FormModel
     {
-        [Required, StringLength(50)]
-        public string    PolicyCode       { get; set; } = string.Empty;
-        [Required, StringLength(200)]
-        public string    PolicyTitle      { get; set; } = string.Empty;
-        [Required, StringLength(100)]
-        public string    PolicyTypeCode   { get; set; } = string.Empty;
-        [Required, StringLength(50)]
-        public string    Version          { get; set; } = "1.0";
+        [Required, StringLength(50)] public string PolicyCode { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string PolicyTitle { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string PolicyTypeCode { get; set; } = "Compliance";
+        [Required, StringLength(50)] public string Version { get; set; } = "1.0";
         public DateTime? EffectiveDateUtc { get; set; }
-        [StringLength(1000)]
-        public string?   Description      { get; set; }
+        [StringLength(1000)] public string? Description { get; set; }
+        [StringLength(8000)] public string? Content { get; set; }
     }
 
     private sealed class VersionFormModel
     {
-        [Required, StringLength(50)]
-        public string    NewVersion        { get; set; } = string.Empty;
-        public DateTime? EffectiveDateUtc  { get; set; }
-        [StringLength(1000)]
-        public string?   Description       { get; set; }
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        [Required, StringLength(50)] public string NewVersion { get; set; } = string.Empty;
+        public DateTime? EffectiveDateUtc { get; set; }
+        [StringLength(1000)] public string? Description { get; set; }
     }
 }

@@ -1,10 +1,12 @@
 @page "/crm/leads/{LeadId:guid}"
 @namespace Ams.Web.Components.Pages.Crm
 @using System.ComponentModel.DataAnnotations
+@using System.Security.Claims
 @using Ams.Application.Common.Validation
 @using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject AuthenticationStateProvider AuthenticationStateProvider
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 @inject LeadScoringRealtimeClient LeadScoringRealtime
@@ -52,13 +54,13 @@ else
             <button class="um-btn um-btn-ghost" @onclick="OpenEdit">
                 <i class="bi bi-pencil" aria-hidden="true"></i> Edit
             </button>
-            <button class="um-btn um-btn-ghost" @onclick="() => _showAssign = true">
+            <button class="um-btn um-btn-ghost" @onclick="OpenAssign">
                 <i class="bi bi-person-check" aria-hidden="true"></i> Assign
             </button>
-            <button class="um-btn um-btn-ghost" @onclick="() => _showCampaign = true">
+            <button class="um-btn um-btn-ghost" @onclick="OpenCampaign">
                 <i class="bi bi-megaphone" aria-hidden="true"></i> Campaign
             </button>
-            <button class="um-btn um-btn-primary" @onclick="() => _showConvert = true">
+            <button class="um-btn um-btn-primary" @onclick="OpenConvert">
                 <i class="bi bi-building-check" aria-hidden="true"></i> Qualify to Account
             </button>
         </Actions>
@@ -170,7 +172,7 @@ else
                             <div class="ldd-tab-body">
                                 <div class="ldd-tab-toolbar">
                                     <span class="ldd-tab-count">@_contacts.Count contact(s)</span>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showAddContact = true">
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAddContact">
                                         <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Contact
                                     </button>
                                 </div>
@@ -222,7 +224,7 @@ else
                             <div class="ldd-tab-body">
                                 <div class="ldd-tab-toolbar">
                                     <span class="ldd-tab-count">@_interestLines.Count line(s) of interest</span>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showAddInterest = true">
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAddInterest">
                                         <i class="bi bi-plus-lg" aria-hidden="true"></i> Add Line
                                     </button>
                                 </div>
@@ -274,7 +276,7 @@ else
                             <div class="ldd-tab-body">
                                 <div class="ldd-tab-toolbar">
                                     <span class="ldd-tab-count">@_activities.Count activit@(_activities.Count == 1 ? "y" : "ies")</span>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showLogActivity = true">
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenLogActivity">
                                         <i class="bi bi-plus-lg" aria-hidden="true"></i> Log Activity
                                     </button>
                                 </div>
@@ -385,7 +387,7 @@ else
                             <div class="ldd-tab-body">
                                 <div class="ldd-tab-toolbar">
                                     <span class="ldd-tab-count">@_documents.Count document(s)</span>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showUploadDoc = true">
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenUploadDocument">
                                         <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Upload
                                     </button>
                                 </div>
@@ -438,7 +440,7 @@ else
                             <div class="ldd-tab-body">
                                 <div class="ldd-tab-toolbar">
                                     <span class="ldd-tab-count">@_comms.Count message(s)</span>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showCompose = true">
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenCompose">
                                         <i class="bi bi-plus-lg" aria-hidden="true"></i> New
                                     </button>
                                 </div>
@@ -483,7 +485,7 @@ else
                             <div class="ldd-tab-body">
                                 <div class="ldd-tab-toolbar">
                                     <span class="ldd-tab-count">@_campaigns.Count enrollment(s)</span>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showCampaign = true">
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenCampaign">
                                         <i class="bi bi-plus-lg" aria-hidden="true"></i> Enroll
                                     </button>
                                 </div>
@@ -664,29 +666,33 @@ else
                 <span id="ldd-assign-title">Assign Owner</span>
                 <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showAssign = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
             </div>
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field um-field--full">
-                        <label>Owner <span class="text-danger">*</span></label>
-                        <InputSelect class="um-input" @bind-Value="_assignTarget">
-                            <option value="">Select owner…</option>
-                            @foreach (var owner in _ownerOptions)
-                            {
-                                <option value="@owner.Value">@owner.Label</option>
-                            }
-                        </InputSelect>
-                    </div>
-                    <div class="um-field um-field--full um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_assignNotify" /> Notify owner by email</label>
+            <EditForm Model="_assignForm" OnValidSubmit="CommitAssignAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Owner <span class="text-danger">*</span></label>
+                            <InputSelect class="um-input" @bind-Value="_assignForm.OwnerId">
+                                <option value="">Select owner…</option>
+                                @foreach (var owner in _ownerOptions)
+                                {
+                                    <option value="@owner.Value">@owner.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _assignForm.OwnerId" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full um-field--checkbox">
+                            <label><InputCheckbox @bind-Value="_assignForm.Notify" /> Notify owner by email</label>
+                        </div>
                     </div>
                 </div>
-            </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showAssign = false">Cancel</button>
-                <button type="button" class="um-btn um-btn-primary" @onclick="CommitAssignAsync" disabled="@string.IsNullOrEmpty(_assignTarget)">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Assign
-                </button>
-            </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showAssign = false">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary">
+                        <i class="bi bi-check-lg" aria-hidden="true"></i> Assign
+                    </button>
+                </div>
+            </EditForm>
         </div>
     </div>
 }
@@ -728,30 +734,42 @@ else
 <!-- ══════════════════════════════════════════════════════════
      DIALOG — Qualify to Account
      ══════════════════════════════════════════════════════════ -->
-<SfDialog @bind-Visible="_showConvert" Width="520px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="ldd-dlg-hdr"><i class="bi bi-building-check" aria-hidden="true"></i> Qualify Lead to Account</span></Header>
-        <Content>
-            <div class="ldd-dlg-body" style="display:flex;flex-direction:column;gap:.75rem;font-size:.88rem">
-                <p style="margin:0">Qualify <strong>@(_lead?.FullName)</strong> into an account before creating revenue opportunities.</p>
-                <label class="ldd-toggle-label">
-                    <input type="checkbox" @bind="_convertKeepLead" /> Keep lead visible after qualification
-                </label>
-                <label class="ldd-toggle-label">
-                    <input type="checkbox" @bind="_convertCreateActivity" /> Create account follow-up activity
-                </label>
+@if (_showConvert)
+{
+    <div class="ldd-modal-backdrop" @onclick="() => _showConvert = false">
+        <div class="ldd-enterprise-modal" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="ldd-convert-title">
+            <div class="um-modal-header">
+                <i class="bi bi-building-check" aria-hidden="true"></i>
+                <span id="ldd-convert-title">Qualify Lead to Account</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showConvert = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="ldd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showConvert = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitConvertAsync">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Qualify to Account
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+            <EditForm Model="_convertForm" OnValidSubmit="CommitConvertAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <p class="ldd-modal-copy">Qualify <strong>@(_lead?.FullName)</strong> into an account before creating revenue opportunities.</p>
+                        </div>
+                        <div class="um-field um-field--full um-field--checkbox">
+                            <label><InputCheckbox @bind-Value="_convertForm.KeepLead" /> Keep lead visible after qualification</label>
+                            <ValidationMessage For="() => _convertForm.KeepLead" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full um-field--checkbox">
+                            <label><InputCheckbox @bind-Value="_convertForm.CreateActivity" /> Create account follow-up activity</label>
+                            <ValidationMessage For="() => _convertForm.CreateActivity" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showConvert = false">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary">
+                        <i class="bi bi-check-lg" aria-hidden="true"></i> Qualify to Account
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
 <!-- ══════════════════════════════════════════════════════════
      DIALOG — Enroll Campaign
@@ -765,29 +783,33 @@ else
                 <span id="ldd-campaign-title">Enroll in Campaign</span>
                 <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showCampaign = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
             </div>
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field um-field--full">
-                        <label>Campaign <span class="text-danger">*</span></label>
-                        <InputSelect class="um-input" @bind-Value="_campaignTarget">
-                            <option value="">Select campaign…</option>
-                            @foreach (var campaign in _campaignOptions)
-                            {
-                                <option value="@campaign.Value">@campaign.Label</option>
-                            }
-                        </InputSelect>
-                    </div>
-                    <div class="um-field um-field--full um-field--checkbox">
-                        <label><InputCheckbox @bind-Value="_campaignSendNow" /> Send first email immediately</label>
+            <EditForm Model="_campaignForm" OnValidSubmit="CommitCampaignAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Campaign <span class="text-danger">*</span></label>
+                            <InputSelect class="um-input" @bind-Value="_campaignForm.CampaignId">
+                                <option value="">Select campaign…</option>
+                                @foreach (var campaign in _campaignOptions)
+                                {
+                                    <option value="@campaign.Value">@campaign.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _campaignForm.CampaignId" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full um-field--checkbox">
+                            <label><InputCheckbox @bind-Value="_campaignForm.SendNow" /> Send first email immediately</label>
+                        </div>
                     </div>
                 </div>
-            </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showCampaign = false">Cancel</button>
-                <button type="button" class="um-btn um-btn-primary" @onclick="CommitCampaignAsync" disabled="@string.IsNullOrEmpty(_campaignTarget)">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Enroll
-                </button>
-            </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showCampaign = false">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary">
+                        <i class="bi bi-check-lg" aria-hidden="true"></i> Enroll
+                    </button>
+                </div>
+            </EditForm>
         </div>
     </div>
 }
@@ -795,178 +817,254 @@ else
 <!-- ══════════════════════════════════════════════════════════
      DIALOG — Upload Document
      ══════════════════════════════════════════════════════════ -->
-<SfDialog @bind-Visible="_showUploadDoc" Width="460px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="ldd-dlg-hdr"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Upload Document</span></Header>
-        <Content>
-            <div class="ldd-dlg-body" style="display:flex;flex-direction:column;gap:1rem">
-                <SfDropDownList TValue="string" TItem="LabelValue"
-                                DataSource="_docCategories"
-                                Placeholder="Category…"
-                                Width="100%"
-                                @bind-Value="_docCategory">
-                    <DropDownListFieldSettings Value="Value" Text="Label" />
-                </SfDropDownList>
-                <SfUploader AllowedExtensions=".pdf,.docx,.xlsx,.csv,.png,.jpg"
-                            MaxFileSize="10485760"
-                            AutoUpload="false" />
+@if (_showUploadDoc)
+{
+    <div class="ldd-modal-backdrop" @onclick="() => _showUploadDoc = false">
+        <div class="ldd-enterprise-modal" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="ldd-upload-title">
+            <div class="um-modal-header">
+                <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
+                <span id="ldd-upload-title">Upload Document</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showUploadDoc = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="ldd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showUploadDoc = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="() => _showUploadDoc = false">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Upload
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+            <EditForm Model="_uploadForm" OnValidSubmit="CommitUploadDocumentAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Category <span class="text-danger">*</span></label>
+                            <InputSelect class="um-input" @bind-Value="_uploadForm.Category">
+                                <option value="">Select category…</option>
+                                @foreach (var category in _docCategories)
+                                {
+                                    <option value="@category.Value">@category.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _uploadForm.Category" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Document File <span class="text-danger">*</span></label>
+                            <InputFile class="um-input" OnChange="OnLeadDocumentSelected" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.tif,.tiff" />
+                            @if (_selectedUploadFile is not null)
+                            {
+                                <div class="text-muted mt-1">
+                                    <i class="bi bi-paperclip" aria-hidden="true"></i>
+                                    @_selectedUploadFile.Name · @FormatFileSize(_selectedUploadFile.Size) · @(_selectedUploadFile.ContentType ?? "application/octet-stream")
+                                </div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(_uploadFileError))
+                            {
+                                <div class="text-danger">@_uploadFileError</div>
+                            }
+                        </div>
+                        <div class="um-field">
+                            <label>Document Name <span class="text-danger">*</span></label>
+                            <InputText class="um-input" @bind-Value="_uploadForm.FileName" placeholder="Auto-filled from selected file" />
+                            <ValidationMessage For="() => _uploadForm.FileName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Uploaded By</label>
+                            <div class="um-input d-flex align-items-center text-muted">
+                                <i class="bi bi-person-check me-2" aria-hidden="true"></i>
+                                @_uploadedByName
+                            </div>
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Storage</label>
+                            <div class="um-input d-flex align-items-center text-muted">
+                                <i class="bi bi-cloud-arrow-up me-2" aria-hidden="true"></i>
+                                Stored securely after upload
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showUploadDoc = false">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary">
+                        <i class="bi bi-check-lg" aria-hidden="true"></i> Upload
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
 <!-- ══════════════════════════════════════════════════════════
      DIALOG — Log Activity
      ══════════════════════════════════════════════════════════ -->
-<SfDialog @bind-Visible="_showLogActivity" Width="520px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="ldd-dlg-hdr"><i class="bi bi-lightning" aria-hidden="true"></i> Log Activity</span></Header>
-        <Content>
-            <div class="ldd-dlg-body" style="display:flex;flex-direction:column;gap:.85rem">
-                <SfDropDownList TValue="string" TItem="LabelValue"
-                                DataSource="_activityTypes"
-                                Placeholder="Activity type…"
-                                Width="100%"
-                                @bind-Value="_newActivity.Type">
-                    <DropDownListFieldSettings Value="Value" Text="Label" />
-                </SfDropDownList>
-                <SfTextBox Placeholder="Subject" @bind-Value="_newActivity.Subject" />
-                <SfTextBox Placeholder="Notes (optional)" @bind-Value="_newActivity.Notes"
-                           Multiline="true" HtmlAttributes="@(new Dictionary<string,object>{{"rows","3"}})" />
-                <SfDateTimePicker TValue="DateTime" Placeholder="Date & time"
-                                  @bind-Value="_newActivity.OccurredAt" />
-                <SfDatePicker TValue="DateTime?" Placeholder="Follow-up date (optional)"
-                              @bind-Value="_newActivity.NextFollowUp" />
+@if (_showLogActivity)
+{
+    <div class="ldd-modal-backdrop" @onclick="() => _showLogActivity = false">
+        <div class="ldd-enterprise-modal" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="ldd-activity-title">
+            <div class="um-modal-header">
+                <i class="bi bi-lightning" aria-hidden="true"></i>
+                <span id="ldd-activity-title">Log Activity</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showLogActivity = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="ldd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showLogActivity = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitActivityAsync"
-                        disabled="@(string.IsNullOrEmpty(_newActivity.Type) || string.IsNullOrEmpty(_newActivity.Subject))">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Save
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+            <EditForm Model="_activityForm" OnValidSubmit="CommitActivityAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Activity Type <span class="text-danger">*</span></label>
+                            <InputSelect class="um-input" @bind-Value="_activityForm.Type">
+                                <option value="">Activity type…</option>
+                                @foreach (var activityType in _activityTypes)
+                                {
+                                    <option value="@activityType.Value">@activityType.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _activityForm.Type" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full"><label>Subject <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_activityForm.Subject" /><ValidationMessage For="() => _activityForm.Subject" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Notes</label><InputTextArea class="um-input" rows="3" @bind-Value="_activityForm.Notes" /><ValidationMessage For="() => _activityForm.Notes" class="text-danger" /></div>
+                        <div class="um-field"><label>Date &amp; Time <span class="text-danger">*</span></label><InputDate Type="InputDateType.DateTimeLocal" class="um-input" @bind-Value="_activityForm.OccurredAt" /><ValidationMessage For="() => _activityForm.OccurredAt" class="text-danger" /></div>
+                        <div class="um-field"><label>Follow-up Date</label><InputDate class="um-input" @bind-Value="_activityForm.NextFollowUp" /><ValidationMessage For="() => _activityForm.NextFollowUp" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showLogActivity = false">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary">
+                        <i class="bi bi-check-lg" aria-hidden="true"></i> Save
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
 <!-- ══════════════════════════════════════════════════════════
      DIALOG — Add Contact
      ══════════════════════════════════════════════════════════ -->
-<SfDialog @bind-Visible="_showAddContact" Width="520px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="ldd-dlg-hdr"><i class="bi bi-person-plus" aria-hidden="true"></i> Add Contact</span></Header>
-        <Content>
-            <div class="ldd-dlg-body" style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-                <SfTextBox Placeholder="First name" @bind-Value="_newContact.FirstName" />
-                <SfTextBox Placeholder="Last name"  @bind-Value="_newContact.LastName" />
-                <SfTextBox Placeholder="Title"      @bind-Value="_newContact.Title" />
-                <SfTextBox Placeholder="Email"      @bind-Value="_newContact.Email" />
-                <SfTextBox Placeholder="Phone"      @bind-Value="_newContact.Phone" />
-                <div style="display:flex;align-items:center">
-                    <label class="ldd-toggle-label">
-                        <input type="checkbox" @bind="_newContact.IsPrimary" /> Primary contact
-                    </label>
+@if (_showAddContact)
+{
+    <div class="ldd-modal-backdrop" @onclick="() => _showAddContact = false">
+        <div class="ldd-enterprise-modal" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="ldd-contact-title">
+            <div class="um-modal-header">
+                <i class="bi bi-person-plus" aria-hidden="true"></i>
+                <span id="ldd-contact-title">Add Contact</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showAddContact = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_contactForm" OnValidSubmit="CommitAddContactAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>First Name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_contactForm.FirstName" /><ValidationMessage For="() => _contactForm.FirstName" class="text-danger" /></div>
+                        <div class="um-field"><label>Last Name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_contactForm.LastName" /><ValidationMessage For="() => _contactForm.LastName" class="text-danger" /></div>
+                        <div class="um-field"><label>Title</label><InputText class="um-input" @bind-Value="_contactForm.Title" /><ValidationMessage For="() => _contactForm.Title" class="text-danger" /></div>
+                        <div class="um-field"><label>Email</label><InputText type="email" class="um-input" @bind-Value="_contactForm.Email" /><ValidationMessage For="() => _contactForm.Email" class="text-danger" /></div>
+                        <div class="um-field"><label>Phone</label><InputText type="tel" class="um-input" @bind-Value="_contactForm.Phone" /><ValidationMessage For="() => _contactForm.Phone" class="text-danger" /></div>
+                        <div class="um-field um-field--checkbox">
+                            <label><InputCheckbox @bind-Value="_contactForm.IsPrimary" /> Primary contact</label>
+                        </div>
+                    </div>
                 </div>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="ldd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showAddContact = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitAddContactAsync"
-                        disabled="@(string.IsNullOrWhiteSpace(_newContact.FirstName) || string.IsNullOrWhiteSpace(_newContact.LastName))">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Add
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showAddContact = false">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary">
+                        <i class="bi bi-check-lg" aria-hidden="true"></i> Add
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
 <!-- ══════════════════════════════════════════════════════════
      DIALOG — Add Interest Line
      ══════════════════════════════════════════════════════════ -->
-<SfDialog @bind-Visible="_showAddInterest" Width="520px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="ldd-dlg-hdr"><i class="bi bi-shield-check" aria-hidden="true"></i> Add Interest Line</span></Header>
-        <Content>
-            <div class="ldd-dlg-body" style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-                <SfDropDownList TValue="string" TItem="LabelValue"
-                                DataSource="_lobOptions"
-                                Placeholder="Line of Business…"
-                                Width="100%"
-                                @bind-Value="_newInterest.LineOfBusiness">
-                    <DropDownListFieldSettings Value="Value" Text="Label" />
-                </SfDropDownList>
-                <SfDropDownList TValue="string" TItem="LabelValue"
-                                DataSource="_priorityOptions"
-                                Placeholder="Priority…"
-                                Width="100%"
-                                @bind-Value="_newInterest.Priority">
-                    <DropDownListFieldSettings Value="Value" Text="Label" />
-                </SfDropDownList>
-                <SfTextBox Placeholder="Preferred carrier" @bind-Value="_newInterest.Carrier" />
-                <SfTextBox Placeholder="Current carrier"   @bind-Value="_newInterest.CurrentCarrier" />
-                <SfNumericTextBox TValue="decimal" Placeholder="Est. premium" @bind-Value="_newInterest.EstPremium" Format="C0" />
-                <SfDatePicker TValue="DateTime?" Placeholder="Expiry date" @bind-Value="_newInterest.ExpiryDate" />
-                <div style="grid-column:span 2">
-                    <SfTextBox Placeholder="Notes" @bind-Value="_newInterest.Notes" />
+@if (_showAddInterest)
+{
+    <div class="ldd-modal-backdrop" @onclick="() => _showAddInterest = false">
+        <div class="ldd-enterprise-modal" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="ldd-interest-title">
+            <div class="um-modal-header">
+                <i class="bi bi-shield-check" aria-hidden="true"></i>
+                <span id="ldd-interest-title">Add Interest Line</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showAddInterest = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_interestForm" OnValidSubmit="CommitAddInterestAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Line of Business <span class="text-danger">*</span></label>
+                            <InputSelect class="um-input" @bind-Value="_interestForm.LineOfBusiness">
+                                <option value="">Line of business…</option>
+                                @foreach (var lob in _lobOptions)
+                                {
+                                    <option value="@lob.Value">@lob.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _interestForm.LineOfBusiness" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Priority <span class="text-danger">*</span></label>
+                            <InputSelect class="um-input" @bind-Value="_interestForm.Priority">
+                                @foreach (var priority in _priorityOptions)
+                                {
+                                    <option value="@priority.Value">@priority.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _interestForm.Priority" class="text-danger" />
+                        </div>
+                        <div class="um-field"><label>Preferred Carrier</label><InputText class="um-input" @bind-Value="_interestForm.Carrier" /><ValidationMessage For="() => _interestForm.Carrier" class="text-danger" /></div>
+                        <div class="um-field"><label>Current Carrier</label><InputText class="um-input" @bind-Value="_interestForm.CurrentCarrier" /><ValidationMessage For="() => _interestForm.CurrentCarrier" class="text-danger" /></div>
+                        <div class="um-field"><label>Est. Premium</label><InputNumber class="um-input" @bind-Value="_interestForm.EstPremium" /><ValidationMessage For="() => _interestForm.EstPremium" class="text-danger" /></div>
+                        <div class="um-field"><label>Expiry Date</label><InputDate class="um-input" @bind-Value="_interestForm.ExpiryDate" /><ValidationMessage For="() => _interestForm.ExpiryDate" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Notes</label><InputText class="um-input" @bind-Value="_interestForm.Notes" /><ValidationMessage For="() => _interestForm.Notes" class="text-danger" /></div>
+                    </div>
                 </div>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="ldd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showAddInterest = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitAddInterestAsync"
-                        disabled="@string.IsNullOrEmpty(_newInterest.LineOfBusiness)">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Add
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showAddInterest = false">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary">
+                        <i class="bi bi-check-lg" aria-hidden="true"></i> Add
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
 <!-- ══════════════════════════════════════════════════════════
      DIALOG — Compose Communication
      ══════════════════════════════════════════════════════════ -->
-<SfDialog @bind-Visible="_showCompose" Width="560px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="ldd-dlg-hdr"><i class="bi bi-send" aria-hidden="true"></i> New Communication</span></Header>
-        <Content>
-            <div class="ldd-dlg-body" style="display:flex;flex-direction:column;gap:.85rem">
-                <SfDropDownList TValue="string" TItem="LabelValue"
-                                DataSource="_commChannels"
-                                Placeholder="Channel…"
-                                Width="100%"
-                                @bind-Value="_newComm.Channel">
-                    <DropDownListFieldSettings Value="Value" Text="Label" />
-                </SfDropDownList>
-                <SfTextBox Placeholder="Subject" @bind-Value="_newComm.Subject" />
-                <SfTextBox Placeholder="Message / notes"
-                           @bind-Value="_newComm.Preview"
-                           Multiline="true"
-                           HtmlAttributes="@(new Dictionary<string,object>{{"rows","4"}})" />
+@if (_showCompose)
+{
+    <div class="ldd-modal-backdrop" @onclick="() => _showCompose = false">
+        <div class="ldd-enterprise-modal" @onclick:stopPropagation="true" role="dialog" aria-modal="true" aria-labelledby="ldd-compose-title">
+            <div class="um-modal-header">
+                <i class="bi bi-send" aria-hidden="true"></i>
+                <span id="ldd-compose-title">New Communication</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showCompose = false" aria-label="Close"><i class="bi bi-x-lg"></i></button>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="ldd-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showCompose = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitComposeAsync"
-                        disabled="@(string.IsNullOrEmpty(_newComm.Channel) || string.IsNullOrEmpty(_newComm.Subject))">
-                    <i class="bi bi-send" aria-hidden="true"></i> Send
-                </button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
-</SfDialog>
+            <EditForm Model="_commForm" OnValidSubmit="CommitComposeAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Channel <span class="text-danger">*</span></label>
+                            <InputSelect class="um-input" @bind-Value="_commForm.Channel">
+                                <option value="">Channel…</option>
+                                @foreach (var channel in _commChannels)
+                                {
+                                    <option value="@channel.Value">@channel.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _commForm.Channel" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full"><label>Subject <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_commForm.Subject" /><ValidationMessage For="() => _commForm.Subject" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Message / Notes</label><InputTextArea class="um-input" rows="4" @bind-Value="_commForm.Preview" /><ValidationMessage For="() => _commForm.Preview" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showCompose = false">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary">
+                        <i class="bi bi-send" aria-hidden="true"></i> Send
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
 @code {
     [Parameter] public Guid LeadId { get; set; }
@@ -976,6 +1074,7 @@ else
     private string?  _loadError;
     private int      _tab     = 0;
     private Guid     _tenantId;
+    private Guid?    _currentUserId;
 
     // ── Core record ───────────────────────────────────────────────────────────
     private LeadDetailModel? _lead;
@@ -1009,10 +1108,24 @@ else
     private bool   _showCompose      = false;
     private bool   _savingEdit       = false;
 
-    // Assign
-    private string _assignTarget = string.Empty;
-    private bool   _assignNotify  = true;
+    // Form models
+    private AssignOwnerForm _assignForm = new();
     private EditLeadForm _editForm = new();
+    private ConvertLeadForm _convertForm = new();
+    private CampaignForm _campaignForm = new();
+    private UploadDocumentForm _uploadForm = new();
+    private IBrowserFile? _selectedUploadFile;
+    private string? _uploadFileError;
+    private string _uploadedByName = "Current user";
+    private const long MaxUploadBytes = 104_857_600;
+    private static readonly HashSet<string> AllowedUploadExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".tif", ".tiff"
+    };
+    private ActivityForm _activityForm = new();
+    private ContactForm _contactForm = new();
+    private InterestForm _interestForm = new();
+    private CommunicationForm _commForm = new();
     private static readonly List<LabelValue> _sourceOptions =
     [
         new("Referral","Referral"), new("Website","Website"), new("Cold Call","Cold Call"),
@@ -1025,29 +1138,6 @@ else
         new("Proposal","Proposal"), new("Negotiation","Negotiation"),
         new("Converted","Converted"), new("Lost","Lost"),
     ];
-
-    // Qualify
-    private bool _convertKeepLead       = false;
-    private bool _convertCreateActivity = true;
-
-    // Campaign
-    private string _campaignTarget  = string.Empty;
-    private bool   _campaignSendNow = false;
-
-    // Doc upload
-    private string _docCategory = string.Empty;
-
-    // Log activity
-    private ActivityRow _newActivity = new();
-
-    // Add contact
-    private ContactRow _newContact = new();
-
-    // Add interest
-    private InterestLine _newInterest = new();
-
-    // Compose comm
-    private CommRow _newComm = new();
 
     // ── Static options ────────────────────────────────────────────────────────
     private List<LabelValue> _ownerOptions = [];
@@ -1147,7 +1237,7 @@ else
                 .Select(ScoreFactor.FromDto)
                 .ToList();
             ApplyEngagementSummary(engagement);
-            _assignTarget = dto.AssignedToUserId?.ToString() ?? string.Empty;
+            _assignForm.OwnerId = dto.AssignedToUserId?.ToString() ?? string.Empty;
 
             await LoadTabDataAsync(dto.TenantId);
 
@@ -1342,6 +1432,12 @@ else
     }
 
     // ── Action handlers ───────────────────────────────────────────────────────
+    private void OpenAssign()
+    {
+        _assignForm = new AssignOwnerForm { OwnerId = _assignForm.OwnerId, Notify = true };
+        _showAssign = true;
+    }
+
     private void OpenEdit()
     {
         if (_lead is null) return;
@@ -1354,11 +1450,80 @@ else
             Phone = _lead.Phone ?? string.Empty,
             Source = _lead.Source,
             Stage = _lead.Stage,
-            OwnerId = _assignTarget,
+            OwnerId = _assignForm.OwnerId,
             Score = _lead.Score,
             Notes = _lead.Notes ?? string.Empty
         };
         _showEdit = true;
+    }
+
+    private void OpenConvert()
+    {
+        _convertForm = new ConvertLeadForm { CreateActivity = true };
+        _showConvert = true;
+    }
+
+    private void OpenCampaign()
+    {
+        _campaignForm = new CampaignForm();
+        _showCampaign = true;
+    }
+
+    private void OpenUploadDocument()
+    {
+        _uploadForm = new UploadDocumentForm();
+        _selectedUploadFile = null;
+        _uploadFileError = null;
+        _showUploadDoc = true;
+    }
+
+    private void OnLeadDocumentSelected(InputFileChangeEventArgs args)
+    {
+        _uploadFileError = null;
+        _selectedUploadFile = args.File;
+
+        var extension = Path.GetExtension(_selectedUploadFile.Name);
+        if (!AllowedUploadExtensions.Contains(extension))
+        {
+            _uploadFileError = "Select a supported document type: PDF, Word, Excel, CSV, image, or TIFF.";
+            _selectedUploadFile = null;
+            return;
+        }
+
+        if (_selectedUploadFile.Size > MaxUploadBytes)
+        {
+            _uploadFileError = "The selected file is larger than the 100 MB upload limit.";
+            _selectedUploadFile = null;
+            return;
+        }
+
+        _uploadForm.FileName = _selectedUploadFile.Name;
+        _uploadForm.Extension = extension;
+        _uploadForm.SizeKb = ToSizeKb(_selectedUploadFile.Size);
+    }
+
+    private void OpenLogActivity()
+    {
+        _activityForm = new ActivityForm { OccurredAt = DateTime.UtcNow };
+        _showLogActivity = true;
+    }
+
+    private void OpenAddContact()
+    {
+        _contactForm = new ContactForm();
+        _showAddContact = true;
+    }
+
+    private void OpenAddInterest()
+    {
+        _interestForm = new InterestForm();
+        _showAddInterest = true;
+    }
+
+    private void OpenCompose()
+    {
+        _commForm = new CommunicationForm();
+        _showCompose = true;
     }
 
     private async Task SaveEditAsync()
@@ -1401,7 +1566,7 @@ else
 
     private async Task CommitAssignAsync()
     {
-        if (_lead is null || !Guid.TryParse(_assignTarget, out var assignedToUserId))
+        if (_lead is null || !Guid.TryParse(_assignForm.OwnerId, out var assignedToUserId))
         {
             await Toast("Select a valid owner from the user table.", "e-toast-danger");
             return;
@@ -1437,7 +1602,7 @@ else
 
     private async Task CommitConvertAsync()
     {
-        // TODO: Api.QualifyLeadToAccountAsync(LeadId, _convertKeepLead, _convertCreateActivity)
+        // TODO: Api.QualifyLeadToAccountAsync(LeadId, _convertForm.KeepLead, _convertForm.CreateActivity)
         await Task.Delay(0);
         _showConvert = false;
         await Toast("Lead qualified to account.", "e-toast-success");
@@ -1449,10 +1614,10 @@ else
         if (_lead is null) return;
         try
         {
-            var campaignName = _campaignOptions.FirstOrDefault(c => c.Value == _campaignTarget)?.Label ?? _campaignTarget;
-            await Api.CreateLeadCampaignAsync(LeadId, new CreateLeadCampaignEnrollmentRequest { TenantId = _lead.TenantId, LeadId = LeadId, CampaignName = campaignName, Status = "Active", EnrolledAt = DateTime.UtcNow, EmailsSent = _campaignSendNow ? 1 : 0, CreatedByUserId = CurrentUserId });
+            var campaignName = _campaignOptions.FirstOrDefault(c => c.Value == _campaignForm.CampaignId)?.Label ?? _campaignForm.CampaignId;
+            await Api.CreateLeadCampaignAsync(LeadId, new CreateLeadCampaignEnrollmentRequest { TenantId = _lead.TenantId, LeadId = LeadId, CampaignName = campaignName, Status = "Active", EnrolledAt = DateTime.UtcNow, EmailsSent = _campaignForm.SendNow ? 1 : 0, CreatedByUserId = CurrentUserId });
             _showCampaign = false;
-            _campaignTarget = string.Empty;
+            _campaignForm = new();
             await Toast("Lead enrolled in campaign.", "e-toast-success");
             await LoadAsync();
         }
@@ -1462,20 +1627,67 @@ else
         }
     }
 
-    private async Task CommitActivityAsync()
+    private async Task CommitUploadDocumentAsync()
     {
         if (_lead is null) return;
 
-        if (string.IsNullOrWhiteSpace(_newActivity.Type) || string.IsNullOrWhiteSpace(_newActivity.Subject))
+        if (_selectedUploadFile is null)
         {
-            await Toast("Activity type and subject are required.", "e-toast-danger");
+            _uploadFileError = "Select a document file to upload.";
             return;
         }
 
         try
         {
-            await Api.CreateLeadActivityAsync(new Ams.Application.Features.LeadActivities.CreateLeadActivityRequest { TenantId = _lead.TenantId, LeadId = LeadId, ActivityTypeCode = _newActivity.Type.Trim(), Subject = _newActivity.Subject.Trim(), Notes = NullIfWhiteSpace(_newActivity.Notes), ActivityDate = _newActivity.OccurredAt == default ? DateTime.UtcNow : _newActivity.OccurredAt, CreatedByUserId = CurrentUserId });
-            _newActivity = new();
+            await using var stream = _selectedUploadFile.OpenReadStream(MaxUploadBytes);
+            await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
+            {
+                TenantId = _lead.TenantId,
+                DocumentTypeCode = _uploadForm.Category,
+                CategoryCode = _uploadForm.Category,
+                FileName = _uploadForm.FileName,
+                OriginalFileName = _selectedUploadFile.Name,
+                EntityName = "Lead",
+                EntityId = LeadId,
+                Tags = "lead",
+                UploadedByName = _uploadedByName,
+                CreatedByUserId = _currentUserId,
+                Content = stream
+            });
+
+            await Api.CreateLeadDocumentAsync(LeadId, new CreateLeadDocumentRequest
+            {
+                TenantId = _lead.TenantId,
+                LeadId = LeadId,
+                FileName = _uploadForm.FileName,
+                Extension = _uploadForm.Extension,
+                Category = _uploadForm.Category,
+                SizeKb = _uploadForm.SizeKb,
+                UploadedByUserId = _currentUserId,
+                UploadedAt = DateTime.UtcNow
+            });
+
+            _showUploadDoc = false;
+            _uploadForm = new();
+            _selectedUploadFile = null;
+            _uploadFileError = null;
+            await Toast("Document uploaded successfully.", "e-toast-success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await Toast($"Document upload failed: {ex.Message}", "e-toast-danger");
+        }
+    }
+
+    private async Task CommitActivityAsync()
+    {
+        if (_lead is null) return;
+
+        try
+        {
+            await Api.CreateLeadActivityAsync(new Ams.Application.Features.LeadActivities.CreateLeadActivityRequest { TenantId = _lead.TenantId, LeadId = LeadId, ActivityTypeCode = _activityForm.Type.Trim(), Subject = _activityForm.Subject.Trim(), Notes = NullIfWhiteSpace(_activityForm.Notes), ActivityDate = _activityForm.OccurredAt, CreatedByUserId = CurrentUserId });
+            _activityForm = new();
             _showLogActivity = false;
             await Toast("Activity logged.", "e-toast-success");
             await LoadAsync();
@@ -1490,30 +1702,24 @@ else
     {
         if (_lead is null) return;
 
-        var emailValidation = ValidateEmail(_newContact.Email);
+        var emailValidation = ValidateEmail(_contactForm.Email);
         if (emailValidation is not null)
         {
             await Toast(emailValidation, "e-toast-danger");
             return;
         }
 
-        var phoneValidation = ValidatePhone(_newContact.Phone);
+        var phoneValidation = ValidatePhone(_contactForm.Phone);
         if (phoneValidation is not null)
         {
             await Toast(phoneValidation, "e-toast-danger");
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_newContact.FirstName) || string.IsNullOrWhiteSpace(_newContact.LastName))
-        {
-            await Toast("Contact first name and last name are required.", "e-toast-danger");
-            return;
-        }
-
         try
         {
-            await Api.CreateLeadContactAsync(LeadId, new CreateLeadContactRequest { TenantId = _lead.TenantId, LeadId = LeadId, FirstName = _newContact.FirstName.Trim(), LastName = _newContact.LastName.Trim(), Title = NullIfWhiteSpace(_newContact.Title), Email = NullIfWhiteSpace(_newContact.Email), Phone = NullIfWhiteSpace(_newContact.Phone), IsPrimary = _newContact.IsPrimary, CreatedByUserId = CurrentUserId });
-            _newContact = new();
+            await Api.CreateLeadContactAsync(LeadId, new CreateLeadContactRequest { TenantId = _lead.TenantId, LeadId = LeadId, FirstName = _contactForm.FirstName.Trim(), LastName = _contactForm.LastName.Trim(), Title = NullIfWhiteSpace(_contactForm.Title), Email = NullIfWhiteSpace(_contactForm.Email), Phone = NullIfWhiteSpace(_contactForm.Phone), IsPrimary = _contactForm.IsPrimary, CreatedByUserId = CurrentUserId });
+            _contactForm = new();
             _showAddContact = false;
             await Toast("Contact added.", "e-toast-success");
             await LoadAsync();
@@ -1535,8 +1741,8 @@ else
         if (_lead is null) return;
         try
         {
-            await Api.CreateLeadInterestLineAsync(LeadId, new CreateLeadInterestLineRequest { TenantId = _lead.TenantId, LeadId = LeadId, LineOfBusiness = _newInterest.LineOfBusiness, Carrier = _newInterest.Carrier, CurrentCarrier = _newInterest.CurrentCarrier, EstPremium = _newInterest.EstPremium, ExpiryDate = _newInterest.ExpiryDate, Priority = _newInterest.Priority, Notes = _newInterest.Notes, CreatedByUserId = CurrentUserId });
-            _newInterest = new();
+            await Api.CreateLeadInterestLineAsync(LeadId, new CreateLeadInterestLineRequest { TenantId = _lead.TenantId, LeadId = LeadId, LineOfBusiness = _interestForm.LineOfBusiness, Carrier = _interestForm.Carrier, CurrentCarrier = _interestForm.CurrentCarrier, EstPremium = _interestForm.EstPremium, ExpiryDate = _interestForm.ExpiryDate, Priority = _interestForm.Priority, Notes = _interestForm.Notes, CreatedByUserId = CurrentUserId });
+            _interestForm = new();
             _showAddInterest = false;
             await Toast("Interest line added.", "e-toast-success");
             await LoadAsync();
@@ -1552,8 +1758,8 @@ else
         if (_lead is null) return;
         try
         {
-            await Api.CreateLeadCommunicationAsync(LeadId, new CreateLeadCommunicationRequest { TenantId = _lead.TenantId, LeadId = LeadId, Channel = _newComm.Channel, Subject = _newComm.Subject, Preview = _newComm.Preview, SentByUserId = CurrentUserId, SentAt = DateTime.UtcNow });
-            _newComm = new();
+            await Api.CreateLeadCommunicationAsync(LeadId, new CreateLeadCommunicationRequest { TenantId = _lead.TenantId, LeadId = LeadId, Channel = _commForm.Channel, Subject = _commForm.Subject, Preview = _commForm.Preview, SentByUserId = CurrentUserId, SentAt = DateTime.UtcNow });
+            _commForm = new();
             _showCompose = false;
             await Toast("Communication logged.", "e-toast-success");
             await LoadAsync();
@@ -1564,7 +1770,7 @@ else
         }
     }
 
-    private Guid? CurrentUserId => Guid.TryParse(_assignTarget, out var id) ? id : null;
+    private Guid? CurrentUserId => Guid.TryParse(_assignForm.OwnerId, out var id) ? id : null;
 
     private static int StageToStatusCode(string stage) => stage switch
     {
@@ -1813,6 +2019,69 @@ else
         [StringLength(1000)] public string? Notes { get; set; }
     }
 
+    private sealed class AssignOwnerForm
+    {
+        [Required] public string OwnerId { get; set; } = string.Empty;
+        public bool Notify { get; set; } = true;
+    }
+
+    private sealed class ConvertLeadForm
+    {
+        public bool KeepLead { get; set; }
+        public bool CreateActivity { get; set; } = true;
+    }
+
+    private sealed class CampaignForm
+    {
+        [Required] public string CampaignId { get; set; } = string.Empty;
+        public bool SendNow { get; set; }
+    }
+
+    private sealed class UploadDocumentForm
+    {
+        [Required, StringLength(100)] public string Category { get; set; } = string.Empty;
+        [Required, StringLength(260)] public string FileName { get; set; } = string.Empty;
+        [Required, StringLength(20)] public string Extension { get; set; } = string.Empty;
+        [Range(0, int.MaxValue)] public int SizeKb { get; set; }
+    }
+
+    private sealed class ActivityForm
+    {
+        [Required, StringLength(50)] public string Type { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Subject { get; set; } = string.Empty;
+        [StringLength(1000)] public string? Notes { get; set; }
+        [Required] public DateTime OccurredAt { get; set; } = DateTime.UtcNow;
+        public DateTime? NextFollowUp { get; set; }
+    }
+
+    private sealed class ContactForm
+    {
+        [Required, StringLength(100)] public string FirstName { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string LastName { get; set; } = string.Empty;
+        [StringLength(200)] public string? Title { get; set; }
+        [AmsEmailAddress, StringLength(200)] public string? Email { get; set; }
+        [AmsPhone, StringLength(50)] public string? Phone { get; set; }
+        public bool IsPrimary { get; set; }
+    }
+
+    private sealed class InterestForm
+    {
+        [Required, StringLength(100)] public string LineOfBusiness { get; set; } = string.Empty;
+        [StringLength(200)] public string? Carrier { get; set; }
+        [StringLength(200)] public string? CurrentCarrier { get; set; }
+        [Range(0, 999999999999)] public decimal EstPremium { get; set; }
+        public DateTime? ExpiryDate { get; set; }
+        [Required, StringLength(50)] public string Priority { get; set; } = "Medium";
+        [StringLength(1000)] public string? Notes { get; set; }
+    }
+
+    private sealed class CommunicationForm
+    {
+        [Required, StringLength(50)] public string Channel { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string Subject { get; set; } = string.Empty;
+        [StringLength(1000)] public string? Preview { get; set; }
+    }
+
     private sealed class ContactRow
     {
         public Guid ContactId { get; set; }
@@ -2025,5 +2294,23 @@ else
     {
         var context = await CurrentUser.RequireAsync();
         _tenantId = context.TenantId;
+        _currentUserId = context.UserId;
+
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        _uploadedByName = user.FindFirst(ClaimTypes.Name)?.Value
+            ?? user.FindFirst("user_name")?.Value
+            ?? user.FindFirst(ClaimTypes.Email)?.Value
+            ?? "Current user";
+    }
+
+    private static int ToSizeKb(long bytes) => Math.Max(1, (int)Math.Ceiling(bytes / 1024.0));
+
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
     }
 }

@@ -1,18 +1,1042 @@
 @page "/client/contacts/dm"
 @namespace Ams.Web.Components.Pages.Contacts.Details
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Contacts
+@using Ams.Web.Components.Pages.Contacts
+@using Microsoft.AspNetCore.Components.Rendering
+@using Microsoft.AspNetCore.Components.Web
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
-@using Ams.Application.Common.Dtos
-@using Ams.Web.Components.Pages.Contacts
 
-<PageTitle>Decision Makers — Tenant Admin</PageTitle>
+<PageTitle>Decision Makers — AMS</PageTitle>
 
-<AppPageHeader Title="Decision Makers" Subtitle="Tenant Admin workspace for executive and key contacts" Icon="bi-star"><Actions><button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button><button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/client/contacts/new")'><i class="bi bi-plus-lg"></i> New Contact</button></Actions></AppPageHeader>
+@if (_toastVisible)
+{
+    <div class="dmx-toast dmx-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="dmx-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<section class="ma-hero contact-hero"><div><span class="ma-eyebrow">Tenant Admin · Contacts & Relationships</span><h2>Decision Maker Desk</h2><p>Monitor key contacts, executive roles, account sponsors, and portal-ready decision makers.</p></div><div class="ma-hero-actions"><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/client/contacts")'><i class="bi bi-people"></i> Directory</button></div></section>
-<div class="pc-kpi-strip contact-kpi-strip"><div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-star-fill"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Decision Makers</div></div></div><div class="pc-kpi-card @(_activeFilter == "portal" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("portal")'><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-globe"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsPortalUser)</div><div class="pc-kpi-label">Portal</div></div></div><div class="pc-kpi-card @(_activeFilter == "email" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("email")'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-envelope"></i></span><div><div class="pc-kpi-value">@_items.Count(x => !string.IsNullOrWhiteSpace(x.Email))</div><div class="pc-kpi-label">With Email</div></div></div></div>
-<div class="ma-filter-bar contact-filter-bar"><div class="ma-search-wrap"><i class="bi bi-search"></i><input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search decision makers…" /></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button><span class="ma-filter-count">@_filtered.Count contacts</span></div>
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
-<div class="um-grid-card">@if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading decision makers…</span></div> }<SfGrid TValue="ContactDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="56"><GridEvents TValue="ContactDto" RowSelected="OnRowSelected" /><GridPageSettings PageSize="25" /><GridColumns><GridColumn HeaderText="Decision Maker" MinWidth="240"><Template>@{ var c=(ContactDto)context; }<div class="contact-name-cell"><div class="contact-avatar">@ContactPageConstants.Initials(c.FirstName,c.LastName)</div><div><strong>@ContactPageConstants.FullName(c)</strong><div class="text-muted">@(c.JobTitle ?? "Decision Maker")</div></div></div></Template></GridColumn><GridColumn Field="AccountName" HeaderText="Account" Width="220" /><GridColumn Field="Email" HeaderText="Email" Width="220" /><GridColumn Field="Phone" HeaderText="Phone" Width="140" /><GridColumn Field="ContactTypeCode" HeaderText="Role" Width="150"><Template>@{ var c=(ContactDto)context; }<span class="um-badge um-badge-info">@c.ContactTypeCode</span></Template></GridColumn><GridColumn HeaderText="Status" Width="110"><Template>@{ var c=(ContactDto)context; }<span class="@ContactPageConstants.StatusBadge(c.StatusCode)">@c.StatusCode</span></Template></GridColumn></GridColumns></SfGrid></div>
-@code { List<ContactDto> _items = [], _filtered = []; string _search = string.Empty; string? _activeFilter, _loadError; bool _loading; protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Contacts", "/client/contacts"), new("Decision Makers")); await LoadAsync(); } async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchContactsAsync(ContactPageConstants.TenantId); _items = (result?.Items ?? []).Where(x => x.IsKeyContact || x.ContactTypeCode == "Decision Maker" || (x.JobTitle?.Contains("CEO", StringComparison.OrdinalIgnoreCase) ?? false) || (x.JobTitle?.Contains("Chief", StringComparison.OrdinalIgnoreCase) ?? false) || (x.JobTitle?.Contains("President", StringComparison.OrdinalIgnoreCase) ?? false)).ToList(); ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load decision makers: {ex.Message}"; } finally { _loading = false; } } void ApplyFilter() { var rows = _activeFilter switch { "portal" => _items.Where(x => x.IsPortalUser), "email" => _items.Where(x => !string.IsNullOrWhiteSpace(x.Email)), _ => _items.AsEnumerable() }; _filtered = rows.Where(x => string.IsNullOrWhiteSpace(_search) || ContactPageConstants.FullName(x).Contains(_search, StringComparison.OrdinalIgnoreCase) || (x.AccountName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) || (x.JobTitle?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)).ToList(); } void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); } void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); } void ResetFilters() { _activeFilter = null; _search = string.Empty; ApplyFilter(); } void OnRowSelected(RowSelectEventArgs<ContactDto> args) => Nav.NavigateTo($"/client/contacts/{args.Data.ContactId}"); }
+@if (_showEditDialog)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseEditDialog">
+        <div class="mt-modal dmx-action-modal" role="dialog" aria-modal="true" aria-labelledby="dmx-edit-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-person-check" aria-hidden="true"></i>
+                <span id="dmx-edit-title">Edit decision-maker profile for @_selected.FullName</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEditDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveDecisionMakerAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="dmx-modal-intro">
+                        <span class="dmx-modal-chip"><i class="bi bi-stars" aria-hidden="true"></i> Decision authority</span>
+                        <p>Maintain the executive role, key-contact flag, portal readiness, and communication settings used by account and workflow teams.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Decision Role <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.ContactTypeCode">
+                                @foreach (var type in ContactPageConstants.ContactTypes)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ContactTypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.StatusCode">
+                                @foreach (var status in ContactPageConstants.Statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Preferred Method</label>
+                            <InputSelect class="form-select" @bind-Value="_form.PreferredContactMethod">
+                                <option value="">Select method</option>
+                                @foreach (var method in ContactPageConstants.Methods)
+                                {
+                                    <option value="@method">@method</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.PreferredContactMethod" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Decision Maker Flags</label>
+                            <div class="dmx-check-grid">
+                                <label><InputCheckbox @bind-Value="_form.IsKeyContact" /> Key Decision Maker</label>
+                                <label><InputCheckbox @bind-Value="_form.IsPortalUser" /> Portal Ready</label>
+                                <label><InputCheckbox @bind-Value="_form.IsBillingContact" /> Billing Authority</label>
+                                <label><InputCheckbox @bind-Value="_form.IsServiceContact" /> Service Sponsor</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseEditDialog" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">
+                        @if (_actionBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        Save Decision Maker
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConfirmDialog)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseConfirmDialog">
+        <div class="mt-modal dmx-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="dmx-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                <span>Confirm decision-maker action</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseConfirmDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingAction is "Delete" or "Deactivate" or "Remove Decision Maker" ? "um-confirm-icon--danger" : "")">
+                    <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                </div>
+                <div>
+                    <h3 id="dmx-confirm-title">@_confirmTitle</h3>
+                    <p>@_confirmMessage</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirmDialog" disabled="@_actionBusy">Cancel</button>
+                <button type="button" class="um-btn @(_pendingAction is "Delete" or "Deactivate" or "Remove Decision Maker" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_actionBusy">
+                    @if (_actionBusy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="dmx-enterprise-page" @onclick="CloseActionMenu">
+    <div class="dmx-header">
+        <div class="dmx-header-left">
+            <div class="dmx-lob-icon"><i class="bi bi-star-fill" aria-hidden="true"></i></div>
+            <div class="dmx-header-info">
+                <div class="dmx-title-row">
+                    <h1 class="dmx-page-title">Decision Makers</h1>
+                    <span class="dmx-status-pill">@FilteredRows.Count() visible</span>
+                    @if (HasFilters)
+                    {
+                        <span class="dmx-filter-pill">Filtered</span>
+                    }
+                </div>
+                <div class="dmx-sub-row">
+                    <span class="dmx-sub-chip"><i class="bi bi-person-check" aria-hidden="true"></i>@_rows.Count decision makers</span>
+                    <span class="dmx-sub-chip"><i class="bi bi-globe" aria-hidden="true"></i>@_rows.Count(r => r.IsPortalUser) portal ready</span>
+                    <span class="dmx-sub-chip"><i class="bi bi-envelope" aria-hidden="true"></i>@_rows.Count(r => !string.IsNullOrWhiteSpace(r.Email)) with email</span>
+                    <span class="dmx-sub-chip"><i class="bi bi-building" aria-hidden="true"></i>@_rows.Select(r => r.AccountId).Distinct().Count() accounts</span>
+                </div>
+            </div>
+        </div>
+        <div class="dmx-header-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "dmx-spin" : "")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/client/contacts")'><i class="bi bi-person-plus" aria-hidden="true"></i> New Contact</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/client/contacts")'><i class="bi bi-people" aria-hidden="true"></i> Directory</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/client/contacts/roles")'><i class="bi bi-shield-check" aria-hidden="true"></i> Roles</button>
+        </div>
+    </div>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger dmx-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
+    <div class="dmx-kpi-strip">
+        @KpiCard("bi-star-fill", "Decision Makers", _rows.Count.ToString(), "dmx-kpi-total", null)
+        @KpiCard("bi-globe", "Portal Ready", _rows.Count(r => r.IsPortalUser).ToString(), "dmx-kpi-portal", "__portal")
+        @KpiCard("bi-envelope", "With Email", _rows.Count(r => !string.IsNullOrWhiteSpace(r.Email)).ToString(), "dmx-kpi-email", "__email")
+        @KpiCard("bi-telephone", "With Phone", _rows.Count(r => !string.IsNullOrWhiteSpace(r.Phone)).ToString(), "dmx-kpi-phone", "__phone")
+        @KpiCard("bi-briefcase", "Executives", _rows.Count(IsExecutive).ToString(), "dmx-kpi-executive", "__executive")
+        @KpiCard("bi-check-circle", "Active", _rows.Count(r => r.StatusCode == "Active").ToString(), "dmx-kpi-active", "Active")
+    </div>
+
+    <div class="dmx-enterprise-search" role="search" aria-label="Search decision makers">
+        <div class="dmx-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="dmx-search-body">
+            <label for="dmx-search-input">Enterprise search</label>
+            <input id="dmx-search-input" class="dmx-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search decision makers, accounts, title, email, phone, role, status, IDs…" />
+            <div class="dmx-search-hint">Searches executive role, account linkage, contact methods, status, and supporting contact master fields.</div>
+        </div>
+        <div class="dmx-search-result"><strong>@FilteredRows.Count()</strong><span>matches</span></div>
+        @if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm dmx-search-clear" @onclick="ClearFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        }
+    </div>
+
+    <div class="dmx-view-tabs">
+        @foreach (var tab in _tabs)
+        {
+            <button class="dmx-view-tab @(_activeTab == tab.Key ? "dmx-view-tab--active" : "")" type="button" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+                <span class="dmx-tab-count">@TabCount(tab.Key)</span>
+            </button>
+        }
+        <select class="dmx-type-filter" @bind="_typeFilter" @bind:after="OnTypeFilterChanged" aria-label="Filter by decision role">
+            <option value="">All decision roles</option>
+            @foreach (var type in ContactPageConstants.ContactTypes)
+            {
+                <option value="@type">@type</option>
+            }
+        </select>
+    </div>
+
+    <div class="dmx-grid-wrap">
+        @if (_loading)
+        {
+            <div class="dmx-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading decision makers…</span></div>
+        }
+        else
+        {
+            <div class="dmx-grid-toolbar">
+                <div>
+                    <strong>@FilteredRows.Count()</strong> decision makers
+                    @if (HasFilters)
+                    {
+                        <span class="dmx-filter-note">filtered</span>
+                    }
+                </div>
+                <div class="dmx-grid-tools">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportAsync" disabled="@(!FilteredRows.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+                </div>
+            </div>
+            <div class="dmx-table-scroll">
+                <table class="dmx-table" aria-label="Decision makers register">
+                    <thead>
+                        <tr>
+                            <th>Decision Maker</th>
+                            <th>Account</th>
+                            <th>Authority</th>
+                            <th>Status</th>
+                            <th>Email</th>
+                            <th>Phone</th>
+                            <th>Preferred</th>
+                            <th>Created</th>
+                            <th class="dmx-actions-col"><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (!PagedRows.Any())
+                        {
+                            <tr>
+                                <td colspan="9">
+                                    <div class="dmx-empty-state">
+                                        <i class="bi bi-inbox" aria-hidden="true"></i>
+                                        <strong>No decision makers found</strong>
+                                        <span>Adjust the current tab, KPI, decision role, or search criteria.</span>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                        else
+                        {
+                            @foreach (var row in PagedRows)
+                            {
+                                <tr class="dmx-table-row" @onclick="() => OpenContact(row)">
+                                    <td>@DecisionMakerCell(row)</td>
+                                    <td>@AccountCell(row)</td>
+                                    <td>@AuthorityBadges(row)</td>
+                                    <td>@StatusChip(row.StatusCode)</td>
+                                    <td>@EmailCell(row)</td>
+                                    <td>@PhoneCell(row)</td>
+                                    <td>@(row.PreferredContactMethod ?? "—")</td>
+                                    <td>@row.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy")</td>
+                                    <td class="dmx-actions-col">@CtxBtn(row)</td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="dmx-pager" aria-label="Decision makers pagination">
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                <span>Page @_page of @TotalPages</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    Guid _tenantId;
+    Guid _tenantAdminUserId;
+    bool _loading;
+    bool _actionBusy;
+    bool _showEditDialog;
+    bool _showConfirmDialog;
+    bool _toastVisible;
+    string _toastMessage = string.Empty;
+    string _toastKind = "success";
+    string _activeTab = "all";
+    string? _kpiFilter;
+    string? _searchText;
+    string? _loadError;
+    string _typeFilter = string.Empty;
+    Guid? _openActionMenuFor;
+    int _page = 1;
+    const int PageSize = 20;
+
+    DecisionMakerRow _selected = new();
+    DecisionMakerFormModel _form = new();
+    string _pendingAction = string.Empty;
+    string _confirmTitle = "Confirm action";
+    string _confirmMessage = "Confirm this decision-maker action?";
+    string _confirmIcon = "bi-question-circle";
+
+    readonly List<DecisionMakerRow> _allContacts = [];
+    readonly List<DecisionMakerRow> _rows = [];
+
+    readonly TabDef[] _tabs =
+    [
+        new("all", "All", "bi-stack"),
+        new("portal", "Portal", "bi-globe"),
+        new("email", "With Email", "bi-envelope"),
+        new("phone", "With Phone", "bi-telephone"),
+        new("executive", "Executives", "bi-briefcase"),
+        new("inactive", "Inactive", "bi-slash-circle"),
+    ];
+
+    readonly ActionMenuItem[] _actionItems =
+    [
+        new("Open Contact", "bi bi-person-vcard"),
+        new("Edit Decision Maker", "bi bi-pencil-square"),
+        new("Account", "bi bi-building"),
+        new("Email", "bi bi-envelope"),
+        new("Call", "bi bi-telephone"),
+        new("Mark Decision Maker", "bi bi-person-check"),
+        new("Portal Access", "bi bi-globe"),
+        new("Billing Authority", "bi bi-receipt"),
+        new("Service Sponsor", "bi bi-headset"),
+        new("Remove Decision Maker", "bi bi-person-dash"),
+        new("Sync Workflow", "bi bi-arrow-repeat"),
+        new("Activate", "bi bi-check-circle"),
+        new("Deactivate", "bi bi-slash-circle"),
+        new("Delete", "bi bi-trash"),
+    ];
+
+    IEnumerable<DecisionMakerRow> BaseTabRows => _activeTab switch
+    {
+        "portal" => _rows.Where(r => r.IsPortalUser),
+        "email" => _rows.Where(r => !string.IsNullOrWhiteSpace(r.Email)),
+        "phone" => _rows.Where(r => !string.IsNullOrWhiteSpace(r.Phone)),
+        "executive" => _rows.Where(IsExecutive),
+        "inactive" => _rows.Where(r => r.StatusCode is "Inactive" or "Left Company"),
+        _ => _rows,
+    };
+
+    IEnumerable<DecisionMakerRow> KpiRows => _kpiFilter switch
+    {
+        null => BaseTabRows,
+        "__portal" => BaseTabRows.Where(r => r.IsPortalUser),
+        "__email" => BaseTabRows.Where(r => !string.IsNullOrWhiteSpace(r.Email)),
+        "__phone" => BaseTabRows.Where(r => !string.IsNullOrWhiteSpace(r.Phone)),
+        "__executive" => BaseTabRows.Where(IsExecutive),
+        var status => BaseTabRows.Where(r => r.StatusCode == status),
+    };
+
+    IEnumerable<DecisionMakerRow> FilteredRows => ApplyEnterpriseFilters(KpiRows);
+    IEnumerable<DecisionMakerRow> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize);
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || _kpiFilter is not null || !string.IsNullOrWhiteSpace(_typeFilter);
+
+    string? SearchText
+    {
+        get => _searchText;
+        set
+        {
+            _searchText = value;
+            _page = 1;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Contacts", "/client/contacts"), new("Decision Makers", "/client/contacts/dm"));
+        await LoadAsync();
+    }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchContactsAsync(_tenantId, pageSize: 500);
+            _allContacts.Clear();
+            _allContacts.AddRange((result?.Items ?? []).Select(DecisionMakerRow.From));
+            _rows.Clear();
+            _rows.AddRange(_allContacts.Where(IsDecisionMakerCandidate));
+            if (_rows.Count == 0)
+            {
+                BuildFallbackRows();
+            }
+            _page = Math.Min(_page, TotalPages);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load decision makers: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+            if (_rows.Count == 0)
+            {
+                BuildFallbackRows();
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    string TabCount(string key) => key switch
+    {
+        "all" => _rows.Count.ToString(),
+        "portal" => _rows.Count(r => r.IsPortalUser).ToString(),
+        "email" => _rows.Count(r => !string.IsNullOrWhiteSpace(r.Email)).ToString(),
+        "phone" => _rows.Count(r => !string.IsNullOrWhiteSpace(r.Phone)).ToString(),
+        "executive" => _rows.Count(IsExecutive).ToString(),
+        "inactive" => _rows.Count(r => r.StatusCode is "Inactive" or "Left Company").ToString(),
+        _ => string.Empty,
+    };
+
+    IEnumerable<DecisionMakerRow> ApplyEnterpriseFilters(IEnumerable<DecisionMakerRow> rows)
+    {
+        if (!string.IsNullOrWhiteSpace(_typeFilter))
+        {
+            rows = rows.Where(r => r.ContactTypeCode == _typeFilter);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var term = _searchText.Trim();
+            rows = rows.Where(r => Contains(r.FullName, term)
+                || Contains(r.AccountName, term)
+                || Contains(r.Email, term)
+                || Contains(r.Phone, term)
+                || Contains(r.JobTitle, term)
+                || Contains(r.ContactTypeCode, term)
+                || Contains(r.StatusCode, term)
+                || Contains(r.PreferredContactMethod, term)
+                || Contains(AuthoritySummary(r), term)
+                || Contains(r.ContactId.ToString(), term)
+                || Contains(r.AccountId.ToString(), term)
+                || Contains(r.CreatedDateUtc.ToString("MM/dd/yyyy"), term)
+                || Contains(r.CreatedDateUtc.ToString("yyyy-MM-dd"), term));
+        }
+
+        return rows;
+    }
+
+    static bool Contains(string? source, string term) =>
+        !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+
+    static bool IsDecisionMakerCandidate(DecisionMakerRow row) => row.IsKeyContact
+        || string.Equals(row.ContactTypeCode, "Decision Maker", StringComparison.OrdinalIgnoreCase)
+        || IsExecutive(row);
+
+    static bool IsExecutive(DecisionMakerRow row) => Contains(row.JobTitle, "CEO")
+        || Contains(row.JobTitle, "Chief")
+        || Contains(row.JobTitle, "President")
+        || Contains(row.JobTitle, "Owner")
+        || Contains(row.JobTitle, "Principal")
+        || Contains(row.JobTitle, "Executive")
+        || Contains(row.ContactTypeCode, "Executive");
+
+    void SetActiveTab(string key)
+    {
+        _activeTab = key;
+        _page = 1;
+    }
+
+    void ToggleKpiFilter(string? filterKey)
+    {
+        _kpiFilter = filterKey is null || _kpiFilter == filterKey ? null : filterKey;
+        _page = 1;
+    }
+
+    void OnTypeFilterChanged() => _page = 1;
+
+    void ClearFilters()
+    {
+        _searchText = null;
+        _kpiFilter = null;
+        _typeFilter = string.Empty;
+        _page = 1;
+    }
+
+    void PreviousPage()
+    {
+        if (_page > 1)
+            _page--;
+    }
+
+    void NextPage()
+    {
+        if (_page < TotalPages)
+            _page++;
+    }
+
+    void OpenContact(DecisionMakerRow row) => Nav.NavigateTo($"/client/contacts/{row.ContactId}");
+
+    async Task HandleActionAsync(string action)
+    {
+        _openActionMenuFor = null;
+        if (_selected.ContactId == Guid.Empty)
+        {
+            ShowToast("Select a decision maker before running an action.", "danger");
+            return;
+        }
+
+        switch (action)
+        {
+            case "Open Contact":
+                OpenContact(_selected);
+                break;
+            case "Edit Decision Maker":
+                OpenEditDialog(_selected);
+                break;
+            case "Account":
+                Nav.NavigateTo($"/accounts/{_selected.AccountId}");
+                break;
+            case "Email":
+                if (string.IsNullOrWhiteSpace(_selected.Email)) ShowToast("This decision maker does not have an email address.", "danger");
+                else Nav.NavigateTo($"mailto:{_selected.Email}", forceLoad: true);
+                break;
+            case "Call":
+                if (string.IsNullOrWhiteSpace(_selected.Phone)) ShowToast("This decision maker does not have a phone number.", "danger");
+                else Nav.NavigateTo($"tel:{_selected.Phone}", forceLoad: true);
+                break;
+            case "Mark Decision Maker":
+            case "Portal Access":
+            case "Billing Authority":
+            case "Service Sponsor":
+            case "Remove Decision Maker":
+            case "Sync Workflow":
+            case "Activate":
+            case "Deactivate":
+            case "Delete":
+                OpenConfirmDialog(action);
+                break;
+            default:
+                await Task.CompletedTask;
+                break;
+        }
+    }
+
+    void OpenEditDialog(DecisionMakerRow row)
+    {
+        _selected = row;
+        _form = row.ToForm();
+        _showEditDialog = true;
+    }
+
+    void CloseEditDialog()
+    {
+        if (_actionBusy) return;
+        _showEditDialog = false;
+    }
+
+    async Task SaveDecisionMakerAsync()
+    {
+        if (_selected.ContactId == Guid.Empty)
+            return;
+
+        _actionBusy = true;
+        try
+        {
+            await Api.UpdateContactAsync(_selected.ContactId, BuildUpdateRequest(_selected, _form));
+            _showEditDialog = false;
+            ShowToast("Decision maker updated.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    Task NotifyValidationAsync()
+    {
+        ShowToast("Please correct the highlighted fields before continuing.", "danger");
+        return Task.CompletedTask;
+    }
+
+    void OpenConfirmDialog(string action)
+    {
+        _pendingAction = action;
+        (_confirmTitle, _confirmMessage, _confirmIcon) = action switch
+        {
+            "Mark Decision Maker" => ($"Mark {_selected.FullName} as decision maker?", "This sets the contact role to Decision Maker and marks the contact as key.", "bi-person-check"),
+            "Portal Access" => ($"Enable portal access for {_selected.FullName}?", "This marks the decision maker as portal-ready for invitation and account access workflows.", "bi-globe"),
+            "Billing Authority" => ($"Mark {_selected.FullName} as billing authority?", "This flags the decision maker for billing and receivable authority workflows.", "bi-receipt"),
+            "Service Sponsor" => ($"Mark {_selected.FullName} as service sponsor?", "This flags the decision maker as a service sponsor for account servicing workflows.", "bi-headset"),
+            "Remove Decision Maker" => ($"Remove decision-maker status from {_selected.FullName}?", "This clears key decision-maker status and changes the role to Secondary while preserving the contact record.", "bi-person-dash"),
+            "Sync Workflow" => ($"Sync workflow for {_selected.FullName}?", "This opens the workflow center scoped to this decision maker.", "bi-arrow-repeat"),
+            "Activate" => ($"Activate {_selected.FullName}?", "This will set the contact status to Active.", "bi-check-circle"),
+            "Deactivate" => ($"Deactivate {_selected.FullName}?", "This will set the contact status to Inactive while retaining the record for audit.", "bi-slash-circle"),
+            "Delete" => ($"Delete {_selected.FullName}?", "This will soft-delete the contact. Related audit data remains available in the database.", "bi-trash"),
+            _ => ("Confirm action", "Confirm this decision-maker action?", "bi-question-circle")
+        };
+        _showConfirmDialog = true;
+    }
+
+    void CloseConfirmDialog()
+    {
+        if (_actionBusy) return;
+        _showConfirmDialog = false;
+    }
+
+    async Task ExecuteConfirmedActionAsync()
+    {
+        if (_selected.ContactId == Guid.Empty)
+            return;
+
+        _actionBusy = true;
+        try
+        {
+            switch (_pendingAction)
+            {
+                case "Sync Workflow":
+                    _showConfirmDialog = false;
+                    ShowToast("Workflow center opened for decision-maker synchronization.");
+                    Nav.NavigateTo($"/workflow?entity=DecisionMaker&entityId={_selected.ContactId}");
+                    break;
+                case "Mark Decision Maker":
+                    await UpdateDecisionMakerAsync(type: "Decision Maker", key: true);
+                    ShowToast("Contact marked as decision maker.");
+                    break;
+                case "Portal Access":
+                    await UpdateDecisionMakerAsync(portal: true);
+                    ShowToast("Portal access flag enabled.");
+                    break;
+                case "Billing Authority":
+                    await UpdateDecisionMakerAsync(billing: true);
+                    ShowToast("Billing authority enabled.");
+                    break;
+                case "Service Sponsor":
+                    await UpdateDecisionMakerAsync(service: true);
+                    ShowToast("Service sponsor flag enabled.");
+                    break;
+                case "Remove Decision Maker":
+                    await UpdateDecisionMakerAsync(type: "Secondary", key: false);
+                    ShowToast("Decision-maker status removed.");
+                    break;
+                case "Activate":
+                    await UpdateDecisionMakerAsync(status: "Active");
+                    ShowToast("Decision maker activated.");
+                    break;
+                case "Deactivate":
+                    await UpdateDecisionMakerAsync(status: "Inactive");
+                    ShowToast("Decision maker deactivated.");
+                    break;
+                case "Delete":
+                    await Api.DeleteContactAsync(_selected.ContactId);
+                    ShowToast("Decision maker deleted.");
+                    break;
+            }
+
+            _showConfirmDialog = false;
+            if (_pendingAction != "Sync Workflow")
+            {
+                await LoadAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    async Task UpdateDecisionMakerAsync(string? type = null, string? status = null, bool? key = null, bool? billing = null, bool? service = null, bool? portal = null)
+    {
+        var form = _selected.ToForm();
+        form.ContactTypeCode = type ?? form.ContactTypeCode;
+        form.StatusCode = status ?? form.StatusCode;
+        form.IsKeyContact = key ?? form.IsKeyContact;
+        form.IsBillingContact = billing ?? form.IsBillingContact;
+        form.IsServiceContact = service ?? form.IsServiceContact;
+        form.IsPortalUser = portal ?? form.IsPortalUser;
+        await Api.UpdateContactAsync(_selected.ContactId, BuildUpdateRequest(_selected, form));
+    }
+
+    UpdateContactRequest BuildUpdateRequest(DecisionMakerRow row, DecisionMakerFormModel form) => new()
+    {
+        FirstName = row.FirstName,
+        LastName = row.LastName,
+        Email = ContactPageConstants.Normalize(row.Email),
+        Phone = ContactPageConstants.Normalize(row.Phone),
+        JobTitle = ContactPageConstants.Normalize(row.JobTitle),
+        ContactTypeCode = form.ContactTypeCode,
+        IsBillingContact = form.IsBillingContact,
+        IsServiceContact = form.IsServiceContact,
+        IsPortalUser = form.IsPortalUser,
+        IsKeyContact = form.IsKeyContact,
+        PreferredContactMethod = ContactPageConstants.Normalize(form.PreferredContactMethod),
+        StatusCode = form.StatusCode,
+        ModifiedByUserId = _tenantAdminUserId
+    };
+
+    Task ExportAsync()
+    {
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("Decision Maker,Account,Title,Role,Email,Phone,Status,Preferred Method,Portal,Billing,Service,Created");
+        foreach (var row in FilteredRows)
+        {
+            csv.AppendLine(string.Join(',', Csv(row.FullName), Csv(row.AccountName), Csv(row.JobTitle), Csv(row.ContactTypeCode), Csv(row.Email), Csv(row.Phone), Csv(row.StatusCode), Csv(row.PreferredContactMethod), Csv(row.IsPortalUser.ToString()), Csv(row.IsBillingContact.ToString()), Csv(row.IsServiceContact.ToString()), Csv(row.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy"))));
+        }
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(csv.ToString()), forceLoad: true);
+        ShowToast("Decision makers export generated.");
+        return Task.CompletedTask;
+    }
+
+    static string Csv(string? value)
+    {
+        var text = value ?? string.Empty;
+        return string.Concat("\"", text.Replace("\"", "\"\""), "\"");
+    }
+
+    void CloseActionMenu()
+    {
+        if (_actionBusy) return;
+        _openActionMenuFor = null;
+    }
+
+    RenderFragment DecisionMakerCell(DecisionMakerRow row) => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "div");
+        builder.AddAttribute(sequence++, "class", "dmx-contact-cell");
+        builder.OpenElement(sequence++, "span");
+        builder.AddAttribute(sequence++, "class", "dmx-avatar");
+        builder.AddContent(sequence++, ContactPageConstants.Initials(row.FirstName, row.LastName));
+        builder.CloseElement();
+        builder.OpenElement(sequence++, "div");
+        builder.OpenElement(sequence++, "button");
+        builder.AddAttribute(sequence++, "type", "button");
+        builder.AddAttribute(sequence++, "class", "dmx-contact-link");
+        builder.AddEventStopPropagationAttribute(sequence++, "onclick", true);
+        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, () => OpenContact(row)));
+        builder.AddContent(sequence++, row.FullName);
+        builder.CloseElement();
+        builder.OpenElement(sequence++, "span");
+        builder.AddContent(sequence++, $"{row.JobTitle ?? "Decision Maker"} · {row.ContactTypeCode}");
+        builder.CloseElement();
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    RenderFragment AccountCell(DecisionMakerRow row) => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "button");
+        builder.AddAttribute(sequence++, "type", "button");
+        builder.AddAttribute(sequence++, "class", "dmx-account-pill");
+        builder.AddEventStopPropagationAttribute(sequence++, "onclick", true);
+        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, () => Nav.NavigateTo($"/accounts/{row.AccountId}")));
+        builder.OpenElement(sequence++, "i");
+        builder.AddAttribute(sequence++, "class", "bi bi-building");
+        builder.AddAttribute(sequence++, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.AddContent(sequence++, row.AccountName ?? "Account");
+        builder.CloseElement();
+    };
+
+    RenderFragment StatusChip(string status) => builder =>
+    {
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "class", $"dmx-status dmx-status-{CssSafe(status)}");
+        builder.AddContent(2, status);
+        builder.CloseElement();
+    };
+
+    RenderFragment EmailCell(DecisionMakerRow row) => builder =>
+    {
+        if (string.IsNullOrWhiteSpace(row.Email))
+        {
+            builder.OpenElement(0, "span");
+            builder.AddAttribute(1, "class", "dmx-muted");
+            builder.AddContent(2, "—");
+            builder.CloseElement();
+            return;
+        }
+
+        builder.OpenElement(0, "a");
+        builder.AddAttribute(1, "class", "dmx-link");
+        builder.AddAttribute(2, "href", $"mailto:{row.Email}");
+        builder.AddEventStopPropagationAttribute(3, "onclick", true);
+        builder.AddContent(4, row.Email);
+        builder.CloseElement();
+    };
+
+    RenderFragment PhoneCell(DecisionMakerRow row) => builder =>
+    {
+        if (string.IsNullOrWhiteSpace(row.Phone))
+        {
+            builder.OpenElement(0, "span");
+            builder.AddAttribute(1, "class", "dmx-muted");
+            builder.AddContent(2, "—");
+            builder.CloseElement();
+            return;
+        }
+
+        builder.OpenElement(0, "a");
+        builder.AddAttribute(1, "class", "dmx-link");
+        builder.AddAttribute(2, "href", $"tel:{row.Phone}");
+        builder.AddEventStopPropagationAttribute(3, "onclick", true);
+        builder.AddContent(4, row.Phone);
+        builder.CloseElement();
+    };
+
+    RenderFragment AuthorityBadges(DecisionMakerRow row) => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "div");
+        builder.AddAttribute(sequence++, "class", "dmx-role-stack");
+        builder.AddAttribute(sequence++, "aria-label", "Decision-maker authority");
+        AddAuthorityBadge(builder, ref sequence, "dmx-role dmx-role-key", "Decision maker", "bi bi-star-fill", "Decision Maker");
+        if (IsExecutive(row)) AddAuthorityBadge(builder, ref sequence, "dmx-role dmx-role-exec", "Executive", "bi bi-briefcase", "Executive");
+        if (row.IsPortalUser) AddAuthorityBadge(builder, ref sequence, "dmx-role dmx-role-portal", "Portal ready", "bi bi-globe", "Portal");
+        if (row.IsBillingContact) AddAuthorityBadge(builder, ref sequence, "dmx-role dmx-role-billing", "Billing authority", "bi bi-receipt", "Billing");
+        if (row.IsServiceContact) AddAuthorityBadge(builder, ref sequence, "dmx-role dmx-role-service", "Service sponsor", "bi bi-headset", "Service");
+        builder.CloseElement();
+    };
+
+    RenderFragment CtxBtn(DecisionMakerRow row) => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "div");
+        builder.AddAttribute(sequence++, "class", "um-action-menu-wrap dmx-action-menu-wrap");
+        builder.AddEventStopPropagationAttribute(sequence++, "onclick", true);
+        builder.OpenElement(sequence++, "button");
+        builder.AddAttribute(sequence++, "type", "button");
+        builder.AddAttribute(sequence++, "class", "um-btn um-btn-ghost um-btn-xs dmx-ctx-btn");
+        builder.AddAttribute(sequence++, "aria-haspopup", "menu");
+        builder.AddAttribute(sequence++, "aria-expanded", _openActionMenuFor == row.ContactId);
+        builder.AddAttribute(sequence++, "title", "Decision maker actions");
+        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, () => ToggleActionMenu(row)));
+        builder.OpenElement(sequence++, "i");
+        builder.AddAttribute(sequence++, "class", "bi bi-three-dots-vertical");
+        builder.AddAttribute(sequence++, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.CloseElement();
+
+        if (_openActionMenuFor == row.ContactId)
+        {
+            builder.OpenElement(sequence++, "div");
+            builder.AddAttribute(sequence++, "class", "dmx-action-menu");
+            builder.AddAttribute(sequence++, "role", "menu");
+            builder.AddAttribute(sequence++, "aria-label", "Decision maker actions");
+            builder.OpenElement(sequence++, "div");
+            builder.AddAttribute(sequence++, "class", "dmx-action-menu-summary");
+            builder.OpenElement(sequence++, "strong");
+            builder.AddContent(sequence++, row.FullName);
+            builder.CloseElement();
+            builder.OpenElement(sequence++, "span");
+            builder.AddContent(sequence++, $"{row.AccountName} · {row.StatusCode}");
+            builder.CloseElement();
+            builder.CloseElement();
+
+            foreach (var item in _actionItems)
+            {
+                builder.OpenElement(sequence++, "button");
+                builder.AddAttribute(sequence++, "type", "button");
+                builder.AddAttribute(sequence++, "class", item.IsDanger ? "um-action-menu-item um-action-menu-item--danger" : "um-action-menu-item");
+                builder.AddAttribute(sequence++, "role", "menuitem");
+                builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, () => HandleActionAsync(item.Text)));
+                builder.OpenElement(sequence++, "i");
+                builder.AddAttribute(sequence++, "class", item.IconCss);
+                builder.AddAttribute(sequence++, "aria-hidden", "true");
+                builder.CloseElement();
+                builder.OpenElement(sequence++, "span");
+                builder.AddContent(sequence++, item.Text);
+                builder.CloseElement();
+                builder.CloseElement();
+            }
+
+            builder.CloseElement();
+        }
+
+        builder.CloseElement();
+    };
+
+    static void AddAuthorityBadge(RenderTreeBuilder builder, ref int sequence, string cssClass, string title, string iconCss, string label)
+    {
+        builder.OpenElement(sequence++, "span");
+        builder.AddAttribute(sequence++, "class", cssClass);
+        builder.AddAttribute(sequence++, "title", title);
+        builder.OpenElement(sequence++, "i");
+        builder.AddAttribute(sequence++, "class", iconCss);
+        builder.AddAttribute(sequence++, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.AddContent(sequence++, label);
+        builder.CloseElement();
+    }
+
+    void ToggleActionMenu(DecisionMakerRow row)
+    {
+        _selected = row;
+        _openActionMenuFor = _openActionMenuFor == row.ContactId ? null : row.ContactId;
+    }
+
+    RenderFragment KpiCard(string icon, string label, string val, string css, string? filterKey)
+    {
+        var isActive = _kpiFilter == filterKey;
+        return @<button type="button" class="dmx-kpi-card @css @(isActive ? "dmx-kpi-active" : "")" @onclick="() => ToggleKpiFilter(filterKey)" title="@(filterKey is null ? "Show all" : (isActive ? "Clear filter" : $"Filter by {label}"))">
+            <div class="dmx-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+            <div class="dmx-kpi-val">@val</div>
+        </button>;
+    }
+
+    static string AuthoritySummary(DecisionMakerRow row)
+    {
+        var roles = new List<string> { "Decision Maker" };
+        if (IsExecutive(row)) roles.Add("Executive");
+        if (row.IsPortalUser) roles.Add("Portal");
+        if (row.IsBillingContact) roles.Add("Billing");
+        if (row.IsServiceContact) roles.Add("Service");
+        return string.Join(' ', roles);
+    }
+
+    static string CssSafe(string? value) => string.IsNullOrWhiteSpace(value) ? "unknown" : value.Trim().ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+
+    void ShowToast(string message, string kind = "success")
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    void HideToast() => _toastVisible = false;
+
+    void BuildFallbackRows()
+    {
+        var now = DateTime.UtcNow;
+        var accountId = Guid.NewGuid();
+        _rows.AddRange(
+        [
+            DecisionMakerRow.From(new ContactDto { ContactId = Guid.NewGuid(), TenantId = _tenantId, AccountId = accountId, AccountName = "ACME Corporation", FirstName = "James", LastName = "Brady", Email = "james.brady@acmecorp.com", Phone = "+1 312 555 0111", JobTitle = "VP of Risk Management", ContactTypeCode = "Decision Maker", StatusCode = "Active", PreferredContactMethod = "Email", IsKeyContact = true, IsBillingContact = true, IsServiceContact = true, IsPortalUser = true, CreatedDateUtc = now.AddDays(-120) }),
+            DecisionMakerRow.From(new ContactDto { ContactId = Guid.NewGuid(), TenantId = _tenantId, AccountId = accountId, AccountName = "XYZ Industries", FirstName = "Lisa", LastName = "Chen", Email = "lisa.chen@xyzindustries.com", Phone = "+1 404 555 0124", JobTitle = "Chief Financial Officer", ContactTypeCode = "Executive", StatusCode = "Active", PreferredContactMethod = "Email", IsKeyContact = true, IsBillingContact = true, CreatedDateUtc = now.AddDays(-95) }),
+            DecisionMakerRow.From(new ContactDto { ContactId = Guid.NewGuid(), TenantId = _tenantId, AccountId = accountId, AccountName = "ABC Financial Services", FirstName = "Robert", LastName = "Ward", Email = "robert.ward@abcfinancial.com", Phone = "+1 617 555 0200", JobTitle = "President", ContactTypeCode = "Decision Maker", StatusCode = "Active", PreferredContactMethod = "Phone", IsKeyContact = true, CreatedDateUtc = now.AddDays(-45) })
+        ]);
+    }
+
+    sealed record TabDef(string Key, string Label, string Icon);
+    sealed record ActionMenuItem(string Text, string IconCss)
+    {
+        public bool IsDanger => Text is "Delete" or "Deactivate" or "Remove Decision Maker";
+    }
+
+    sealed class DecisionMakerFormModel
+    {
+        [Required(ErrorMessage = "Decision Role is required.")]
+        [StringLength(50, ErrorMessage = "Decision Role cannot exceed 50 characters.")]
+        public string ContactTypeCode { get; set; } = "Decision Maker";
+
+        [Required(ErrorMessage = "Status is required.")]
+        [StringLength(50, ErrorMessage = "Status cannot exceed 50 characters.")]
+        public string StatusCode { get; set; } = "Active";
+
+        [StringLength(50, ErrorMessage = "Preferred Method cannot exceed 50 characters.")]
+        public string? PreferredContactMethod { get; set; }
+
+        public bool IsBillingContact { get; set; }
+        public bool IsServiceContact { get; set; }
+        public bool IsPortalUser { get; set; }
+        public bool IsKeyContact { get; set; }
+    }
+
+    sealed class DecisionMakerRow
+    {
+        public Guid ContactId { get; set; }
+        public Guid TenantId { get; set; }
+        public Guid AccountId { get; set; }
+        public string? AccountName { get; set; }
+        public string FirstName { get; set; } = string.Empty;
+        public string LastName { get; set; } = string.Empty;
+        public string FullName => $"{FirstName} {LastName}".Trim();
+        public string? Email { get; set; }
+        public string? Phone { get; set; }
+        public string? JobTitle { get; set; }
+        public string ContactTypeCode { get; set; } = "Decision Maker";
+        public bool IsBillingContact { get; set; }
+        public bool IsPortalUser { get; set; }
+        public bool IsKeyContact { get; set; }
+        public bool IsServiceContact { get; set; }
+        public Guid? ParentContactId { get; set; }
+        public string? PreferredContactMethod { get; set; }
+        public string StatusCode { get; set; } = "Active";
+        public DateTime CreatedDateUtc { get; set; }
+
+        public static DecisionMakerRow From(ContactDto dto) => new()
+        {
+            ContactId = dto.ContactId,
+            TenantId = dto.TenantId,
+            AccountId = dto.AccountId,
+            AccountName = dto.AccountName,
+            FirstName = dto.FirstName,
+            LastName = dto.LastName,
+            Email = dto.Email,
+            Phone = dto.Phone,
+            JobTitle = dto.JobTitle,
+            ContactTypeCode = string.IsNullOrWhiteSpace(dto.ContactTypeCode) ? "Decision Maker" : dto.ContactTypeCode,
+            IsBillingContact = dto.IsBillingContact,
+            IsPortalUser = dto.IsPortalUser,
+            IsKeyContact = dto.IsKeyContact,
+            IsServiceContact = dto.IsServiceContact,
+            ParentContactId = dto.ParentContactId,
+            PreferredContactMethod = dto.PreferredContactMethod,
+            StatusCode = string.IsNullOrWhiteSpace(dto.StatusCode) ? "Active" : dto.StatusCode,
+            CreatedDateUtc = dto.CreatedDateUtc == default ? DateTime.UtcNow : dto.CreatedDateUtc
+        };
+
+        public DecisionMakerFormModel ToForm() => new()
+        {
+            ContactTypeCode = ContactTypeCode,
+            PreferredContactMethod = PreferredContactMethod,
+            StatusCode = StatusCode,
+            IsBillingContact = IsBillingContact,
+            IsServiceContact = IsServiceContact,
+            IsPortalUser = IsPortalUser,
+            IsKeyContact = IsKeyContact
+        };
+    }
+}

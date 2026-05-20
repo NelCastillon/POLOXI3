@@ -1,98 +1,133 @@
 @page "/platform/notifications"
 @page "/communications/notifications"
 @page "/workbench/notifications"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Communications
+@using System.ComponentModel.DataAnnotations
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
 
-<PageTitle>Notifications � AMS Enterprise</PageTitle>
+<PageTitle>Tenant Notification Control Center — AMS</PageTitle>
 
-<AppPageHeader Title="Notifications Administration"
-               Subtitle="Tenant admin monitoring for delivery alerts, system notifications, communication events, unread items, and failures"
-               Icon="bi-bell">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero comm-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant Administration � Notifications</span>
-        <h2>Tenant Notification Control Center</h2>
-        <p>Administer notification delivery status, unread items, failed sends, channel performance, related entities, and tenant communication health.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/inbox")'><i class="bi bi-inbox"></i> Inbox</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/campaigns")'><i class="bi bi-megaphone"></i> Campaigns</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/templates")'><i class="bi bi-layout-text-sidebar"></i> Templates</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/outreach")'><i class="bi bi-telephone-outbound"></i> Outreach Queue</button>
-    </div>
-</section>
-
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick="() => SetFilter(null)" title="Show all notifications">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-bell" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "Unread" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Unread")' title="Filter unread">
-        <span class="pc-kpi-icon pc-kpi-icon--warning"><i class="bi bi-envelope-exclamation" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => !x.IsRead)</div><div class="pc-kpi-label">Unread</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "Sent" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Sent")' title="Filter sent">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-send-check" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Sent")</div><div class="pc-kpi-label">Sent</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "Failed" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Failed")' title="Filter failed">
-        <span class="pc-kpi-icon pc-kpi-icon--danger"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Failed")</div><div class="pc-kpi-label">Failed</div></div>
-    </div>
-</div>
-
-<div class="toolbar d-flex gap-2 align-items-center mb-3">
-    <SfTextBox Placeholder="Search subject, body, status..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <button class="um-btn um-btn-primary" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    <div class="nt-toast nt-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIcon" aria-hidden="true"></i>
+        <div><strong>@_toastTitle</strong><span>@_toastMessage</span></div>
+        <button type="button" class="nt-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg"></i></button>
     </div>
 }
 
-<div class="um-grid-card position-relative">
-@if (_loading) { <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading�</span></div> }
-<SfGrid TValue="NotificationDto" DataSource="_filtered" AllowPaging="true" AllowSorting="true" Height="520px" EnableHover="true" RowHeight="52">
-    <GridEvents TValue="NotificationDto" RowSelected="OnRowSelected" />
-    <GridPageSettings PageSize="25" PageSizes="@(new[] { 10, 25, 50 })"></GridPageSettings>
-    <GridColumns>
-        <GridColumn Field="@nameof(NotificationDto.ChannelCode)" HeaderText="Channel" Width="110">
-            <Template>@{ var n = (NotificationDto)context; }<span class="badge bg-light text-dark"><i class="bi @ChannelIcon(n.ChannelCode) me-1"></i>@n.ChannelCode</span></Template>
-        </GridColumn>
-        <GridColumn Field="@nameof(NotificationDto.Subject)" HeaderText="Notification" Width="320">
-            <Template>
-                @{ var n = (NotificationDto)context; }
-                <div class="fw-semibold">@(string.IsNullOrWhiteSpace(n.Subject) ? "(No subject)" : n.Subject)</div>
-                <div class="text-muted small">@n.Body</div>
-            </Template>
-        </GridColumn>
-        <GridColumn Field="@nameof(NotificationDto.StatusCode)" HeaderText="Status" Width="110">
-            <Template>@{ var n = (NotificationDto)context; }<span class="badge @StatusClass(n.StatusCode)">@n.StatusCode</span></Template>
-        </GridColumn>
-        <GridColumn Field="@nameof(NotificationDto.IsRead)" HeaderText="Read" Width="80" DisplayAsCheckBox="true"></GridColumn>
-        <GridColumn Field="@nameof(NotificationDto.EntityName)" HeaderText="Entity" Width="130"></GridColumn>
-        <GridColumn Field="@nameof(NotificationDto.SentDateUtc)" HeaderText="Sent" Type="ColumnType.DateTime" Format="g" Width="150"></GridColumn>
-        <GridColumn Field="@nameof(NotificationDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="g" Width="150"></GridColumn>
-    </GridColumns>
-</SfGrid>
-</div>
+@if (_showCreate && _form is not null)
+{
+    <div class="nt-modal-backdrop" role="presentation" @onclick="CloseCreate">
+        <div class="nt-modal nt-form-modal" role="dialog" aria-modal="true" aria-labelledby="nt-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-bell-plus" aria-hidden="true"></i><span id="nt-form-title">Create Notification</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCreate" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="CreateNotification" OnInvalidSubmit="NotifyValidation">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="nt-modal-intro"><span><i class="bi bi-shield-check"></i> Tenant notification governance</span><p>Create a tenant notification, choose delivery channel, priority, category, entity context, and sync it into delivery tracking.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Channel <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.ChannelCode" class="um-input">@foreach (var channel in _channels) { <option value="@channel">@channel</option> }</InputSelect><ValidationMessage For="() => _form.ChannelCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Priority <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.Priority" class="um-input">@foreach (var priority in _priorities) { <option value="@priority">@priority</option> }</InputSelect><ValidationMessage For="() => _form.Priority" class="text-danger" /></div>
+                        <div class="um-field"><label>Category <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.Category" class="um-input">@foreach (var category in _categories) { <option value="@category">@category</option> }</InputSelect><ValidationMessage For="() => _form.Category" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Subject</label><InputText @bind-Value="_form.Subject" class="um-input" placeholder="Notification subject" /><ValidationMessage For="() => _form.Subject" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Body <span class="text-danger">*</span></label><InputTextArea @bind-Value="_form.Body" class="um-input nt-body-input" placeholder="Notification details, action required, or delivery event summary" /><ValidationMessage For="() => _form.Body" class="text-danger" /></div>
+                        <div class="um-field"><label>Entity Name</label><InputText @bind-Value="_form.EntityName" class="um-input" placeholder="MessageThread, Appointment, Campaign" /><ValidationMessage For="() => _form.EntityName" class="text-danger" /></div>
+                        <div class="um-field"><label>Error Message</label><InputText @bind-Value="_form.ErrorMessage" class="um-input" placeholder="Optional provider error" /><ValidationMessage For="() => _form.ErrorMessage" class="text-danger" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseCreate" disabled="@_actionBusy">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy"><i class="bi bi-check-lg"></i> Create Notification</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
 
-<style>
-@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
-</style>
+@if (_confirmTarget is not null)
+{
+    <div class="nt-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="nt-modal nt-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="nt-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog"><div class="um-confirm-icon @ConfirmIconClass"><i class="bi @ConfirmIcon" aria-hidden="true"></i></div><div><h3 id="nt-confirm-title">@_confirmTitle</h3><p>@((MarkupString)_confirmMessage)</p></div></div>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseConfirm" disabled="@_actionBusy">Cancel</button><button class="um-btn @_confirmButtonClass" @onclick="ExecuteConfirm" disabled="@_actionBusy"><i class="bi @ConfirmIcon"></i> @_confirmButtonText</button></div>
+        </div>
+    </div>
+}
+
+<section class="nt-page">
+    <div class="nt-hero">
+        <div class="nt-hero-left"><div class="nt-hero-icon"><i class="bi bi-bell"></i></div><div><div class="nt-eyebrow">Tenant Communications · Notification Governance</div><div class="nt-title-row"><h1>Tenant Notification Control Center</h1><span>@Filtered.Count() notifications</span></div><p>Monitor delivery health, unread alerts, failed sends, provider retries, policy status, and tenant-wide notification synchronization.</p><div class="nt-hero-chips"><span><i class="bi bi-check-circle"></i>@DeliveryRate.ToString("0")% delivery health</span><span><i class="bi bi-exclamation-triangle"></i>@FailedCount failed</span><span><i class="bi bi-arrow-repeat"></i>@LastSyncLabel</span></div></div></div>
+        <div class="nt-hero-actions"><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/inbox")'><i class="bi bi-inbox"></i> Inbox</button><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/templates")'><i class="bi bi-layout-text-sidebar"></i> Templates</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> New Notification</button></div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger nt-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+    }
+
+    <div class="nt-kpi-strip">
+        @Kpi("bi-bell", "Total", _items.Count.ToString(), "nt-ki-blue", null)
+        @Kpi("bi-envelope-exclamation", "Unread", _items.Count(x => !x.IsRead).ToString(), "nt-ki-amber", "Unread")
+        @Kpi("bi-send-check", "Delivered", _items.Count(x => x.StatusCode is "Sent" or "Delivered").ToString(), "nt-ki-green", "Delivered")
+        @Kpi("bi-exclamation-triangle", "Failed", FailedCount.ToString(), "nt-ki-red", "Failed")
+        @Kpi("bi-arrow-repeat", "Retrying", _items.Count(x => x.DeliveryStatus == "Retrying" || x.StatusCode == "Queued").ToString(), "nt-ki-purple", "Retrying")
+    </div>
+
+    <div class="nt-toolbar"><div class="nt-search-wrap"><i class="bi bi-search"></i><input class="nt-search" @bind="_searchTerm" @bind:event="oninput" placeholder="Search subject, body, status, channel, category…" /></div><select class="nt-sel" @bind="_channelFilter"><option value="">All Channels</option>@foreach (var channel in _channels) { <option>@channel</option> }</select><select class="nt-sel" @bind="_categoryFilter"><option value="">All Categories</option>@foreach (var category in _categories) { <option>@category</option> }</select><select class="nt-sel" @bind="_priorityFilter"><option value="">All Priority</option>@foreach (var priority in _priorities) { <option>@priority</option> }</select><button class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-x"></i> Clear</button></div>
+
+    <div class="nt-command-bar"><button class="um-btn um-btn-ghost" @onclick="ConfirmMarkAllRead" disabled="@(!_items.Any(x => !x.IsRead))"><i class="bi bi-check2-all"></i> Mark All Read</button><button class="um-btn um-btn-ghost" @onclick="ConfirmDeleteRead" disabled="@(!_items.Any(x => x.IsRead))"><i class="bi bi-archive"></i> Archive Read</button></div>
+
+    <div class="nt-layout">
+        <div class="nt-list">
+            @if (_loading)
+            {
+                <div class="nt-empty"><i class="bi bi-arrow-repeat nt-spin nt-empty-icon"></i><span>Loading tenant notifications…</span></div>
+            }
+            else if (!Filtered.Any())
+            {
+                <div class="nt-empty"><i class="bi bi-bell-slash nt-empty-icon"></i><span>No notifications match this view.</span><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> Create Notification</button></div>
+            }
+            else
+            {
+                @foreach (var item in Filtered.OrderByDescending(n => n.CreatedDateUtc))
+                {
+                    <article class="nt-card @(item.IsRead ? "nt-card-read" : "") @(SelectedId == item.NotificationId ? "nt-card-selected" : "")" @onclick="() => Select(item)">
+                        <div class="nt-card-icon nt-ch-@Css(item.ChannelCode)"><i class="bi @ChannelIcon(item.ChannelCode)"></i></div>
+                        <div class="nt-card-body"><div class="nt-card-title-row"><h2>@(string.IsNullOrWhiteSpace(item.Subject) ? "(No subject)" : item.Subject)</h2><span class="nt-priority nt-priority-@Css(item.Priority)">@item.Priority</span></div><p>@item.Body</p><div class="nt-card-meta"><span>@item.ChannelCode</span><span>@item.Category</span><span>@FormatAge(item.CreatedDateUtc)</span></div></div>
+                        <div class="nt-card-status"><span class="nt-status nt-status-@Css(item.StatusCode)">@item.StatusCode</span>@if (!item.IsRead) { <span class="nt-unread-dot" title="Unread"></span> }</div>
+                    </article>
+                }
+            }
+        </div>
+
+        <aside class="nt-detail @(Selected is null ? "nt-detail-empty" : "")">
+            @if (Selected is null)
+            {
+                <div class="nt-detail-placeholder"><i class="bi bi-bell nt-empty-icon"></i><h3>Select a notification</h3><p>Choose a notification to review delivery, policy, and sync details.</p></div>
+            }
+            else
+            {
+                var n = Selected;
+                <div class="nt-detail-header"><div><div class="nt-detail-title">@(string.IsNullOrWhiteSpace(n.Subject) ? "Notification" : n.Subject)</div><div class="nt-detail-sub">@n.ChannelCode · @n.Category · @FormatAge(n.CreatedDateUtc)</div></div><span class="nt-status nt-status-@Css(n.StatusCode)">@n.StatusCode</span></div>
+                <div class="nt-detail-body">
+                    <div class="nt-sync-strip"><span><i class="bi bi-cloud-check"></i>@n.SyncStatus</span><span><i class="bi bi-truck"></i>@n.DeliveryProvider</span><span><i class="bi bi-shield-check"></i>@n.PolicyStatus</span><span><i class="bi bi-arrow-repeat"></i>@n.AttemptCount attempts</span></div>
+                    <div class="nt-message-box">@n.Body</div>
+                    @if (!string.IsNullOrWhiteSpace(n.ErrorMessage)) { <div class="nt-error-box"><i class="bi bi-exclamation-triangle"></i>@n.ErrorMessage</div> }
+                    <div class="nt-detail-grid"><div><label>Entity</label><strong>@(n.EntityName ?? "—")</strong></div><div><label>Delivery</label><strong>@n.DeliveryStatus</strong></div><div><label>Sent</label><strong>@(n.SentDateUtc?.ToString("g") ?? "—")</strong></div><div><label>Delivered</label><strong>@(n.DeliveredDateUtc?.ToString("g") ?? "—")</strong></div><div><label>Read</label><strong>@(n.IsRead ? n.ReadDateUtc?.ToString("g") ?? "Read" : "Unread")</strong></div><div><label>Last Sync</label><strong>@(n.LastSyncedDateUtc?.ToString("g") ?? "—")</strong></div></div>
+                    <div class="nt-actions">
+                        <button class="um-btn um-btn-ghost" @onclick="ConfirmSelectedRead"><i class="bi @ReadActionIcon(n)"></i> @ReadActionLabel(n)</button>
+                        <button class="um-btn um-btn-ghost" @onclick="ConfirmSelectedRetry" disabled="@IsDelivered(n)"><i class="bi bi-arrow-repeat"></i> Retry</button>
+                        <button class="um-btn um-btn-ghost" @onclick="ConfirmSelectedDelivered"><i class="bi bi-send-check"></i> Mark Delivered</button>
+                        <button class="um-btn um-btn-ghost um-action-menu-item--danger" @onclick="ConfirmSelectedDelete"><i class="bi bi-trash"></i> Delete</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </div>
+</section>
 
 @code {
     Guid TenantId { get; set; }
@@ -101,12 +136,42 @@
     Guid DevUserId { get; set; }
     private Guid _tenantAdminUserId;
     private Guid _tenantId;
+    private bool _loading;
+    private bool _actionBusy;
+    private bool _toastVisible;
+    private string _toastTitle = string.Empty;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
     private string? _searchTerm;
     private string? _loadError;
     private string? _activeFilter;
-    private bool _loading;
+    private string _channelFilter = string.Empty;
+    private string _categoryFilter = string.Empty;
+    private string _priorityFilter = string.Empty;
+    private Guid? SelectedId;
+    private bool _showCreate;
+    private NotificationForm? _form;
+    private NotificationDto? _confirmTarget;
+    private Func<Task>? _confirmAction;
+    private string _confirmTitle = string.Empty;
+    private string _confirmMessage = string.Empty;
+    private string _confirmButtonText = string.Empty;
+    private string _confirmButtonClass = "um-btn-primary";
+    private string _confirmKind = "info";
     private List<NotificationDto> _items = [];
-    private List<NotificationDto> _filtered = [];
+    private readonly string[] _channels = ["InApp", "Email", "SMS", "Portal"];
+    private readonly string[] _statuses = ["Queued", "Sent", "Delivered", "Failed"];
+    private readonly string[] _priorities = ["Low", "Normal", "High", "Critical"];
+    private readonly string[] _categories = ["General", "Communications", "Appointments", "Delivery Failure", "Marketing", "Compliance", "System"];
+
+    private IEnumerable<NotificationDto> Filtered => _items.Where(n => (_activeFilter is null || MatchesActiveFilter(n)) && (string.IsNullOrWhiteSpace(_searchTerm) || (n.Subject ?? string.Empty).Contains(_searchTerm, StringComparison.OrdinalIgnoreCase) || n.Body.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase) || n.StatusCode.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase) || n.Category.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase)) && (string.IsNullOrWhiteSpace(_channelFilter) || n.ChannelCode == _channelFilter) && (string.IsNullOrWhiteSpace(_categoryFilter) || n.Category == _categoryFilter) && (string.IsNullOrWhiteSpace(_priorityFilter) || n.Priority == _priorityFilter));
+    private NotificationDto? Selected => _items.FirstOrDefault(x => x.NotificationId == SelectedId);
+    private int FailedCount => _items.Count(x => x.StatusCode == "Failed" || x.DeliveryStatus == "Failed");
+    private decimal DeliveryRate => _items.Count == 0 ? 100 : (decimal)_items.Count(x => x.StatusCode is "Sent" or "Delivered") / _items.Count * 100;
+    private string LastSyncLabel => _items.Count == 0 ? "No sync" : $"Synced {FormatAge(_items.Max(x => x.LastSyncedDateUtc) ?? DateTime.UtcNow)}";
+    private string ToastIcon => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : _toastKind == "info" ? "bi-info-circle-fill" : "bi-check-circle-fill";
+    private string ConfirmIcon => _confirmKind == "danger" ? "bi-trash" : _confirmKind == "warning" ? "bi-archive" : "bi-check-circle";
+    private string ConfirmIconClass => _confirmKind == "danger" ? "um-confirm-icon--danger" : _confirmKind == "warning" ? "um-confirm-icon--warning" : "um-confirm-icon--info";
 
     protected override async Task OnInitializedAsync()
     {
@@ -121,51 +186,87 @@
         _loadError = null;
         try
         {
-            var result = await Api.SearchNotificationsAsync(_tenantId, _searchTerm);
+            var result = await Api.SearchNotificationsAsync(_tenantId, _searchTerm, pageSize: 250);
             _items = result?.Items.ToList() ?? [];
-            ApplyFilter();
+            SelectedId = SelectedId.HasValue && _items.Any(x => x.NotificationId == SelectedId.Value) ? SelectedId : _items.FirstOrDefault()?.NotificationId;
         }
         catch (Exception ex)
         {
             _loadError = $"Failed to load notifications: {ex.Message}";
+            ShowToast("Load failed", $"Failed to load notifications: {ex.Message}", "danger");
             _items = [];
-            _filtered = [];
+            SelectedId = null;
         }
         finally { _loading = false; }
     }
 
-    private void SetFilter(string? filter)
+    private bool MatchesActiveFilter(NotificationDto n) => _activeFilter switch { "Unread" => !n.IsRead, "Delivered" => n.StatusCode is "Sent" or "Delivered", "Failed" => n.StatusCode == "Failed" || n.DeliveryStatus == "Failed", "Retrying" => n.DeliveryStatus == "Retrying" || n.StatusCode == "Queued", _ => true };
+    private void Select(NotificationDto item) => SelectedId = item.NotificationId;
+    private void ResetFilters() { _activeFilter = null; _searchTerm = string.Empty; _channelFilter = string.Empty; _categoryFilter = string.Empty; _priorityFilter = string.Empty; }
+    private void OpenCreate() { _form = new NotificationForm { ChannelCode = "InApp", StatusCode = "Delivered", Priority = "Normal", Category = "General" }; _showCreate = true; }
+    private void CloseCreate() { if (_actionBusy) return; _showCreate = false; _form = null; }
+
+    private async Task CreateNotification()
     {
-        _activeFilter = filter;
-        ApplyFilter();
+        if (_form is null) return;
+        await ExecuteActionAsync("Notification created", async () =>
+        {
+            await Api.CreateNotificationAsync(new CreateNotificationRequest { TenantId = _tenantId, RecipientUserId = _tenantAdminUserId, ChannelCode = _form.ChannelCode, Subject = _form.Subject, Body = _form.Body, EntityName = _form.EntityName, StatusCode = _form.StatusCode, SentDateUtc = _form.StatusCode is "Sent" or "Delivered" ? DateTime.UtcNow : null, ErrorMessage = _form.ErrorMessage, CreatedByUserId = _tenantAdminUserId, Priority = _form.Priority, Category = _form.Category });
+            _showCreate = false;
+            await LoadAsync();
+        }, $"Notification '{_form.Subject ?? _form.Category}' synced.");
     }
 
-    private void ApplyFilter() => _filtered = _activeFilter switch
+    private void ConfirmRead(NotificationDto n) => ConfigureConfirm(n, n.IsRead ? "Mark notification unread?" : "Mark notification read?", $"Update read state for <strong>{n.Subject ?? "notification"}</strong>?", n.IsRead ? "Mark Unread" : "Mark Read", "info", "um-btn-primary", async () => { await Api.SetNotificationReadAsync(n.NotificationId, !n.IsRead); await LoadAsync(); });
+    private void ConfirmRetry(NotificationDto n) => ConfigureConfirm(n, "Retry delivery?", $"Queue a delivery retry for <strong>{n.Subject ?? "notification"}</strong> through {n.DeliveryProvider}?", "Retry Delivery", "info", "um-btn-primary", async () => { await Api.RetryNotificationAsync(n.NotificationId, new NotificationRetryRequest(n.DeliveryProvider)); await LoadAsync(); });
+    private void ConfirmStatus(NotificationDto n, string status) => ConfigureConfirm(n, "Mark delivered?", $"Set <strong>{n.Subject ?? "notification"}</strong> to {status} and sync delivery metadata?", "Mark Delivered", "info", "um-btn-primary", async () => { await Api.SetNotificationStatusAsync(n.NotificationId, new NotificationStatusRequest(status, "Manual status update")); await LoadAsync(); });
+    private void ConfirmDelete(NotificationDto n) => ConfigureConfirm(n, "Delete notification?", $"Delete <strong>{n.Subject ?? "notification"}</strong>? This removes it from active tenant notification views.", "Delete", "danger", "um-btn-danger", async () => { await Api.DeleteNotificationAsync(n.NotificationId); await LoadAsync(); });
+    private void ConfirmSelectedRead() { if (Selected is not null) ConfirmRead(Selected); }
+    private void ConfirmSelectedRetry() { if (Selected is not null) ConfirmRetry(Selected); }
+    private void ConfirmSelectedDelivered() { if (Selected is not null) ConfirmStatus(Selected, "Delivered"); }
+    private void ConfirmSelectedDelete() { if (Selected is not null) ConfirmDelete(Selected); }
+    private static bool IsDelivered(NotificationDto n) => n.StatusCode is "Delivered" or "Sent";
+    private static string ReadActionIcon(NotificationDto n) => n.IsRead ? "bi-envelope" : "bi-envelope-open";
+    private static string ReadActionLabel(NotificationDto n) => n.IsRead ? "Mark Unread" : "Mark Read";
+    private void ConfirmMarkAllRead() => ConfigureConfirm(null, "Mark all read?", "Mark every tenant notification in this view as read?", "Mark All Read", "info", "um-btn-primary", async () => { await Api.MarkAllNotificationsReadAsync(_tenantId, Guid.Empty); await LoadAsync(); });
+    private void ConfirmDeleteRead() => ConfigureConfirm(null, "Archive read notifications?", "Archive all read tenant notifications from the active notification center?", "Archive Read", "warning", "um-btn-primary", async () => { await Api.DeleteReadNotificationsAsync(_tenantId, Guid.Empty); await LoadAsync(); });
+
+    private void ConfigureConfirm(NotificationDto? target, string title, string message, string buttonText, string kind, string buttonClass, Func<Task> action)
     {
-        "Unread" => _items.Where(x => !x.IsRead).ToList(),
-        "Sent" => _items.Where(x => x.StatusCode == "Sent").ToList(),
-        "Failed" => _items.Where(x => x.StatusCode == "Failed").ToList(),
-        _ => [.. _items]
-    };
+        _confirmTarget = target ?? new NotificationDto { NotificationId = Guid.Empty };
+        _confirmTitle = title;
+        _confirmMessage = message;
+        _confirmButtonText = buttonText;
+        _confirmKind = kind;
+        _confirmButtonClass = buttonClass;
+        _confirmAction = action;
+    }
 
-    private void OnRowSelected(RowSelectEventArgs<NotificationDto> args) { }
-
-    private static string ChannelIcon(string channel) => channel switch
+    private async Task ExecuteConfirm()
     {
-        "Email" => "bi-envelope",
-        "SMS" => "bi-phone",
-        "InApp" => "bi-bell",
-        _ => "bi-chat-dots"
-    };
+        if (_confirmAction is null) return;
+        await ExecuteActionAsync(_confirmTitle.Replace("?", string.Empty), async () => { await _confirmAction(); CloseConfirm(); }, "Notification workflow synced.", _confirmKind == "danger" ? "warning" : "info");
+    }
 
-    private static string StatusClass(string status) => status switch
+    private void CloseConfirm() { if (_actionBusy) return; _confirmTarget = null; _confirmAction = null; }
+    private void NotifyValidation() => ShowToast("Validation required", "Please correct the highlighted notification fields.", "warning");
+    private void ShowToast(string title, string message, string kind = "success") { _toastTitle = title; _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+
+    private async Task ExecuteActionAsync(string title, Func<Task> action, string message, string kind = "success")
     {
-        "Sent" or "Delivered" => "bg-success",
-        "Failed" => "bg-danger",
-        _ => "bg-secondary"
-    };
+        _actionBusy = true;
+        try { await action(); ShowToast(title, message, kind); }
+        catch (Exception ex) { ShowToast("Action failed", $"Action failed: {ex.Message}", "danger"); }
+        finally { _actionBusy = false; }
+    }
 
-    async Task ResolveCurrentUserContextAsync()
+    private RenderFragment Kpi(string icon, string label, string value, string color, string? filter) => @<button type="button" class="nt-kpi-card @color @(_activeFilter == filter ? "nt-kpi-active" : "")" @onclick="() => _activeFilter = filter"><span><i class="bi @icon"></i>@label</span><strong>@value</strong></button>;
+    private static string ChannelIcon(string channel) => channel switch { "Email" => "bi-envelope", "SMS" => "bi-phone", "Portal" => "bi-globe", "InApp" => "bi-bell", _ => "bi-chat-dots" };
+    private static string Css(string value) => value.ToLowerInvariant().Replace(" ", "-");
+    private static string FormatAge(DateTime date) { var d = DateTime.UtcNow - date.ToUniversalTime(); if (d.TotalMinutes < 60) return $"{Math.Max(0, (int)d.TotalMinutes)}m ago"; if (d.TotalDays < 1) return "Today"; if (d.TotalDays < 7) return $"{(int)d.TotalDays}d ago"; return date.ToString("MM/dd/yyyy"); }
+
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;
@@ -174,5 +275,17 @@
         _tenantAdminUserId = context.UserId;
         DevTenantId = context.TenantId;
         DevUserId = context.UserId;
+    }
+
+    private sealed class NotificationForm
+    {
+        [Required, StringLength(50)] public string ChannelCode { get; set; } = "InApp";
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Delivered";
+        [Required, StringLength(40)] public string Priority { get; set; } = "Normal";
+        [Required, StringLength(80)] public string Category { get; set; } = "General";
+        [StringLength(200)] public string? Subject { get; set; }
+        [Required, StringLength(2000)] public string Body { get; set; } = string.Empty;
+        [StringLength(100)] public string? EntityName { get; set; }
+        [StringLength(1000)] public string? ErrorMessage { get; set; }
     }
 }

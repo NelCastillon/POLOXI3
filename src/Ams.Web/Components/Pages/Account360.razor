@@ -1,6 +1,10 @@
 @page "/accounts/{AccountId:guid}"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
 @using Ams.Application.Common.Dtos
+@using Ams.Application.Common.Validation
+@using Ams.Application.Features.Accounts
+@using Microsoft.AspNetCore.Components.Forms
 @using Syncfusion.Blazor.Diagram
 @inject ApiClient Api
 @inject NavigationManager Nav
@@ -29,6 +33,7 @@ else if (_acct is null)
 }
 else
 {
+    <div class="a360-enterprise-page">
     <!-- ── HEADER ─────────────────────────────────────────────────────── -->
     <div class="a360-header">
         <div class="a360-header-left">
@@ -36,6 +41,7 @@ else
             <div class="a360-header-info">
                 <div class="a360-name-row">
                     <h1 class="a360-name">@_acct.AccountName</h1>
+                    <span class="a360-account-pill">@_acct.AccountNumber</span>
                     <span class="@StatusBadge(_acct.Status)">@_acct.Status</span>
                     @if (!string.IsNullOrEmpty(_acct.Segment))
                     {
@@ -55,7 +61,7 @@ else
         </div>
         <div class="a360-header-actions">
             <button type="button" class="a360-return" @onclick='() => Nav.NavigateTo("/accounts")' title="Back to Accounts" aria-label="Back to Accounts"><i class="bi bi-arrow-left" aria-hidden="true"></i></button>
-            <button class="um-btn um-btn-ghost" @onclick="() => _showEdit = true"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenEditAccount"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
             <button class="um-btn um-btn-ghost" @onclick="() => _showNote = true"><i class="bi bi-sticky" aria-hidden="true"></i> Add Note</button>
             <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/quotes/new?accountId=" + AccountId)'><i class="bi bi-file-text" aria-hidden="true"></i> New Quote</button>
             <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/crm/opportunities/new?accountId=" + AccountId)'><i class="bi bi-trophy" aria-hidden="true"></i> New Opportunity</button>
@@ -75,13 +81,21 @@ else
     </div>
 
     <!-- ── 14-TAB BODY ─────────────────────────────────────────────────── -->
-    <AppDetailTabs SelectedTab="_tab" SelectedTabChanged="t => _tab = t">
-        <Tabs>
+    <div class="a360-detail-shell">
+    <div class="a360-native-tabs" role="tablist" aria-label="Account detail sections">
+        @foreach (var tab in _tabs)
+        {
+            <button type="button" class="@TabButtonClass(tab.Index)" role="tab" aria-selected="@(_tab == tab.Index)" @onclick="() => SelectTab(tab.Index)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+            </button>
+        }
+    </div>
+    <div class="a360-native-panels">
 
             <!-- 0 ── OVERVIEW ──────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Overview" IconCss="bi bi-house" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 0)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-overview-grid">
 
@@ -151,17 +165,15 @@ else
                             </div>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 1 ── CONTACTS ──────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Contacts" IconCss="bi bi-people" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 1)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-tab-toolbar">
                             <span class="a360-tab-count">@_contacts.Count contact(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showAddContact = true"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Contact</button>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAddContact"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Contact</button>
                         </div>
                         @if (_contacts.Count == 0) { @AEmpty("bi-people","No contacts","Add the key contacts for this account.") }
                         else
@@ -180,18 +192,20 @@ else
                                             </div>
                                         </div>
                                         @if (c.IsPrimary) { <span class="a360-primary-badge">Primary</span> }
+                                        <div class="a360-card-actions">
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit contact" @onclick="() => OpenEditContact(c)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete contact" @onclick="() => ConfirmDeleteContact(c)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                        </div>
                                     </div>
                                 }
                             </div>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 2 ── POLICIES ──────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Policies" IconCss="bi bi-shield-check" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 2)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-tab-toolbar">
                             <span class="a360-tab-count">@_policies.Count polic@(_policies.Count == 1 ? "y" : "ies")</span>
@@ -227,17 +241,15 @@ else
                             </div>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 3 ── SUBMISSIONS ───────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Submissions" IconCss="bi bi-send" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 3)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-tab-toolbar">
                             <span class="a360-tab-count">@_submissions.Count submission(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showAddSubmission = true"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Submission</button>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAddSubmission"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Submission</button>
                         </div>
                         @if (_submissions.Count == 0) { @AEmpty("bi-send","No submissions","Create carrier submissions for this account's lines.") }
                         else
@@ -258,22 +270,23 @@ else
                                             <Template>@{ var s = (SubmissionRow)context; }<span class="a360-mono @(s.DueDate.HasValue && s.DueDate < DateTime.UtcNow ? "a360-overdue" : "")">@(s.DueDate?.ToString("d") ?? "—")</span></Template>
                                         </GridColumn>
                                         <GridColumn Field="@nameof(SubmissionRow.Notes)"            HeaderText="Notes"     MinWidth="120" />
+                                        <GridColumn HeaderText="Actions" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                            <Template>@{ var s = (SubmissionRow)context; }<button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit submission" @onclick="() => OpenEditSubmission(s)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete submission" @onclick="() => ConfirmDeleteSubmission(s)"><i class="bi bi-trash" aria-hidden="true"></i></button></Template>
+                                        </GridColumn>
                                     </GridColumns>
                                 </SfGrid>
                             </div>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 4 ── CLAIMS ────────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Claims" IconCss="bi bi-exclamation-triangle" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 4)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-tab-toolbar">
                             <span class="a360-tab-count">@_claims.Count claim(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showFnol = true"><i class="bi bi-plus-lg" aria-hidden="true"></i> FNOL</button>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenFnol"><i class="bi bi-plus-lg" aria-hidden="true"></i> FNOL</button>
                         </div>
                         @if (_claims.Count == 0) { @AEmpty("bi-exclamation-triangle","No claims","First notice of loss will appear here.") }
                         else
@@ -297,18 +310,19 @@ else
                                             <Template>@{ var c = (ClaimRow)context; }<span class="a360-mono">@c.PaidAmount.ToString("C0")</span></Template>
                                         </GridColumn>
                                         <GridColumn Field="@nameof(ClaimRow.Adjuster)"        HeaderText="Adjuster"   Width="140" />
+                                        <GridColumn HeaderText="Actions" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                            <Template>@{ var c = (ClaimRow)context; }<button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit claim" @onclick="() => OpenEditClaim(c)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete claim" @onclick="() => ConfirmDeleteClaim(c)"><i class="bi bi-trash" aria-hidden="true"></i></button></Template>
+                                        </GridColumn>
                                     </GridColumns>
                                 </SfGrid>
                             </div>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 5 ── BILLING ───────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Billing" IconCss="bi bi-receipt" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 5)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-tab-toolbar">
                             <span class="a360-tab-count">@_billing.Count invoice(s)</span>
@@ -339,13 +353,11 @@ else
                             </div>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 6 ── COMMISSIONS ───────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Commissions" IconCss="bi bi-percent" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 6)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-tab-toolbar">
                             <span class="a360-tab-count">@_commissions.Count commission record(s)</span>
@@ -379,17 +391,15 @@ else
                             </div>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 7 ── DOCUMENTS ─────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Documents" IconCss="bi bi-folder2" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 7)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-tab-toolbar">
                             <span class="a360-tab-count">@_documents.Count document(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showUpload = true"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Upload</button>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenUpload"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Upload</button>
                         </div>
                         @if (_documents.Count == 0) { @AEmpty("bi-folder2","No documents","Upload loss runs, financials, policy documents or correspondence.") }
                         else
@@ -409,24 +419,22 @@ else
                                             <Template>@{ var d = (DocRow)context; }<span class="a360-mono">@d.UploadedAt.ToString("d")</span></Template>
                                         </GridColumn>
                                         <GridColumn HeaderText="" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                                            <Template><button class="um-btn um-btn-ghost um-btn-sm" title="Download"><i class="bi bi-download" aria-hidden="true"></i></button></Template>
+                                            <Template>@{ var d = (DocRow)context; }<button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Download" @onclick="() => DownloadDocumentAsync(d)"><i class="bi bi-download" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete document" @onclick="() => ConfirmDeleteDocument(d)"><i class="bi bi-trash" aria-hidden="true"></i></button></Template>
                                         </GridColumn>
                                     </GridColumns>
                                 </SfGrid>
                             </div>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 8 ── ACTIVITIES ────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Activities" IconCss="bi bi-lightning" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 8)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-tab-toolbar">
                             <span class="a360-tab-count">@_activities.Count activit@(_activities.Count == 1 ? "y" : "ies")</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showLogActivity = true"><i class="bi bi-plus-lg" aria-hidden="true"></i> Log</button>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenLogActivity"><i class="bi bi-plus-lg" aria-hidden="true"></i> Log</button>
                         </div>
                         @if (_activities.Count == 0) { @AEmpty("bi-lightning","No activities","Log calls, emails and meetings linked to this account.") }
                         else
@@ -444,23 +452,22 @@ else
                                             </div>
                                             <div class="a360-tl-subject">@a.Subject</div>
                                             @if (!string.IsNullOrEmpty(a.Notes)) { <p class="a360-tl-notes">@a.Notes</p> }
+                                            <div class="a360-inline-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditActivity(a)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteActivity(a)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
                                         </div>
                                     </div>
                                 }
                             </div>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 9 ── COMMUNICATIONS ────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Communications" IconCss="bi bi-chat-dots" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 9)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-tab-toolbar">
                             <span class="a360-tab-count">@_comms.Count message(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showCompose = true"><i class="bi bi-plus-lg" aria-hidden="true"></i> New</button>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenCompose"><i class="bi bi-plus-lg" aria-hidden="true"></i> New</button>
                         </div>
                         @if (_comms.Count == 0) { @AEmpty("bi-chat-dots","No communications","Log emails, calls or SMS sent to this account.") }
                         else
@@ -478,23 +485,22 @@ else
                                             </div>
                                             <div class="a360-comm-preview">@m.Preview</div>
                                             <div class="a360-comm-meta"><span>By @m.SentBy</span>@if (m.Opened) { <span class="a360-comm-opened"><i class="bi bi-check2-all" aria-hidden="true"></i> Opened</span> }</div>
+                                            <div class="a360-inline-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditCommunication(m)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => MarkCommunicationOpenedAsync(m)"><i class="bi bi-check2-all" aria-hidden="true"></i> Mark Opened</button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteCommunication(m)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
                                         </div>
                                     </div>
                                 }
                             </div>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 10 ── MARKETING ────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Marketing" IconCss="bi bi-megaphone" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 10)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-tab-toolbar">
                             <span class="a360-tab-count">@_campaigns.Count enrollment(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showCampaign = true"><i class="bi bi-plus-lg" aria-hidden="true"></i> Enroll</button>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenCampaign"><i class="bi bi-plus-lg" aria-hidden="true"></i> Enroll</button>
                         </div>
                         @if (_campaigns.Count == 0) { @AEmpty("bi-megaphone","No campaign enrollments","Enroll this account in renewal or cross-sell campaigns.") }
                         else
@@ -512,18 +518,19 @@ else
                                         <GridColumn Field="@nameof(CampaignRow.EmailsSent)"  HeaderText="Sent"        Width="65" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
                                         <GridColumn Field="@nameof(CampaignRow.Opens)"       HeaderText="Opens"       Width="65" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
                                         <GridColumn Field="@nameof(CampaignRow.Clicks)"      HeaderText="Clicks"      Width="65" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
+                                        <GridColumn HeaderText="Actions" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
+                                            <Template>@{ var c = (CampaignRow)context; }<button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit campaign" @onclick="() => OpenEditCampaign(c)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Remove campaign" @onclick="() => ConfirmDeleteCampaign(c)"><i class="bi bi-trash" aria-hidden="true"></i></button></Template>
+                                        </GridColumn>
                                     </GridColumns>
                                 </SfGrid>
                             </div>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 11 ── TIMELINE ─────────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Timeline" IconCss="bi bi-clock-history" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 11)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-timeline-full">
                             @foreach (var e in _timelineEvents.OrderByDescending(x => x.OccurredAt))
@@ -542,17 +549,15 @@ else
                             @if (_timelineEvents.Count == 0) { @AEmpty("bi-clock-history","No timeline events","All account-level events will appear here in chronological order.") }
                         </div>
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 12 ── RELATIONSHIPS ─────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Relationships" IconCss="bi bi-diagram-3" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 12)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-rel-header">
                             <span class="a360-tab-count">Account relationship map</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showAddRel = true"><i class="bi bi-plus-lg" aria-hidden="true"></i> Link Account</button>
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAddRelationship"><i class="bi bi-plus-lg" aria-hidden="true"></i> Link Account</button>
                         </div>
                         <!-- SfDiagram for relationship visualization -->
                         <div class="a360-diagram-wrap">
@@ -583,18 +588,18 @@ else
                                         <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/accounts/{r.RelatedAccountId}")'>
                                             <i class="bi bi-arrow-right" aria-hidden="true"></i>
                                         </button>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditRelationship(r)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteRelationship(r)"><i class="bi bi-trash" aria-hidden="true"></i></button>
                                     </div>
                                 }
                             </div>
                         }
                     </div>
-                </ContentTemplate>
-            </TabItem>
+            }
 
             <!-- 13 ── RISK INSIGHTS ──────────────────────────────────────── -->
-            <TabItem>
-                <ChildContent><TabHeader Text="Risk Insights" IconCss="bi bi-graph-up" /></ChildContent>
-                <ContentTemplate>
+            @if (_tab == 13)
+            {
                     <div class="a360-tab-body">
                         <div class="a360-risk-grid">
 
@@ -664,197 +669,270 @@ else
 
                         </div>
                     </div>
-                </ContentTemplate>
-            </TabItem>
-
-        </Tabs>
-    </AppDetailTabs>
+            }
+    </div>
+    </div>
+    </div>
 }
 
 <!-- ══ DIALOGS ══════════════════════════════════════════════════════════════ -->
 
-<!-- Add Contact -->
-<SfDialog @bind-Visible="_showAddContact" Width="520px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="a360-dlg-hdr"><i class="bi bi-person-plus" aria-hidden="true"></i> Add Contact</span></Header>
-        <Content>
-            <div class="a360-dlg-body" style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-                <SfTextBox Placeholder="First name *" @bind-Value="_newContact.FirstName" />
-                <SfTextBox Placeholder="Last name"    @bind-Value="_newContact.LastName" />
-                <SfTextBox Placeholder="Title"        @bind-Value="_newContact.Title" />
-                <SfTextBox Placeholder="Email"        @bind-Value="_newContact.Email" />
-                <SfTextBox Placeholder="Phone"        @bind-Value="_newContact.Phone" />
-                <div style="display:flex;align-items:center"><label class="a360-toggle"><input type="checkbox" @bind="_newContact.IsPrimary" /> Primary</label></div>
+<!-- Edit Account -->
+<SfDialog @bind-Visible="_showEdit" Width="720px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header">
+            <i class="bi bi-building-gear" aria-hidden="true"></i>
+            <span>Edit Account</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showEdit = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+        <EditForm Model="_editForm" OnValidSubmit="SaveAccountAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field">
+                        <label>Account Name <span class="text-danger">*</span></label>
+                        <InputText @bind-Value="_editForm.AccountName" class="um-input" />
+                        <ValidationMessage For="() => _editForm.AccountName" class="validation-message text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Account Type <span class="text-danger">*</span></label>
+                        <InputSelect @bind-Value="_editForm.AccountTypeCode" class="um-input">
+                            @foreach (var option in _accountTypes)
+                            {
+                                <option value="@option.Value">@option.Label</option>
+                            }
+                        </InputSelect>
+                        <ValidationMessage For="() => _editForm.AccountTypeCode" class="validation-message text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Status <span class="text-danger">*</span></label>
+                        <InputSelect @bind-Value="_editForm.StatusCode" class="um-input">
+                            @foreach (var option in _statusOptions)
+                            {
+                                <option value="@option.Value">@option.Label</option>
+                            }
+                        </InputSelect>
+                        <ValidationMessage For="() => _editForm.StatusCode" class="validation-message text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Segment</label>
+                        <InputSelect @bind-Value="_editForm.SegmentCode" class="um-input">
+                            <option value="">Select segment</option>
+                            @foreach (var option in _segmentOptions)
+                            {
+                                <option value="@option.Value">@option.Label</option>
+                            }
+                        </InputSelect>
+                        <ValidationMessage For="() => _editForm.SegmentCode" class="validation-message text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Lifecycle Stage</label>
+                        <InputSelect @bind-Value="_editForm.LifecycleStageCode" class="um-input">
+                            <option value="">Select stage</option>
+                            @foreach (var option in _lifecycleOptions)
+                            {
+                                <option value="@option.Value">@option.Label</option>
+                            }
+                        </InputSelect>
+                        <ValidationMessage For="() => _editForm.LifecycleStageCode" class="validation-message text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Industry</label>
+                        <InputText @bind-Value="_editForm.Industry" class="um-input" />
+                        <ValidationMessage For="() => _editForm.Industry" class="validation-message text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Email</label>
+                        <InputText @bind-Value="_editForm.MainEmail" class="um-input" />
+                        <ValidationMessage For="() => _editForm.MainEmail" class="validation-message text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Phone</label>
+                        <InputText @bind-Value="_editForm.MainPhone" class="um-input" />
+                        <ValidationMessage For="() => _editForm.MainPhone" class="validation-message text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Website</label>
+                        <InputText @bind-Value="_editForm.Website" class="um-input" />
+                        <ValidationMessage For="() => _editForm.Website" class="validation-message text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Annual Revenue</label>
+                        <InputNumber @bind-Value="_editForm.AnnualRevenue" class="um-input" />
+                        <ValidationMessage For="() => _editForm.AnnualRevenue" class="validation-message text-danger" />
+                    </div>
+                </div>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="a360-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showAddContact = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitAddContactAsync" disabled="@string.IsNullOrEmpty(_newContact.FirstName)"><i class="bi bi-check-lg" aria-hidden="true"></i> Add</button>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showEdit = false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save Changes</button>
             </div>
-        </FooterTemplate>
-    </DialogTemplates>
+        </EditForm>
+    </DialogContent>
 </SfDialog>
 
-<!-- Log Activity -->
-<SfDialog @bind-Visible="_showLogActivity" Width="500px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="a360-dlg-hdr"><i class="bi bi-lightning" aria-hidden="true"></i> Log Activity</span></Header>
-        <Content>
-            <div class="a360-dlg-body" style="display:flex;flex-direction:column;gap:.75rem">
-                <SfDropDownList TValue="string" TItem="LV" DataSource="_actTypes" Placeholder="Type…" Width="100%" @bind-Value="_newAct.Type"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-                <SfTextBox Placeholder="Subject *" @bind-Value="_newAct.Subject" />
-                <SfTextBox Placeholder="Notes" @bind-Value="_newAct.Notes" Multiline="true" HtmlAttributes="@(new Dictionary<string,object>{{"rows","3"}})" />
-                <SfDateTimePicker TValue="DateTime" Placeholder="Date & time" @bind-Value="_newAct.OccurredAt" />
+<!-- Add/Edit Contact -->
+<SfDialog @bind-Visible="_showAddContact" Width="620px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header">
+            <i class="bi bi-person-plus" aria-hidden="true"></i>
+            <span>@(_editingContact is null ? "Add Contact" : "Edit Contact")</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseContactDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+        <EditForm Model="_contactForm" OnValidSubmit="CommitAddContactAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field"><label>First Name <span class="text-danger">*</span></label><InputText @bind-Value="_contactForm.FirstName" class="um-input" /><ValidationMessage For="() => _contactForm.FirstName" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Last Name</label><InputText @bind-Value="_contactForm.LastName" class="um-input" /><ValidationMessage For="() => _contactForm.LastName" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Title</label><InputText @bind-Value="_contactForm.Title" class="um-input" /><ValidationMessage For="() => _contactForm.Title" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Email</label><InputText @bind-Value="_contactForm.Email" class="um-input" /><ValidationMessage For="() => _contactForm.Email" class="validation-message text-danger" /></div>
+                    <div class="um-field"><label>Phone</label><InputText @bind-Value="_contactForm.Phone" class="um-input" /><ValidationMessage For="() => _contactForm.Phone" class="validation-message text-danger" /></div>
+                    <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_contactForm.IsPrimary" /> Primary Contact</label></div>
+                </div>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="a360-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showLogActivity = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitActivityAsync" disabled="@(string.IsNullOrEmpty(_newAct.Type)||string.IsNullOrEmpty(_newAct.Subject))"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseContactDialog">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingContact is null ? "Add" : "Save")</button>
             </div>
-        </FooterTemplate>
-    </DialogTemplates>
+        </EditForm>
+    </DialogContent>
 </SfDialog>
 
-<!-- Compose -->
-<SfDialog @bind-Visible="_showCompose" Width="520px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="a360-dlg-hdr"><i class="bi bi-send" aria-hidden="true"></i> New Communication</span></Header>
-        <Content>
-            <div class="a360-dlg-body" style="display:flex;flex-direction:column;gap:.75rem">
-                <SfDropDownList TValue="string" TItem="LV" DataSource="_commChannels" Placeholder="Channel…" Width="100%" @bind-Value="_newComm.Channel"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-                <SfTextBox Placeholder="Subject *" @bind-Value="_newComm.Subject" />
-                <SfTextBox Placeholder="Message" @bind-Value="_newComm.Preview" Multiline="true" HtmlAttributes="@(new Dictionary<string,object>{{"rows","4"}})" />
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="a360-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showCompose = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitComposeAsync" disabled="@(string.IsNullOrEmpty(_newComm.Channel)||string.IsNullOrEmpty(_newComm.Subject))"><i class="bi bi-send" aria-hidden="true"></i> Send</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
+<!-- Log/Edit Activity -->
+<SfDialog @bind-Visible="_showLogActivity" Width="620px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header"><i class="bi bi-lightning" aria-hidden="true"></i><span>@(_editingActivity is null ? "Log Activity" : "Edit Activity")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActivityDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_activityForm" OnValidSubmit="CommitActivityAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_activityForm.Type" class="um-input">@foreach (var option in _actTypes) { <option value="@option.Value">@option.Label</option> }</InputSelect><ValidationMessage For="() => _activityForm.Type" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Date & Time <span class="text-danger">*</span></label><InputDate @bind-Value="_activityForm.OccurredAt" class="um-input" /><ValidationMessage For="() => _activityForm.OccurredAt" class="validation-message text-danger" /></div>
+                <div class="um-field um-field--full"><label>Subject <span class="text-danger">*</span></label><InputText @bind-Value="_activityForm.Subject" class="um-input" /><ValidationMessage For="() => _activityForm.Subject" class="validation-message text-danger" /></div>
+                <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_activityForm.Notes" class="um-input" rows="3" /><ValidationMessage For="() => _activityForm.Notes" class="validation-message text-danger" /></div>
+            </div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseActivityDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button></div>
+        </EditForm>
+    </DialogContent>
+</SfDialog>
+
+<!-- Compose/Edit Communication -->
+<SfDialog @bind-Visible="_showCompose" Width="620px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header"><i class="bi bi-send" aria-hidden="true"></i><span>@(_editingCommunication is null ? "New Communication" : "Edit Communication")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCommunicationDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_communicationForm" OnValidSubmit="CommitComposeAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field"><label>Channel <span class="text-danger">*</span></label><InputSelect @bind-Value="_communicationForm.Channel" class="um-input">@foreach (var option in _commChannels) { <option value="@option.Value">@option.Label</option> }</InputSelect><ValidationMessage For="() => _communicationForm.Channel" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Subject <span class="text-danger">*</span></label><InputText @bind-Value="_communicationForm.Subject" class="um-input" /><ValidationMessage For="() => _communicationForm.Subject" class="validation-message text-danger" /></div>
+                <div class="um-field um-field--full"><label>Message</label><InputTextArea @bind-Value="_communicationForm.Preview" class="um-input" rows="4" /><ValidationMessage For="() => _communicationForm.Preview" class="validation-message text-danger" /></div>
+            </div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseCommunicationDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-send" aria-hidden="true"></i> Save</button></div>
+        </EditForm>
+    </DialogContent>
 </SfDialog>
 
 <!-- Upload -->
-<SfDialog @bind-Visible="_showUpload" Width="440px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="a360-dlg-hdr"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Upload Document</span></Header>
-        <Content>
-            <div class="a360-dlg-body" style="display:flex;flex-direction:column;gap:.75rem">
-                <SfDropDownList TValue="string" TItem="LV" DataSource="_docCats" Placeholder="Category…" Width="100%" @bind-Value="_docCategory"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-                <SfUploader AllowedExtensions=".pdf,.docx,.xlsx,.csv,.png,.jpg" MaxFileSize="10485760" AutoUpload="false" />
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="a360-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showUpload = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="() => _showUpload = false"><i class="bi bi-check-lg" aria-hidden="true"></i> Upload</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
+<SfDialog @bind-Visible="_showUpload" Width="540px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i><span>Upload Document</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseUploadDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_documentForm" OnValidSubmit="CommitUploadAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field"><label>Category <span class="text-danger">*</span></label><InputSelect @bind-Value="_documentForm.Category" class="um-input">@foreach (var option in _docCats) { <option value="@option.Value">@option.Label</option> }</InputSelect><ValidationMessage For="() => _documentForm.Category" class="validation-message text-danger" /></div>
+                <div class="um-field um-field--full"><label>Document File <span class="text-danger">*</span></label><InputFile OnChange="OnUploadFileSelected" class="um-input" accept=".pdf,.docx,.xlsx,.csv,.png,.jpg" />@if (_selectedUploadFile is not null) { <small class="a360-help-text">@_selectedUploadFile.Name (@((_selectedUploadFile.Size / 1024m).ToString("N0")) KB)</small> }</div>
+            </div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseUploadDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Upload</button></div>
+        </EditForm>
+    </DialogContent>
 </SfDialog>
 
-<!-- FNOL -->
-<SfDialog @bind-Visible="_showFnol" Width="480px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="a360-dlg-hdr"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> First Notice of Loss</span></Header>
-        <Content>
-            <div class="a360-dlg-body" style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-                <SfTextBox Placeholder="Policy number" @bind-Value="_newFnol.PolicyNumber" />
-                <SfTextBox Placeholder="Line of business" @bind-Value="_newFnol.LineOfBusiness" />
-                <SfDatePicker TValue="DateTime?" Placeholder="Loss date" @bind-Value="_newFnol.LossDate" />
-                <SfTextBox Placeholder="Adjuster" @bind-Value="_newFnol.Adjuster" />
-                <div style="grid-column:span 2">
-                    <SfTextBox Placeholder="Description of loss" @bind-Value="_newFnol.Description" Multiline="true" HtmlAttributes="@(new Dictionary<string,object>{{"rows","3"}})" />
-                </div>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="a360-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showFnol = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitFnolAsync" disabled="@(string.IsNullOrEmpty(_newFnol.PolicyNumber))"><i class="bi bi-check-lg" aria-hidden="true"></i> Submit FNOL</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
+<!-- FNOL/Edit Claim -->
+<SfDialog @bind-Visible="_showFnol" Width="620px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span>@(_editingClaim is null ? "First Notice of Loss" : "Edit Claim")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseClaimDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_claimForm" OnValidSubmit="CommitFnolAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field"><label>Policy Number <span class="text-danger">*</span></label><InputText @bind-Value="_claimForm.PolicyNumber" class="um-input" /><ValidationMessage For="() => _claimForm.PolicyNumber" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Line of Business <span class="text-danger">*</span></label><InputText @bind-Value="_claimForm.LineOfBusiness" class="um-input" /><ValidationMessage For="() => _claimForm.LineOfBusiness" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Loss Date <span class="text-danger">*</span></label><InputDate @bind-Value="_claimForm.LossDate" class="um-input" /><ValidationMessage For="() => _claimForm.LossDate" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Adjuster</label><InputText @bind-Value="_claimForm.Adjuster" class="um-input" /><ValidationMessage For="() => _claimForm.Adjuster" class="validation-message text-danger" /></div>
+                <div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_claimForm.Description" class="um-input" rows="3" /><ValidationMessage For="() => _claimForm.Description" class="validation-message text-danger" /></div>
+            </div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseClaimDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingClaim is null ? "Submit FNOL" : "Save")</button></div>
+        </EditForm>
+    </DialogContent>
 </SfDialog>
 
-<!-- Add Relationship -->
-<SfDialog @bind-Visible="_showAddRel" Width="440px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="a360-dlg-hdr"><i class="bi bi-diagram-3" aria-hidden="true"></i> Link Account</span></Header>
-        <Content>
-            <div class="a360-dlg-body" style="display:flex;flex-direction:column;gap:.75rem">
-                <SfTextBox Placeholder="Related account name" @bind-Value="_newRel.RelatedAccount" />
-                <SfDropDownList TValue="string" TItem="LV" DataSource="_relTypeOpts" Placeholder="Relationship type…" Width="100%" @bind-Value="_newRel.RelationType"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="a360-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showAddRel = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitAddRelAsync" disabled="@string.IsNullOrEmpty(_newRel.RelatedAccount)"><i class="bi bi-check-lg" aria-hidden="true"></i> Link</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
+<!-- Add/Edit Relationship -->
+<SfDialog @bind-Visible="_showAddRel" Width="520px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header"><i class="bi bi-diagram-3" aria-hidden="true"></i><span>@(_editingRelationship is null ? "Link Account" : "Edit Relationship")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseRelationshipDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_relationshipForm" OnValidSubmit="CommitAddRelAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field um-field--full"><label>Related Account Name <span class="text-danger">*</span></label><InputText @bind-Value="_relationshipForm.RelatedAccount" class="um-input" /><ValidationMessage For="() => _relationshipForm.RelatedAccount" class="validation-message text-danger" /></div>
+                <div class="um-field um-field--full"><label>Relationship Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_relationshipForm.RelationType" class="um-input">@foreach (var option in _relTypeOpts) { <option value="@option.Value">@option.Label</option> }</InputSelect><ValidationMessage For="() => _relationshipForm.RelationType" class="validation-message text-danger" /></div>
+            </div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseRelationshipDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingRelationship is null ? "Link" : "Save")</button></div>
+        </EditForm>
+    </DialogContent>
 </SfDialog>
 
-<!-- Enroll Campaign -->
-<SfDialog @bind-Visible="_showCampaign" Width="440px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="a360-dlg-hdr"><i class="bi bi-megaphone" aria-hidden="true"></i> Enroll in Campaign</span></Header>
-        <Content>
-            <div class="a360-dlg-body" style="display:flex;flex-direction:column;gap:.75rem">
-                <SfDropDownList TValue="string" TItem="LV" DataSource="_campOpts" Placeholder="Select campaign…" Width="100%" @bind-Value="_campaignTarget"><DropDownListFieldSettings Value="Value" Text="Label" /></SfDropDownList>
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="a360-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showCampaign = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitCampaignAsync" disabled="@string.IsNullOrEmpty(_campaignTarget)"><i class="bi bi-check-lg" aria-hidden="true"></i> Enroll</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
+<!-- Enroll/Edit Campaign -->
+<SfDialog @bind-Visible="_showCampaign" Width="520px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header"><i class="bi bi-megaphone" aria-hidden="true"></i><span>@(_editingCampaign is null ? "Enroll in Campaign" : "Edit Campaign Enrollment")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCampaignDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_campaignForm" OnValidSubmit="CommitCampaignAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid"><div class="um-field um-field--full"><label>Campaign <span class="text-danger">*</span></label><InputSelect @bind-Value="_campaignForm.CampaignName" class="um-input"><option value="">Select campaign</option>@foreach (var option in _campOpts) { <option value="@option.Label">@option.Label</option> }</InputSelect><ValidationMessage For="() => _campaignForm.CampaignName" class="validation-message text-danger" /></div></div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseCampaignDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingCampaign is null ? "Enroll" : "Save")</button></div>
+        </EditForm>
+    </DialogContent>
 </SfDialog>
 
 <!-- Add Note -->
-<SfDialog @bind-Visible="_showNote" Width="460px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="a360-dlg-hdr"><i class="bi bi-sticky" aria-hidden="true"></i> Add Note</span></Header>
-        <Content>
-            <div class="a360-dlg-body">
-                <SfTextBox Placeholder="Note text…" @bind-Value="_newNoteText" Multiline="true" HtmlAttributes="@(new Dictionary<string,object>{{"rows","5"}})" />
-            </div>
-        </Content>
-        <FooterTemplate>
-            <div class="a360-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showNote = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitNoteAsync" disabled="@string.IsNullOrEmpty(_newNoteText)"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
+<SfDialog @bind-Visible="_showNote" Width="560px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header"><i class="bi bi-sticky" aria-hidden="true"></i><span>Add Note</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseNoteDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_noteForm" OnValidSubmit="CommitNoteAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid"><div class="um-field um-field--full"><label>Note Text <span class="text-danger">*</span></label><InputTextArea @bind-Value="_noteForm.Text" class="um-input" rows="5" /><ValidationMessage For="() => _noteForm.Text" class="validation-message text-danger" /></div></div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseNoteDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save</button></div>
+        </EditForm>
+    </DialogContent>
 </SfDialog>
 
-<!-- New Submission -->
-<SfDialog @bind-Visible="_showAddSubmission" Width="480px" IsModal="true" ShowCloseIcon="true">
-    <DialogTemplates>
-        <Header><span class="a360-dlg-hdr"><i class="bi bi-send" aria-hidden="true"></i> New Submission</span></Header>
-        <Content>
-            <div class="a360-dlg-body" style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-                <SfTextBox Placeholder="Line of business *" @bind-Value="_newSub.LineOfBusiness" />
-                <SfTextBox Placeholder="Carrier *"          @bind-Value="_newSub.Carrier" />
-                <SfDatePicker TValue="DateTime?" Placeholder="Due date" @bind-Value="_newSub.DueDate" />
-                <div></div>
-                <div style="grid-column:span 2"><SfTextBox Placeholder="Notes" @bind-Value="_newSub.Notes" /></div>
+<!-- New/Edit Submission -->
+<SfDialog @bind-Visible="_showAddSubmission" Width="620px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-modal-header"><i class="bi bi-send" aria-hidden="true"></i><span>@(_editingSubmission is null ? "New Submission" : "Edit Submission")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseSubmissionDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_submissionForm" OnValidSubmit="CommitAddSubmissionAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field"><label>Line of Business <span class="text-danger">*</span></label><InputText @bind-Value="_submissionForm.LineOfBusiness" class="um-input" /><ValidationMessage For="() => _submissionForm.LineOfBusiness" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Carrier <span class="text-danger">*</span></label><InputText @bind-Value="_submissionForm.Carrier" class="um-input" /><ValidationMessage For="() => _submissionForm.Carrier" class="validation-message text-danger" /></div>
+                <div class="um-field"><label>Due Date</label><InputDate @bind-Value="_submissionForm.DueDate" class="um-input" /><ValidationMessage For="() => _submissionForm.DueDate" class="validation-message text-danger" /></div>
+                <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_submissionForm.Notes" class="um-input" rows="3" /><ValidationMessage For="() => _submissionForm.Notes" class="validation-message text-danger" /></div>
+            </div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseSubmissionDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingSubmission is null ? "Submit" : "Save")</button></div>
+        </EditForm>
+    </DialogContent>
+</SfDialog>
+
+<SfDialog @bind-Visible="_showDeleteConfirm" Width="440px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-confirm-dialog">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+            <div class="um-confirm-title">@_deleteTitle</div>
+            <div class="um-confirm-body">@_deleteMessage</div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDeleteConfirm = false">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
             </div>
-        </Content>
-        <FooterTemplate>
-            <div class="a360-dlg-footer">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showAddSubmission = false">Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="CommitAddSubmissionAsync" disabled="@(string.IsNullOrEmpty(_newSub.LineOfBusiness)||string.IsNullOrEmpty(_newSub.Carrier))"><i class="bi bi-check-lg" aria-hidden="true"></i> Submit</button>
-            </div>
-        </FooterTemplate>
-    </DialogTemplates>
+        </div>
+    </DialogContent>
 </SfDialog>
 
 @code {
@@ -865,6 +943,24 @@ else
     private bool                           _loading = true;
     private int                            _tab     = 0;
     private Account360Model?               _acct;
+
+    private static readonly IReadOnlyList<AccountTab> _tabs =
+    [
+        new(0, "Overview", "bi-house"),
+        new(1, "Contacts", "bi-people"),
+        new(2, "Policies", "bi-shield-check"),
+        new(3, "Submissions", "bi-send"),
+        new(4, "Claims", "bi-exclamation-triangle"),
+        new(5, "Billing", "bi-receipt"),
+        new(6, "Commissions", "bi-percent"),
+        new(7, "Documents", "bi-folder2"),
+        new(8, "Activities", "bi-lightning"),
+        new(9, "Communications", "bi-chat-dots"),
+        new(10, "Marketing", "bi-megaphone"),
+        new(11, "Timeline", "bi-clock-history"),
+        new(12, "Relationships", "bi-diagram-3"),
+        new(13, "Risk Insights", "bi-graph-up")
+    ];
 
     // Tab data
     private List<ContactRow>        _contacts      = [];
@@ -891,6 +987,7 @@ else
     private Syncfusion.Blazor.Diagram.DiagramObjectCollection<Syncfusion.Blazor.Diagram.Connector> _diagramConnectors = new();
     // Dialog state
     private bool          _showEdit          = false;
+    private bool          _showDeleteConfirm = false;
     private bool          _showAddContact    = false;
     private bool          _showLogActivity   = false;
     private bool          _showCompose       = false;
@@ -901,21 +998,38 @@ else
     private bool          _showNote          = false;
     private bool          _showAddSubmission = false;
 
-    private ContactRow    _newContact   = new();
-    private ActivityRow   _newAct       = new();
-    private CommRow       _newComm      = new();
-    private string        _docCategory  = string.Empty;
-    private FnolInput     _newFnol      = new();
-    private RelationshipRow _newRel     = new();
-    private string        _campaignTarget = string.Empty;
-    private string        _newNoteText  = string.Empty;
-    private SubmissionRow _newSub       = new();
+    private AccountEditForm _editForm    = new();
+    private ContactForm   _contactForm   = new();
+    private ActivityForm  _activityForm  = new();
+    private CommunicationForm _communicationForm = new();
+    private DocumentForm  _documentForm  = new();
+    private IBrowserFile? _selectedUploadFile;
+    private ClaimForm     _claimForm     = new();
+    private RelationshipForm _relationshipForm = new();
+    private CampaignForm  _campaignForm  = new();
+    private NoteForm      _noteForm      = new();
+    private SubmissionForm _submissionForm = new();
+    private ContactRow?   _editingContact;
+    private SubmissionRow? _editingSubmission;
+    private ClaimRow?     _editingClaim;
+    private ActivityRow?  _editingActivity;
+    private CommRow?      _editingCommunication;
+    private CampaignRow?  _editingCampaign;
+    private RelationshipRow? _editingRelationship;
+    private string        _deleteTitle = string.Empty;
+    private string        _deleteMessage = string.Empty;
+    private Func<Task>?   _confirmDeleteAction;
+    private bool          _saving;
 
     private static readonly List<LV> _actTypes     = [new("Call","Call"),new("Email","Email"),new("Meeting","Meeting"),new("Note","Note"),new("Task","Task")];
     private static readonly List<LV> _commChannels = [new("Email","Email"),new("Phone","Phone"),new("SMS","SMS"),new("Portal","Portal")];
     private static readonly List<LV> _docCats      = [new("Loss Run","Loss Run"),new("Policy","Policy"),new("Financial","Financial"),new("Correspondence","Correspondence"),new("Other","Other")];
     private static readonly List<LV> _relTypeOpts  = [new("Parent","Parent"),new("Subsidiary","Subsidiary"),new("Partner","Partner"),new("Referred By","Referred By")];
     private static readonly List<LV> _campOpts     = [new("c1","Renewal Outreach 2025"),new("c2","Cross-Sell Cyber"),new("c3","Win-Back Series")];
+    private static readonly List<LV> _accountTypes = [new("Commercial","Commercial"),new("Personal","Personal"),new("Non-Profit","Non-Profit"),new("Government","Government"),new("Partner","Partner")];
+    private static readonly List<LV> _statusOptions = [new("Active","Active"),new("Prospect","Prospect"),new("Inactive","Inactive"),new("Suspended","Suspended")];
+    private static readonly List<LV> _segmentOptions = [new("Enterprise","Enterprise"),new("Mid-Market","Mid-Market"),new("SMB","SMB"),new("Key Account","Key Account"),new("Startup","Startup")];
+    private static readonly List<LV> _lifecycleOptions = [new("Lead","Lead"),new("Prospect","Prospect"),new("Customer","Customer"),new("Renewal","Renewal"),new("At Risk","At Risk"),new("Inactive","Inactive")];
 
     private Guid _loadedAccountId;
 
@@ -1032,54 +1146,241 @@ else
     private void OnDiagramCreated() { }
 
     // ── Action handlers ───────────────────────────────────────────────────────
+    private void OpenEditAccount()
+    {
+        if (_acct is null)
+            return;
+
+        _editForm = new AccountEditForm
+        {
+            AccountName = _acct.AccountName,
+            AccountTypeCode = _acct.AccountType,
+            StatusCode = _acct.Status,
+            SegmentCode = _acct.Segment,
+            LifecycleStageCode = _acct.LifecycleStage,
+            Industry = _acct.Industry,
+            MainEmail = _acct.Email,
+            MainPhone = _acct.Phone,
+            Website = _acct.Website,
+            AnnualRevenue = _acct.AnnualRevenue
+        };
+        _showEdit = true;
+    }
+
+    private async Task SaveAccountAsync()
+    {
+        if (_acct is null)
+            return;
+
+        _saving = true;
+        try
+        {
+            var request = new UpdateAccountRequest
+            {
+                AccountName = Normalize(_editForm.AccountName) ?? string.Empty,
+                AccountTypeCode = Normalize(_editForm.AccountTypeCode) ?? string.Empty,
+                StatusCode = Normalize(_editForm.StatusCode) ?? "Active",
+                SegmentCode = Normalize(_editForm.SegmentCode),
+                LifecycleStageCode = Normalize(_editForm.LifecycleStageCode),
+                Industry = Normalize(_editForm.Industry),
+                MainEmail = Normalize(_editForm.MainEmail),
+                MainPhone = Normalize(_editForm.MainPhone),
+                Website = Normalize(_editForm.Website),
+                AnnualRevenue = _editForm.AnnualRevenue
+            };
+
+            await Api.UpdateAccountAsync(AccountId, request);
+            _showEdit = false;
+            AddTimelineEvent("Account", "Account updated", "Account profile fields were updated.", "Me", DateTime.UtcNow);
+            await LoadAsync();
+            await ShowToast("Account updated.");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast($"Save failed: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
     private async Task CommitAddContactAsync()
     {
-        _contacts.Add(new ContactRow { FirstName=_newContact.FirstName, LastName=_newContact.LastName, Title=_newContact.Title, Email=_newContact.Email, Phone=_newContact.Phone, IsPrimary=_newContact.IsPrimary });
-        _newContact=new(); _showAddContact=false;
-        await ShowToast("Contact added.");
+        var row = _editingContact ?? new ContactRow();
+        row.FirstName = Normalize(_contactForm.FirstName) ?? string.Empty;
+        row.LastName = Normalize(_contactForm.LastName) ?? string.Empty;
+        row.Title = Normalize(_contactForm.Title);
+        row.Email = Normalize(_contactForm.Email);
+        row.Phone = Normalize(_contactForm.Phone);
+        row.IsPrimary = _contactForm.IsPrimary;
+        if (row.IsPrimary)
+            _contacts.Where(c => !ReferenceEquals(c, row)).ToList().ForEach(c => c.IsPrimary = false);
+        if (_editingContact is null)
+            _contacts.Add(row);
+        AddTimelineEvent("Contact", _editingContact is null ? "Contact added" : "Contact updated", row.FullName, "Me", DateTime.UtcNow);
+        CloseContactDialog();
+        await ShowToast(_editingContact is null ? "Contact added." : "Contact updated.");
     }
     private async Task CommitActivityAsync()
     {
-        _activities.Insert(0, new ActivityRow { Type=_newAct.Type, Subject=_newAct.Subject, Notes=_newAct.Notes, By="Me", OccurredAt=_newAct.OccurredAt });
-        AddTimelineEvent("Activity", $"{_newAct.Type}: {_newAct.Subject}", _newAct.Notes, "Me", _newAct.OccurredAt);
-        _newAct=new(); _showLogActivity=false;
-        await ShowToast("Activity logged.");
+        var row = _editingActivity ?? new ActivityRow { By = "Me" };
+        row.Type = _activityForm.Type;
+        row.Subject = Normalize(_activityForm.Subject) ?? string.Empty;
+        row.Notes = Normalize(_activityForm.Notes);
+        row.OccurredAt = _activityForm.OccurredAt;
+        if (_editingActivity is null)
+            _activities.Insert(0, row);
+        AddTimelineEvent("Activity", $"{row.Type}: {row.Subject}", row.Notes, "Me", row.OccurredAt);
+        CloseActivityDialog();
+        await ShowToast(_editingActivity is null ? "Activity logged." : "Activity updated.");
     }
     private async Task CommitComposeAsync()
     {
-        _comms.Insert(0, new CommRow { Channel=_newComm.Channel, Subject=_newComm.Subject, Preview=_newComm.Preview, SentBy="Me", SentAt=DateTime.UtcNow });
-        _newComm=new(); _showCompose=false;
-        await ShowToast("Communication logged.");
+        var row = _editingCommunication ?? new CommRow { SentBy = "Me", SentAt = DateTime.UtcNow };
+        row.Channel = _communicationForm.Channel;
+        row.Subject = Normalize(_communicationForm.Subject) ?? string.Empty;
+        row.Preview = Normalize(_communicationForm.Preview) ?? string.Empty;
+        if (_editingCommunication is null)
+            _comms.Insert(0, row);
+        AddTimelineEvent("Communication", $"{row.Channel}: {row.Subject}", row.Preview, "Me", row.SentAt);
+        CloseCommunicationDialog();
+        await ShowToast(_editingCommunication is null ? "Communication logged." : "Communication updated.");
     }
     private async Task CommitFnolAsync()
     {
-        _claims.Add(new ClaimRow { ClaimNumber=$"CLM-{Random.Shared.Next(1000,9999)}", LineOfBusiness=_newFnol.LineOfBusiness, LossDate=_newFnol.LossDate ?? DateTime.UtcNow, Status="Open", ReserveAmount=0, PaidAmount=0, Adjuster=_newFnol.Adjuster ?? "—" });
-        _newFnol=new(); _showFnol=false;
-        await ShowToast("FNOL submitted.");
+        var row = _editingClaim ?? new ClaimRow { ClaimNumber=$"CLM-{Random.Shared.Next(1000,9999)}", Status="Open" };
+        row.LineOfBusiness = Normalize(_claimForm.LineOfBusiness) ?? string.Empty;
+        row.LossDate = _claimForm.LossDate ?? DateTime.UtcNow;
+        row.Adjuster = Normalize(_claimForm.Adjuster) ?? "—";
+        if (_editingClaim is null)
+            _claims.Add(row);
+        AddTimelineEvent("Claim", _editingClaim is null ? $"Claim opened — {_claimForm.PolicyNumber}" : $"Claim updated — {row.ClaimNumber}", _claimForm.Description, "Me", DateTime.UtcNow);
+        CloseClaimDialog();
+        await ShowToast(_editingClaim is null ? "FNOL submitted." : "Claim updated.");
     }
     private async Task CommitAddRelAsync()
     {
-        _relationships.Add(new RelationshipRow { RelatedAccountId=Guid.NewGuid(), RelatedAccount=_newRel.RelatedAccount, RelationType=_newRel.RelationType });
-        _newRel=new(); _showAddRel=false;
-        await ShowToast("Relationship linked.");
+        var row = _editingRelationship ?? new RelationshipRow { RelatedAccountId = Guid.NewGuid() };
+        row.RelatedAccount = Normalize(_relationshipForm.RelatedAccount) ?? string.Empty;
+        row.RelationType = Normalize(_relationshipForm.RelationType) ?? string.Empty;
+        if (_editingRelationship is null)
+            _relationships.Add(row);
+        BuildDiagram();
+        CloseRelationshipDialog();
+        await ShowToast(_editingRelationship is null ? "Relationship linked." : "Relationship updated.");
     }
     private async Task CommitCampaignAsync()
     {
-        _campaigns.Add(new CampaignRow { CampaignName=_campaignTarget, Status="Active", EnrolledAt=DateTime.UtcNow });
-        _campaignTarget=string.Empty; _showCampaign=false;
-        await ShowToast("Enrolled in campaign.");
+        var row = _editingCampaign ?? new CampaignRow { Status="Active", EnrolledAt=DateTime.UtcNow };
+        row.CampaignName = Normalize(_campaignForm.CampaignName) ?? string.Empty;
+        if (_editingCampaign is null)
+            _campaigns.Add(row);
+        AddTimelineEvent("Marketing", _editingCampaign is null ? "Campaign enrollment added" : "Campaign enrollment updated", row.CampaignName, "Me", DateTime.UtcNow);
+        CloseCampaignDialog();
+        await ShowToast(_editingCampaign is null ? "Enrolled in campaign." : "Campaign enrollment updated.");
     }
     private async Task CommitNoteAsync()
     {
-        AddTimelineEvent("Note", "Note added", _newNoteText, "Me", DateTime.UtcNow);
-        _newNoteText=string.Empty; _showNote=false;
+        AddTimelineEvent("Note", "Note added", _noteForm.Text, "Me", DateTime.UtcNow);
+        CloseNoteDialog();
         await ShowToast("Note saved.");
     }
     private async Task CommitAddSubmissionAsync()
     {
-        _submissions.Add(new SubmissionRow { SubmissionNumber=$"SUB-{Random.Shared.Next(1000,9999)}", LineOfBusiness=_newSub.LineOfBusiness, Carrier=_newSub.Carrier, Status="Submitted", SubmittedAt=DateTime.UtcNow, DueDate=_newSub.DueDate, Notes=_newSub.Notes });
-        _newSub=new(); _showAddSubmission=false;
-        await ShowToast("Submission created.");
+        var row = _editingSubmission ?? new SubmissionRow { SubmissionNumber=$"SUB-{Random.Shared.Next(1000,9999)}", Status="Submitted", SubmittedAt=DateTime.UtcNow };
+        row.LineOfBusiness = Normalize(_submissionForm.LineOfBusiness) ?? string.Empty;
+        row.Carrier = Normalize(_submissionForm.Carrier) ?? string.Empty;
+        row.DueDate = _submissionForm.DueDate;
+        row.Notes = Normalize(_submissionForm.Notes);
+        if (_editingSubmission is null)
+            _submissions.Add(row);
+        AddTimelineEvent("Submission", _editingSubmission is null ? $"Submission created — {row.SubmissionNumber}" : $"Submission updated — {row.SubmissionNumber}", row.Notes, "Me", DateTime.UtcNow);
+        CloseSubmissionDialog();
+        await ShowToast(_editingSubmission is null ? "Submission created." : "Submission updated.");
+    }
+
+    private async Task CommitUploadAsync()
+    {
+        if (_selectedUploadFile is null)
+        {
+            await ShowToast("Upload failed: select a document file.", "e-toast-danger");
+            return;
+        }
+
+        var ext = Path.GetExtension(_selectedUploadFile.Name);
+        _documents.Add(new DocRow { FileName = _selectedUploadFile.Name, Extension = ext, Category = _documentForm.Category, SizeKb = (int)Math.Ceiling(_selectedUploadFile.Size / 1024m), UploadedBy = "Me", UploadedAt = DateTime.UtcNow });
+        AddTimelineEvent("Document", "Document uploaded", _selectedUploadFile.Name, "Me", DateTime.UtcNow);
+        CloseUploadDialog();
+        await ShowToast("Document uploaded.");
+    }
+
+    private Task DownloadDocumentAsync(DocRow row) => ShowToast($"Download prepared for {row.FileName}.");
+    private async Task MarkCommunicationOpenedAsync(CommRow row) { row.Opened = true; await ShowToast("Communication marked opened."); }
+
+    private void OpenAddContact() { _editingContact = null; _contactForm = new(); _showAddContact = true; }
+    private void OpenEditContact(ContactRow row) { _editingContact = row; _contactForm = new() { FirstName = row.FirstName, LastName = row.LastName, Title = row.Title, Email = row.Email, Phone = row.Phone, IsPrimary = row.IsPrimary }; _showAddContact = true; }
+    private void CloseContactDialog() { _showAddContact = false; _editingContact = null; _contactForm = new(); }
+    private void OpenLogActivity() { _editingActivity = null; _activityForm = new() { Type = "Call", OccurredAt = DateTime.UtcNow }; _showLogActivity = true; }
+    private void OpenEditActivity(ActivityRow row) { _editingActivity = row; _activityForm = new() { Type = row.Type, Subject = row.Subject, Notes = row.Notes, OccurredAt = row.OccurredAt }; _showLogActivity = true; }
+    private void CloseActivityDialog() { _showLogActivity = false; _editingActivity = null; _activityForm = new(); }
+    private void OpenCompose() { _editingCommunication = null; _communicationForm = new() { Channel = "Email" }; _showCompose = true; }
+    private void OpenEditCommunication(CommRow row) { _editingCommunication = row; _communicationForm = new() { Channel = row.Channel, Subject = row.Subject, Preview = row.Preview }; _showCompose = true; }
+    private void CloseCommunicationDialog() { _showCompose = false; _editingCommunication = null; _communicationForm = new(); }
+    private void OpenUpload() { _documentForm = new() { Category = "Other" }; _selectedUploadFile = null; _showUpload = true; }
+    private void CloseUploadDialog() { _showUpload = false; _documentForm = new(); _selectedUploadFile = null; }
+    private void OnUploadFileSelected(InputFileChangeEventArgs args) => _selectedUploadFile = args.File;
+    private void OpenFnol() { _editingClaim = null; _claimForm = new() { LossDate = DateTime.UtcNow }; _showFnol = true; }
+    private void OpenEditClaim(ClaimRow row) { _editingClaim = row; _claimForm = new() { PolicyNumber = row.ClaimNumber, LineOfBusiness = row.LineOfBusiness, LossDate = row.LossDate, Adjuster = row.Adjuster }; _showFnol = true; }
+    private void CloseClaimDialog() { _showFnol = false; _editingClaim = null; _claimForm = new(); }
+    private void OpenAddRelationship() { _editingRelationship = null; _relationshipForm = new() { RelationType = "Partner" }; _showAddRel = true; }
+    private void OpenEditRelationship(RelationshipRow row) { _editingRelationship = row; _relationshipForm = new() { RelatedAccount = row.RelatedAccount, RelationType = row.RelationType }; _showAddRel = true; }
+    private void CloseRelationshipDialog() { _showAddRel = false; _editingRelationship = null; _relationshipForm = new(); }
+    private void OpenCampaign() { _editingCampaign = null; _campaignForm = new(); _showCampaign = true; }
+    private void OpenEditCampaign(CampaignRow row) { _editingCampaign = row; _campaignForm = new() { CampaignName = row.CampaignName }; _showCampaign = true; }
+    private void CloseCampaignDialog() { _showCampaign = false; _editingCampaign = null; _campaignForm = new(); }
+    private void CloseNoteDialog() { _showNote = false; _noteForm = new(); }
+    private void OpenAddSubmission() { _editingSubmission = null; _submissionForm = new(); _showAddSubmission = true; }
+    private void OpenEditSubmission(SubmissionRow row) { _editingSubmission = row; _submissionForm = new() { LineOfBusiness = row.LineOfBusiness, Carrier = row.Carrier, DueDate = row.DueDate, Notes = row.Notes }; _showAddSubmission = true; }
+    private void CloseSubmissionDialog() { _showAddSubmission = false; _editingSubmission = null; _submissionForm = new(); }
+
+    private void ConfirmDeleteContact(ContactRow row) => ConfirmDelete("Delete Contact", $"Delete contact {row.FullName}?", async () => { _contacts.Remove(row); await ShowToast("Contact deleted."); });
+    private void ConfirmDeleteSubmission(SubmissionRow row) => ConfirmDelete("Delete Submission", $"Delete submission {row.SubmissionNumber}?", async () => { _submissions.Remove(row); await ShowToast("Submission deleted."); });
+    private void ConfirmDeleteClaim(ClaimRow row) => ConfirmDelete("Delete Claim", $"Delete claim {row.ClaimNumber}?", async () => { _claims.Remove(row); await ShowToast("Claim deleted."); });
+    private void ConfirmDeleteDocument(DocRow row) => ConfirmDelete("Delete Document", $"Delete document {row.FileName}?", async () => { _documents.Remove(row); await ShowToast("Document deleted."); });
+    private void ConfirmDeleteActivity(ActivityRow row) => ConfirmDelete("Delete Activity", $"Delete activity {row.Subject}?", async () => { _activities.Remove(row); await ShowToast("Activity deleted."); });
+    private void ConfirmDeleteCommunication(CommRow row) => ConfirmDelete("Delete Communication", $"Delete communication {row.Subject}?", async () => { _comms.Remove(row); await ShowToast("Communication deleted."); });
+    private void ConfirmDeleteCampaign(CampaignRow row) => ConfirmDelete("Remove Campaign", $"Remove campaign enrollment {row.CampaignName}?", async () => { _campaigns.Remove(row); await ShowToast("Campaign enrollment removed."); });
+    private void ConfirmDeleteRelationship(RelationshipRow row) => ConfirmDelete("Delete Relationship", $"Delete relationship to {row.RelatedAccount}?", async () => { _relationships.Remove(row); BuildDiagram(); await ShowToast("Relationship deleted."); });
+
+    private void ConfirmDelete(string title, string message, Func<Task> action)
+    {
+        _deleteTitle = title;
+        _deleteMessage = message;
+        _confirmDeleteAction = action;
+        _showDeleteConfirm = true;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_confirmDeleteAction is null)
+            return;
+
+        _saving = true;
+        try
+        {
+            await _confirmDeleteAction.Invoke();
+            _showDeleteConfirm = false;
+        }
+        catch (Exception ex)
+        {
+            await ShowToast($"Delete failed: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+            _confirmDeleteAction = null;
+        }
     }
 
     private void AddTimelineEvent(string cat, string title, string? detail, string by, DateTime at)
@@ -1097,8 +1398,8 @@ else
     private static RenderFragment KpiCard(string label, string val, string icon, string cls) => __builder =>
     {
         <div class="a360-kpi-card">
-            <span class="a360-kpi-icon @cls"><i class="bi @icon" aria-hidden="true"></i></span>
-            <div><div class="a360-kpi-val">@val</div><div class="a360-kpi-lbl">@label</div></div>
+            <div class="a360-kpi-lbl"><span class="a360-kpi-icon @cls"><i class="bi @icon" aria-hidden="true"></i></span>@label</div>
+            <div class="a360-kpi-val">@val</div>
         </div>;
     };
 
@@ -1111,6 +1412,8 @@ else
     // ── Style helpers ─────────────────────────────────────────────────────────
     private static string StatusBadge(string s) => s switch { "Active"=>"acl-status acl-status--active","Inactive"=>"acl-status acl-status--inactive","Prospect"=>"acl-status acl-status--prospect",_=>"acl-status acl-status--suspended" };
     private static string SegBadge(string? s) => s switch { "Enterprise"=>"acl-seg acl-seg--ent","Key Account"=>"acl-seg acl-seg--key",_=>"acl-seg" };
+    private void SelectTab(int index) => _tab = index;
+    private string TabButtonClass(int index) => _tab == index ? "a360-tab-button a360-tab-button--active" : "a360-tab-button";
     private static string PolicyStatusBadge(string s) => s switch { "Active"=>"a360-ps a360-ps--active","Cancelled"=>"a360-ps a360-ps--cancel","Expired"=>"a360-ps a360-ps--expired",_=>"a360-ps a360-ps--pending" };
     private static string SubStatusBadge(string s) => s switch { "Quoted"=>"a360-sub a360-sub--quoted","Bound"=>"a360-sub a360-sub--bound","Declined"=>"a360-sub a360-sub--declined",_=>"a360-sub a360-sub--sub" };
     private static string ClaimStatusBadge(string s) => s switch { "Open"=>"a360-cl a360-cl--open","Closed"=>"a360-cl a360-cl--closed","Pending"=>"a360-cl a360-cl--pending",_=>"a360-cl" };
@@ -1129,6 +1432,7 @@ else
     private static string TimelineColor(string cat) => cat switch { "Policy"=>"a360-tle--policy","Claim"=>"a360-tle--claim","Billing"=>"a360-tle--billing","Activity"=>"a360-tle--activity","Marketing"=>"a360-tle--marketing",_=>"a360-tle--default" };
     private static string AvatarColor(string name) { var c=new[]{"a360-av1","a360-av2","a360-av3","a360-av4","a360-av5","a360-av6"}; return c[Math.Abs(name.GetHashCode())%c.Length]; }
     private static string Initials(string name) { var p=name.Trim().Split(' ',StringSplitOptions.RemoveEmptyEntries); return p.Length>=2?$"{p[0][0]}{p[^1][0]}":name.Length>0?name[..1]:"?"; }
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     // ── Account mapping ───────────────────────────────────────────────────────
     private static Account360Model BuildAccountModel(AccountDto account) => new()
@@ -1196,6 +1500,157 @@ else
         public DateTime  CreatedAt        { get; set; }
         public DateTime? ModifiedAt       { get; set; }
     }
+    private sealed class AccountEditForm
+    {
+        [Required(ErrorMessage = "Account name is required.")]
+        [StringLength(200, ErrorMessage = "Account name cannot exceed 200 characters.")]
+        public string AccountName { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Account type is required.")]
+        [StringLength(50, ErrorMessage = "Account type cannot exceed 50 characters.")]
+        public string AccountTypeCode { get; set; } = "Commercial";
+
+        [Required(ErrorMessage = "Status is required.")]
+        [StringLength(50, ErrorMessage = "Status cannot exceed 50 characters.")]
+        public string StatusCode { get; set; } = "Active";
+
+        [StringLength(50, ErrorMessage = "Segment cannot exceed 50 characters.")]
+        public string? SegmentCode { get; set; }
+
+        [StringLength(50, ErrorMessage = "Lifecycle stage cannot exceed 50 characters.")]
+        public string? LifecycleStageCode { get; set; }
+
+        [StringLength(100, ErrorMessage = "Industry cannot exceed 100 characters.")]
+        public string? Industry { get; set; }
+
+        [AmsEmailAddress]
+        [StringLength(200, ErrorMessage = "Email cannot exceed 200 characters.")]
+        public string? MainEmail { get; set; }
+
+        [AmsPhone]
+        [StringLength(50, ErrorMessage = "Phone cannot exceed 50 characters.")]
+        public string? MainPhone { get; set; }
+
+        [Url(ErrorMessage = "Enter a valid website URL.")]
+        [StringLength(200, ErrorMessage = "Website cannot exceed 200 characters.")]
+        public string? Website { get; set; }
+
+        [Range(0, 999999999999, ErrorMessage = "Annual revenue must be 0 or greater.")]
+        public decimal? AnnualRevenue { get; set; }
+    }
+    private sealed class ContactForm
+    {
+        [Required(ErrorMessage = "First name is required.")]
+        [StringLength(100, ErrorMessage = "First name cannot exceed 100 characters.")]
+        public string FirstName { get; set; } = string.Empty;
+
+        [StringLength(100, ErrorMessage = "Last name cannot exceed 100 characters.")]
+        public string? LastName { get; set; }
+
+        [StringLength(150, ErrorMessage = "Title cannot exceed 150 characters.")]
+        public string? Title { get; set; }
+
+        [AmsEmailAddress]
+        [StringLength(200, ErrorMessage = "Email cannot exceed 200 characters.")]
+        public string? Email { get; set; }
+
+        [AmsPhone]
+        [StringLength(50, ErrorMessage = "Phone cannot exceed 50 characters.")]
+        public string? Phone { get; set; }
+
+        public bool IsPrimary { get; set; }
+    }
+    private sealed class ActivityForm
+    {
+        [Required(ErrorMessage = "Activity type is required.")]
+        [StringLength(50, ErrorMessage = "Activity type cannot exceed 50 characters.")]
+        public string Type { get; set; } = "Call";
+
+        [Required(ErrorMessage = "Subject is required.")]
+        [StringLength(200, ErrorMessage = "Subject cannot exceed 200 characters.")]
+        public string Subject { get; set; } = string.Empty;
+
+        [StringLength(2000, ErrorMessage = "Notes cannot exceed 2,000 characters.")]
+        public string? Notes { get; set; }
+
+        [Required(ErrorMessage = "Activity date is required.")]
+        public DateTime OccurredAt { get; set; } = DateTime.UtcNow;
+    }
+    private sealed class CommunicationForm
+    {
+        [Required(ErrorMessage = "Channel is required.")]
+        [StringLength(50, ErrorMessage = "Channel cannot exceed 50 characters.")]
+        public string Channel { get; set; } = "Email";
+
+        [Required(ErrorMessage = "Subject is required.")]
+        [StringLength(200, ErrorMessage = "Subject cannot exceed 200 characters.")]
+        public string Subject { get; set; } = string.Empty;
+
+        [StringLength(2000, ErrorMessage = "Message cannot exceed 2,000 characters.")]
+        public string? Preview { get; set; }
+    }
+    private sealed class DocumentForm
+    {
+        [Required(ErrorMessage = "Document category is required.")]
+        [StringLength(100, ErrorMessage = "Document category cannot exceed 100 characters.")]
+        public string Category { get; set; } = "Other";
+    }
+    private sealed class ClaimForm
+    {
+        [Required(ErrorMessage = "Policy number is required.")]
+        [StringLength(50, ErrorMessage = "Policy number cannot exceed 50 characters.")]
+        public string PolicyNumber { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Line of business is required.")]
+        [StringLength(100, ErrorMessage = "Line of business cannot exceed 100 characters.")]
+        public string LineOfBusiness { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Loss date is required.")]
+        public DateTime? LossDate { get; set; } = DateTime.UtcNow;
+
+        [StringLength(150, ErrorMessage = "Adjuster cannot exceed 150 characters.")]
+        public string? Adjuster { get; set; }
+
+        [StringLength(2000, ErrorMessage = "Description cannot exceed 2,000 characters.")]
+        public string? Description { get; set; }
+    }
+    private sealed class RelationshipForm
+    {
+        [Required(ErrorMessage = "Related account name is required.")]
+        [StringLength(200, ErrorMessage = "Related account name cannot exceed 200 characters.")]
+        public string RelatedAccount { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Relationship type is required.")]
+        [StringLength(50, ErrorMessage = "Relationship type cannot exceed 50 characters.")]
+        public string RelationType { get; set; } = "Related";
+    }
+    private sealed class CampaignForm
+    {
+        [Required(ErrorMessage = "Campaign is required.")]
+        [StringLength(200, ErrorMessage = "Campaign cannot exceed 200 characters.")]
+        public string CampaignName { get; set; } = string.Empty;
+    }
+    private sealed class NoteForm
+    {
+        [Required(ErrorMessage = "Note text is required.")]
+        [StringLength(4000, ErrorMessage = "Note text cannot exceed 4,000 characters.")]
+        public string Text { get; set; } = string.Empty;
+    }
+    private sealed class SubmissionForm
+    {
+        [Required(ErrorMessage = "Line of business is required.")]
+        [StringLength(100, ErrorMessage = "Line of business cannot exceed 100 characters.")]
+        public string LineOfBusiness { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Carrier is required.")]
+        [StringLength(150, ErrorMessage = "Carrier cannot exceed 150 characters.")]
+        public string Carrier { get; set; } = string.Empty;
+
+        public DateTime? DueDate { get; set; }
+
+        [StringLength(2000, ErrorMessage = "Notes cannot exceed 2,000 characters.")]
+        public string? Notes { get; set; }
+    }
     private sealed class ContactRow     { public string FirstName { get; set; }=string.Empty; public string LastName { get; set; }=string.Empty; public string FullName => $"{FirstName} {LastName}".Trim(); public string? Title { get; set; } public string? Email { get; set; } public string? Phone { get; set; } public bool IsPrimary { get; set; } }
     private sealed class PolicyRow      { public Guid PolicyId { get; set; }=Guid.NewGuid(); public string PolicyNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Carrier { get; set; }=string.Empty; public decimal Premium { get; set; } public string Status { get; set; }="Active"; public DateTime EffectiveDate { get; set; }=DateTime.UtcNow; public DateTime ExpirationDate { get; set; }=DateTime.UtcNow.AddYears(1); }
     private sealed class SubmissionRow  { public string SubmissionNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Carrier { get; set; }=string.Empty; public string Status { get; set; }="Submitted"; public DateTime SubmittedAt { get; set; }=DateTime.UtcNow; public DateTime? DueDate { get; set; } public string? Notes { get; set; } }
@@ -1213,5 +1668,10 @@ else
     private sealed class ClaimsHistory  { public int TotalClaims { get; set; } public int OpenClaims { get; set; } public decimal TotalIncurred { get; set; } public decimal AvgClaimSize { get; set; } public decimal LargestClaim { get; set; } public int YearsSinceLoss { get; set; } }
     private sealed class RiskInsight    { public int EngagementScore { get; set; } public int PortalLogins { get; set; } public int EmailsOpened { get; set; } public int DaysSinceTouch { get; set; } public int? NpsScore { get; set; } }
     private sealed class FnolInput      { public string PolicyNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public DateTime? LossDate { get; set; } public string? Adjuster { get; set; } public string? Description { get; set; } }
+    private sealed record AccountTab(int Index, string Label, string Icon);
     private sealed record LV(string Value, string Label);
 }
+
+<!-- -- DIALOGS
+
+

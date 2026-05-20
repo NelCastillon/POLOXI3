@@ -1,241 +1,636 @@
 @page "/policies/documents"
+@using System.ComponentModel.DataAnnotations
+@using System.Security.Claims
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Documents
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Web
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject AuthenticationStateProvider AuthenticationStateProvider
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
-@using Ams.Application.Features.Documents
 
 <PageTitle>Policy Documents — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Policy Documents"
-               Subtitle="Tenant admin document governance for policy forms, endorsements, certificates, and attachments"
-               Icon="bi-folder2">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="OpenUpload">
-            <i class="bi bi-upload" aria-hidden="true"></i> Upload Document
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="ma-hero pol-hero">
-    <div>
-        <span class="ma-eyebrow">Tenant Administration · Policy Documents</span>
-        <h2>Tenant Policy Document Vault</h2>
-        <p>Administer tenant-wide policy forms, endorsements, certificates, binders, declarations, and document retention readiness.</p>
-    </div>
-    <div class="ma-hero-actions">
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies")'><i class="bi bi-shield-check"></i> Policies</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/policies/endorsements")'><i class="bi bi-pen"></i> Endorsements</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/compliance/policies")'><i class="bi bi-patch-check"></i> Compliance</button>
-    </div>
-</section>
-
-<div class="pc-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter == null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)' title="Show all documents">
-        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-folder2-open" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Total Documents</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "Policy" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Policy")' title="Filter: Policy Forms">
-        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => IsPolicyCategory(x, "Policy"))</div><div class="pc-kpi-label">Policy Forms</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "Endorsement" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Endorsement")' title="Filter: Endorsements">
-        <span class="pc-kpi-icon pc-kpi-icon--warning"><i class="bi bi-pen" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => IsPolicyCategory(x, "Endorsement"))</div><div class="pc-kpi-label">Endorsements</div></div>
-    </div>
-    <div class="pc-kpi-card @(_activeFilter == "Certificate" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("Certificate")' title="Filter: Certificates">
-        <span class="pc-kpi-icon pc-kpi-icon--info"><i class="bi bi-file-earmark-check" aria-hidden="true"></i></span>
-        <div><div class="pc-kpi-value">@_items.Count(x => IsPolicyCategory(x, "Certificate"))</div><div class="pc-kpi-label">Certificates</div></div>
-    </div>
-</div>
-
-<AppFilterPanel @bind-SearchValue="_search" OnSearch="OnSearchAsync" SearchPlaceholder="Search by policy number, document name…" />
-
-@if (_loadError is not null)
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    <div class="pd-toast pd-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pd-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<div class="um-grid-card">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading…</span></div>
-    }
-    <SfGrid TValue="DocumentDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
-        <GridEvents TValue="DocumentDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="50" PageSizes="@(new[] { 25, 50, 100 })" />
-        <GridColumns>
-            <GridColumn Field="FileName" HeaderText="File Name" Width="280" />
-            <GridColumn Field="CategoryCode" HeaderText="Category" Width="130" />
-            <GridColumn Field="FileSizeBytes" HeaderText="Size" Width="100" TextAlign="TextAlign.Right">
-                <Template>
-                    @{ var r = (DocumentDto)context; }
-                    <span>@FormatFileSize(r.FileSizeBytes ?? 0)</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="CreatedDateUtc" HeaderText="Uploaded" Width="140" Format="d" Type="ColumnType.Date" />
-            <GridColumn Field="UploadedByName" HeaderText="Uploaded By" Width="160" />
-            <GridColumn HeaderText="Actions" Width="140" TextAlign="TextAlign.Center">
-                <Template>
-                    @{ var r = (DocumentDto)context; }
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DownloadDocument(r)" @onclick:stopPropagation="true" title="Download"><i class="bi bi-download"></i></button>
-                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ViewDocument(r)" @onclick:stopPropagation="true" title="View"><i class="bi bi-eye"></i></button>
-                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(r)" @onclick:stopPropagation="true" title="Delete"><i class="bi bi-trash"></i></button>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
+@if (_showUpload)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseUpload">
+        <div class="mt-modal pd-action-modal" role="dialog" aria-modal="true" aria-labelledby="pd-upload-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-cloud-arrow-up-fill" aria-hidden="true"></i>
+                <span id="pd-upload-title">Upload Policy Document</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseUpload" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_uploadForm" OnValidSubmit="UploadAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro">
+                        <span class="pd-modal-chip"><i class="bi bi-folder2-open" aria-hidden="true"></i> Policy document vault</span>
+                        <p>Upload declarations, certificates, endorsements, binders, cancellation notices, and retained policy workflow files.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full pd-dlg-section">Document File</div>
+                        <div class="um-field um-field--full">
+                            <label>File <span class="text-danger">*</span></label>
+                            <InputFile class="form-control" OnChange="OnUploadFileSelected" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.tif,.tiff" />
+                            @if (_uploadFile is not null)
+                            {
+                                <div class="pd-file-note"><i class="bi bi-paperclip" aria-hidden="true"></i>@_uploadFile.Name · @FormatFileSize(_uploadFile.Size)</div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(_fileError))
+                            {
+                                <div class="text-danger mt-1">@_fileError</div>
+                            }
+                        </div>
 
-<SfDialog @bind-Visible="_showUpload" Width="640px" IsModal="true" ShowCloseIcon="false">
-    <DialogEvents Closed="ResetUpload" />
-    <DialogContent>
-        <div class="um-modal-header">
-            <i class="bi bi-upload"></i>
-            <span>Upload Policy Document</span>
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showUpload = false"><i class="bi bi-x-lg"></i></button>
-        </div>
-        <EditForm Model="_form" OnValidSubmit="SaveAsync">
-            <DataAnnotationsValidator />
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>File Name <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.FileName" class="um-input" placeholder="e.g. Policy Declaration.pdf" />
-                        <ValidationMessage For="() => _form.FileName" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Document Type <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.DocumentTypeCode" class="um-input" placeholder="e.g. Declaration" />
-                        <ValidationMessage For="() => _form.DocumentTypeCode" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Category <span class="text-danger">*</span></label>
-                        <InputSelect @bind-Value="_form.CategoryCode" class="um-input">
-                            <option value="Policy">Policy</option>
-                            <option value="Endorsement">Endorsement</option>
-                            <option value="Certificate">Certificate</option>
-                            <option value="Binder">Binder</option>
-                            <option value="Declaration">Declaration</option>
-                        </InputSelect>
-                        <ValidationMessage For="() => _form.CategoryCode" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Storage Path <span class="text-danger">*</span></label>
-                        <InputText @bind-Value="_form.StoragePath" class="um-input" placeholder="/policy-documents/file.pdf" />
-                        <ValidationMessage For="() => _form.StoragePath" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Content Type</label>
-                        <InputText @bind-Value="_form.ContentType" class="um-input" placeholder="application/pdf" />
-                        <ValidationMessage For="() => _form.ContentType" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>File Size (bytes)</label>
-                        <InputNumber @bind-Value="_form.FileSizeBytes" class="um-input" />
-                        <ValidationMessage For="() => _form.FileSizeBytes" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Uploaded By</label>
-                        <InputText @bind-Value="_form.UploadedByName" class="um-input" />
-                        <ValidationMessage For="() => _form.UploadedByName" class="text-danger" />
-                    </div>
-                    <div class="um-field">
-                        <label>Tags</label>
-                        <InputText @bind-Value="_form.Tags" class="um-input" placeholder="policy, renewal, certificate" />
-                        <ValidationMessage For="() => _form.Tags" class="text-danger" />
-                    </div>
-                    <div class="um-field um-field--full">
-                        <label>Description</label>
-                        <InputTextArea @bind-Value="_form.Description" class="um-input" rows="3" />
-                        <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        <div class="um-field um-field--full pd-dlg-section">Indexing & Workflow</div>
+                        <div class="um-field">
+                            <label>Document Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_uploadForm.FileName" />
+                            <ValidationMessage For="() => _uploadForm.FileName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Document Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_uploadForm.DocumentTypeCode">
+                                @foreach (var type in DocumentTypes)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _uploadForm.DocumentTypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Category <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_uploadForm.CategoryCode">
+                                @foreach (var category in Categories)
+                                {
+                                    <option value="@category">@category</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _uploadForm.CategoryCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Retention Date</label>
+                            <InputDate class="form-control" @bind-Value="_uploadForm.RetentionDate" />
+                        </div>
+                        <div class="um-field">
+                            <label>Tags</label>
+                            <InputText class="form-control" @bind-Value="_uploadForm.Tags" />
+                            <ValidationMessage For="() => _uploadForm.Tags" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Uploaded By</label>
+                            <input class="form-control pd-readonly-input" value="@_uploadedByName" disabled />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description</label>
+                            <InputTextArea class="form-control" rows="3" @bind-Value="_uploadForm.Description" />
+                            <ValidationMessage For="() => _uploadForm.Description" class="text-danger" />
+                        </div>
                     </div>
                 </div>
-            </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showUpload = false">Cancel</button>
-                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
-                    @if (_saving) { <span class="um-spinner-sm"></span> } Create Document
-                </button>
-            </div>
-        </EditForm>
-    </DialogContent>
-</SfDialog>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseUpload" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        Upload Document
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
-<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false">
-    <DialogContent>
-        <div class="um-confirm-dialog">
-            <div class="um-confirm-icon um-confirm-icon--danger">
-                <i class="bi bi-trash3-fill"></i>
+@if (_showMetadata)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseMetadata">
+        <div class="mt-modal pd-action-modal" role="dialog" aria-modal="true" aria-labelledby="pd-metadata-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                <span id="pd-metadata-title">Edit Document Metadata</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseMetadata" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
             </div>
-            <div class="um-confirm-message">
-                <h6>Delete Document?</h6>
-                <p>You are about to delete <strong>@_deleteTarget?.FileName</strong>. This action cannot be undone.</p>
+            <EditForm Model="_metadataForm" OnValidSubmit="SaveMetadataAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro">
+                        <span class="pd-modal-chip"><i class="bi bi-tags" aria-hidden="true"></i> Metadata workflow</span>
+                        <p>Update retention, tags, and description for the selected policy document without changing the stored file.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Document</label>
+                            <input class="form-control pd-readonly-input" value="@_selected?.FileName" disabled />
+                        </div>
+                        <div class="um-field">
+                            <label>Retention Date</label>
+                            <InputDate class="form-control" @bind-Value="_metadataForm.RetentionDate" />
+                        </div>
+                        <div class="um-field">
+                            <label>Tags</label>
+                            <InputText class="form-control" @bind-Value="_metadataForm.Tags" />
+                            <ValidationMessage For="() => _metadataForm.Tags" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description</label>
+                            <InputTextArea class="form-control" rows="4" @bind-Value="_metadataForm.Description" />
+                            <ValidationMessage For="() => _metadataForm.Description" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseMetadata" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">Save Metadata</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showRename)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseRename">
+        <div class="mt-modal pd-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="pd-rename-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-input-cursor-text" aria-hidden="true"></i>
+                <span id="pd-rename-title">Rename Document</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseRename" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
             </div>
-            <div class="um-modal-footer w-100">
-                <button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
-                <button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            <EditForm Model="_renameForm" OnValidSubmit="RenameAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-field">
+                        <label>New File Name <span class="text-danger">*</span></label>
+                        <InputText class="form-control" @bind-Value="_renameForm.NewFileName" />
+                        <ValidationMessage For="() => _renameForm.NewFileName" class="text-danger" />
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRename" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">Rename</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showVersion)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseVersion">
+        <div class="mt-modal pd-action-modal" role="dialog" aria-modal="true" aria-labelledby="pd-version-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-files" aria-hidden="true"></i>
+                <span id="pd-version-title">Upload New Version</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseVersion" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_versionForm" OnValidSubmit="UploadVersionAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro">
+                        <span class="pd-modal-chip"><i class="bi bi-diagram-3" aria-hidden="true"></i> Version control</span>
+                        <p>Replace the current file and preserve a new document version in the enterprise document vault.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Version File <span class="text-danger">*</span></label>
+                            <InputFile class="form-control" OnChange="OnVersionFileSelected" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.tif,.tiff" />
+                            @if (_versionFile is not null)
+                            {
+                                <div class="pd-file-note"><i class="bi bi-paperclip" aria-hidden="true"></i>@_versionFile.Name · @FormatFileSize(_versionFile.Size)</div>
+                            }
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Change Notes</label>
+                            <InputTextArea class="form-control" rows="3" @bind-Value="_versionForm.ChangeNotes" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseVersion" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">Upload Version</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showShare)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseShare">
+        <div class="mt-modal pd-action-modal" role="dialog" aria-modal="true" aria-labelledby="pd-share-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-share-fill" aria-hidden="true"></i>
+                <span id="pd-share-title">Secure Share Link</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseShare" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_shareForm" OnValidSubmit="CreateShareLinkAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro">
+                        <span class="pd-modal-chip"><i class="bi bi-link-45deg" aria-hidden="true"></i> Controlled access</span>
+                        <p>Create time-bound, auditable access to the selected policy document.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Expires <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_shareForm.ExpiresDate" />
+                            <ValidationMessage For="() => _shareForm.ExpiresDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Max Access Count</label>
+                            <InputNumber class="form-control" @bind-Value="_shareForm.MaxAccessCount" />
+                        </div>
+                        <div class="um-field pd-check-field">
+                            <label class="pd-check-label"><InputCheckbox @bind-Value="_shareForm.RequiresPin" /> Require PIN</label>
+                        </div>
+                        <div class="um-field">
+                            <label>PIN</label>
+                            <InputText class="form-control" @bind-Value="_shareForm.Pin" disabled="@(!_shareForm.RequiresPin)" />
+                        </div>
+                    </div>
+                    @if (_shareLinks.Any())
+                    {
+                        <div class="pd-dlg-section mt-3">Existing Share Links</div>
+                        <div class="pd-mini-list">
+                            @foreach (var link in _shareLinks.Take(5))
+                            {
+                                <div class="pd-mini-item">
+                                    <strong>@link.Token</strong>
+                                    <span>Expires @link.ExpiresDateUtc.ToLocalTime().ToString("MM/dd/yyyy") · @link.AccessCount access(es)@(link.IsRevoked ? " · Revoked" : string.Empty)</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseShare" disabled="@_busy">Close</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">Create Link</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDelete)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseDelete">
+        <div class="mt-modal pd-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="pd-delete-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill" aria-hidden="true"></i></div>
+                <div class="um-confirm-message">
+                    <h6 id="pd-delete-title">Delete Document?</h6>
+                    <p>You are about to delete <strong>@_selected?.FileName</strong>. This action removes the document from active workflows.</p>
+                </div>
+                <div class="um-modal-footer w-100">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDelete" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="DeleteAsync" disabled="@_busy">Delete</button>
+                </div>
             </div>
         </div>
-    </DialogContent>
-</SfDialog>
-
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
-
-<style>
-@@keyframes um-shake {
-    0%,100%{transform:translateX(0)}
-    25%{transform:translateX(-4px)}
-    75%{transform:translateX(4px)}
+    </div>
 }
-</style>
+
+@if (_drawerRow is not null)
+{
+    <div class="pd-drawer-backdrop" @onclick="CloseDrawer"></div>
+    <aside class="pd-drawer" aria-label="Policy document details">
+        <div class="pd-drawer-head">
+            <div>
+                <h2 class="pd-drawer-title">@_drawerRow.FileName</h2>
+                <span class="pd-drawer-sub">@_drawerRow.CategoryCode · @_drawerRow.DocumentTypeCode · v@_drawerRow.VersionNumber</span>
+            </div>
+            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="CloseDrawer"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+        <div class="pd-drawer-body">
+            <div class="pd-drawer-banner @(_drawerRow.StatusCode == "Archived" ? "pd-drawer-banner--archived" : null)">
+                <i class="bi @(_drawerRow.StatusCode == "Archived" ? "bi-archive" : "bi-shield-check")" aria-hidden="true"></i>
+                <span>@_drawerRow.StatusCode</span>
+                <strong>@RetentionLabel(_drawerRow)</strong>
+            </div>
+            <div class="pd-drawer-meta">
+                @DrawerField("Category", _drawerRow.CategoryCode)
+                @DrawerField("Type", _drawerRow.DocumentTypeCode)
+                @DrawerField("Size", FormatFileSize(_drawerRow.FileSizeBytes ?? 0))
+                @DrawerField("Uploaded", _drawerRow.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy"))
+                @DrawerField("Uploaded By", _drawerRow.UploadedByName ?? "—")
+                @DrawerField("Entity", _drawerRow.EntityName ?? "Policy")
+                @DrawerField("Retention", _drawerRow.RetentionDate?.ToString("MM/dd/yyyy") ?? "—")
+                @DrawerField("Modified", _drawerRow.ModifiedDateUtc?.ToLocalTime().ToString("MM/dd/yyyy") ?? "—")
+            </div>
+            <section class="pd-drawer-section">
+                <h3><i class="bi bi-card-text" aria-hidden="true"></i> Description</h3>
+                <p>@(string.IsNullOrWhiteSpace(_drawerRow.Description) ? "No description has been provided." : _drawerRow.Description)</p>
+                <div class="pd-tag-list">
+                    @foreach (var tag in TagsFor(_drawerRow))
+                    {
+                        <span>@tag</span>
+                    }
+                </div>
+            </section>
+            <section class="pd-drawer-section">
+                <h3><i class="bi bi-files" aria-hidden="true"></i> Versions</h3>
+                @if (_versions.Any())
+                {
+                    <div class="pd-mini-list">
+                        @foreach (var version in _versions.Take(6))
+                        {
+                            <div class="pd-mini-item">
+                                <strong>v@version.VersionNumber · @version.FileName</strong>
+                                <span>@FormatFileSize(version.FileSizeBytes ?? 0) · @version.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy h:mm tt")</span>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <p>No additional versions yet.</p>
+                }
+            </section>
+            <section class="pd-drawer-section">
+                <h3><i class="bi bi-clock-history" aria-hidden="true"></i> Audit Log</h3>
+                @if (_accessLog.Any())
+                {
+                    <div class="pd-timeline">
+                        @foreach (var log in _accessLog.Take(6))
+                        {
+                            <div class="pd-timeline-item">
+                                <span class="pd-timeline-dot"></span>
+                                <div>
+                                    <strong>@log.ActionCode</strong>
+                                    <span>@log.AccessDateUtc.ToLocalTime().ToString("MM/dd/yyyy h:mm tt") · @(log.IpAddress ?? "system")</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <p>No access events have been logged yet.</p>
+                }
+            </section>
+            <div class="pd-drawer-actions">
+                <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => DownloadDocument(_drawerRow)"><i class="bi bi-download"></i> Download</button>
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenMetadata(_drawerRow)"><i class="bi bi-pencil-square"></i> Edit Metadata</button>
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenVersion(_drawerRow)"><i class="bi bi-files"></i> New Version</button>
+                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenShareAsync(_drawerRow)"><i class="bi bi-share"></i> Share</button>
+            </div>
+        </div>
+    </aside>
+}
+
+<div class="pd-enterprise-page" @onclick="CloseActionMenu">
+    <div class="pd-header">
+        <div class="pd-header-left">
+            <div class="pd-lob-icon"><i class="bi bi-folder2-open" aria-hidden="true"></i></div>
+            <div class="pd-header-info">
+                <div class="pd-title-row">
+                    <h1 class="pd-page-title">Policy Documents</h1>
+                    <span class="pd-status-pill">@FilteredRows.Count() visible</span>
+                    @if (HasFilters)
+                    {
+                        <span class="pd-filter-pill">Filtered</span>
+                    }
+                </div>
+                <div class="pd-sub-row">
+                    <span class="pd-sub-chip"><i class="bi bi-stack" aria-hidden="true"></i>@_rows.Count total documents</span>
+                    <span class="pd-sub-chip"><i class="bi bi-shield-check" aria-hidden="true"></i>@_rows.Count(r => r.StatusCode == "Active") active</span>
+                    <span class="pd-sub-chip"><i class="bi bi-files" aria-hidden="true"></i>@_rows.Sum(r => Math.Max(r.VersionNumber, 1)) retained versions</span>
+                    <span class="pd-sub-chip"><i class="bi bi-hdd" aria-hidden="true"></i>@FormatFileSize(_rows.Sum(r => r.FileSizeBytes ?? 0)) vault size</span>
+                </div>
+            </div>
+        </div>
+        <div class="pd-header-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pd-spin" : null)"></i> Refresh</button>
+            <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenUpload"><i class="bi bi-upload"></i> Upload Document</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies")'><i class="bi bi-shield-check"></i> Policies</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies/endorsements")'><i class="bi bi-pen"></i> Endorsements</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies/cancellations")'><i class="bi bi-x-circle"></i> Cancellations</button>
+        </div>
+    </div>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger pd-load-error" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+    }
+
+    <div class="pd-kpi-strip">
+        @KpiCard("bi-folder2-open", "Total", _rows.Count.ToString(), "pd-kpi-total", null)
+        @KpiCard("bi-shield-check", "Policy Forms", _rows.Count(r => IsCategory(r, "Policy")).ToString(), "pd-kpi-policy", "Policy")
+        @KpiCard("bi-pen", "Endorsements", _rows.Count(r => IsCategory(r, "Endorsement")).ToString(), "pd-kpi-endorse", "Endorsement")
+        @KpiCard("bi-file-earmark-check", "Certificates", _rows.Count(r => IsCategory(r, "Certificate")).ToString(), "pd-kpi-cert", "Certificate")
+        @KpiCard("bi-journal-bookmark", "Binders", _rows.Count(r => IsCategory(r, "Binder")).ToString(), "pd-kpi-binder", "Binder")
+        @KpiCard("bi-archive", "Archived", _rows.Count(r => r.StatusCode == "Archived").ToString(), "pd-kpi-archived", "__archived")
+        @KpiCard("bi-hdd", "Vault Size", FormatFileSize(_rows.Sum(r => r.FileSizeBytes ?? 0)), "pd-kpi-size", "__size")
+    </div>
+
+    <div class="pd-enterprise-search" role="search" aria-label="Search policy documents">
+        <div class="pd-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="pd-search-body">
+            <label for="pd-search-input">Enterprise search</label>
+            <input id="pd-search-input" class="pd-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search file name, category, type, tags, status, uploader, description, dates…" />
+            <div class="pd-search-hint">Searches all document vault and workflow fields as you type.</div>
+        </div>
+        <div class="pd-search-result"><strong>@FilteredRows.Count()</strong><span>matches</span></div>
+        @if (HasFilters)
+        {
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm pd-search-clear" @onclick="ClearFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        }
+    </div>
+
+    <div class="pd-view-tabs" role="tablist" aria-label="Policy document views">
+        @foreach (var tab in _tabs)
+        {
+            <button class="pd-view-tab @(_activeTab == tab.Key ? "pd-view-tab--active" : null)" type="button" role="tab" aria-selected="@(_activeTab == tab.Key)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <span class="pd-tab-count">@TabCount(tab.Key)</span>
+            </button>
+        }
+    </div>
+
+    <div class="pd-grid-wrap">
+        @if (_loading)
+        {
+            <div class="pd-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Loading policy documents…</span></div>
+        }
+        else if (!PagedRows.Any())
+        {
+            <div class="pd-empty-state">
+                <i class="bi bi-folder-x" aria-hidden="true"></i>
+                <strong>No policy documents found</strong>
+                <span>Upload a document or adjust the current tab, KPI, or search criteria.</span>
+            </div>
+        }
+        else
+        {
+            <div class="pd-grid-toolbar">
+                <div><strong>@FilteredRows.Count()</strong> documents @if (HasFilters) { <span class="pd-filter-note">Filtered</span> }</div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+            </div>
+            <div class="pd-table-scroll">
+                <table class="pd-table" aria-label="Policy documents register">
+                    <thead>
+                        <tr>
+                            <th>Document</th>
+                            <th>Category</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                            <th class="pd-num">Size</th>
+                            <th>Version</th>
+                            <th>Uploaded</th>
+                            <th>Uploaded By</th>
+                            <th>Retention</th>
+                            <th>Tags</th>
+                            <th class="pd-actions-col"><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in PagedRows)
+                        {
+                            <tr class="pd-table-row" @onclick="() => OpenDetailAsync(row)">
+                                <td>
+                                    <div class="pd-doc-cell">
+                                        <span class="pd-avatar"><i class="bi @DocumentIcon(row)" aria-hidden="true"></i></span>
+                                        <div><strong>@row.FileName</strong><span>@(row.Description ?? "Policy document")</span></div>
+                                    </div>
+                                </td>
+                                <td>@CategoryChip(row.CategoryCode)</td>
+                                <td>@row.DocumentTypeCode</td>
+                                <td>@StatusChip(row.StatusCode)</td>
+                                <td class="pd-num">@FormatFileSize(row.FileSizeBytes ?? 0)</td>
+                                <td><span class="pd-doc-count">v@row.VersionNumber</span></td>
+                                <td>@row.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy")</td>
+                                <td>@(row.UploadedByName ?? "—")</td>
+                                <td>@RetentionCell(row)</td>
+                                <td><span class="pd-tags-inline">@ShortTags(row)</span></td>
+                                <td class="pd-actions-col">@CtxBtn(row)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="pd-pager">
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button>
+                <span class="pd-page-chip">@PageSummary</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button>
+            </div>
+        }
+    </div>
+</div>
+
+@if (_openActionMenuFor is not null)
+{
+    <div class="pd-context-menu" style="left:@_menuXpx; top:@_menuYpx" @onclick:stopPropagation="true">
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("View")'><i class="bi bi-eye" aria-hidden="true"></i><span>View details</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Download")'><i class="bi bi-download" aria-hidden="true"></i><span>Download</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Metadata")'><i class="bi bi-pencil-square" aria-hidden="true"></i><span>Edit metadata</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Rename")'><i class="bi bi-input-cursor-text" aria-hidden="true"></i><span>Rename</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Version")'><i class="bi bi-files" aria-hidden="true"></i><span>Upload new version</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Share")'><i class="bi bi-share" aria-hidden="true"></i><span>Secure share link</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Audit")'><i class="bi bi-clock-history" aria-hidden="true"></i><span>Audit log</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Archive")' disabled="@IsSelectedArchived"><i class="bi bi-archive" aria-hidden="true"></i><span>Archive</span></button>
+        <button type="button" class="pd-menu-danger" @onclick='() => ExecuteMenuActionAsync("Delete")'><i class="bi bi-trash" aria-hidden="true"></i><span>Delete</span></button>
+    </div>
+}
 
 @code {
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
-    Guid TenantId { get; set; }
+    private bool _loading;
+    private bool _busy;
+    private bool _toastVisible;
+    private bool _showUpload;
+    private bool _showMetadata;
+    private bool _showRename;
+    private bool _showVersion;
+    private bool _showShare;
+    private bool _showDelete;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _searchText;
+    private string? _kpiFilter;
+    private string _activeTab = "all";
+    private string _uploadedByName = "Current user";
+    private Guid? _openActionMenuFor;
+    private string _menuXpx = "0px";
+    private string _menuYpx = "0px";
+    private int _page = 1;
+    private const int PageSize = 20;
+    private const long MaxUploadBytes = 104_857_600;
 
-    List<DocumentDto> _items = [], _filtered = [];
-    string? _activeFilter;
-    bool _loading, _saving;
-    string _search = string.Empty;
-    string? _loadError;
-    bool _showDelete, _showUpload;
-    DocumentDto? _deleteTarget;
-    SfToast _toast = default!;
-    PolicyDocumentFormModel _form = new();
+    private readonly List<DocumentDto> _rows = [];
+    private readonly List<DocumentVersionDto> _versions = [];
+    private readonly List<DocumentShareLinkDto> _shareLinks = [];
+    private readonly List<DocumentAccessLogDto> _accessLog = [];
+
+    private DocumentDto? _selected;
+    private DocumentDto? _drawerRow;
+    private IBrowserFile? _uploadFile;
+    private IBrowserFile? _versionFile;
+    private string? _fileError;
+    private UploadForm _uploadForm = new();
+    private MetadataForm _metadataForm = new();
+    private RenameForm _renameForm = new();
+    private VersionForm _versionForm = new();
+    private ShareForm _shareForm = new();
+
+    private static readonly string[] Categories = ["Policy", "Endorsement", "Certificate", "Binder", "Declaration"];
+    private static readonly string[] DocumentTypes = ["Declarations", "Policy", "Endorsement", "Certificate", "Binder", "Cancellation Notice", "Reinstatement Notice", "Claims Supplement", "Audit", "Other"];
+
+    private readonly TabDef[] _tabs =
+    [
+        new("all", "All", "bi-stack"),
+        new("active", "Active", "bi-shield-check"),
+        new("policy", "Policy", "bi-journal-check"),
+        new("endorsement", "Endorsements", "bi-pen"),
+        new("certificate", "Certificates", "bi-file-earmark-check"),
+        new("binder", "Binders", "bi-journal-bookmark"),
+        new("archived", "Archived", "bi-archive"),
+        new("retention", "Retention", "bi-calendar-check")
+    ];
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", null), new("Policy Documents", null));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"), new("Policy Documents", null));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        _uploadedByName = user.FindFirst(ClaimTypes.Name)?.Value
+            ?? user.FindFirst("user_name")?.Value
+            ?? user.FindFirst(ClaimTypes.Email)?.Value
+            ?? "Current user";
+    }
+
+    private async Task LoadAsync()
     {
         _loading = true;
         _loadError = null;
         try
         {
-            var result = await Api.SearchDocumentsAsync(
-                tenantId: TenantId,
-                searchTerm: _search
-            );
-            
-            _items = result?.Items
-                .Where(IsPolicyDocument)
-                .ToList() ?? [];
-            
-            ApplyFilter();
+            var result = await Api.SearchDocumentsAsync(tenantId: _tenantId, entityName: "Policy", searchTerm: null);
+            _rows.Clear();
+            _rows.AddRange((result?.Items ?? []).Where(IsPolicyDocument).OrderByDescending(x => x.CreatedDateUtc));
+            _page = 1;
         }
         catch (Exception ex)
         {
@@ -247,102 +642,595 @@
         }
     }
 
-    Task OnSearchAsync() => LoadAsync();
-
-    void ApplyFilter() => _filtered = _activeFilter switch
+    private string? SearchText
     {
-        "Policy" => _items.Where(x => IsPolicyCategory(x, "Policy")).ToList(),
-        "Endorsement" => _items.Where(x => IsPolicyCategory(x, "Endorsement")).ToList(),
-        "Certificate" => _items.Where(x => IsPolicyCategory(x, "Certificate")).ToList(),
-        _ => [.. _items]
-    };
-
-    void SetFilter(string? key)
-    {
-        _activeFilter = key;
-        ApplyFilter();
+        get => _searchText;
+        set
+        {
+            _searchText = value;
+            _page = 1;
+        }
     }
 
-    void OnRowSelected(RowSelectEventArgs<DocumentDto> args) => ViewDocument(args.Data);
+    private IEnumerable<DocumentDto> FilteredRows => _rows.Where(MatchesActiveTab).Where(MatchesKpiFilter).Where(MatchesSearch).ToList();
+    private IEnumerable<DocumentDto> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
+    private bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || _activeTab != "all" || _kpiFilter is not null;
+    private bool IsSelectedArchived => _selected?.StatusCode == "Archived";
+    private string PageSummary => $"Page {_page} of {TotalPages} · {FilteredRows.Count()} records";
 
-    void OpenUpload()
+    private bool MatchesActiveTab(DocumentDto row) => _activeTab switch
     {
-        _form = new();
+        "active" => row.StatusCode == "Active",
+        "policy" => IsCategory(row, "Policy"),
+        "endorsement" => IsCategory(row, "Endorsement"),
+        "certificate" => IsCategory(row, "Certificate"),
+        "binder" => IsCategory(row, "Binder"),
+        "archived" => row.StatusCode == "Archived",
+        "retention" => row.RetentionDate is not null,
+        _ => true
+    };
+
+    private bool MatchesKpiFilter(DocumentDto row) => _kpiFilter switch
+    {
+        null => true,
+        "__archived" => row.StatusCode == "Archived",
+        "__size" => true,
+        _ => IsCategory(row, _kpiFilter)
+    };
+
+    private bool MatchesSearch(DocumentDto row)
+    {
+        if (string.IsNullOrWhiteSpace(_searchText)) return true;
+        var s = _searchText.Trim();
+        return Contains(row.FileName, s)
+            || Contains(row.CategoryCode, s)
+            || Contains(row.DocumentTypeCode, s)
+            || Contains(row.StatusCode, s)
+            || Contains(row.Description, s)
+            || Contains(row.Tags, s)
+            || Contains(row.UploadedByName, s)
+            || Contains(row.EntityName, s)
+            || Contains(row.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy"), s)
+            || Contains(row.RetentionDate?.ToString("MM/dd/yyyy"), s);
+    }
+
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+
+    private void SetActiveTab(string key)
+    {
+        _activeTab = key;
+        _page = 1;
+    }
+
+    private void SetKpiFilter(string? key)
+    {
+        _kpiFilter = key;
+        _page = 1;
+    }
+
+    private void ClearFilters()
+    {
+        _searchText = null;
+        _kpiFilter = null;
+        _activeTab = "all";
+        _page = 1;
+    }
+
+    private void PreviousPage() => _page = Math.Max(1, _page - 1);
+    private void NextPage() => _page = Math.Min(TotalPages, _page + 1);
+
+    private int TabCount(string key) => key switch
+    {
+        "active" => _rows.Count(r => r.StatusCode == "Active"),
+        "policy" => _rows.Count(r => IsCategory(r, "Policy")),
+        "endorsement" => _rows.Count(r => IsCategory(r, "Endorsement")),
+        "certificate" => _rows.Count(r => IsCategory(r, "Certificate")),
+        "binder" => _rows.Count(r => IsCategory(r, "Binder")),
+        "archived" => _rows.Count(r => r.StatusCode == "Archived"),
+        "retention" => _rows.Count(r => r.RetentionDate is not null),
+        _ => _rows.Count
+    };
+
+    private void OpenUpload()
+    {
+        _uploadForm = new();
+        _uploadFile = null;
+        _fileError = null;
         _showUpload = true;
     }
 
-    async Task SaveAsync()
+    private void CloseUpload() => _showUpload = false;
+
+    private void OnUploadFileSelected(InputFileChangeEventArgs args)
     {
-        _saving = true;
+        _fileError = null;
+        _uploadFile = args.File;
+        if (_uploadFile.Size > MaxUploadBytes)
+        {
+            _fileError = "The selected file is larger than the 100 MB upload limit.";
+            _uploadFile = null;
+            return;
+        }
+
+        _uploadForm.FileName = _uploadFile.Name;
+    }
+
+    private async Task UploadAsync()
+    {
+        if (_uploadFile is null)
+        {
+            _fileError = "Select a document file to upload.";
+            return;
+        }
+
+        _busy = true;
         try
         {
-            await Api.CreateDocumentAsync(new CreateDocumentRequest
+            await using var stream = _uploadFile.OpenReadStream(MaxUploadBytes);
+            await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
             {
-                TenantId = TenantId,
-                DocumentTypeCode = _form.DocumentTypeCode,
-                CategoryCode = _form.CategoryCode,
-                FileName = _form.FileName,
-                StoragePath = _form.StoragePath,
-                ContentType = _form.ContentType,
-                FileSizeBytes = _form.FileSizeBytes,
+                TenantId = _tenantId,
+                DocumentTypeCode = _uploadForm.DocumentTypeCode,
+                CategoryCode = _uploadForm.CategoryCode,
+                FileName = _uploadForm.FileName,
+                OriginalFileName = _uploadFile.Name,
                 EntityName = "Policy",
-                Description = _form.Description,
-                Tags = _form.Tags,
-                UploadedByName = _form.UploadedByName
+                Description = _uploadForm.Description,
+                Tags = EnsurePolicyTag(_uploadForm.Tags),
+                RetentionDate = _uploadForm.RetentionDate,
+                UploadedByName = _uploadedByName,
+                CreatedByUserId = _tenantAdminUserId,
+                Content = stream
             });
             _showUpload = false;
-            await _toast.ShowAsync(new() { Content = "Document created successfully", CssClass = "e-toast-success" });
+            ShowToast("Document uploaded successfully.");
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Upload failed: {ex.Message}", "danger");
         }
         finally
         {
-            _saving = false;
+            _busy = false;
         }
     }
 
-    void ViewDocument(DocumentDto doc)
+    private void OpenMetadata(DocumentDto row)
     {
-        Nav.NavigateTo($"/documents/{doc.DocumentId}");
+        _selected = row;
+        _metadataForm = new MetadataForm { Description = row.Description, Tags = row.Tags, RetentionDate = row.RetentionDate };
+        _showMetadata = true;
     }
 
-    void DownloadDocument(DocumentDto doc)
+    private void CloseMetadata() => _showMetadata = false;
+
+    private async Task SaveMetadataAsync()
     {
-        Nav.NavigateTo($"/api/documents/{doc.DocumentId}/download", forceLoad: true);
+        if (_selected is null) return;
+        _busy = true;
+        try
+        {
+            await Api.UpdateDocumentMetadataAsync(new UpdateDocumentMetadataRequest
+            {
+                DocumentId = _selected.DocumentId,
+                Description = _metadataForm.Description,
+                Tags = EnsurePolicyTag(_metadataForm.Tags),
+                RetentionDate = _metadataForm.RetentionDate,
+                ModifiedByUserId = _tenantAdminUserId
+            });
+            _showMetadata = false;
+            ShowToast("Document metadata updated.");
+            await LoadAsync();
+            await RefreshDrawerAsync(_selected.DocumentId);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Metadata update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
-    void ConfirmDelete(DocumentDto doc)
+    private void OpenRename(DocumentDto row)
     {
-        _deleteTarget = doc;
+        _selected = row;
+        _renameForm = new RenameForm { NewFileName = row.FileName };
+        _showRename = true;
+    }
+
+    private void CloseRename() => _showRename = false;
+
+    private async Task RenameAsync()
+    {
+        if (_selected is null) return;
+        _busy = true;
+        try
+        {
+            await Api.RenameDocumentAsync(new RenameDocumentRequest { DocumentId = _selected.DocumentId, NewFileName = _renameForm.NewFileName, ModifiedByUserId = _tenantAdminUserId });
+            _showRename = false;
+            ShowToast("Document renamed.");
+            await LoadAsync();
+            await RefreshDrawerAsync(_selected.DocumentId);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Rename failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OpenVersion(DocumentDto row)
+    {
+        _selected = row;
+        _versionFile = null;
+        _versionForm = new VersionForm { ChangeNotes = "Updated policy document version" };
+        _showVersion = true;
+    }
+
+    private void CloseVersion() => _showVersion = false;
+
+    private void OnVersionFileSelected(InputFileChangeEventArgs args)
+    {
+        _versionFile = args.File;
+        if (_versionFile.Size > MaxUploadBytes)
+        {
+            ShowToast("The selected version file is larger than the 100 MB upload limit.", "danger");
+            _versionFile = null;
+        }
+    }
+
+    private async Task UploadVersionAsync()
+    {
+        if (_selected is null) return;
+        if (_versionFile is null)
+        {
+            ShowToast("Select a file for the new version.", "danger");
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await using var stream = _versionFile.OpenReadStream(MaxUploadBytes);
+            await Api.UploadDocumentVersionAsync(_selected.DocumentId, new ApiClient.UploadDocumentVersionRequest
+            {
+                FileName = _versionFile.Name,
+                OriginalFileName = _versionFile.Name,
+                ChangeNotes = _versionForm.ChangeNotes,
+                CreatedByUserId = _tenantAdminUserId,
+                Content = stream
+            });
+            _showVersion = false;
+            ShowToast("New document version uploaded.");
+            await LoadAsync();
+            await RefreshDrawerAsync(_selected.DocumentId);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Version upload failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OpenShareAsync(DocumentDto row)
+    {
+        _selected = row;
+        _shareForm = new ShareForm { ExpiresDate = DateOnly.FromDateTime(DateTime.Today.AddDays(14)), MaxAccessCount = 10 };
+        await LoadShareLinksAsync(row.DocumentId);
+        _showShare = true;
+    }
+
+    private void CloseShare() => _showShare = false;
+
+    private async Task CreateShareLinkAsync()
+    {
+        if (_selected is null) return;
+        _busy = true;
+        try
+        {
+            await Api.CreateDocumentShareLinkAsync(new CreateDocumentShareLinkRequest
+            {
+                TenantId = _tenantId,
+                DocumentId = _selected.DocumentId,
+                CreatedByUserId = _tenantAdminUserId,
+                ExpiresDateUtc = _shareForm.ExpiresDate.ToDateTime(TimeOnly.MaxValue).ToUniversalTime(),
+                MaxAccessCount = _shareForm.MaxAccessCount,
+                RequiresPin = _shareForm.RequiresPin,
+                Pin = _shareForm.Pin
+            });
+            await LoadShareLinksAsync(_selected.DocumentId);
+            ShowToast("Secure share link created.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Share link failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task LoadShareLinksAsync(Guid documentId)
+    {
+        _shareLinks.Clear();
+        var links = await Api.GetDocumentShareLinksAsync(documentId);
+        _shareLinks.AddRange(links ?? []);
+    }
+
+    private void OpenDelete(DocumentDto row)
+    {
+        _selected = row;
         _showDelete = true;
     }
 
-    async Task ExecuteDeleteAsync()
+    private void CloseDelete() => _showDelete = false;
+
+    private async Task DeleteAsync()
     {
-        if (_deleteTarget is null) return;
-        
-        _saving = true;
+        if (_selected is null) return;
+        _busy = true;
         try
         {
-            await Api.DeleteDocumentAsync(_deleteTarget.DocumentId);
+            await Api.DeleteDocumentAsync(_selected.DocumentId, _tenantAdminUserId);
             _showDelete = false;
-            await _toast.ShowAsync(new() { Content = "Document deleted successfully", CssClass = "e-toast-success" });
+            _drawerRow = null;
+            ShowToast("Document deleted.");
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Delete failed: {ex.Message}", "danger");
         }
         finally
         {
-            _saving = false;
+            _busy = false;
         }
     }
 
-    static string FormatFileSize(long bytes)
+    private async Task ArchiveAsync(DocumentDto row)
+    {
+        _busy = true;
+        try
+        {
+            await Api.ArchiveDocumentAsync(row.DocumentId, _tenantAdminUserId);
+            ShowToast("Document archived.");
+            await LoadAsync();
+            await RefreshDrawerAsync(row.DocumentId);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Archive failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OpenDetailAsync(DocumentDto row)
+    {
+        _selected = row;
+        _drawerRow = row;
+        await LoadRelatedAsync(row.DocumentId);
+    }
+
+    private void CloseDrawer() => _drawerRow = null;
+
+    private async Task RefreshDrawerAsync(Guid documentId)
+    {
+        if (_drawerRow is null) return;
+        _drawerRow = _rows.FirstOrDefault(r => r.DocumentId == documentId) ?? await Api.GetDocumentByIdAsync(documentId);
+        if (_drawerRow is not null)
+        {
+            await LoadRelatedAsync(documentId);
+        }
+    }
+
+    private async Task LoadRelatedAsync(Guid documentId)
+    {
+        _versions.Clear();
+        _accessLog.Clear();
+        var versions = await Api.GetDocumentVersionsAsync(documentId);
+        var logs = await Api.GetDocumentAccessLogAsync(documentId, 25);
+        _versions.AddRange(versions ?? []);
+        _accessLog.AddRange(logs ?? []);
+    }
+
+    private void DownloadDocument(DocumentDto row) => Nav.NavigateTo(Api.GetDocumentDownloadUrl(row.DocumentId), forceLoad: true);
+
+    private void OpenActionMenu(DocumentDto row, MouseEventArgs args)
+    {
+        _selected = row;
+        _openActionMenuFor = row.DocumentId;
+        _menuXpx = $"{Math.Min(args.ClientX, 1420)}px";
+        _menuYpx = $"{Math.Min(args.ClientY, 820)}px";
+    }
+
+    private void CloseActionMenu() => _openActionMenuFor = null;
+
+    private async Task ExecuteMenuActionAsync(string action)
+    {
+        var row = _selected;
+        CloseActionMenu();
+        if (row is null) return;
+
+        switch (action)
+        {
+            case "View":
+            case "Audit":
+                await OpenDetailAsync(row);
+                break;
+            case "Download":
+                DownloadDocument(row);
+                break;
+            case "Metadata":
+                OpenMetadata(row);
+                break;
+            case "Rename":
+                OpenRename(row);
+                break;
+            case "Version":
+                OpenVersion(row);
+                break;
+            case "Share":
+                await OpenShareAsync(row);
+                break;
+            case "Archive":
+                await ArchiveAsync(row);
+                break;
+            case "Delete":
+                OpenDelete(row);
+                break;
+        }
+    }
+
+    private RenderFragment KpiCard(string icon, string label, string value, string cssClass, string? filterKey) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "button");
+        builder.AddAttribute(seq++, "type", "button");
+        builder.AddAttribute(seq++, "class", $"pd-kpi-card {cssClass} {(Equals(_kpiFilter, filterKey) ? "pd-kpi-card--active" : string.Empty)}");
+        builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, () => SetKpiFilter(filterKey)));
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "pd-kpi-val");
+        builder.AddContent(seq++, value);
+        builder.CloseElement();
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "pd-kpi-lbl");
+        builder.OpenElement(seq++, "i");
+        builder.AddAttribute(seq++, "class", $"bi {icon}");
+        builder.AddAttribute(seq++, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.AddContent(seq++, label);
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment CtxBtn(DocumentDto row) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "button");
+        builder.AddAttribute(seq++, "type", "button");
+        builder.AddAttribute(seq++, "class", "um-btn um-btn-ghost um-btn-sm pd-ctx-btn");
+        builder.AddAttribute(seq++, "title", "Actions");
+        builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, args => OpenActionMenu(row, args)));
+        builder.AddEventStopPropagationAttribute(seq++, "onclick", true);
+        builder.OpenElement(seq++, "i");
+        builder.AddAttribute(seq++, "class", "bi bi-three-dots-vertical");
+        builder.AddAttribute(seq++, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment DrawerField(string label, string value) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "pd-meta-row");
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", "pd-meta-lbl");
+        builder.AddContent(seq++, label);
+        builder.CloseElement();
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", "pd-meta-val");
+        builder.AddContent(seq++, value);
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment CategoryChip(string category) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", $"pd-category-chip pd-category-{CssSafe(category)}");
+        builder.AddContent(seq++, string.IsNullOrWhiteSpace(category) ? "Other" : category);
+        builder.CloseElement();
+    };
+
+    private RenderFragment StatusChip(string status) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", $"pd-status pd-status-{CssSafe(status)}");
+        builder.AddContent(seq++, string.IsNullOrWhiteSpace(status) ? "Active" : status);
+        builder.CloseElement();
+    };
+
+    private RenderFragment RetentionCell(DocumentDto row) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", $"pd-retention {RetentionClass(row)}");
+        builder.AddContent(seq++, RetentionLabel(row));
+        builder.CloseElement();
+    };
+
+    private static bool IsPolicyDocument(DocumentDto document) =>
+        string.Equals(document.EntityName, "Policy", StringComparison.OrdinalIgnoreCase)
+        || IsCategory(document, "Policy")
+        || IsCategory(document, "Endorsement")
+        || IsCategory(document, "Certificate")
+        || IsCategory(document, "Binder")
+        || IsCategory(document, "Declaration")
+        || TagsFor(document).Any(t => string.Equals(t, "policy", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsCategory(DocumentDto document, string category) => string.Equals(document.CategoryCode, category, StringComparison.OrdinalIgnoreCase);
+    private static string CssSafe(string? value) => string.IsNullOrWhiteSpace(value) ? "unknown" : value.Trim().ToLowerInvariant().Replace(" ", "-");
+    private static string DocumentIcon(DocumentDto row) => row.CategoryCode switch
+    {
+        "Endorsement" => "bi-pen",
+        "Certificate" => "bi-file-earmark-check",
+        "Binder" => "bi-journal-bookmark",
+        "Declaration" => "bi-card-checklist",
+        _ => "bi-file-earmark-pdf"
+    };
+
+    private static IReadOnlyList<string> TagsFor(DocumentDto row) => string.IsNullOrWhiteSpace(row.Tags)
+        ? []
+        : row.Tags.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+
+    private static string ShortTags(DocumentDto row)
+    {
+        var tags = TagsFor(row).Take(3).ToArray();
+        return tags.Length == 0 ? "—" : string.Join(", ", tags);
+    }
+
+    private static string EnsurePolicyTag(string? tags)
+    {
+        var items = (tags ?? string.Empty).Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+        if (!items.Any(x => string.Equals(x, "policy", StringComparison.OrdinalIgnoreCase)))
+        {
+            items.Insert(0, "policy");
+        }
+        return string.Join(", ", items.Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static string RetentionLabel(DocumentDto row)
+    {
+        if (row.RetentionDate is null) return "No retention";
+        var days = row.RetentionDate.Value.DayNumber - DateOnly.FromDateTime(DateTime.Today).DayNumber;
+        return days < 0 ? "Retention due" : days <= 30 ? "Due soon" : row.RetentionDate.Value.ToString("MM/dd/yyyy");
+    }
+
+    private static string RetentionClass(DocumentDto row)
+    {
+        if (row.RetentionDate is null) return "pd-retention-none";
+        var days = row.RetentionDate.Value.DayNumber - DateOnly.FromDateTime(DateTime.Today).DayNumber;
+        return days < 0 ? "pd-retention-overdue" : days <= 30 ? "pd-retention-soon" : "pd-retention-ok";
+    }
+
+    private static string FormatFileSize(long bytes)
     {
         if (bytes < 1024) return $"{bytes} B";
         if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
@@ -350,67 +1238,50 @@
         return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
     }
 
-    static bool IsPolicyDocument(DocumentDto document) =>
-        IsPolicyCategory(document, "Policy") ||
-        IsPolicyCategory(document, "Endorsement") ||
-        IsPolicyCategory(document, "Certificate") ||
-        IsPolicyCategory(document, "Binder") ||
-        IsPolicyCategory(document, "Declaration") ||
-        string.Equals(document.EntityName, "Policy", StringComparison.OrdinalIgnoreCase) ||
-        ContainsPolicyTag(document);
-
-    static bool IsPolicyCategory(DocumentDto document, string category) =>
-        string.Equals(document.CategoryCode, category, StringComparison.OrdinalIgnoreCase);
-
-    static bool ContainsPolicyTag(DocumentDto document) =>
-        !string.IsNullOrWhiteSpace(document.Tags) &&
-        document.Tags.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Any(x => string.Equals(x, "policy", StringComparison.OrdinalIgnoreCase));
-
-    void ResetUpload() => _form = new();
-
-    sealed class PolicyDocumentFormModel
+    private void ShowToast(string message, string kind = "success")
     {
-        [Required(ErrorMessage = "File Name is required.")]
-        [StringLength(260, ErrorMessage = "File Name cannot exceed 260 characters.")]
-        public string FileName { get; set; } = string.Empty;
-
-        [Required(ErrorMessage = "Document Type is required.")]
-        [StringLength(100, ErrorMessage = "Document Type cannot exceed 100 characters.")]
-        public string DocumentTypeCode { get; set; } = "Policy";
-
-        [Required(ErrorMessage = "Category is required.")]
-        [StringLength(100, ErrorMessage = "Category cannot exceed 100 characters.")]
-        public string CategoryCode { get; set; } = "Policy";
-
-        [Required(ErrorMessage = "Storage Path is required.")]
-        [StringLength(500, ErrorMessage = "Storage Path cannot exceed 500 characters.")]
-        public string StoragePath { get; set; } = string.Empty;
-
-        [StringLength(200, ErrorMessage = "Content Type cannot exceed 200 characters.")]
-        public string? ContentType { get; set; } = "application/pdf";
-
-        [Range(0, long.MaxValue, ErrorMessage = "File Size must be zero or greater.")]
-        public long? FileSizeBytes { get; set; }
-
-        [StringLength(200, ErrorMessage = "Uploaded By cannot exceed 200 characters.")]
-        public string? UploadedByName { get; set; }
-
-        [StringLength(500, ErrorMessage = "Tags cannot exceed 500 characters.")]
-        public string? Tags { get; set; } = "policy";
-
-        [StringLength(1000, ErrorMessage = "Description cannot exceed 1000 characters.")]
-        public string? Description { get; set; }
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private void HideToast() => _toastVisible = false;
+    private Task NotifyValidationAsync() { ShowToast("Review required fields before continuing.", "danger"); return Task.CompletedTask; }
+
+    private sealed record TabDef(string Key, string Label, string Icon);
+
+    private sealed class UploadForm
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        [Required, StringLength(260)] public string FileName { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string DocumentTypeCode { get; set; } = "Declarations";
+        [Required, StringLength(100)] public string CategoryCode { get; set; } = "Policy";
+        [StringLength(500)] public string? Tags { get; set; } = "policy";
+        [StringLength(1000)] public string? Description { get; set; }
+        public DateOnly? RetentionDate { get; set; } = DateOnly.FromDateTime(DateTime.Today.AddYears(7));
+    }
+
+    private sealed class MetadataForm
+    {
+        [StringLength(500)] public string? Tags { get; set; }
+        [StringLength(1000)] public string? Description { get; set; }
+        public DateOnly? RetentionDate { get; set; }
+    }
+
+    private sealed class RenameForm
+    {
+        [Required, StringLength(260)] public string NewFileName { get; set; } = string.Empty;
+    }
+
+    private sealed class VersionForm
+    {
+        [StringLength(1000)] public string? ChangeNotes { get; set; }
+    }
+
+    private sealed class ShareForm
+    {
+        [Required] public DateOnly ExpiresDate { get; set; } = DateOnly.FromDateTime(DateTime.Today.AddDays(14));
+        [Range(1, 10000)] public int? MaxAccessCount { get; set; } = 10;
+        public bool RequiresPin { get; set; }
+        [StringLength(50)] public string? Pin { get; set; }
     }
 }

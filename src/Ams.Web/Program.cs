@@ -2,10 +2,14 @@ using Ams.Web;
 using Ams.Web.Components;
 using Ams.Web.Security;
 using Ams.Web.Services;
+using Ams.Application.Common.Dtos;
+using Ams.Application.Common.Models;
+using Ams.Infrastructure.DependencyInjection;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Threading.RateLimiting;
 using Syncfusion.Blazor;
 using System.Security.Claims;
 
@@ -17,6 +21,58 @@ if (!string.IsNullOrWhiteSpace(syncfusionKey))
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
+
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add(new IgnoreAntiforgeryTokenAttribute());
+});
+
+builder.Services.Configure<ContactIntakeSecurityOptions>(builder.Configuration.GetSection("ContactIntake:Security"));
+
+var contactAllowedOrigins = builder.Configuration.GetSection("ContactIntake:AllowedOrigins").Get<string[]>() ?? [];
+var contactSecurityOptions = builder.Configuration.GetSection("ContactIntake:Security").Get<ContactIntakeSecurityOptions>() ?? new();
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("ContactIntake", policy =>
+    {
+        if (contactAllowedOrigins.Length > 0)
+        {
+            policy.WithOrigins(contactAllowedOrigins)
+                .WithMethods("POST", "OPTIONS")
+                .WithHeaders(
+                    "content-type",
+                    "x-requested-with",
+                    "x-contact-rendered-at",
+                    "x-contact-elapsed-ms",
+                    "x-contact-honeypot")
+                .SetPreflightMaxAge(TimeSpan.FromHours(1));
+        }
+    });
+});
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("ContactIntake", httpContext =>
+    {
+        var forwardedFor = httpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault();
+        var ipAddress = forwardedFor?.Split(',').FirstOrDefault()?.Trim();
+        if (string.IsNullOrWhiteSpace(ipAddress))
+            ipAddress = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        var userAgent = httpContext.Request.Headers.UserAgent.ToString();
+        var partitionKey = $"{ipAddress}|{userAgent.GetHashCode(StringComparison.Ordinal)}";
+
+        return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = Math.Max(1, contactSecurityOptions.PermitLimit),
+            Window = TimeSpan.FromMinutes(Math.Max(1, contactSecurityOptions.WindowMinutes)),
+            QueueLimit = Math.Max(0, contactSecurityOptions.QueueLimit),
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            AutoReplenishment = true
+        });
+    });
+});
 
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
@@ -42,6 +98,9 @@ builder.Services.AddAuthorization(options =>
 });
 builder.Services.AddSingleton<IAuthorizationHandler, PermissionAuthorizationHandler>();
 builder.Services.AddCascadingAuthenticationState();
+builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.Configure<ContactIntakeNotificationOptions>(builder.Configuration.GetSection("ContactIntake:Notification"));
+builder.Services.AddScoped<IContactIntakeNotificationService, SmtpContactIntakeNotificationService>();
 
 builder.Services.AddSyncfusionBlazor();
 
@@ -73,6 +132,8 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseCors();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
@@ -96,7 +157,16 @@ app.MapPost("/auth/sign-in", async (
         return Results.Redirect(loginRedirect("Enter your organization, email, and password.", form));
     }
 
-    var tenantResult = await apiClient.SearchTenantsAsync(tenantText, 1, 25, cancellationToken);
+    PagedResult<TenantDto>? tenantResult;
+    try
+    {
+        tenantResult = await apiClient.SearchTenantsAsync(tenantText, 1, 25, cancellationToken);
+    }
+    catch (HttpRequestException ex)
+    {
+        return Results.Redirect(loginRedirect($"The AMS API could not be reached or returned an error: {ex.Message}", form));
+    }
+
     var tenant = tenantResult?.Items.FirstOrDefault(t =>
         string.Equals(t.TenantCode, tenantText, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(t.TenantName, tenantText, StringComparison.OrdinalIgnoreCase) ||
@@ -108,7 +178,16 @@ app.MapPost("/auth/sign-in", async (
         return Results.Redirect(loginRedirect("The organization is not active or could not be found.", form));
     }
 
-    var user = await apiClient.ValidateLoginAsync(tenant.TenantId, email, password, cancellationToken);
+    AuthenticatedUserDto? user;
+    try
+    {
+        user = await apiClient.ValidateLoginAsync(tenant.TenantId, email, password, cancellationToken);
+    }
+    catch (HttpRequestException ex)
+    {
+        return Results.Redirect(loginRedirect($"The AMS API could not validate the credentials: {ex.Message}", form));
+    }
+
     if (user is null)
     {
         return Results.Redirect(loginRedirect("The credentials provided could not be verified.", form));
@@ -163,6 +242,8 @@ app.MapGet("/auth/sign-out", async (HttpContext httpContext) =>
     await httpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Redirect("/login?signedOut=true");
 });
+
+app.MapControllers();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

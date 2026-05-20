@@ -6,6 +6,7 @@ using Ams.Infrastructure.Persistence;
 using Ams.Infrastructure.Persistence.ConnectionFactory;
 using Ams.Infrastructure.Persistence.Repositories;
 using Ams.Infrastructure.Persistence.TypeHandlers;
+using Ams.Infrastructure.Services;
 using Dapper;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,8 +25,17 @@ public static class ServiceCollectionExtensions
             options.ConnectionString = configuration.GetConnectionString("DefaultConnection") ?? string.Empty;
         });
 
+        services.Configure<DocumentStorageOptions>(options =>
+        {
+            var section = configuration.GetSection("DocumentStorage");
+            options.ConnectionString = section[nameof(DocumentStorageOptions.ConnectionString)] ?? string.Empty;
+            options.AccountUri = section[nameof(DocumentStorageOptions.AccountUri)] ?? string.Empty;
+            options.ContainerName = section[nameof(DocumentStorageOptions.ContainerName)] ?? "documents";
+        });
+
         services.AddScoped<ISqlConnectionFactory, SqlConnectionFactory>();
         services.AddTransient<DatabaseMigrator>();
+        services.AddScoped<IDocumentStorageService, AzureBlobDocumentStorageService>();
 
         // ── Existing repositories ────────────────────────────────────
         services.AddScoped<ILeadRepository, LeadRepository>();
@@ -57,6 +67,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionTransactionRepository, CommissionTransactionRepository>();
         services.AddScoped<ICommissionPayoutRepository, CommissionPayoutRepository>();
         services.AddScoped<IDocumentRepository, DocumentRepository>();
+        services.AddScoped<IContactIntakeRepository, ContactIntakeRepository>();
         services.AddScoped<IAssistantMessageRepository, AssistantMessageRepository>();
         services.AddScoped<IDashboardRepository, DashboardRepository>();
         services.AddScoped<IAgencyDashboardRepository, AgencyDashboardRepository>();
@@ -98,6 +109,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IFinanceService, FinanceService>();
         services.AddScoped<ICommissionService, CommissionService>();
         services.AddScoped<IDocumentService, DocumentService>();
+        services.AddScoped<IContactIntakeService, ContactIntakeService>();
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IAgencyDashboardService, AgencyDashboardService>();
         services.AddScoped<AdminPagesService>();
@@ -221,6 +233,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IMarketingWorkbenchService, MarketingWorkbenchService>();
         services.AddScoped<IOperationsWorkbenchRepository, OperationsWorkbenchRepository>();
         services.AddScoped<IOperationsWorkbenchService, OperationsWorkbenchService>();
+        services.AddScoped<IRenewalRetentionRepository, RenewalRetentionRepository>();
+        services.AddScoped<IRenewalRetentionService, RenewalRetentionService>();
 
         // ── Client and Account engines ───────────────────────────────
         services.AddScoped<IAccountNoteRepository, AccountNoteRepository>();
@@ -375,6 +389,14 @@ public static class ServiceCollectionExtensions
         // ── Submissions & Quoting Engine ─────────────────────────────
         services.AddScoped<ISubmissionRepository, SubmissionRepository>();
         services.AddScoped<ISubmissionService, SubmissionService>();
+
+        // ── Policy Endorsements Workflow ─────────────────────────────
+        services.AddScoped<IPolicyEndorsementRepository, PolicyEndorsementRepository>();
+        services.AddScoped<IPolicyEndorsementService, PolicyEndorsementService>();
+
+        // ── Policy Cancellations Workflow ────────────────────────────
+        services.AddScoped<IPolicyCancellationRepository, PolicyCancellationRepository>();
+        services.AddScoped<IPolicyCancellationService, PolicyCancellationService>();
 
         // ── Documents — E-Sign (Epic 11) ─────────────────────────────
         services.AddScoped<IESignRepository, ESignRepository>();

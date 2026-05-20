@@ -12,6 +12,7 @@ public interface INotificationRepository
     Task<Guid> CreateAsync(CreateNotificationRequest request, CancellationToken cancellationToken = default);
     Task SetReadAsync(Guid notificationId, bool isRead, CancellationToken cancellationToken = default);
     Task SetStatusAsync(Guid notificationId, string statusCode, CancellationToken cancellationToken = default);
+    Task RetryAsync(Guid notificationId, string? providerName = null, CancellationToken cancellationToken = default);
     Task MarkAllReadAsync(Guid tenantId, Guid recipientUserId, CancellationToken cancellationToken = default);
     Task DeleteAsync(Guid notificationId, CancellationToken cancellationToken = default);
     Task DeleteReadAsync(Guid tenantId, Guid recipientUserId, CancellationToken cancellationToken = default);

@@ -11,5 +11,9 @@ public sealed class ThreadMessageDto
     public DateTime SentAt          { get; init; }
     public string   DeliveryStatus  { get; init; } = "Delivered";
     public bool     IsAutomated     { get; init; }
+    public string   ExternalMessageId { get; init; } = string.Empty;
+    public string   ProviderName    { get; init; } = string.Empty;
+    public DateTime? DeliveredAtUtc { get; init; }
+    public DateTime? ReadAtUtc      { get; init; }
     public IReadOnlyList<string> Attachments { get; init; } = [];
 }

@@ -31,6 +31,9 @@ public sealed class NotificationService : INotificationService
     public Task SetStatusAsync(Guid notificationId, string statusCode, CancellationToken cancellationToken = default)
         => _repository.SetStatusAsync(notificationId, statusCode, cancellationToken);
 
+    public Task RetryAsync(Guid notificationId, string? providerName = null, CancellationToken cancellationToken = default)
+        => _repository.RetryAsync(notificationId, providerName, cancellationToken);
+
     public Task MarkAllReadAsync(Guid tenantId, Guid recipientUserId, CancellationToken cancellationToken = default)
         => _repository.MarkAllReadAsync(tenantId, recipientUserId, cancellationToken);
 

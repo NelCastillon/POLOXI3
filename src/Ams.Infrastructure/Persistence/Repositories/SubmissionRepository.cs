@@ -25,40 +25,32 @@ public sealed class SubmissionRepository : ISubmissionRepository
         const string sql = @"
 ;WITH Cte AS
 (
-    SELECT o.OpportunityId AS SubmissionId,
-           o.TenantId,
-           o.AccountId,
+    SELECT s.SubmissionId,
+           s.TenantId,
+           s.AccountId,
            a.AccountName,
-           o.OpportunityId,
-           o.OpportunityName,
-           'SUB-' + RIGHT(REPLACE(CONVERT(varchar(36), o.OpportunityId), '-', ''), 8) AS SubmissionNumber,
-           COALESCE(NULLIF(o.ForecastCategoryCode, ''), 'General Liability') AS LineOfBusiness,
-           CASE
-               WHEN o.Stage = 'Closed Won' OR o.StatusCodeId = 5 THEN 'Bound'
-               WHEN o.Stage = 'Closed Lost' OR o.StatusCodeId = 6 THEN 'Declined'
-               WHEN o.Stage IN ('Proposal', 'Negotiation') THEN 'Quoted'
-               WHEN o.Stage = 'Needs Analysis' THEN 'In Review'
-               ELSE 'New'
-           END AS Status,
-           CASE
-               WHEN o.EstimatedAmount >= 100000 THEN 'High'
-               WHEN o.EstimatedAmount >= 25000 THEN 'Normal'
-               ELSE 'Low'
-           END AS Priority,
-           o.OwnerUserId AS AssignedToUserId,
-           NULL AS AssignedToUserName,
-           CAST(COALESCE(o.CloseDate, o.EstimatedCloseDate, DATEADD(day, 30, SYSUTCDATETIME())) AS datetime2) AS EffectiveDate,
-           DATEADD(year, 1, CAST(COALESCE(o.CloseDate, o.EstimatedCloseDate, DATEADD(day, 30, SYSUTCDATETIME())) AS datetime2)) AS ExpirationDate,
-           o.EstimatedAmount AS TargetPremium,
-           0 AS MarketCount,
-           (SELECT COUNT(1) FROM CRM.Quote q WHERE q.OpportunityId = o.OpportunityId AND q.IsDeleted = 0) AS QuoteCount,
-           o.CreatedDateUtc,
-           o.ModifiedDateUtc
-    FROM   CRM.Opportunity o
-    JOIN   Client.Account a ON a.AccountId = o.AccountId
-    WHERE  o.TenantId = @TenantId
-      AND  o.IsDeleted = 0
-      AND  (@SearchTerm IS NULL OR @SearchTerm = '' OR o.OpportunityName LIKE '%' + @SearchTerm + '%' OR o.OpportunityNumber LIKE '%' + @SearchTerm + '%' OR a.AccountName LIKE '%' + @SearchTerm + '%')
+           s.OpportunityId,
+           COALESCE(o.OpportunityName, s.SubmissionNumber) AS OpportunityName,
+           s.SubmissionNumber,
+           s.LineOfBusiness,
+           s.Status,
+           s.Priority,
+           s.AssignedToUserId,
+           COALESCE(u.FullName, u.DisplayName, u.UserName) AS AssignedToUserName,
+           s.EffectiveDate,
+           s.ExpirationDate,
+           s.TargetPremium,
+           (SELECT COUNT(1) FROM Submissions.SubmissionMarket sm WHERE sm.SubmissionId = s.SubmissionId AND sm.IsDeleted = 0) AS MarketCount,
+           (SELECT COUNT(1) FROM Submissions.Quote q WHERE q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0) AS QuoteCount,
+           s.CreatedDateUtc,
+           s.ModifiedDateUtc
+    FROM   Submissions.Submission s
+    JOIN   Client.Account a ON a.AccountId = s.AccountId
+    LEFT JOIN CRM.Opportunity o ON o.OpportunityId = s.OpportunityId
+    LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
+    WHERE  s.TenantId = @TenantId
+      AND  s.IsDeleted = 0
+      AND  (@SearchTerm IS NULL OR @SearchTerm = '' OR s.SubmissionNumber LIKE '%' + @SearchTerm + '%' OR s.LineOfBusiness LIKE '%' + @SearchTerm + '%' OR a.AccountName LIKE '%' + @SearchTerm + '%' OR o.OpportunityName LIKE '%' + @SearchTerm + '%')
 ),
 Filtered AS
 (
@@ -73,19 +65,13 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
 
 ;WITH Cte AS
 (
-    SELECT COALESCE(NULLIF(o.ForecastCategoryCode, ''), 'General Liability') AS LineOfBusiness,
-           CASE
-               WHEN o.Stage = 'Closed Won' OR o.StatusCodeId = 5 THEN 'Bound'
-               WHEN o.Stage = 'Closed Lost' OR o.StatusCodeId = 6 THEN 'Declined'
-               WHEN o.Stage IN ('Proposal', 'Negotiation') THEN 'Quoted'
-               WHEN o.Stage = 'Needs Analysis' THEN 'In Review'
-               ELSE 'New'
-           END AS Status
-    FROM   CRM.Opportunity o
-    JOIN   Client.Account a ON a.AccountId = o.AccountId
-    WHERE  o.TenantId = @TenantId
-      AND  o.IsDeleted = 0
-      AND  (@SearchTerm IS NULL OR @SearchTerm = '' OR o.OpportunityName LIKE '%' + @SearchTerm + '%' OR o.OpportunityNumber LIKE '%' + @SearchTerm + '%' OR a.AccountName LIKE '%' + @SearchTerm + '%')
+    SELECT s.LineOfBusiness, s.Status
+    FROM   Submissions.Submission s
+    JOIN   Client.Account a ON a.AccountId = s.AccountId
+    LEFT JOIN CRM.Opportunity o ON o.OpportunityId = s.OpportunityId
+    WHERE  s.TenantId = @TenantId
+      AND  s.IsDeleted = 0
+      AND  (@SearchTerm IS NULL OR @SearchTerm = '' OR s.SubmissionNumber LIKE '%' + @SearchTerm + '%' OR s.LineOfBusiness LIKE '%' + @SearchTerm + '%' OR a.AccountName LIKE '%' + @SearchTerm + '%' OR o.OpportunityName LIKE '%' + @SearchTerm + '%')
 ),
 Filtered AS
 (
@@ -114,38 +100,30 @@ SELECT COUNT(1) FROM Filtered;";
     public async Task<SubmissionDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-SELECT o.OpportunityId AS SubmissionId,
-       o.TenantId,
-       o.AccountId,
+SELECT s.SubmissionId,
+       s.TenantId,
+       s.AccountId,
        a.AccountName,
-       o.OpportunityId,
-       o.OpportunityName,
-       'SUB-' + RIGHT(REPLACE(CONVERT(varchar(36), o.OpportunityId), '-', ''), 8) AS SubmissionNumber,
-       COALESCE(NULLIF(o.ForecastCategoryCode, ''), 'General Liability') AS LineOfBusiness,
-       CASE
-           WHEN o.Stage = 'Closed Won' OR o.StatusCodeId = 5 THEN 'Bound'
-           WHEN o.Stage = 'Closed Lost' OR o.StatusCodeId = 6 THEN 'Declined'
-           WHEN o.Stage IN ('Proposal', 'Negotiation') THEN 'Quoted'
-           WHEN o.Stage = 'Needs Analysis' THEN 'In Review'
-           ELSE 'New'
-       END AS Status,
-       CASE
-           WHEN o.EstimatedAmount >= 100000 THEN 'High'
-           WHEN o.EstimatedAmount >= 25000 THEN 'Normal'
-           ELSE 'Low'
-       END AS Priority,
-       o.OwnerUserId AS AssignedToUserId,
-       NULL AS AssignedToUserName,
-       CAST(COALESCE(o.CloseDate, o.EstimatedCloseDate, DATEADD(day, 30, SYSUTCDATETIME())) AS datetime2) AS EffectiveDate,
-       DATEADD(year, 1, CAST(COALESCE(o.CloseDate, o.EstimatedCloseDate, DATEADD(day, 30, SYSUTCDATETIME())) AS datetime2)) AS ExpirationDate,
-       o.EstimatedAmount AS TargetPremium,
-       0 AS MarketCount,
-       (SELECT COUNT(1) FROM CRM.Quote q WHERE q.OpportunityId = o.OpportunityId AND q.IsDeleted = 0) AS QuoteCount,
-       o.CreatedDateUtc,
-       o.ModifiedDateUtc
-FROM   CRM.Opportunity o
-JOIN   Client.Account a ON a.AccountId = o.AccountId
-WHERE  o.OpportunityId = @Id AND o.IsDeleted = 0;";
+       s.OpportunityId,
+       COALESCE(o.OpportunityName, s.SubmissionNumber) AS OpportunityName,
+       s.SubmissionNumber,
+       s.LineOfBusiness,
+       s.Status,
+       s.Priority,
+       s.AssignedToUserId,
+       COALESCE(u.FullName, u.DisplayName, u.UserName) AS AssignedToUserName,
+       s.EffectiveDate,
+       s.ExpirationDate,
+       s.TargetPremium,
+       (SELECT COUNT(1) FROM Submissions.SubmissionMarket sm WHERE sm.SubmissionId = s.SubmissionId AND sm.IsDeleted = 0) AS MarketCount,
+       (SELECT COUNT(1) FROM Submissions.Quote q WHERE q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0) AS QuoteCount,
+       s.CreatedDateUtc,
+       s.ModifiedDateUtc
+FROM   Submissions.Submission s
+JOIN   Client.Account a ON a.AccountId = s.AccountId
+LEFT JOIN CRM.Opportunity o ON o.OpportunityId = s.OpportunityId
+LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
+WHERE  s.SubmissionId = @Id AND s.IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await cn.QuerySingleOrDefaultAsync<SubmissionDto>(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }
@@ -217,6 +195,148 @@ SET    AssignedToUserId = @AssignedToUserId,
 WHERE  SubmissionId = @Id AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.AssignedToUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @CarrierId UNIQUEIDENTIFIER = COALESCE(@CarrierIdIn, (SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CarrierName));
+IF @CarrierId IS NULL THROW 52000, 'No carrier is available for this tenant.', 1;
+
+DECLARE @MarketId UNIQUEIDENTIFIER = (SELECT TOP 1 SubmissionMarketId FROM Submissions.SubmissionMarket WHERE SubmissionId = @SubmissionId AND CarrierId = @CarrierId AND IsDeleted = 0);
+IF @MarketId IS NULL
+BEGIN
+    SET @MarketId = NEWID();
+    INSERT INTO Submissions.SubmissionMarket (SubmissionMarketId, SubmissionId, CarrierId, Status, AppetiteScore, IsRecommended, DeclineReason, AddedDateUtc, RespondedDateUtc, IsDeleted)
+    VALUES (@MarketId, @SubmissionId, @CarrierId, N'Submitted', 80, 1, NULL, SYSUTCDATETIME(), NULL, 0);
+END
+ELSE
+BEGIN
+    UPDATE Submissions.SubmissionMarket
+    SET Status = N'Submitted', DeclineReason = NULL, RespondedDateUtc = NULL
+    WHERE SubmissionMarketId = @MarketId;
+END
+
+UPDATE Submissions.Submission
+SET Status = CASE WHEN Status IN (N'Bound', N'Declined', N'Withdrawn') THEN Status ELSE N'In Review' END,
+    MarketCount = (SELECT COUNT(1) FROM Submissions.SubmissionMarket WHERE SubmissionId = @SubmissionId AND IsDeleted = 0),
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'SubmitToMarket', COALESCE(@Notes, N'Submitted to market.'), SYSUTCDATETIME(), 0);
+
+SELECT @MarketId;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var marketId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { SubmissionId = id, request.TenantId, CarrierIdIn = request.CarrierId, request.Notes }, cancellationToken: cancellationToken));
+        return new SubmissionActionResult(marketId, "Submission sent to market.");
+    }
+
+    public async Task<SubmissionActionResult> RequestQuoteAsync(Guid id, RequestSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @CarrierId UNIQUEIDENTIFIER = COALESCE(@CarrierIdIn, (SELECT TOP 1 CarrierId FROM Submissions.SubmissionMarket WHERE SubmissionId = @SubmissionId AND IsDeleted = 0 ORDER BY IsRecommended DESC, AddedDateUtc DESC), (SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CarrierName));
+IF @CarrierId IS NULL THROW 52001, 'No carrier is available for quote request.', 1;
+
+DECLARE @QuoteId UNIQUEIDENTIFIER = NEWID();
+DECLARE @Premium DECIMAL(18,2) = COALESCE(@AnnualPremium, (SELECT NULLIF(TargetPremium, 0) FROM Submissions.Submission WHERE SubmissionId = @SubmissionId), 50000);
+
+INSERT INTO Submissions.Quote (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
+VALUES (@QuoteId, @SubmissionId, @CarrierId, N'QT-' + CONVERT(NVARCHAR(8), SYSUTCDATETIME(), 112) + N'-' + RIGHT(REPLACE(CONVERT(NVARCHAR(36), @QuoteId), N'-', N''), 6), N'Requested', @Premium, COALESCE(@Deductible, 2500), COALESCE(@Limit, 1000000), COALESCE(@CoverageNotes, N'Enterprise quote requested from submissions register.'), SYSUTCDATETIME(), DATEADD(day, 30, SYSUTCDATETIME()), SYSUTCDATETIME(), 0);
+
+UPDATE Submissions.Submission
+SET Status = N'Quoted',
+    QuoteCount = (SELECT COUNT(1) FROM Submissions.Quote WHERE SubmissionId = @SubmissionId AND IsDeleted = 0),
+    TargetPremium = COALESCE(TargetPremium, @Premium),
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'RequestQuote', COALESCE(@CoverageNotes, N'Quote requested.'), SYSUTCDATETIME(), 0);
+
+SELECT @QuoteId;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var quoteId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { SubmissionId = id, request.TenantId, CarrierIdIn = request.CarrierId, request.AnnualPremium, request.Deductible, request.Limit, request.CoverageNotes }, cancellationToken: cancellationToken));
+        return new SubmissionActionResult(quoteId, "Quote requested.");
+    }
+
+    public async Task<SubmissionActionResult> CopyAsync(Guid id, CopySubmissionRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @NewSubmissionId UNIQUEIDENTIFIER = NEWID();
+INSERT INTO Submissions.Submission (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium, MarketCount, QuoteCount, CreatedDateUtc, IsDeleted)
+SELECT @NewSubmissionId, TenantId, AccountId, OpportunityId,
+       N'SUB-' + CONVERT(NVARCHAR(8), SYSUTCDATETIME(), 112) + N'-' + RIGHT(REPLACE(CONVERT(NVARCHAR(36), @NewSubmissionId), N'-', N''), 6),
+       COALESCE(NULLIF(@LineOfBusiness, N''), LineOfBusiness),
+       N'New',
+       COALESCE(NULLIF(@Priority, N''), Priority),
+       AssignedToUserId,
+       COALESCE(@EffectiveDate, DATEADD(year, 1, EffectiveDate)),
+       DATEADD(year, 1, COALESCE(@EffectiveDate, DATEADD(year, 1, EffectiveDate))),
+       TargetPremium,
+       0,
+       0,
+       SYSUTCDATETIME(),
+       0
+FROM Submissions.Submission
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF @@ROWCOUNT = 0 THROW 52002, 'Submission was not found for copy.', 1;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), @NewSubmissionId, @TenantId, N'Copy', N'Copied from source submission.', SYSUTCDATETIME(), 0);
+
+SELECT @NewSubmissionId;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var newId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { SubmissionId = id, request.TenantId, request.EffectiveDate, request.LineOfBusiness, request.Priority }, cancellationToken: cancellationToken));
+        return new SubmissionActionResult(newId, "Submission copied.");
+    }
+
+    public async Task<SubmissionActionResult> DeclineAsync(Guid id, DeclineSubmissionRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE Submissions.Submission
+SET Status = N'Declined', ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF @@ROWCOUNT = 0 THROW 52003, 'Submission was not found for decline.', 1;
+
+UPDATE Submissions.SubmissionMarket
+SET Status = CASE WHEN Status IN (N'Bound', N'Declined') THEN Status ELSE N'Declined' END,
+    DeclineReason = COALESCE(NULLIF(DeclineReason, N''), @Reason),
+    RespondedDateUtc = COALESCE(RespondedDateUtc, SYSUTCDATETIME())
+WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'Decline', @Reason, SYSUTCDATETIME(), 0);
+
+SELECT @SubmissionId;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var declinedId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { SubmissionId = id, request.TenantId, request.Reason }, cancellationToken: cancellationToken));
+        return new SubmissionActionResult(declinedId, "Submission declined.");
+    }
+
+    public async Task<SubmissionActionResult> CreatePolicyAsync(Guid id, CreatePolicyFromSubmissionRequest request, CancellationToken cancellationToken = default)
+    {
+        var submission = await GetByIdAsync(id, cancellationToken) ?? throw new InvalidOperationException("Submission was not found for policy creation.");
+        var quote = request.QuoteId.HasValue ? await GetQuoteByIdAsync(request.QuoteId.Value, cancellationToken) : null;
+        if (quote is null)
+        {
+            var quotes = await GetQuoteComparisonAsync(id, cancellationToken);
+            quote = quotes.OrderByDescending(q => q.AnnualPremium).FirstOrDefault();
+        }
+
+        if (quote is null)
+        {
+            var quoteResult = await RequestQuoteAsync(id, new RequestSubmissionQuoteRequest(request.TenantId, request.CarrierId, request.AnnualPremium, null, null, "Quote generated for policy creation."), cancellationToken);
+            quote = await GetQuoteByIdAsync(quoteResult.Id, cancellationToken);
+        }
+
+        if (quote is null)
+            throw new InvalidOperationException("Unable to create or resolve a quote for policy creation.");
+
+        var policyId = await BindPolicyAsync(new BindPolicyRequest(id, quote.QuoteId, request.TenantId, submission.AccountId, request.CarrierId ?? quote.CarrierId, request.AnnualPremium ?? quote.AnnualPremium, request.EffectiveDate ?? submission.EffectiveDate, request.ExpirationDate ?? submission.ExpirationDate), cancellationToken);
+        return new SubmissionActionResult(policyId, "Policy created from submission.");
     }
 
     // ── Markets ───────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 @page "/platform/settings"
+@using System.ComponentModel.DataAnnotations
 @using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject NavigationManager Nav
@@ -33,6 +34,13 @@
 else
 {
     <div class="ps-container">
+        @if (!string.IsNullOrWhiteSpace(_loadError))
+        {
+            <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+                @_loadError
+            </div>
+        }
+
         <SfTab @bind-SelectedItem="_selectedTab" CssClass="ps-tabs">
             <TabItems>
                 <TabItem>
@@ -202,6 +210,36 @@ else
                         </div>
                     </ContentTemplate>
                 </TabItem>
+
+                <TabItem>
+                    <ChildContent>
+                        <TabHeader Text="Marketing Notifications" IconCss="bi bi-envelope-at" />
+                    </ChildContent>
+                    <ContentTemplate>
+                        <div class="ps-tab-content">
+                            <h6 class="ps-section-title">Marketing Notifications</h6>
+                            <p class="ps-section-desc">Configure recipients for public website contact and demo request notifications.</p>
+                            @foreach (var s in GetByModule("Marketing"))
+                            {
+                                <div class="ps-field-row">
+                                    <label class="ps-label" title="@s.SettingKey">@FriendlyName(s.SettingKey)</label>
+                                    <div class="ps-input">
+                                        @RenderInput(s)
+                                        @if (TryGetValidationError(s.SettingId, out var validationError))
+                                        {
+                                            <div class="text-danger">@validationError</div>
+                                        }
+                                    </div>
+                                    <span class="ps-desc">@s.Description</span>
+                                    @if (!string.IsNullOrEmpty(s.DefaultValue))
+                                    {
+                                        <span class="ps-default-badge" title="Default value">Default: @s.DefaultValue</span>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </ContentTemplate>
+                </TabItem>
             </TabItems>
         </SfTab>
     </div>
@@ -211,8 +249,10 @@ else
     private SfToast _toast = null!;
     private int _selectedTab;
     private bool _loading = true;
+    private string? _loadError;
     private List<ConfigurationSettingDto> _settings = new();
     private readonly Dictionary<Guid, string?> _editedValues = new();
+    private readonly Dictionary<Guid, string> _validationErrors = new();
 
     // Known enum-type fields rendered as dropdowns instead of free-text inputs
     private static readonly Dictionary<string, List<string>> KnownDropdownOptions = new()
@@ -239,13 +279,15 @@ else
         _editedValues.Clear();
         try
         {
+            _loadError = null;
             var result = await Api.GetConfigurationByScopeAsync("Platform");
             _settings = result ?? new();
             foreach (var s in _settings)
                 _editedValues[s.SettingId] = s.SettingValue;
         }
-        catch
+        catch (Exception ex)
         {
+            _loadError = $"Settings failed to load: {ex.Message}";
             _settings = new();
         }
         _loading = false;
@@ -317,6 +359,15 @@ else
         var changedCount = 0;
         try
         {
+            _validationErrors.Clear();
+            ValidateSettings();
+
+            if (_validationErrors.Count > 0)
+            {
+                await _toast.ShowAsync(new ToastModel { Title = "Validation", Content = "Fix validation errors before saving.", CssClass = "e-toast-danger" });
+                return;
+            }
+
             foreach (var s in _settings)
             {
                 if (_editedValues.TryGetValue(s.SettingId, out var newValue) && newValue != s.SettingValue)
@@ -338,11 +389,41 @@ else
         }
     }
 
+    private void ValidateSettings()
+    {
+        foreach (var setting in _settings)
+        {
+            if (!string.Equals(setting.SettingKey, "Platform.ContactIntakeNotificationRecipientEmail", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var value = _editedValues.GetValueOrDefault(setting.SettingId, setting.SettingValue)?.Trim();
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                _validationErrors[setting.SettingId] = "Recipient email is required.";
+                continue;
+            }
+
+            if (value.Length > 256)
+            {
+                _validationErrors[setting.SettingId] = "Recipient email cannot exceed 256 characters.";
+                continue;
+            }
+
+            if (!new EmailAddressAttribute().IsValid(value))
+                _validationErrors[setting.SettingId] = "Enter a valid recipient email address.";
+        }
+    }
+
+    private bool TryGetValidationError(Guid settingId, out string validationError)
+        => _validationErrors.TryGetValue(settingId, out validationError!);
+
     private static string FriendlyName(string settingKey)
     {
         var name = settingKey;
         if (name.StartsWith("Platform."))
             name = name["Platform.".Length..];
+        if (name.StartsWith("ContactIntake"))
+            name = name["ContactIntake".Length..];
 
         // Insert spaces before capital letters
         var result = new System.Text.StringBuilder();
@@ -363,8 +444,14 @@ else
             .Replace(" Dms",  " DMS")
             .Replace("Crm ",  "CRM ")
             .Replace(" Crm",  " CRM")
+            .Replace("Smtp ", "SMTP ")
+            .Replace(" Smtp", " SMTP")
             .Replace("Gb",    "GB")
             .Replace("Url",   "URL")
             .Replace("Pct",   "%");
     }
 }
+
+<style>
+    @@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
+</style>

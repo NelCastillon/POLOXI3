@@ -17,4 +17,14 @@ public sealed class NotificationDto
     public DateTime? SentDateUtc { get; set; }
     public string? ErrorMessage { get; set; }
     public DateTime CreatedDateUtc { get; set; }
+    public string Priority { get; set; } = "Normal";
+    public string Category { get; set; } = "General";
+    public string DeliveryProvider { get; set; } = "AMS";
+    public string DeliveryStatus { get; set; } = "Queued";
+    public string PolicyStatus { get; set; } = "Compliant";
+    public string SyncStatus { get; set; } = "Synced";
+    public int AttemptCount { get; set; }
+    public DateTime? LastAttemptDateUtc { get; set; }
+    public DateTime? DeliveredDateUtc { get; set; }
+    public DateTime? LastSyncedDateUtc { get; set; }
 }

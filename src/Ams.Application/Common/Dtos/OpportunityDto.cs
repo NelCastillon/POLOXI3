@@ -15,4 +15,10 @@ public sealed class OpportunityDto
     public decimal WinProbability { get; set; }
     public string? ForecastCategoryCode { get; set; }
     public Guid? LeadId { get; set; }
+    public string? StageName { get; set; }
+    public string? Description { get; set; }
+    public DateTime CreatedDateUtc { get; set; }
+    public DateTime? ModifiedDateUtc { get; set; }
+    public string? OwnerName { get; set; }
+    public string? SourceLead { get; set; }
 }

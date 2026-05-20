@@ -14,6 +14,14 @@ public sealed class CommTemplateDto
     public bool     IncludeOptOutFooter { get; init; }
     public bool     TcpaNotice          { get; init; }
     public int      UsageCount          { get; init; }
+    public string   ApprovalStatus      { get; init; } = "Approved";
+    public string   ApprovedBy          { get; init; } = string.Empty;
+    public DateTime? ApprovedDateUtc    { get; init; }
+    public string   ComplianceStatus    { get; init; } = "Clear";
+    public string   OwnerTeam           { get; init; } = "Communications";
+    public string   SourceSystem        { get; init; } = "AMS";
+    public int      VersionNumber       { get; init; } = 1;
+    public DateTime LastSyncedDateUtc   { get; init; }
     public DateTime CreatedDateUtc      { get; init; }
     public DateTime UpdatedAt           { get; init; }
 }

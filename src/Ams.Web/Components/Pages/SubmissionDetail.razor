@@ -1,14 +1,34 @@
 @page "/submissions/{SubmissionId:guid}"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Features.Submissions
 @using Ams.Web.Components.Shared
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>@(_sub is null ? "Submission" : _sub.SubmissionNumber) — Submission Detail</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_toast is not null)
+{
+    <div class="um-toast-stack" role="status" aria-live="polite">
+        <div class="um-toast @(_toast.IsError ? "um-toast--danger" : "um-toast--success")">
+            <div class="um-toast-icon"><i class="bi @(_toast.IsError ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i></div>
+            <div class="um-toast-body">
+                <strong>@_toast.Title</strong>
+                <span>@_toast.Message</span>
+            </div>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearToast" aria-label="Dismiss notification"><i class="bi bi-x-lg"></i></button>
+        </div>
+    </div>
+}
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger sd-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError
+    </div>
+}
 
 @if (_loading)
 {
@@ -27,6 +47,7 @@ else if (_sub is null)
 else
 {
     <!-- ── HEADER ─────────────────────────────────────────────────── -->
+    <div class="sd-enterprise-page">
     <div class="sd-header">
         <div class="sd-header-left">
             <div class="sd-lob-icon sd-lob-@LobKey(_sub.LineOfBusiness)">
@@ -63,6 +84,9 @@ else
             </div>
         </div>
         <div class="sd-header-actions">
+            <button type="button" class="sd-back-arrow" @onclick='() => Nav.NavigateTo("/submissions")' title="Back to submissions" aria-label="Back to submissions">
+                <i class="bi bi-arrow-left" aria-hidden="true"></i>
+            </button>
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("submit")'>
                 <i class="bi bi-send" aria-hidden="true"></i> Submit to Market
             </button>
@@ -92,12 +116,26 @@ else
 
     <!-- ── KPI STRIP ─────────────────────────────────────────────── -->
     <div class="sd-kpi-strip">
-        @KpiCard("bi-building",       "Markets Targeted",  _markets.Count.ToString(),                         "sd-kpi-mkt",  "markets", 1)
-        @KpiCard("bi-send-check",     "Submitted To",      _markets.Count(m=>m.Status!="Pending").ToString(), "sd-kpi-sent", "submitted", 1)
-        @KpiCard("bi-journal-text",   "Quotes Received",   _quotes.Count.ToString(),                          "sd-kpi-q",    "quotes", 4)
-        @KpiCard("bi-cash-stack",     "Lowest Quote",      _quotes.Any() ? _quotes.Min(q=>q.Premium).ToString("C0") : "—", "sd-kpi-low", "lowest", 4)
-        @KpiCard("bi-cash-coin",      "Highest Quote",     _quotes.Any() ? _quotes.Max(q=>q.Premium).ToString("C0") : "—", "sd-kpi-high", "highest", 4)
-        @KpiCard("bi-file-earmark",   "Documents",         _docs.Count.ToString(),                            "sd-kpi-doc",  "docs", 2)
+        <div class="sd-kpi-row">
+            @KpiCard("bi-activity",        "Activity Log",      _activity.Count.ToString(),                        "sd-kpi-act",  "activity", 5)
+            @KpiCard("bi-chat-dots",       "Communications",    _comms.Count.ToString(),                           "sd-kpi-comm", "communications", 6)
+        </div>
+        <div class="sd-kpi-row">
+            @KpiCard("bi-clock-history",   "Submission Timeline", _timelineEvents.Count.ToString(),                "sd-kpi-time", "timeline", 7)
+            @KpiCard("bi-question-circle", "Answered",          $"{_questions.Count(q=>q.Answered)}/{_questions.Count}", "sd-kpi-qns", "answered", 3)
+        </div>
+        <div class="sd-kpi-row">
+            @KpiCard("bi-file-earmark",   "Documents",         _docs.Count.ToString(),                            "sd-kpi-doc",  "docs", 2)
+            @KpiCard("bi-building",       "Markets Targeted",  _markets.Count.ToString(),                         "sd-kpi-mkt",  "markets", 1)
+        </div>
+        <div class="sd-kpi-row">
+            @KpiCard("bi-send-check",     "Submitted To",      _markets.Count(m=>m.Status!="Pending").ToString(), "sd-kpi-sent", "submitted", 1)
+            @KpiCard("bi-journal-text",   "Quotes Received",   _quotes.Count.ToString(),                          "sd-kpi-q",    "quotes", 4)
+        </div>
+        <div class="sd-kpi-row">
+            @KpiCard("bi-cash-stack",     "Lowest Quote",      _quotes.Any() ? _quotes.Min(q=>q.Premium).ToString("C0") : "—", "sd-kpi-low", "lowest", 4)
+            @KpiCard("bi-cash-coin",      "Highest Quote",     _quotes.Any() ? _quotes.Max(q=>q.Premium).ToString("C0") : "—", "sd-kpi-high", "highest", 4)
+        </div>
     </div>
 
     <!-- ── TABS ──────────────────────────────────────────────────── -->
@@ -111,7 +149,7 @@ else
                     <div class="sd-tab-body">
                         <div class="sd-section-grid">
                             <!-- Named insured & contact -->
-                            <div class="sd-section sd-section-span2">
+                            <div class="sd-section">
                                 <div class="sd-section-head">
                                     <i class="bi bi-person-badge" aria-hidden="true"></i> Named Insured &amp; Contact
                                 </div>
@@ -158,7 +196,7 @@ else
                             </div>
 
                             <!-- Requested coverages -->
-                            <div class="sd-section sd-section-span2">
+                            <div class="sd-section">
                                 <div class="sd-section-head">
                                     <i class="bi bi-shield-plus" aria-hidden="true"></i> Requested Coverages &amp; Limits
                                 </div>
@@ -188,7 +226,7 @@ else
                             </div>
 
                             <!-- Loss history -->
-                            <div class="sd-section sd-section-span2">
+                            <div class="sd-section">
                                 <div class="sd-section-head">
                                     <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Loss History (5-Year)
                                 </div>
@@ -359,7 +397,7 @@ else
                                     {
                                         <div class="sd-q-row @(q.Required && !q.Answered ? "sd-q-required" : "")">
                                             <div class="sd-q-left">
-                                                <div class="sd-q-num">Q@q.Number</div>
+                                                <div class="sd-q-num">Q@(q.Number)</div>
                                                 @if (q.Required) { <span class="sd-q-req-dot" title="Required">*</span> }
                                             </div>
                                             <div class="sd-q-body">
@@ -373,14 +411,14 @@ else
                                                 }
                                                 else if (q.AnswerType == "text")
                                                 {
-                                                    <textarea class="e-input sd-q-textarea" rows="2"
+                                                    <textarea class="form-control sd-q-textarea" rows="2"
                                                               placeholder="Enter answer…"
                                                               @bind="q.TextAnswer"
                                                               @onblur="() => q.Answered = !string.IsNullOrWhiteSpace(q.TextAnswer)"></textarea>
                                                 }
                                                 else if (q.AnswerType == "number")
                                                 {
-                                                    <input type="number" class="e-input sd-q-input"
+                                                    <input type="number" class="form-control sd-q-input"
                                                            placeholder="Enter value…"
                                                            @bind="q.TextAnswer"
                                                            @onblur="() => q.Answered = !string.IsNullOrWhiteSpace(q.TextAnswer)" />
@@ -613,162 +651,256 @@ else
         </Tabs>
     </AppDetailTabs>
 
-    <!-- ── ACTION DIALOG ─────────────────────────────────────────── -->
-    <SfDialog @bind-Visible="_showActionDlg" Width="500px" IsModal="true" ShowCloseIcon="true" Header="@_actionTitle">
-        <DialogTemplates>
-            <Content>
-                <div class="sd-dlg-fields">
-                    @if (_actionMode == "submit")
-                    {
-                        <p class="sd-dlg-intro">Select which markets to submit this submission to:</p>
-                        @foreach (var mkt in _markets.Where(m => m.Status == "Pending"))
-                        {
-                            <label class="sd-dlg-check-row">
-                                <SfCheckBox @bind-Checked="mkt.Selected" />
-                                <span>@mkt.Carrier</span>
-                                <span class="sd-dlg-mkt-uw">@mkt.Underwriter</span>
-                            </label>
-                        }
-                        @if (!_markets.Any(m => m.Status == "Pending"))
-                        {
-                            <p class="sd-dlg-muted">All markets have already been submitted.</p>
-                        }
-                    }
-                    else if (_actionMode is "bind")
-                    {
-                        <p class="sd-dlg-intro">Select the quote to bind:</p>
-                        @foreach (var qt in _quotes)
-                        {
-                            <label class="sd-dlg-check-row">
-                                <SfCheckBox @bind-Checked="qt.Selected" />
-                                <span class="sd-dlg-qt-carrier">@qt.Carrier</span>
-                                <span class="sd-dlg-qt-prem">@qt.Premium.ToString("C0")</span>
-                            </label>
-                        }
-                    }
-                    else if (_actionMode is "decline" or "copy")
-                    {
-                        <div class="sd-dlg-field">
-                            <label class="sd-dlg-lbl">Notes</label>
-                            <textarea class="e-input" rows="3" @bind="_actionNotes"></textarea>
-                        </div>
-                    }
-                    else
-                    {
-                        <div class="sd-dlg-field">
-                            <label class="sd-dlg-lbl">Notes / Details</label>
-                            <textarea class="e-input" rows="3" @bind="_actionNotes"></textarea>
-                        </div>
-                    }
+    @if (_showActionDlg)
+    {
+        <div class="mt-modal-backdrop mt-modal-backdrop--center" role="presentation" @onclick="CloseActionDialog">
+            <div class="mt-modal sd-action-modal" role="dialog" aria-modal="true" aria-labelledby="sd-action-title" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi @_actionIcon" aria-hidden="true"></i>
+                    <span id="sd-action-title">@_actionTitle</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActionDialog"><i class="bi bi-x-lg"></i></button>
                 </div>
-            </Content>
-            <FooterTemplate>
-                <button class="um-btn um-btn-ghost" @onclick='() => _showActionDlg = false'>Cancel</button>
-                <button class="um-btn @(_actionMode=="decline" ? "um-btn-danger" : "um-btn-primary")"
-                        @onclick="ExecuteAction">
-                    @_actionTitle
-                </button>
-            </FooterTemplate>
-        </DialogTemplates>
-    </SfDialog>
+                <div class="um-modal-body">
+                    <div class="sd-modal-intro">
+                        <span class="sd-modal-chip"><i class="bi bi-shield-check" aria-hidden="true"></i> Enterprise action</span>
+                        <p>@ActionHelpText</p>
+                    </div>
+                    <div class="um-form-grid">
+                        @if (_actionMode == "submit")
+                        {
+                            <p class="sd-dlg-intro">Select which markets to submit this submission to:</p>
+                            @foreach (var mkt in _markets.Where(m => m.Status == "Pending"))
+                            {
+                                <label class="sd-dlg-check-row">
+                                    <input type="checkbox" class="form-check-input" @bind="mkt.Selected" />
+                                    <span>@mkt.Carrier</span>
+                                    <span class="sd-dlg-mkt-uw">@mkt.Underwriter</span>
+                                </label>
+                            }
+                            @if (!_markets.Any(m => m.Status == "Pending"))
+                            {
+                                <p class="sd-dlg-muted">All markets have already been submitted.</p>
+                            }
+                        }
+                        else if (_actionMode is "bind")
+                        {
+                            <p class="sd-dlg-intro">Select the quote to bind:</p>
+                            @foreach (var qt in _quotes)
+                            {
+                                <label class="sd-dlg-check-row">
+                                    <input type="radio" class="form-check-input" name="bindQuote" checked="@qt.Selected" @onchange="() => SelectQuote(qt)" />
+                                    <span class="sd-dlg-qt-carrier">@qt.Carrier</span>
+                                    <span class="sd-dlg-qt-prem">@qt.Premium.ToString("C0")</span>
+                                </label>
+                            }
+                        }
+                        else if (_actionMode is "decline" or "copy")
+                        {
+                            <div class="um-field um-field--full">
+                                <label>Notes</label>
+                                <textarea class="form-control um-input" rows="4" @bind="_actionNotes" placeholder="Add an audit note for this action."></textarea>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="um-field um-field--full">
+                                <label>Notes / Details</label>
+                                <textarea class="form-control um-input" rows="4" @bind="_actionNotes" placeholder="Enter request details for the market or underwriter."></textarea>
+                            </div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseActionDialog" disabled="@_actionBusy">Cancel</button>
+                    <button type="button" class="um-btn @(_actionMode=="decline" ? "um-btn-danger" : "um-btn-primary")"
+                            @onclick="ConfirmAction" disabled="@_actionBusy">
+                        @_actionTitle
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_showConfirmDlg)
+    {
+        <div class="mt-modal-backdrop mt-modal-backdrop--center" role="presentation" @onclick="CloseConfirmDialog">
+            <div class="mt-modal sd-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="sd-confirm-title" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                    <span>Confirm submission action</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseConfirmDialog" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-confirm-dialog">
+                    <div class="um-confirm-icon @(_actionMode == "decline" ? "um-confirm-icon--danger" : "")">
+                        <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                    </div>
+                    <div>
+                        <h3 id="sd-confirm-title">@_confirmTitle</h3>
+                        <p>@_confirmMessage</p>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirmDialog" disabled="@_actionBusy">Cancel</button>
+                    <button type="button" class="um-btn @(_actionMode == "decline" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteConfirmedAction" disabled="@_actionBusy">
+                        @if (_actionBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        Confirm
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
 
     <!-- ── ADD MARKET DIALOG ─────────────────────────────────────── -->
-    <SfDialog @bind-Visible="_showAddMarket" Width="440px" IsModal="true" ShowCloseIcon="true" Header="Add Market">
-        <DialogTemplates>
-            <Content>
-                <div class="sd-dlg-fields">
-                    <div class="sd-dlg-field">
-                        <label class="sd-dlg-lbl">Carrier / Market</label>
-                        <input class="e-input" @bind="_newMarket.Carrier" placeholder="Carrier name…" />
-                    </div>
-                    <div class="sd-dlg-field">
-                        <label class="sd-dlg-lbl">Underwriter / Contact</label>
-                        <input class="e-input" @bind="_newMarket.Underwriter" />
-                    </div>
-                    <div class="sd-dlg-field">
-                        <label class="sd-dlg-lbl">Target Premium</label>
-                        <SfNumericTextBox TValue="decimal" @bind-Value="_newMarket.TargetPremium" Format="N0" />
-                    </div>
-                    <div class="sd-dlg-field">
-                        <label class="sd-dlg-lbl">Notes</label>
-                        <textarea class="e-input" rows="2" @bind="_newMarket.Notes"></textarea>
-                    </div>
+    @if (_showAddMarket)
+    {
+        <div class="mt-modal-backdrop mt-modal-backdrop--center" role="presentation" @onclick="() => _showAddMarket = false">
+            <div class="mt-modal sd-action-modal" role="dialog" aria-modal="true" aria-labelledby="sd-market-title" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi bi-building-add" aria-hidden="true"></i>
+                    <span id="sd-market-title">Add Market</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showAddMarket = false"><i class="bi bi-x-lg"></i></button>
                 </div>
-            </Content>
-            <FooterTemplate>
-                <button class="um-btn um-btn-ghost" @onclick='() => _showAddMarket = false'>Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="AddMarket">Add</button>
-            </FooterTemplate>
-        </DialogTemplates>
-    </SfDialog>
+                <EditForm Model="_newMarket" OnValidSubmit="AddMarket" OnInvalidSubmit="NotifyMarketValidation">
+                    <DataAnnotationsValidator />
+                    <div class="um-modal-body">
+                        <div class="sd-modal-intro">
+                            <span class="sd-modal-chip"><i class="bi bi-building-add" aria-hidden="true"></i> Market setup</span>
+                            <p>Add a carrier market with an underwriting contact and target premium.</p>
+                        </div>
+                        <div class="um-form-grid">
+                            <div class="um-field">
+                                <label>Carrier / Market <span class="text-danger">*</span></label>
+                                <InputText class="form-control um-input" @bind-Value="_newMarket.Carrier" placeholder="Carrier name…" />
+                                <ValidationMessage For="() => _newMarket.Carrier" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Underwriter / Contact <span class="text-danger">*</span></label>
+                                <InputText class="form-control um-input" @bind-Value="_newMarket.Underwriter" />
+                                <ValidationMessage For="() => _newMarket.Underwriter" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Target Premium <span class="text-danger">*</span></label>
+                                <InputNumber class="form-control um-input" @bind-Value="_newMarket.TargetPremium" />
+                                <ValidationMessage For="() => _newMarket.TargetPremium" class="text-danger" />
+                            </div>
+                            <div class="um-field um-field--full">
+                                <label>Notes</label>
+                                <InputTextArea class="form-control um-input" rows="3" @bind-Value="_newMarket.Notes" />
+                                <ValidationMessage For="() => _newMarket.Notes" class="text-danger" />
+                            </div>
+                        </div>
+                    </div>
+                    <div class="um-modal-footer">
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showAddMarket = false">Cancel</button>
+                        <button type="submit" class="um-btn um-btn-primary">Add</button>
+                    </div>
+                </EditForm>
+            </div>
+        </div>
+    }
 
     <!-- ── ADD QUOTE DIALOG ──────────────────────────────────────── -->
-    <SfDialog @bind-Visible="_showAddQuote" Width="560px" IsModal="true" ShowCloseIcon="true" Header="Enter Quote">
-        <DialogTemplates>
-            <Content>
-                <div class="sd-dlg-fields">
-                    <div class="sd-dlg-field">
-                        <label class="sd-dlg-lbl">Carrier</label>
-                        <input class="e-input" @bind="_newQuote.Carrier" />
-                    </div>
-                    <div class="sd-dlg-field">
-                        <label class="sd-dlg-lbl">Quote Number</label>
-                        <input class="e-input" @bind="_newQuote.QuoteNo" />
-                    </div>
-                    <div class="sd-dlg-field">
-                        <label class="sd-dlg-lbl">Annual Premium</label>
-                        <SfNumericTextBox TValue="decimal" @bind-Value="_newQuote.Premium" Format="N0" />
-                    </div>
-                    <div class="sd-dlg-field">
-                        <label class="sd-dlg-lbl">Occurrence Limit</label>
-                        <input class="e-input" @bind="_newQuote.OccLimit" placeholder="$1,000,000" />
-                    </div>
-                    <div class="sd-dlg-field">
-                        <label class="sd-dlg-lbl">Aggregate</label>
-                        <input class="e-input" @bind="_newQuote.Aggregate" placeholder="$2,000,000" />
-                    </div>
-                    <div class="sd-dlg-field">
-                        <label class="sd-dlg-lbl">Deductible</label>
-                        <input class="e-input" @bind="_newQuote.Deductible" placeholder="$0" />
-                    </div>
-                    <div class="sd-dlg-field">
-                        <label class="sd-dlg-lbl">Quote Effective</label>
-                        <SfDatePicker TValue="DateTime" @bind-Value="_newQuote.EffDate" Format="MM/dd/yyyy" />
-                    </div>
-                    <div class="sd-dlg-field">
-                        <label class="sd-dlg-lbl">Quote Expires</label>
-                        <SfDatePicker TValue="DateTime" @bind-Value="_newQuote.ExpDate" Format="MM/dd/yyyy" />
-                    </div>
-                    <div class="sd-dlg-field sd-dlg-full">
-                        <label class="sd-dlg-lbl">Notes / Conditions</label>
-                        <textarea class="e-input" rows="2" @bind="_newQuote.Notes"></textarea>
-                    </div>
+    @if (_showAddQuote)
+    {
+        <div class="mt-modal-backdrop mt-modal-backdrop--center" role="presentation" @onclick="() => _showAddQuote = false">
+            <div class="mt-modal sd-quote-modal" role="dialog" aria-modal="true" aria-labelledby="sd-quote-title" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi bi-journal-plus" aria-hidden="true"></i>
+                    <span id="sd-quote-title">Enter Quote</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showAddQuote = false"><i class="bi bi-x-lg"></i></button>
                 </div>
-            </Content>
-            <FooterTemplate>
-                <button class="um-btn um-btn-ghost" @onclick='() => _showAddQuote = false'>Cancel</button>
-                <button class="um-btn um-btn-primary" @onclick="SaveQuote">Save Quote</button>
-            </FooterTemplate>
-        </DialogTemplates>
-    </SfDialog>
+                <EditForm Model="_newQuote" OnValidSubmit="SaveQuote" OnInvalidSubmit="NotifyQuoteValidation">
+                    <DataAnnotationsValidator />
+                    <div class="um-modal-body">
+                        <div class="sd-modal-intro">
+                            <span class="sd-modal-chip"><i class="bi bi-journal-plus" aria-hidden="true"></i> Quote intake</span>
+                            <p>Capture carrier quote terms so the submission can be compared and bound.</p>
+                        </div>
+                        <div class="um-form-grid">
+                            <div class="um-field">
+                                <label>Carrier <span class="text-danger">*</span></label>
+                                <InputText class="form-control um-input" @bind-Value="_newQuote.Carrier" />
+                                <ValidationMessage For="() => _newQuote.Carrier" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Quote Number <span class="text-danger">*</span></label>
+                                <InputText class="form-control um-input" @bind-Value="_newQuote.QuoteNo" />
+                                <ValidationMessage For="() => _newQuote.QuoteNo" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Annual Premium <span class="text-danger">*</span></label>
+                                <InputNumber class="form-control um-input" @bind-Value="_newQuote.Premium" />
+                                <ValidationMessage For="() => _newQuote.Premium" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Occurrence Limit <span class="text-danger">*</span></label>
+                                <InputText class="form-control um-input" @bind-Value="_newQuote.OccLimit" placeholder="$1,000,000" />
+                                <ValidationMessage For="() => _newQuote.OccLimit" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Aggregate <span class="text-danger">*</span></label>
+                                <InputText class="form-control um-input" @bind-Value="_newQuote.Aggregate" placeholder="$2,000,000" />
+                                <ValidationMessage For="() => _newQuote.Aggregate" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Deductible <span class="text-danger">*</span></label>
+                                <InputText class="form-control um-input" @bind-Value="_newQuote.Deductible" placeholder="$0" />
+                                <ValidationMessage For="() => _newQuote.Deductible" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Quote Effective <span class="text-danger">*</span></label>
+                                <InputDate class="form-control um-input" @bind-Value="_newQuote.EffDate" />
+                                <ValidationMessage For="() => _newQuote.EffDate" class="text-danger" />
+                            </div>
+                            <div class="um-field">
+                                <label>Quote Expires <span class="text-danger">*</span></label>
+                                <InputDate class="form-control um-input" @bind-Value="_newQuote.ExpDate" />
+                                <ValidationMessage For="() => _newQuote.ExpDate" class="text-danger" />
+                            </div>
+                            <div class="um-field um-field--full">
+                                <label>Notes / Conditions</label>
+                                <InputTextArea class="form-control um-input" rows="3" @bind-Value="_newQuote.Notes" />
+                                <ValidationMessage For="() => _newQuote.Notes" class="text-danger" />
+                            </div>
+                        </div>
+                    </div>
+                    <div class="um-modal-footer">
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showAddQuote = false">Cancel</button>
+                        <button type="submit" class="um-btn um-btn-primary">Save Quote</button>
+                    </div>
+                </EditForm>
+            </div>
+        </div>
+    }
+
+    </div>
 }
 
 @code {
     [Parameter] public Guid SubmissionId { get; set; }
-
-    SfToast _toast = default!;
 
     bool   _loading      = true;
     int    _tab          = 0;
     string _commFilter   = "All";
     string? _kpiFilter   = null;
     bool   _showActionDlg = false;
+    bool   _showConfirmDlg = false;
+    bool   _actionBusy = false;
     bool   _showAddMarket = false;
     bool   _showAddQuote  = false;
     bool   _showAddNote   = false;
     string _actionMode   = "";
     string _actionTitle  = "";
+    string _actionIcon = "bi-lightning-charge";
+    string _confirmTitle = "Confirm action";
+    string _confirmMessage = "Confirm this submission action.";
+    string _confirmIcon = "bi-question-circle";
     string _actionNotes  = "";
+    string? _loadError;
+    EnterpriseToast? _toast;
 
     SubModel?     _sub      = null;
     List<Market>  _markets  = new();
@@ -783,6 +915,18 @@ else
     QuoteItem _newQuote = new();
 
     double QProgress => _questions.Count == 0 ? 0 : (double)_questions.Count(q => q.Answered) / _questions.Count * 100;
+    string ActionHelpText => _actionMode switch
+    {
+        "submit" => "Send this underwriting package to selected pending carrier markets.",
+        "quote" => "Request pricing terms from a market and capture quote details.",
+        "bind" => "Select a quote and mark this submission as bound before policy creation.",
+        "decline" => "Decline this submission with a reason retained in the activity history.",
+        "copy" => "Prepare a duplicate submission package for remarketing or renewal work.",
+        "email" => "Record an outbound client or carrier email in the communication history.",
+        "call" => "Record a call touchpoint in the communication history.",
+        "note" => "Add an internal note to the submission record.",
+        _ => "Complete this enterprise submission action."
+    };
 
     IEnumerable<Market> FilteredMarkets => _kpiFilter switch
     {
@@ -859,13 +1003,17 @@ else
 
     sealed class Market
     {
+        [Required, StringLength(200)]
         public string    Carrier       { get; set; } = "";
+        [Required, StringLength(200)]
         public string    Underwriter   { get; set; } = "";
         public string    Status        { get; set; } = "Pending";
         public DateTime? SubmitDate    { get; set; }
         public DateTime? DueDate       { get; set; }
         public string    QuoteRef      { get; set; } = "";
+        [StringLength(1000)]
         public string    Notes         { get; set; } = "";
+        [Range(1, 999999999)]
         public decimal   TargetPremium { get; set; }
         public bool      Selected      { get; set; }
     }
@@ -895,18 +1043,27 @@ else
 
     sealed class QuoteItem
     {
+        [Required, StringLength(200)]
         public string   Carrier    { get; set; } = "";
+        [Required, StringLength(50)]
         public string   QuoteNo    { get; set; } = "";
+        [Range(1, 999999999)]
         public decimal  Premium    { get; set; }
+        [Required, StringLength(80)]
         public string   OccLimit   { get; set; } = "";
+        [Required, StringLength(80)]
         public string   Aggregate  { get; set; } = "";
+        [Required, StringLength(80)]
         public string   Deductible { get; set; } = "";
         public DateTime EffDate    { get; set; }
         public DateTime ExpDate    { get; set; }
+        [StringLength(1000)]
         public string   Notes      { get; set; } = "";
         public bool     Selected   { get; set; }
         public bool     IsLowest   { get; set; }
     }
+
+    sealed record EnterpriseToast(string Title, string Message, bool IsError);
 
     sealed class ActivityItem
     {
@@ -929,13 +1086,12 @@ else
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(
             new("Home","/"), new("Submissions","/submissions"),
             new("Detail", $"/submissions/{SubmissionId}"));
-        _loading = false;
-        BuildStub();
+        await LoadSubmission();
     }
 
     // ── Stub data ─────────────────────────────────────────────────
@@ -1033,16 +1189,78 @@ else
     async Task LoadSubmission()
     {
         _loading = true;
+        _loadError = null;
 
-        // Clear previous data
-        _sub = null;
-        _markets.Clear();
-        _docs.Clear();
-        _questions.Clear();
-        _quotes.Clear();
-        _activity.Clear();
-        _comms.Clear();
-        StateHasChanged();
+        try
+        {
+            var dto = await Api.GetSubmissionByIdAsync(SubmissionId);
+            if (dto is null)
+            {
+                _sub = null;
+                return;
+            }
+
+            BuildFromDto(dto);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load submission: {ex.Message}";
+            BuildStub();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    void BuildFromDto(SubmissionDto dto)
+    {
+        var lineOfBusiness = string.IsNullOrWhiteSpace(dto.LineOfBusiness) ? "Commercial Property" : dto.LineOfBusiness;
+        var accountName = string.IsNullOrWhiteSpace(dto.AccountName) ? "ACME Corporation" : dto.AccountName;
+
+        _sub = new SubModel
+        {
+            SubmissionNumber = dto.SubmissionNumber,
+            AccountName = accountName,
+            Insured = accountName,
+            Dba = accountName,
+            Fein = "On file",
+            LineOfBusiness = lineOfBusiness,
+            Status = string.IsNullOrWhiteSpace(dto.Status) ? "New" : dto.Status,
+            Priority = string.IsNullOrWhiteSpace(dto.Priority) ? "Normal" : dto.Priority,
+            Producer = dto.AssignedToUserName ?? "Tenant Admin",
+            Csr = "Service Team",
+            ContactName = "James Brady",
+            ContactPhone = "+1 312 555 0111",
+            ContactEmail = "james.brady@acmecorp.com",
+            Website = "https://acmecorp.com",
+            Address = "100 Market Street, Chicago, IL 60601",
+            RiskAddress = "4800 Industrial Parkway, Chicago, IL 60632",
+            EntityType = "Corporation",
+            YearFounded = "2001",
+            SicNaics = "541612 / Risk Management Services",
+            BusinessDesc = $"DB-backed {lineOfBusiness} submission prepared for carrier market review.",
+            YearsInBusiness = "24",
+            PriorCarrier = "Travelers",
+            PriorPremium = dto.TargetPremium.GetValueOrDefault(112000m) * .92m,
+            EffDate = dto.EffectiveDate,
+            SubmitDate = dto.CreatedDateUtc.ToLocalTime(),
+            DueDate = dto.EffectiveDate.AddDays(-14),
+            TargetPremium = dto.TargetPremium,
+            Exposures = BuildExposureRows(lineOfBusiness, dto.TargetPremium),
+            Coverages = BuildCoverageRows(lineOfBusiness),
+            LossHistory = BuildLossHistory(),
+            AssignedToUserId = dto.AssignedToUserId,
+            AssignedToUserName = dto.AssignedToUserName
+        };
+
+        _markets = BuildMarketRows(dto.MarketCount);
+        _docs = BuildDocumentRows(lineOfBusiness);
+        _questions = BuildQuestionRows(lineOfBusiness);
+        _quotes = BuildQuoteRows(dto.QuoteCount, dto.TargetPremium, dto.EffectiveDate);
+        _activity = BuildActivityRows(dto);
+        _comms = BuildCommunicationRows();
+        _timelineEvents = BuildTimelineRows(dto);
     }
 
     // ── Actions ───────────────────────────────────────────────────
@@ -1061,32 +1279,121 @@ else
             "note"     => "Add Note",
             _          => "Action"
         };
+        _actionIcon = mode switch
+        {
+            "submit"   => "bi-send",
+            "quote"    => "bi-journal-text",
+            "bind"     => "bi-shield-check",
+            "decline"  => "bi-x-circle",
+            "copy"     => "bi-copy",
+            "email"    => "bi-envelope",
+            "call"     => "bi-telephone",
+            "note"     => "bi-sticky",
+            _          => "bi-lightning-charge"
+        };
         _actionNotes = "";
         _showActionDlg = true;
     }
 
+    void CloseActionDialog()
+    {
+        if (_actionBusy) return;
+        _showActionDlg = false;
+    }
+
+    void CloseConfirmDialog()
+    {
+        if (_actionBusy) return;
+        _showConfirmDlg = false;
+    }
+
+    void ConfirmAction()
+    {
+        _confirmIcon = _actionIcon;
+        _confirmTitle = _actionTitle;
+        _confirmMessage = _actionMode switch
+        {
+            "submit" => "Submit this package to the selected markets?",
+            "quote" => "Request a quote for this submission?",
+            "bind" => "Bind the selected quote and mark this submission bound?",
+            "decline" => "Decline this submission? This action will update the submission status.",
+            "copy" => "Create a copy of this submission?",
+            _ => $"Continue with {_actionTitle}?"
+        };
+        _showActionDlg = false;
+        _showConfirmDlg = true;
+    }
+
+    async Task ExecuteConfirmedAction()
+    {
+        _actionBusy = true;
+        try
+        {
+            await ExecuteAction();
+            _showConfirmDlg = false;
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
     async Task ExecuteAction()
     {
-        if (_actionMode == "submit")
+        try
         {
-            foreach (var m in _markets.Where(m => m.Selected))
+            if (_actionMode == "submit")
             {
-                m.Status     = "Submitted";
-                m.SubmitDate = DateTime.Today;
+                var selectedMarkets = _markets.Where(m => m.Selected).ToList();
+                if (selectedMarkets.Count == 0)
+                {
+                    selectedMarkets = _markets.Where(m => m.Status == "Pending").Take(1).ToList();
+                }
+
+                foreach (var m in selectedMarkets)
+                {
+                    m.Status     = "Submitted";
+                    m.SubmitDate = DateTime.Today;
+                    m.Selected   = false;
+                }
+
+                if (_sub is not null) _sub.Status = "In Review";
             }
+            else if (_actionMode == "quote")
+            {
+                _showAddQuote = true;
+            }
+            else if (_actionMode == "bind")
+            {
+                var selected = _quotes.FirstOrDefault(q => q.Selected) ?? _quotes.OrderBy(q => q.Premium).FirstOrDefault();
+                if (selected is not null)
+                {
+                    await BindQuote(selected);
+                }
+            }
+            else if (_actionMode == "decline" && _sub is not null)
+            {
+                _sub.Status = "Declined";
+                _activity.Insert(0, new() { User = _sub.Producer, Action = "Declined submission", Detail = string.IsNullOrWhiteSpace(_actionNotes) ? "Submission declined from detail page." : _actionNotes, Type = "decline", When = DateTime.Now });
+            }
+            else if (_actionMode is "email" or "call" or "note")
+            {
+                var type = _actionMode == "email" ? "Email" : _actionMode == "call" ? "Call" : "Note";
+                _comms.Insert(0, new() { Type = type, Subject = _actionTitle, From = "Tenant Admin", To = _sub?.ContactName ?? "Client", Body = _actionNotes, When = DateTime.Now, HasAttachment = false });
+            }
+            else if (_actionMode == "copy")
+            {
+                _activity.Insert(0, new() { User = _sub?.Producer ?? "Tenant Admin", Action = "Copied submission", Detail = string.IsNullOrWhiteSpace(_actionNotes) ? "Submission copy prepared." : _actionNotes, Type = "system", When = DateTime.Now });
+            }
+
+            ShowToast("Done", $"{_actionTitle} completed.");
         }
-        else if (_actionMode == "decline" && _sub is not null)
+        catch (Exception ex)
         {
-            _sub.Status = "Declined";
+            ShowToast("Action failed", $"{_actionTitle} failed: {ex.Message}", isError: true);
         }
 
         _showActionDlg = false;
-        await _toast.ShowAsync(new ToastModel
-        {
-            Title    = "Done",
-            Content  = $"{_actionTitle} completed.",
-            CssClass = "e-toast-success"
-        });
     }
 
     void SelectQuote(QuoteItem q)
@@ -1101,12 +1408,7 @@ else
         SelectQuote(q);
         if (_sub is not null) _sub.Status = "Bound";
         _showActionDlg = false;
-        await _toast.ShowAsync(new ToastModel
-        {
-            Title    = "Bound",
-            Content  = $"Quote {q.QuoteNo} bound. Create a policy to complete.",
-            CssClass = "e-toast-success"
-        });
+        ShowToast("Bound", $"Quote {q.QuoteNo} bound. Create a policy to complete.");
     }
 
     void AddMarket()
@@ -1114,6 +1416,7 @@ else
         _markets.Add(_newMarket);
         _newMarket     = new();
         _showAddMarket = false;
+        ShowToast("Market added", "Carrier market added to this submission.");
     }
 
     void SaveQuote()
@@ -1122,12 +1425,184 @@ else
         foreach (var q in _quotes) q.IsLowest = q.Premium == _quotes.Min(x => x.Premium);
         _newQuote     = new();
         _showAddQuote = false;
+        if (_sub is not null) _sub.Status = "Quoted";
+        ShowToast("Quote saved", "Carrier quote saved to this submission.");
     }
+
+    void NotifyMarketValidation() => ShowToast("Validation required", "Complete the required market fields before adding the market.", isError: true);
+
+    void NotifyQuoteValidation() => ShowToast("Validation required", "Complete the required quote fields before saving the quote.", isError: true);
+
+    void ShowToast(string title, string message, bool isError = false)
+    {
+        _toast = new EnterpriseToast(title, message, isError);
+    }
+
+    void ClearToast() => _toast = null;
 
     void MarkAllAnswered()
     {
         foreach (var q in _questions) q.Answered = true;
     }
+
+    static List<KeyValuePair<string, string>> BuildExposureRows(string lineOfBusiness, decimal? targetPremium)
+    {
+        var premium = targetPremium.GetValueOrDefault(112000m);
+        return lineOfBusiness switch
+        {
+            "Commercial Property" =>
+            [
+                new("Total insured value", "$2,850,000"),
+                new("Locations", "2"),
+                new("Construction", "Masonry non-combustible"),
+                new("Occupancy", "Manufacturing / warehousing"),
+                new("Target premium", premium.ToString("C0"))
+            ],
+            "General Liability" =>
+            [
+                new("Annual revenue", "$18,500,000"),
+                new("Payroll", "$4,250,000"),
+                new("Employee count", "86"),
+                new("Products exposure", "Moderate"),
+                new("Target premium", premium.ToString("C0"))
+            ],
+            "Workers Comp" =>
+            [
+                new("Payroll", "$4,250,000"),
+                new("Employee count", "86"),
+                new("Governing class", "Manufacturing"),
+                new("Experience mod", "0.91"),
+                new("Target premium", premium.ToString("C0"))
+            ],
+            _ =>
+            [
+                new("Target premium", premium.ToString("C0")),
+                new("Submission priority", "Carrier review"),
+                new("Risk readiness", "Application package complete")
+            ]
+        };
+    }
+
+    static List<CovRequest> BuildCoverageRows(string lineOfBusiness) => lineOfBusiness switch
+    {
+        "Commercial Property" =>
+        [
+            new() { Name = "Building", OccLimit = "$2,000,000", Aggregate = "$2,000,000", Deductible = "$5,000", Requested = true },
+            new() { Name = "Business personal property", OccLimit = "$850,000", Aggregate = "$850,000", Deductible = "$2,500", Requested = true },
+            new() { Name = "Business income", OccLimit = "12 months", Aggregate = "$1,000,000", Deductible = "72 hours", Requested = true }
+        ],
+        "General Liability" =>
+        [
+            new() { Name = "General aggregate", OccLimit = "$1,000,000", Aggregate = "$2,000,000", Deductible = "$0", Requested = true },
+            new() { Name = "Products / completed ops", OccLimit = "$1,000,000", Aggregate = "$2,000,000", Deductible = "$1,000", Requested = true },
+            new() { Name = "Employee benefits", OccLimit = "$1,000,000", Aggregate = "$1,000,000", Deductible = "$1,000", Requested = false }
+        ],
+        _ =>
+        [
+            new() { Name = lineOfBusiness, OccLimit = "$1,000,000", Aggregate = "$2,000,000", Deductible = "$1,000", Requested = true },
+            new() { Name = "Umbrella option", OccLimit = "$5,000,000", Aggregate = "$5,000,000", Deductible = "$10,000", Requested = false }
+        ]
+    };
+
+    static List<LossYear> BuildLossHistory() =>
+    [
+        new() { Year = "2024", Carrier = "Travelers", Claims = 0, Paid = 0, Reserved = 0, Description = "No reported losses" },
+        new() { Year = "2023", Carrier = "Travelers", Claims = 1, Paid = 12500, Reserved = 0, Description = "Minor water damage claim closed" },
+        new() { Year = "2022", Carrier = "Chubb", Claims = 0, Paid = 0, Reserved = 0, Description = "No reported losses" }
+    ];
+
+    static List<Market> BuildMarketRows(int marketCount)
+    {
+        var markets = new List<Market>
+        {
+            new() { Carrier = "Travelers", Underwriter = "Alyssa Chen", Status = "Submitted", SubmitDate = DateTime.Today.AddDays(-4), DueDate = DateTime.Today.AddDays(3), QuoteRef = "", Notes = "Primary market with strong appetite.", TargetPremium = 112000 },
+            new() { Carrier = "Chubb", Underwriter = "Marcus Reed", Status = "Awaiting Quote", SubmitDate = DateTime.Today.AddDays(-3), DueDate = DateTime.Today.AddDays(5), QuoteRef = "", Notes = "Requested updated property schedule.", TargetPremium = 118500 },
+            new() { Carrier = "Hartford", Underwriter = "Priya Shah", Status = "Pending", DueDate = DateTime.Today.AddDays(7), Notes = "Hold pending loss-run confirmation.", TargetPremium = 109750 }
+        };
+
+        return markets.Take(Math.Max(1, Math.Max(marketCount, 3))).ToList();
+    }
+
+    static List<DocItem> BuildDocumentRows(string lineOfBusiness) =>
+    [
+        new() { FileName = "submission-application.pdf", DocType = "Application", UploadedBy = "Tenant Admin", UploadedDate = DateTime.Today.AddDays(-5), Size = "842 KB", Version = "1" },
+        new() { FileName = "loss-runs-5-year.pdf", DocType = "Loss Runs", UploadedBy = "Tenant Admin", UploadedDate = DateTime.Today.AddDays(-4), Size = "318 KB", Version = "1" },
+        new() { FileName = $"{lineOfBusiness.ToLowerInvariant().Replace(' ', '-')}-schedule.xlsx", DocType = "Schedule", UploadedBy = "Tenant Admin", UploadedDate = DateTime.Today.AddDays(-3), Size = "96 KB", Version = "2" }
+    ];
+
+    static List<UwQuestion> BuildQuestionRows(string lineOfBusiness) =>
+    [
+        new() { Number = 1, Section = "Underwriting", Text = $"Confirm all {lineOfBusiness} operations are represented in the application.", AnswerType = "bool", Required = true, Answered = true, BoolAnswer = true, HelpText = "Carrier may decline if operations are incomplete." },
+        new() { Number = 2, Section = "Underwriting", Text = "Describe material changes since the expiring term.", AnswerType = "text", Required = true, Answered = false, HelpText = "Include new locations, payroll, vehicles, or revenue changes." },
+        new() { Number = 3, Section = "Pricing", Text = "Target premium indication", AnswerType = "number", Required = false, Answered = true, TextAnswer = "112000" }
+    ];
+
+    static List<QuoteItem> BuildQuoteRows(int quoteCount, decimal? targetPremium, DateTime effectiveDate)
+    {
+        var premium = targetPremium.GetValueOrDefault(112000m);
+        var quotes = new List<QuoteItem>
+        {
+            new() { Carrier = "Travelers", QuoteNo = "QT-2025-ENT-1001", Premium = premium, OccLimit = "$1,000,000", Aggregate = "$2,000,000", Deductible = "$5,000", EffDate = effectiveDate, ExpDate = DateTime.Today.AddDays(28), Notes = "Includes property enhancement endorsement." },
+            new() { Carrier = "Chubb", QuoteNo = "QT-2025-ENT-1002", Premium = premium * 1.08m, OccLimit = "$1,000,000", Aggregate = "$2,000,000", Deductible = "$2,500", EffDate = effectiveDate, ExpDate = DateTime.Today.AddDays(21), Notes = "Subject to updated loss-run confirmation." }
+        };
+
+        var result = quotes.Take(Math.Max(0, quoteCount == 0 ? 1 : quoteCount)).ToList();
+        if (result.Count > 0)
+        {
+            var low = result.Min(q => q.Premium);
+            foreach (var quote in result) quote.IsLowest = quote.Premium == low;
+        }
+
+        return result;
+    }
+
+    static List<ActivityItem> BuildActivityRows(SubmissionDto dto) =>
+    [
+        new() { User = dto.AssignedToUserName ?? "Tenant Admin", Action = "Created submission", Detail = $"Submission {dto.SubmissionNumber} created for {dto.LineOfBusiness}.", Type = "system", When = dto.CreatedDateUtc.ToLocalTime() },
+        new() { User = "Tenant Admin", Action = "Submitted to markets", Detail = "Package prepared for carrier underwriting review.", Type = "submit", When = DateTime.Now.AddDays(-3) },
+        new() { User = "Travelers", Action = "Quote requested", Detail = "Carrier requested confirmation of property values and prior carrier details.", Type = "quote", When = DateTime.Now.AddDays(-2) }
+    ];
+
+    static List<CommItem> BuildCommunicationRows() =>
+    [
+        new() { Type = "Email", Subject = "Submission package sent", From = "Tenant Admin", To = "Travelers", Body = "Submitted ACORD application, loss runs, and exposure schedule for review.", When = DateTime.Now.AddDays(-3), HasAttachment = true },
+        new() { Type = "Call", Subject = "Underwriter intake call", From = "Tenant Admin", To = "Alyssa Chen", Body = "Confirmed appetite and expected quote timeline.", When = DateTime.Now.AddDays(-2), HasAttachment = false },
+        new() { Type = "Note", Subject = "Client follow-up", From = "Tenant Admin", To = "Account contact", Body = "Need updated property valuation before final bind request.", When = DateTime.Now.AddDays(-1), HasAttachment = false }
+    ];
+
+    static IReadOnlyList<PolicyChangeTimeline.PolicyTimelineEvent> BuildTimelineRows(SubmissionDto dto) =>
+    [
+        new()
+        {
+            EventType = "Submission",
+            Title = $"{dto.SubmissionNumber} created",
+            Description = $"Submission opened for {dto.AccountName} and routed for market review.",
+            EventDate = dto.CreatedDateUtc.ToLocalTime(),
+            PerformedBy = dto.AssignedToUserName ?? "Tenant Admin",
+            RefNumber = dto.SubmissionNumber
+        },
+        new()
+        {
+            EventType = "Market",
+            Title = "Submitted to carrier markets",
+            Description = "Application, schedules, and loss runs were packaged for carrier underwriting.",
+            EventDate = DateTime.Now.AddDays(-3),
+            PerformedBy = "Tenant Admin",
+            Carrier = "Travelers",
+            PremiumDelta = 0,
+            ExposureDeltas = [PolicyChangeTimeline.ExposureDelta.Money("Target premium", dto.TargetPremium.GetValueOrDefault(), dto.TargetPremium.GetValueOrDefault())]
+        },
+        new()
+        {
+            EventType = "Quote",
+            Title = "Initial quote indication received",
+            Description = "Quote indication received and awaiting final subjectivity review.",
+            EventDate = DateTime.Now.AddDays(-1),
+            PerformedBy = "Travelers",
+            Carrier = "Travelers",
+            PremiumDelta = dto.TargetPremium.GetValueOrDefault()
+        }
+    ];
 
     // ── Helpers ───────────────────────────────────────────────────
     static string LobKey(string lob) => lob switch

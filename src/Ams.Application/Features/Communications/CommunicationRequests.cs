@@ -16,14 +16,19 @@ public sealed record SendMessageRequest(
     string Body,
     string Priority,
     string? AssignedTo,
-    string? Template);
+    string? Template,
+    string? QueueName = null,
+    string? SourceSystem = null,
+    string? ComplianceStatus = null);
 
 public sealed record ReplyMessageRequest(
     Guid ThreadId,
     string SenderName,
     string Channel,
     string Body,
-    string[]? Attachments = null);
+    string[]? Attachments = null,
+    string? ProviderName = null,
+    string? ExternalMessageId = null);
 
 public sealed record AssignThreadRequest(
     Guid ThreadId,

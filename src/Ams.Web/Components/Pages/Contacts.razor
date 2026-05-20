@@ -1,76 +1,971 @@
 @page "/client/contacts"
 @namespace Ams.Web.Components.Pages.ContactPages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Contacts
+@using Ams.Web.Components.Pages.Contacts
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
-@using Ams.Application.Common.Dtos
-@using Ams.Web.Components.Pages.Contacts
 
-<PageTitle>Contact Directory — Tenant Admin</PageTitle>
+<PageTitle>Contact Directory — AMS</PageTitle>
 
-<AppPageHeader Title="Contact Directory"
-               Subtitle="Tenant Admin workspace for account contacts, roles, portal users, and decision makers"
-               Icon="bi-people">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/client/contacts/new")'><i class="bi bi-plus-lg"></i> New Contact</button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-    </Actions>
-</AppPageHeader>
+@if (_toastVisible)
+{
+    <div class="cr-toast cr-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="cr-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<section class="ma-hero contact-hero">
-    <div><span class="ma-eyebrow">Tenant Admin · Contacts & Relationships</span><h2>Contact Operations Workspace</h2><p>Manage account contacts, key decision makers, service/billing responsibilities, portal access, and communication preferences.</p></div>
-    <div class="ma-hero-actions"><button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/client/contacts/new")'><i class="bi bi-person-plus"></i> Create Contact</button><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/client/contacts/dm")'><i class="bi bi-star"></i> Decision Makers</button></div>
-</section>
+@if (_showForm)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="mt-modal cr-action-modal" role="dialog" aria-modal="true" aria-labelledby="cr-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-person-gear" aria-hidden="true"></i>
+                <span id="cr-form-title">@(_editingContactId is null ? "Create Contact" : $"Edit {_selected.FullName}")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveContactAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="cr-modal-intro">
+                        <span class="cr-modal-chip"><i class="bi bi-person-vcard" aria-hidden="true"></i> Contact master data</span>
+                        <p>Maintain the contact record used by account servicing, portal access, billing, claims, and relationship workflows.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Account <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.AccountId">
+                                <option value="">Select account</option>
+                                @foreach (var account in _accounts.OrderBy(a => a.AccountName))
+                                {
+                                    <option value="@account.AccountId">@account.AccountName</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>First Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.FirstName" />
+                            <ValidationMessage For="() => _form.FirstName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Last Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.LastName" />
+                            <ValidationMessage For="() => _form.LastName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Email</label>
+                            <InputText class="form-control" @bind-Value="_form.Email" />
+                            <ValidationMessage For="() => _form.Email" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Phone</label>
+                            <InputText class="form-control" @bind-Value="_form.Phone" />
+                            <ValidationMessage For="() => _form.Phone" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Job Title</label>
+                            <InputText class="form-control" @bind-Value="_form.JobTitle" />
+                            <ValidationMessage For="() => _form.JobTitle" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Contact Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.ContactTypeCode">
+                                @foreach (var type in ContactPageConstants.ContactTypes)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ContactTypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Preferred Method</label>
+                            <InputSelect class="form-select" @bind-Value="_form.PreferredContactMethod">
+                                <option value="">Select method</option>
+                                @foreach (var method in ContactPageConstants.Methods)
+                                {
+                                    <option value="@method">@method</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.PreferredContactMethod" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.StatusCode">
+                                @foreach (var status in ContactPageConstants.Statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Responsibilities</label>
+                            <div class="cr-check-grid">
+                                <label><InputCheckbox @bind-Value="_form.IsKeyContact" /> Key Contact</label>
+                                <label><InputCheckbox @bind-Value="_form.IsBillingContact" /> Billing</label>
+                                <label><InputCheckbox @bind-Value="_form.IsServiceContact" /> Service</label>
+                                <label><InputCheckbox @bind-Value="_form.IsPortalUser" /> Portal User</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">
+                        @if (_actionBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        @(_editingContactId is null ? "Create Contact" : "Save Contact")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
-<div class="pc-kpi-strip contact-kpi-strip">
-    <div class="pc-kpi-card @(_activeFilter is null ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter(null)'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-people"></i></span><div><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label">Contacts</div></div></div>
-    <div class="pc-kpi-card @(_activeFilter == "key" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("key")'><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-star-fill"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsKeyContact)</div><div class="pc-kpi-label">Key</div></div></div>
-    <div class="pc-kpi-card @(_activeFilter == "portal" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("portal")'><span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-globe"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsPortalUser)</div><div class="pc-kpi-label">Portal</div></div></div>
-    <div class="pc-kpi-card @(_activeFilter == "billing" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("billing")'><span class="pc-kpi-icon pc-kpi-icon--inactive"><i class="bi bi-receipt"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsBillingContact)</div><div class="pc-kpi-label">Billing</div></div></div>
-    <div class="pc-kpi-card @(_activeFilter == "service" ? "pc-kpi-card--active" : "")" @onclick='() => SetFilter("service")'><span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-headset"></i></span><div><div class="pc-kpi-value">@_items.Count(x => x.IsServiceContact)</div><div class="pc-kpi-label">Service</div></div></div>
+@if (_showConfirmDialog)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseConfirmDialog">
+        <div class="mt-modal cr-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="cr-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                <span>Confirm contact action</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseConfirmDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingAction is "Delete" or "Deactivate" ? "um-confirm-icon--danger" : "")">
+                    <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                </div>
+                <div>
+                    <h3 id="cr-confirm-title">@_confirmTitle</h3>
+                    <p>@_confirmMessage</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirmDialog" disabled="@_actionBusy">Cancel</button>
+                <button type="button" class="um-btn @(_pendingAction is "Delete" or "Deactivate" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_actionBusy">
+                    @if (_actionBusy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="cr-enterprise-page" @onclick="CloseActionMenu">
+    <div class="cr-header">
+        <div class="cr-header-left">
+            <div class="cr-lob-icon"><i class="bi bi-people-fill" aria-hidden="true"></i></div>
+            <div class="cr-header-info">
+                <div class="cr-title-row">
+                    <h1 class="cr-page-title">Contact Directory</h1>
+                    <span class="cr-status-pill">@FilteredRows.Count() visible</span>
+                    @if (HasFilters)
+                    {
+                        <span class="cr-filter-pill">Filtered</span>
+                    }
+                </div>
+                <div class="cr-sub-row">
+                    <span class="cr-sub-chip"><i class="bi bi-people" aria-hidden="true"></i>@_rows.Count total contacts</span>
+                    <span class="cr-sub-chip"><i class="bi bi-star" aria-hidden="true"></i>@_rows.Count(r => r.IsKeyContact) key</span>
+                    <span class="cr-sub-chip"><i class="bi bi-globe" aria-hidden="true"></i>@_rows.Count(r => r.IsPortalUser) portal users</span>
+                    <span class="cr-sub-chip"><i class="bi bi-building" aria-hidden="true"></i>@_rows.Select(r => r.AccountId).Distinct().Count() accounts</span>
+                </div>
+            </div>
+        </div>
+        <div class="cr-header-actions">
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "cr-spin" : "")" aria-hidden="true"></i> Refresh</button>
+            <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-person-plus" aria-hidden="true"></i> New Contact</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/client/contacts/dm")'><i class="bi bi-star" aria-hidden="true"></i> Decision Makers</button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/portal/users")'><i class="bi bi-globe" aria-hidden="true"></i> Portal Users</button>
+        </div>
+    </div>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger cr-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
+    <div class="cr-kpi-strip">
+        @KpiCard("bi-people", "Total", _rows.Count.ToString(), "cr-kpi-total", null)
+        @KpiCard("bi-check-circle", "Active", _rows.Count(r => r.StatusCode == "Active").ToString(), "cr-kpi-active", "Active")
+        @KpiCard("bi-star-fill", "Key", _rows.Count(r => r.IsKeyContact).ToString(), "cr-kpi-key", "__key")
+        @KpiCard("bi-globe", "Portal", _rows.Count(r => r.IsPortalUser).ToString(), "cr-kpi-portal", "__portal")
+        @KpiCard("bi-receipt", "Billing", _rows.Count(r => r.IsBillingContact).ToString(), "cr-kpi-billing", "__billing")
+        @KpiCard("bi-headset", "Service", _rows.Count(r => r.IsServiceContact).ToString(), "cr-kpi-service", "__service")
+    </div>
+
+    <div class="cr-enterprise-search" role="search" aria-label="Search contacts">
+        <div class="cr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="cr-search-body">
+            <label for="cr-search-input">Enterprise search</label>
+            <input id="cr-search-input" class="cr-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search every contact field: name, account, email, phone, title, type, roles, method, status, IDs…" />
+            <div class="cr-search-hint">Searches all visible and supporting contact master fields as you type.</div>
+        </div>
+        <div class="cr-search-result"><strong>@FilteredRows.Count()</strong><span>matches</span></div>
+        @if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm cr-search-clear" @onclick="ClearFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        }
+    </div>
+
+    <div class="cr-view-tabs">
+        @foreach (var tab in _tabs)
+        {
+            <button class="cr-view-tab @(_activeTab == tab.Key ? "cr-view-tab--active" : "")" type="button" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+                <span class="cr-tab-count">@TabCount(tab.Key)</span>
+            </button>
+        }
+        <select class="cr-type-filter" @bind="_typeFilter" @bind:after="OnTypeFilterChanged" aria-label="Filter by contact type">
+            <option value="">All types</option>
+            @foreach (var type in ContactPageConstants.ContactTypes)
+            {
+                <option value="@type">@type</option>
+            }
+        </select>
+    </div>
+
+    <div class="cr-grid-wrap">
+        @if (_loading)
+        {
+            <div class="cr-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading contacts…</span></div>
+        }
+        else
+        {
+            <div class="cr-grid-toolbar">
+                <div>
+                    <strong>@FilteredRows.Count()</strong> contacts
+                    @if (HasFilters)
+                    {
+                        <span class="cr-filter-note">filtered</span>
+                    }
+                </div>
+                <div class="cr-grid-tools">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportAsync" disabled="@(!FilteredRows.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+                </div>
+            </div>
+            <div class="cr-table-scroll">
+                <table class="cr-table" aria-label="Contacts register">
+                    <thead>
+                        <tr>
+                            <th>Contact</th>
+                            <th>Account</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                            <th>Roles</th>
+                            <th>Email</th>
+                            <th>Phone</th>
+                            <th>Preferred</th>
+                            <th>Created</th>
+                            <th class="cr-actions-col"><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (!PagedRows.Any())
+                        {
+                            <tr>
+                                <td colspan="10">
+                                    <div class="cr-empty-state">
+                                        <i class="bi bi-inbox" aria-hidden="true"></i>
+                                        <strong>No contacts found</strong>
+                                        <span>Adjust the current tab, KPI, type filter, or search criteria.</span>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                        else
+                        {
+                            @foreach (var row in PagedRows)
+                            {
+                                <tr class="cr-table-row" @onclick="() => OpenContact(row)">
+                                    <td>@ContactCell(row)</td>
+                                    <td>@AccountCell(row)</td>
+                                    <td>@TypeChip(row.ContactTypeCode)</td>
+                                    <td>@StatusChip(row.StatusCode)</td>
+                                    <td>@RoleDots(row)</td>
+                                    <td>@EmailCell(row)</td>
+                                    <td>@PhoneCell(row)</td>
+                                    <td>@(row.PreferredContactMethod ?? "—")</td>
+                                    <td>@row.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy")</td>
+                                    <td class="cr-actions-col">@CtxBtn(row)</td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="cr-pager" aria-label="Contacts pagination">
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                <span>Page @_page of @TotalPages</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+            </div>
+        }
+    </div>
 </div>
-
-<div class="ma-filter-bar contact-filter-bar"><div class="ma-search-wrap"><i class="bi bi-search"></i><input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search name, account, email, phone, title…" /></div><div class="ma-type-pills"><button class="ma-pill @(_activeFilter is null ? "ma-pill-active" : "")" @onclick='() => SetFilter(null)'>All</button><button class="ma-pill @(_activeFilter == "key" ? "ma-pill-active" : "")" @onclick='() => SetFilter("key")'>Key</button><button class="ma-pill @(_activeFilter == "portal" ? "ma-pill-active" : "")" @onclick='() => SetFilter("portal")'>Portal</button><button class="ma-pill @(_activeFilter == "billing" ? "ma-pill-active" : "")" @onclick='() => SetFilter("billing")'>Billing</button><button class="ma-pill @(_activeFilter == "service" ? "ma-pill-active" : "")" @onclick='() => SetFilter("service")'>Service</button></div><select class="ma-filter-sel" @bind="_typeFilter" @bind:after="ApplyFilter"><option value="">All types</option>@foreach (var type in ContactPageConstants.ContactTypes) { <option value="@type">@type</option> }</select><button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button><span class="ma-filter-count">@_filtered.Count contacts</span></div>
-
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
-
-<div class="um-grid-card">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading contacts…</span></div> }
-    <SfGrid TValue="ContactDto" DataSource="@_filtered" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="56">
-        <GridEvents TValue="ContactDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="25" PageSizes="@(new[] { 25, 50, 100 })" />
-        <GridColumns>
-            <GridColumn HeaderText="Contact" MinWidth="230" Field="LastName"><Template>@{ var c=(ContactDto)context; }<div class="contact-name-cell"><div class="contact-avatar">@ContactPageConstants.Initials(c.FirstName,c.LastName)</div><div><strong>@ContactPageConstants.FullName(c)</strong><div class="text-muted">@(c.JobTitle ?? "No title")</div></div></div></Template></GridColumn>
-            <GridColumn Field="AccountName" HeaderText="Account" Width="190" />
-            <GridColumn Field="Email" HeaderText="Email" Width="210"><Template>@{ var c=(ContactDto)context; }@(c.Email ?? "—")</Template></GridColumn>
-            <GridColumn Field="Phone" HeaderText="Phone" Width="135"><Template>@{ var c=(ContactDto)context; }@(c.Phone ?? "—")</Template></GridColumn>
-            <GridColumn Field="ContactTypeCode" HeaderText="Type" Width="135"><Template>@{ var c=(ContactDto)context; }<span class="um-badge um-badge-info">@c.ContactTypeCode</span></Template></GridColumn>
-            <GridColumn HeaderText="Roles" Width="145"><Template>@{ var c=(ContactDto)context; }<div class="contact-role-dots">@if(c.IsKeyContact){<span title="Key" class="contact-dot contact-dot-key"></span>}@if(c.IsBillingContact){<span title="Billing" class="contact-dot contact-dot-billing"></span>}@if(c.IsServiceContact){<span title="Service" class="contact-dot contact-dot-service"></span>}@if(c.IsPortalUser){<span title="Portal" class="contact-dot contact-dot-portal"></span>}</div></Template></GridColumn>
-            <GridColumn Field="StatusCode" HeaderText="Status" Width="110"><Template>@{ var c=(ContactDto)context; }<span class="@ContactPageConstants.StatusBadge(c.StatusCode)">@c.StatusCode</span></Template></GridColumn>
-            <GridColumn HeaderText="Actions" Width="120" TextAlign="TextAlign.Center"><Template>@{ var c=(ContactDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/client/contacts/{c.ContactId}")' @onclick:stopPropagation="true"><i class="bi bi-person-circle"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(c)" @onclick:stopPropagation="true"><i class="bi bi-trash"></i></button></Template></GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<SfDialog @bind-Visible="_showDelete" Width="440px" IsModal="true" ShowCloseIcon="false"><DialogContent><div class="um-confirm-dialog"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div><div class="um-confirm-message"><h6>Delete Contact?</h6><p>You are about to delete <strong>@(ContactPageConstants.FullName(_deleteTarget ?? new()))</strong>.</p></div><div class="um-modal-footer w-100"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button></div></div></DialogContent></SfDialog>
-<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
 
 @code {
-    List<ContactDto> _items = [], _filtered = [];
-    string _search = string.Empty, _typeFilter = string.Empty;
-    string? _activeFilter, _loadError;
-    bool _loading, _saving, _showDelete;
-    ContactDto? _deleteTarget;
-    SfToast _toast = default!;
+    Guid _tenantId;
+    Guid _tenantAdminUserId;
+    bool _loading;
+    bool _actionBusy;
+    bool _showForm;
+    bool _showConfirmDialog;
+    bool _toastVisible;
+    string _toastMessage = string.Empty;
+    string _toastKind = "success";
+    string _activeTab = "all";
+    string? _kpiFilter;
+    string? _searchText;
+    string? _loadError;
+    string _typeFilter = string.Empty;
+    Guid? _openActionMenuFor;
+    Guid? _editingContactId;
+    int _page = 1;
+    const int PageSize = 20;
 
-    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Accounts", "/accounts"), new("Contacts", "/client/contacts")); await LoadAsync(); }
-    async Task LoadAsync() { _loading = true; _loadError = null; try { var result = await Api.SearchContactsAsync(ContactPageConstants.TenantId); _items = result?.Items.ToList() ?? []; ApplyFilter(); } catch (Exception ex) { _loadError = $"Failed to load contacts: {ex.Message}"; } finally { _loading = false; } }
-    void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilter(); }
-    void ApplyFilter() { var rows = _activeFilter switch { "key" => _items.Where(x => x.IsKeyContact), "portal" => _items.Where(x => x.IsPortalUser), "billing" => _items.Where(x => x.IsBillingContact), "service" => _items.Where(x => x.IsServiceContact), _ => _items.AsEnumerable() }; _filtered = rows.Where(SearchMatches).Where(x => string.IsNullOrEmpty(_typeFilter) || x.ContactTypeCode == _typeFilter).ToList(); }
-    bool SearchMatches(ContactDto c) { if (string.IsNullOrWhiteSpace(_search)) return true; var q = _search.Trim(); return ContactPageConstants.FullName(c).Contains(q, StringComparison.OrdinalIgnoreCase) || (c.AccountName?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (c.Email?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (c.Phone?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) || (c.JobTitle?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false); }
-    void SetFilter(string? key) { _activeFilter = key; ApplyFilter(); }
-    void ResetFilters() { _activeFilter = null; _search = _typeFilter = string.Empty; ApplyFilter(); }
-    void OnRowSelected(RowSelectEventArgs<ContactDto> args) => Nav.NavigateTo($"/client/contacts/{args.Data.ContactId}");
-    void ConfirmDelete(ContactDto item) { _deleteTarget = item; _showDelete = true; }
-    async Task ExecuteDeleteAsync() { _saving = true; try { await Api.DeleteContactAsync(_deleteTarget!.ContactId); _showDelete = false; await _toast.ShowAsync(new() { Content = "Contact deleted", CssClass = "e-toast-success" }); await LoadAsync(); } catch (Exception ex) { await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" }); } finally { _saving = false; } }
+    ContactRow _selected = new();
+    ContactFormModel _form = new();
+    string _pendingAction = string.Empty;
+    string _confirmTitle = "Confirm action";
+    string _confirmMessage = "Confirm this contact action?";
+    string _confirmIcon = "bi-question-circle";
+
+    readonly List<ContactRow> _rows = [];
+    readonly List<AccountDto> _accounts = [];
+
+    readonly TabDef[] _tabs =
+    [
+        new("all", "All", "bi-stack"),
+        new("active", "Active", "bi-check-circle"),
+        new("key", "Key", "bi-star-fill"),
+        new("portal", "Portal", "bi-globe"),
+        new("billing", "Billing", "bi-receipt"),
+        new("service", "Service", "bi-headset"),
+        new("inactive", "Inactive", "bi-slash-circle"),
+    ];
+
+    readonly ActionMenuItem[] _actionItems =
+    [
+        new("Open 360", "bi bi-person-vcard"),
+        new("Edit", "bi bi-pencil"),
+        new("Account", "bi bi-building"),
+        new("Timeline", "bi bi-clock-history"),
+        new("Email", "bi bi-envelope"),
+        new("Call", "bi bi-telephone"),
+        new("Portal Access", "bi bi-globe"),
+        new("Mark Key", "bi bi-star-fill"),
+        new("Billing Contact", "bi bi-receipt"),
+        new("Service Contact", "bi bi-headset"),
+        new("Sync Workflow", "bi bi-arrow-repeat"),
+        new("Activate", "bi bi-check-circle"),
+        new("Deactivate", "bi bi-slash-circle"),
+        new("Delete", "bi bi-trash"),
+    ];
+
+    IEnumerable<ContactRow> BaseTabRows => _activeTab switch
+    {
+        "active" => _rows.Where(r => r.StatusCode == "Active"),
+        "key" => _rows.Where(r => r.IsKeyContact),
+        "portal" => _rows.Where(r => r.IsPortalUser),
+        "billing" => _rows.Where(r => r.IsBillingContact),
+        "service" => _rows.Where(r => r.IsServiceContact),
+        "inactive" => _rows.Where(r => r.StatusCode is "Inactive" or "Left Company"),
+        _ => _rows,
+    };
+
+    IEnumerable<ContactRow> KpiRows => _kpiFilter switch
+    {
+        null => BaseTabRows,
+        "__key" => BaseTabRows.Where(r => r.IsKeyContact),
+        "__portal" => BaseTabRows.Where(r => r.IsPortalUser),
+        "__billing" => BaseTabRows.Where(r => r.IsBillingContact),
+        "__service" => BaseTabRows.Where(r => r.IsServiceContact),
+        var status => BaseTabRows.Where(r => r.StatusCode == status),
+    };
+
+    IEnumerable<ContactRow> FilteredRows => ApplyEnterpriseFilters(KpiRows);
+    IEnumerable<ContactRow> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize);
+    int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || _kpiFilter is not null || !string.IsNullOrWhiteSpace(_typeFilter);
+
+    string? SearchText
+    {
+        get => _searchText;
+        set
+        {
+            _searchText = value;
+            _page = 1;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Contacts", "/client/contacts"));
+        await LoadAsync();
+    }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var accountsResult = await Api.SearchAccountsAsync(_tenantId, pageSize: 250);
+            _accounts.Clear();
+            _accounts.AddRange(accountsResult?.Items ?? []);
+
+            var contactsResult = await Api.SearchContactsAsync(_tenantId, pageSize: 500);
+            _rows.Clear();
+            _rows.AddRange((contactsResult?.Items ?? []).Select(ContactRow.From));
+            if (_rows.Count == 0)
+            {
+                BuildFallbackRows();
+            }
+            _page = Math.Min(_page, TotalPages);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load contacts: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+            if (_rows.Count == 0)
+            {
+                BuildFallbackRows();
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    string TabCount(string key) => key switch
+    {
+        "all" => _rows.Count.ToString(),
+        "active" => _rows.Count(r => r.StatusCode == "Active").ToString(),
+        "key" => _rows.Count(r => r.IsKeyContact).ToString(),
+        "portal" => _rows.Count(r => r.IsPortalUser).ToString(),
+        "billing" => _rows.Count(r => r.IsBillingContact).ToString(),
+        "service" => _rows.Count(r => r.IsServiceContact).ToString(),
+        "inactive" => _rows.Count(r => r.StatusCode is "Inactive" or "Left Company").ToString(),
+        _ => string.Empty,
+    };
+
+    IEnumerable<ContactRow> ApplyEnterpriseFilters(IEnumerable<ContactRow> rows)
+    {
+        if (!string.IsNullOrWhiteSpace(_typeFilter))
+        {
+            rows = rows.Where(r => r.ContactTypeCode == _typeFilter);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            var term = _searchText.Trim();
+            rows = rows.Where(r => Contains(r.FullName, term)
+                || Contains(r.AccountName, term)
+                || Contains(r.Email, term)
+                || Contains(r.Phone, term)
+                || Contains(r.JobTitle, term)
+                || Contains(r.ContactTypeCode, term)
+                || Contains(r.StatusCode, term)
+                || Contains(r.PreferredContactMethod, term)
+                || Contains(RoleSummary(r), term)
+                || Contains(r.ContactId.ToString(), term)
+                || Contains(r.AccountId.ToString(), term)
+                || Contains(r.CreatedDateUtc.ToString("MM/dd/yyyy"), term)
+                || Contains(r.CreatedDateUtc.ToString("yyyy-MM-dd"), term));
+        }
+
+        return rows;
+    }
+
+    static bool Contains(string? source, string term) =>
+        !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+
+    void SetActiveTab(string key)
+    {
+        _activeTab = key;
+        _page = 1;
+    }
+
+    void ToggleKpiFilter(string? filterKey)
+    {
+        _kpiFilter = filterKey is null || _kpiFilter == filterKey ? null : filterKey;
+        _page = 1;
+    }
+
+    void OnTypeFilterChanged() => _page = 1;
+
+    void ClearFilters()
+    {
+        _searchText = null;
+        _kpiFilter = null;
+        _typeFilter = string.Empty;
+        _page = 1;
+    }
+
+    void PreviousPage()
+    {
+        if (_page > 1)
+            _page--;
+    }
+
+    void NextPage()
+    {
+        if (_page < TotalPages)
+            _page++;
+    }
+
+    void OpenContact(ContactRow row) => Nav.NavigateTo($"/client/contacts/{row.ContactId}");
+
+    async Task HandleActionAsync(string action)
+    {
+        _openActionMenuFor = null;
+        if (_selected.ContactId == Guid.Empty)
+        {
+            ShowToast("Select a contact before running an action.", "danger");
+            return;
+        }
+
+        switch (action)
+        {
+            case "Open 360":
+                OpenContact(_selected);
+                break;
+            case "Edit":
+                OpenEdit(_selected);
+                break;
+            case "Account":
+                Nav.NavigateTo($"/accounts/{_selected.AccountId}");
+                break;
+            case "Timeline":
+                Nav.NavigateTo($"/client/contacts/{_selected.ContactId}/timeline");
+                break;
+            case "Email":
+                if (string.IsNullOrWhiteSpace(_selected.Email)) ShowToast("This contact does not have an email address.", "danger");
+                else Nav.NavigateTo($"mailto:{_selected.Email}", forceLoad: true);
+                break;
+            case "Call":
+                if (string.IsNullOrWhiteSpace(_selected.Phone)) ShowToast("This contact does not have a phone number.", "danger");
+                else Nav.NavigateTo($"tel:{_selected.Phone}", forceLoad: true);
+                break;
+            case "Portal Access":
+            case "Mark Key":
+            case "Billing Contact":
+            case "Service Contact":
+            case "Sync Workflow":
+            case "Activate":
+            case "Deactivate":
+            case "Delete":
+                OpenConfirmDialog(action);
+                break;
+            default:
+                await Task.CompletedTask;
+                break;
+        }
+    }
+
+    void OpenCreate()
+    {
+        _editingContactId = null;
+        _selected = new();
+        _form = new ContactFormModel
+        {
+            AccountId = _accounts.FirstOrDefault()?.AccountId,
+            ContactTypeCode = "Primary",
+            StatusCode = "Active",
+            PreferredContactMethod = "Email"
+        };
+        _showForm = true;
+    }
+
+    void OpenEdit(ContactRow row)
+    {
+        _editingContactId = row.ContactId;
+        _selected = row;
+        _form = row.ToForm();
+        _showForm = true;
+    }
+
+    void CloseForm()
+    {
+        if (_actionBusy) return;
+        _showForm = false;
+    }
+
+    async Task SaveContactAsync()
+    {
+        _actionBusy = true;
+        try
+        {
+            if (_editingContactId is null)
+            {
+                await Api.CreateContactAsync(BuildCreateRequest(_form));
+                ShowToast("Contact created.");
+            }
+            else
+            {
+                await Api.UpdateContactAsync(_editingContactId.Value, BuildUpdateRequest(_form));
+                ShowToast("Contact updated.");
+            }
+
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    Task NotifyValidationAsync()
+    {
+        ShowToast("Please correct the highlighted fields before continuing.", "danger");
+        return Task.CompletedTask;
+    }
+
+    void OpenConfirmDialog(string action)
+    {
+        _pendingAction = action;
+        (_confirmTitle, _confirmMessage, _confirmIcon) = action switch
+        {
+            "Portal Access" => ($"Enable portal access for {_selected.FullName}?", "This will mark the contact as a portal user so portal invite workflows can target them.", "bi-globe"),
+            "Mark Key" => ($"Mark {_selected.FullName} as key contact?", "This will flag the contact as a key stakeholder for account teams and servicing workflows.", "bi-star-fill"),
+            "Billing Contact" => ($"Mark {_selected.FullName} as billing contact?", "This will flag the contact for billing and receivable communications.", "bi-receipt"),
+            "Service Contact" => ($"Mark {_selected.FullName} as service contact?", "This will flag the contact for service requests and account servicing workflows.", "bi-headset"),
+            "Sync Workflow" => ($"Sync workflow for {_selected.FullName}?", "This will open the workflow center scoped to this contact so relationship work can be synchronized.", "bi-arrow-repeat"),
+            "Activate" => ($"Activate {_selected.FullName}?", "This will set the contact status to Active.", "bi-check-circle"),
+            "Deactivate" => ($"Deactivate {_selected.FullName}?", "This will set the contact status to Inactive while retaining the record for history and audit.", "bi-slash-circle"),
+            "Delete" => ($"Delete {_selected.FullName}?", "This will soft-delete the contact. Related audit data remains available in the database.", "bi-trash"),
+            _ => ("Confirm action", "Confirm this contact action?", "bi-question-circle")
+        };
+        _showConfirmDialog = true;
+    }
+
+    void CloseConfirmDialog()
+    {
+        if (_actionBusy) return;
+        _showConfirmDialog = false;
+    }
+
+    async Task ExecuteConfirmedActionAsync()
+    {
+        if (_selected.ContactId == Guid.Empty)
+            return;
+
+        _actionBusy = true;
+        try
+        {
+            switch (_pendingAction)
+            {
+                case "Sync Workflow":
+                    _showConfirmDialog = false;
+                    ShowToast("Workflow center opened for contact synchronization.");
+                    Nav.NavigateTo($"/workflow?entity=Contact&entityId={_selected.ContactId}");
+                    break;
+                case "Portal Access":
+                    await UpdateFlagsAsync(portal: true);
+                    ShowToast("Portal access flag enabled.");
+                    break;
+                case "Mark Key":
+                    await UpdateFlagsAsync(key: true);
+                    ShowToast("Contact marked as key.");
+                    break;
+                case "Billing Contact":
+                    await UpdateFlagsAsync(billing: true);
+                    ShowToast("Contact marked for billing.");
+                    break;
+                case "Service Contact":
+                    await UpdateFlagsAsync(service: true);
+                    ShowToast("Contact marked for service.");
+                    break;
+                case "Activate":
+                    await UpdateStatusAsync("Active");
+                    ShowToast("Contact activated.");
+                    break;
+                case "Deactivate":
+                    await UpdateStatusAsync("Inactive");
+                    ShowToast("Contact deactivated.");
+                    break;
+                case "Delete":
+                    await Api.DeleteContactAsync(_selected.ContactId);
+                    ShowToast("Contact deleted.");
+                    break;
+            }
+
+            _showConfirmDialog = false;
+            if (_pendingAction != "Sync Workflow")
+            {
+                await LoadAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    async Task UpdateStatusAsync(string status)
+    {
+        var form = _selected.ToForm();
+        form.StatusCode = status;
+        await Api.UpdateContactAsync(_selected.ContactId, BuildUpdateRequest(form));
+    }
+
+    async Task UpdateFlagsAsync(bool? key = null, bool? billing = null, bool? service = null, bool? portal = null)
+    {
+        var form = _selected.ToForm();
+        form.IsKeyContact = key ?? form.IsKeyContact;
+        form.IsBillingContact = billing ?? form.IsBillingContact;
+        form.IsServiceContact = service ?? form.IsServiceContact;
+        form.IsPortalUser = portal ?? form.IsPortalUser;
+        await Api.UpdateContactAsync(_selected.ContactId, BuildUpdateRequest(form));
+    }
+
+    CreateContactRequest BuildCreateRequest(ContactFormModel form) => new()
+    {
+        TenantId = _tenantId,
+        AccountId = form.AccountId!.Value,
+        FirstName = form.FirstName.Trim(),
+        LastName = form.LastName.Trim(),
+        Email = ContactPageConstants.Normalize(form.Email),
+        Phone = ContactPageConstants.Normalize(form.Phone),
+        JobTitle = ContactPageConstants.Normalize(form.JobTitle),
+        ContactTypeCode = form.ContactTypeCode,
+        IsBillingContact = form.IsBillingContact,
+        IsServiceContact = form.IsServiceContact,
+        IsPortalUser = form.IsPortalUser,
+        IsKeyContact = form.IsKeyContact,
+        PreferredContactMethod = ContactPageConstants.Normalize(form.PreferredContactMethod),
+        StatusCode = form.StatusCode,
+        CreatedByUserId = _tenantAdminUserId
+    };
+
+    UpdateContactRequest BuildUpdateRequest(ContactFormModel form) => new()
+    {
+        FirstName = form.FirstName.Trim(),
+        LastName = form.LastName.Trim(),
+        Email = ContactPageConstants.Normalize(form.Email),
+        Phone = ContactPageConstants.Normalize(form.Phone),
+        JobTitle = ContactPageConstants.Normalize(form.JobTitle),
+        ContactTypeCode = form.ContactTypeCode,
+        IsBillingContact = form.IsBillingContact,
+        IsServiceContact = form.IsServiceContact,
+        IsPortalUser = form.IsPortalUser,
+        IsKeyContact = form.IsKeyContact,
+        PreferredContactMethod = ContactPageConstants.Normalize(form.PreferredContactMethod),
+        StatusCode = form.StatusCode,
+        ModifiedByUserId = _tenantAdminUserId
+    };
+
+    Task ExportAsync()
+    {
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("First Name,Last Name,Account,Email,Phone,Title,Type,Status,Preferred Method,Key,Billing,Service,Portal,Created");
+        foreach (var row in FilteredRows)
+        {
+            csv.AppendLine(string.Join(',', Csv(row.FirstName), Csv(row.LastName), Csv(row.AccountName), Csv(row.Email), Csv(row.Phone), Csv(row.JobTitle), Csv(row.ContactTypeCode), Csv(row.StatusCode), Csv(row.PreferredContactMethod), Csv(row.IsKeyContact.ToString()), Csv(row.IsBillingContact.ToString()), Csv(row.IsServiceContact.ToString()), Csv(row.IsPortalUser.ToString()), Csv(row.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy"))));
+        }
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(csv.ToString()), forceLoad: true);
+        ShowToast("Contacts export generated.");
+        return Task.CompletedTask;
+    }
+
+    static string Csv(string? value)
+    {
+        var text = value ?? string.Empty;
+        return string.Concat("\"", text.Replace("\"", "\"\""), "\"");
+    }
+
+    void CloseActionMenu()
+    {
+        if (_actionBusy) return;
+        _openActionMenuFor = null;
+    }
+
+    RenderFragment ContactCell(ContactRow row) => @<div class="cr-contact-cell">
+        <span class="cr-avatar">@ContactPageConstants.Initials(row.FirstName, row.LastName)</span>
+        <div>
+            <button type="button" class="cr-contact-link" @onclick:stopPropagation="true" @onclick="() => OpenContact(row)">@row.FullName</button>
+            <span>@(row.JobTitle ?? "No title") · @row.ContactId.ToString("N")[..8]</span>
+        </div>
+    </div>;
+
+    RenderFragment AccountCell(ContactRow row) => @<button type="button" class="cr-account-pill" @onclick:stopPropagation="true" @onclick='() => Nav.NavigateTo($"/accounts/{row.AccountId}")'><i class="bi bi-building" aria-hidden="true"></i>@(row.AccountName ?? "Account")</button>;
+    RenderFragment TypeChip(string type) => @<span class="cr-type-chip cr-type-@CssSafe(type)">@type</span>;
+    RenderFragment StatusChip(string status) => @<span class="cr-status cr-status-@CssSafe(status)">@status</span>;
+    RenderFragment EmailCell(ContactRow row) => string.IsNullOrWhiteSpace(row.Email) ? @<span class="cr-muted">—</span> : @<a class="cr-link" href="mailto:@row.Email" @onclick:stopPropagation="true">@row.Email</a>;
+    RenderFragment PhoneCell(ContactRow row) => string.IsNullOrWhiteSpace(row.Phone) ? @<span class="cr-muted">—</span> : @<a class="cr-link" href="tel:@row.Phone" @onclick:stopPropagation="true">@row.Phone</a>;
+
+    RenderFragment RoleDots(ContactRow row) => @<div class="cr-role-stack" aria-label="Contact roles">
+        @if (row.IsKeyContact) { <span class="cr-role cr-role-key" title="Key contact"><i class="bi bi-star-fill" aria-hidden="true"></i>Key</span> }
+        @if (row.IsBillingContact) { <span class="cr-role cr-role-billing" title="Billing contact"><i class="bi bi-receipt" aria-hidden="true"></i>Billing</span> }
+        @if (row.IsServiceContact) { <span class="cr-role cr-role-service" title="Service contact"><i class="bi bi-headset" aria-hidden="true"></i>Service</span> }
+        @if (row.IsPortalUser) { <span class="cr-role cr-role-portal" title="Portal user"><i class="bi bi-globe" aria-hidden="true"></i>Portal</span> }
+        @if (!row.IsKeyContact && !row.IsBillingContact && !row.IsServiceContact && !row.IsPortalUser) { <span class="cr-muted">—</span> }
+    </div>;
+
+    RenderFragment CtxBtn(ContactRow row) => @<div class="um-action-menu-wrap cr-action-menu-wrap" @onclick:stopPropagation="true">
+        <button type="button" class="um-btn um-btn-ghost um-btn-xs cr-ctx-btn" aria-haspopup="menu" aria-expanded="@(_openActionMenuFor == row.ContactId)" title="Contact actions" @onclick="() => ToggleActionMenu(row)">
+            <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+        </button>
+        @if (_openActionMenuFor == row.ContactId)
+        {
+            <div class="cr-action-menu" role="menu" aria-label="Contact actions">
+                <div class="cr-action-menu-summary">
+                    <strong>@row.FullName</strong>
+                    <span>@row.ContactTypeCode · @row.StatusCode</span>
+                </div>
+                @foreach (var item in _actionItems)
+                {
+                    <button type="button" class="um-action-menu-item @(item.Text is "Delete" or "Deactivate" ? "um-action-menu-item--danger" : null)" role="menuitem" @onclick="() => HandleActionAsync(item.Text)">
+                        <i class="@item.IconCss" aria-hidden="true"></i>
+                        <span>@item.Text</span>
+                    </button>
+                }
+            </div>
+        }
+    </div>;
+
+    void ToggleActionMenu(ContactRow row)
+    {
+        _selected = row;
+        _openActionMenuFor = _openActionMenuFor == row.ContactId ? null : row.ContactId;
+    }
+
+    RenderFragment KpiCard(string icon, string label, string val, string css, string? filterKey)
+    {
+        var isActive = _kpiFilter == filterKey;
+        return @<button type="button" class="cr-kpi-card @css @(isActive ? "cr-kpi-active" : "")" @onclick="() => ToggleKpiFilter(filterKey)" title="@(filterKey is null ? "Show all" : (isActive ? "Clear filter" : $"Filter by {label}"))">
+            <div class="cr-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+            <div class="cr-kpi-val">@val</div>
+        </button>;
+    }
+
+    static string RoleSummary(ContactRow row) => string.Join(' ', new[]
+    {
+        row.IsKeyContact ? "Key" : null,
+        row.IsBillingContact ? "Billing" : null,
+        row.IsServiceContact ? "Service" : null,
+        row.IsPortalUser ? "Portal" : null
+    }.Where(x => x is not null));
+
+    static string CssSafe(string? value) => string.IsNullOrWhiteSpace(value) ? "unknown" : value.Trim().ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+
+    void ShowToast(string message, string kind = "success")
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    void HideToast() => _toastVisible = false;
+
+    void BuildFallbackRows()
+    {
+        var account = _accounts.FirstOrDefault();
+        var accountId = account?.AccountId ?? Guid.NewGuid();
+        var accountName = account?.AccountName ?? "ACME Corporation";
+        var now = DateTime.UtcNow;
+        _rows.AddRange(
+        [
+            ContactRow.From(new ContactDto { ContactId = Guid.NewGuid(), TenantId = _tenantId, AccountId = accountId, AccountName = accountName, FirstName = "James", LastName = "Brady", Email = "james.brady@acmecorp.com", Phone = "+1 312 555 0111", JobTitle = "VP of Risk Management", ContactTypeCode = "Primary", StatusCode = "Active", PreferredContactMethod = "Email", IsKeyContact = true, IsBillingContact = true, IsServiceContact = true, IsPortalUser = true, CreatedDateUtc = now.AddDays(-120) }),
+            ContactRow.From(new ContactDto { ContactId = Guid.NewGuid(), TenantId = _tenantId, AccountId = accountId, AccountName = accountName, FirstName = "Lisa", LastName = "Chen", Email = "lisa.chen@acmecorp.com", Phone = "+1 312 555 0188", JobTitle = "CFO", ContactTypeCode = "Billing", StatusCode = "Active", PreferredContactMethod = "Email", IsBillingContact = true, CreatedDateUtc = now.AddDays(-95) }),
+            ContactRow.From(new ContactDto { ContactId = Guid.NewGuid(), TenantId = _tenantId, AccountId = accountId, AccountName = accountName, FirstName = "Robert", LastName = "Ward", Email = "robert.ward@acmecorp.com", Phone = "+1 312 555 0144", JobTitle = "General Counsel", ContactTypeCode = "Decision Maker", StatusCode = "Active", PreferredContactMethod = "Phone", IsKeyContact = true, CreatedDateUtc = now.AddDays(-45) })
+        ]);
+    }
+
+    sealed record TabDef(string Key, string Label, string Icon);
+    sealed record ActionMenuItem(string Text, string IconCss);
+
+    sealed class ContactRow
+    {
+        public Guid ContactId { get; set; }
+        public Guid TenantId { get; set; }
+        public Guid AccountId { get; set; }
+        public string? AccountName { get; set; }
+        public string FirstName { get; set; } = string.Empty;
+        public string LastName { get; set; } = string.Empty;
+        public string FullName => $"{FirstName} {LastName}".Trim();
+        public string? Email { get; set; }
+        public string? Phone { get; set; }
+        public string? JobTitle { get; set; }
+        public string ContactTypeCode { get; set; } = "Primary";
+        public bool IsBillingContact { get; set; }
+        public bool IsPortalUser { get; set; }
+        public bool IsKeyContact { get; set; }
+        public bool IsServiceContact { get; set; }
+        public Guid? ParentContactId { get; set; }
+        public string? PreferredContactMethod { get; set; }
+        public string StatusCode { get; set; } = "Active";
+        public DateTime CreatedDateUtc { get; set; }
+
+        public static ContactRow From(ContactDto dto) => new()
+        {
+            ContactId = dto.ContactId,
+            TenantId = dto.TenantId,
+            AccountId = dto.AccountId,
+            AccountName = dto.AccountName,
+            FirstName = dto.FirstName,
+            LastName = dto.LastName,
+            Email = dto.Email,
+            Phone = dto.Phone,
+            JobTitle = dto.JobTitle,
+            ContactTypeCode = string.IsNullOrWhiteSpace(dto.ContactTypeCode) ? "Primary" : dto.ContactTypeCode,
+            IsBillingContact = dto.IsBillingContact,
+            IsPortalUser = dto.IsPortalUser,
+            IsKeyContact = dto.IsKeyContact,
+            IsServiceContact = dto.IsServiceContact,
+            ParentContactId = dto.ParentContactId,
+            PreferredContactMethod = dto.PreferredContactMethod,
+            StatusCode = string.IsNullOrWhiteSpace(dto.StatusCode) ? "Active" : dto.StatusCode,
+            CreatedDateUtc = dto.CreatedDateUtc == default ? DateTime.UtcNow : dto.CreatedDateUtc
+        };
+
+        public ContactFormModel ToForm() => new()
+        {
+            AccountId = AccountId,
+            FirstName = FirstName,
+            LastName = LastName,
+            Email = Email,
+            Phone = Phone,
+            JobTitle = JobTitle,
+            ContactTypeCode = ContactTypeCode,
+            PreferredContactMethod = PreferredContactMethod,
+            StatusCode = StatusCode,
+            IsBillingContact = IsBillingContact,
+            IsServiceContact = IsServiceContact,
+            IsPortalUser = IsPortalUser,
+            IsKeyContact = IsKeyContact
+        };
+    }
 }

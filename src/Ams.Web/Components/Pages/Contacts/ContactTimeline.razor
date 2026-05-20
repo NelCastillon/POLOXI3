@@ -1,18 +1,717 @@
-@page "/client/contacts/{ContactId:guid}/timeline"
+﻿@page "/client/contacts/{ContactId:guid}/timeline"
 @namespace Ams.Web.Components.Pages.Contacts
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Contacts
 @inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Contact Timeline — Tenant Admin</PageTitle>
+<PageTitle>@ContactName Timeline — Tenant Admin</PageTitle>
 
-<AppPageHeader Title="Contact Timeline" Subtitle="Tenant Admin chronology for contact activity, role, and portal events" Icon="bi-timeline"><Actions><button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo($"/client/contacts/{ContactId}")'><i class="bi bi-person-circle"></i> Contact 360</button><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions></AppPageHeader>
+@if (_toastVisible)
+{
+    <div class="ctl-toast ctl-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ctl-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<section class="ma-hero contact-hero"><div><span class="ma-eyebrow">Tenant Admin · Contact Intelligence</span><h2>@(_contact is null ? "Contact" : ContactPageConstants.FullName(_contact)) Timeline</h2><p>Track contact creation, role updates, service touchpoints, and portal readiness.</p></div></section>
+@if (_showEditDialog && _contact is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseEditDialog">
+        <div class="mt-modal ctl-action-modal" role="dialog" aria-modal="true" aria-labelledby="ctl-edit-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                <span id="ctl-edit-title">Edit contact timeline profile</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEditDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveContactAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="ctl-modal-intro">
+                        <span class="ctl-modal-chip"><i class="bi bi-timeline" aria-hidden="true"></i> Timeline workflow</span>
+                        <p>Update the contact master fields that drive role, portal, communication, and timeline activity across tenant workflows.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>First Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.FirstName" />
+                            <ValidationMessage For="() => _form.FirstName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Last Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.LastName" />
+                            <ValidationMessage For="() => _form.LastName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Email</label>
+                            <InputText class="form-control" @bind-Value="_form.Email" />
+                            <ValidationMessage For="() => _form.Email" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Phone</label>
+                            <InputText class="form-control" @bind-Value="_form.Phone" />
+                            <ValidationMessage For="() => _form.Phone" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Job Title</label>
+                            <InputText class="form-control" @bind-Value="_form.JobTitle" />
+                            <ValidationMessage For="() => _form.JobTitle" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Contact Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.ContactTypeCode">
+                                @foreach (var type in ContactPageConstants.ContactTypes)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ContactTypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.StatusCode">
+                                @foreach (var status in ContactPageConstants.Statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Preferred Method</label>
+                            <InputSelect class="form-select" @bind-Value="_form.PreferredContactMethod">
+                                <option value="">Select method</option>
+                                @foreach (var method in ContactPageConstants.Methods)
+                                {
+                                    <option value="@method">@method</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.PreferredContactMethod" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Timeline Flags</label>
+                            <div class="ctl-check-grid">
+                                <label><InputCheckbox @bind-Value="_form.IsKeyContact" /> Key Contact</label>
+                                <label><InputCheckbox @bind-Value="_form.IsPortalUser" /> Portal User</label>
+                                <label><InputCheckbox @bind-Value="_form.IsBillingContact" /> Billing Contact</label>
+                                <label><InputCheckbox @bind-Value="_form.IsServiceContact" /> Service Contact</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseEditDialog" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">
+                        @if (_actionBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                        }
+                        Save Contact
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
-<div class="ma-filter-bar contact-filter-bar"><div class="ma-search-wrap"><i class="bi bi-search"></i><input class="ma-search" value="@_search" @oninput="OnSearchChanged" placeholder="Search timeline…" /></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="ResetFilters"><i class="bi bi-x"></i> Reset</button><span class="ma-filter-count">@Filtered.Count() events</span></div>
-@if (_loadError is not null) { <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div> }
-@if (_loading) { <div class="mt-loading"><div class="um-spinner"></div><span>Loading timeline…</span></div> }
-<div class="ma-content acct-timeline-card"><div class="ma-feed">@foreach (var group in Filtered.GroupBy(x => x.DateUtc.Date).OrderByDescending(x => x.Key)) { <div class="ma-date-sep"><span>@group.Key.ToString("MMM d, yyyy")</span></div>@foreach (var item in group.OrderByDescending(x => x.DateUtc)) { <div class="ma-feed-item"><div class="ma-feed-icon acct-tone-@item.Tone"><i class="bi @item.Icon"></i></div><div class="ma-feed-body"><div class="ma-feed-hdr"><span class="ma-feed-acct">@item.Title</span><span class="ma-type-chip acct-tone-@item.Tone">@item.Type</span></div><div class="ma-feed-notes">@item.Description</div><div class="ma-feed-meta"><span><i class="bi bi-clock"></i> @item.DateUtc.ToLocalTime().ToString("h:mm tt")</span></div></div></div> } } @if (!Filtered.Any()) { <div class="ma-empty"><i class="bi bi-timeline ma-empty-icon"></i><span>No contact timeline events match your filters.</span></div> }</div></div>
+@if (_showConfirmDialog)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseConfirmDialog">
+        <div class="mt-modal ctl-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="ctl-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                <span>Confirm contact timeline action</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseConfirmDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingAction is "Delete Contact" or "Deactivate Contact" ? "um-confirm-icon--danger" : "")">
+                    <i class="bi @_confirmIcon" aria-hidden="true"></i>
+                </div>
+                <div>
+                    <h3 id="ctl-confirm-title">@_confirmTitle</h3>
+                    <p>@_confirmMessage</p>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirmDialog" disabled="@_actionBusy">Cancel</button>
+                <button type="button" class="um-btn @(_pendingAction is "Delete Contact" or "Deactivate Contact" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteConfirmedActionAsync" disabled="@_actionBusy">
+                    @if (_actionBusy)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>
+                    }
+                    Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+}
 
-@code { [Parameter] public Guid ContactId { get; set; } ContactDto? _contact; List<ContactTimelineItem> _events = []; string _search = string.Empty; string? _loadError; bool _loading; IEnumerable<ContactTimelineItem> Filtered => _events.Where(x => string.IsNullOrWhiteSpace(_search) || x.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Type.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.Description.Contains(_search, StringComparison.OrdinalIgnoreCase)); protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Contacts", "/client/contacts"), new("Timeline")); await LoadAsync(); } async Task LoadAsync() { _loading = true; _loadError = null; try { _contact = await Api.GetContactByIdAsync(ContactId); if (_contact is not null) { _events = ContactPageData.BuildTimeline(_contact); Breadcrumbs.SetCrumbs(new("Contacts", "/client/contacts"), new(ContactPageConstants.FullName(_contact), $"/client/contacts/{ContactId}"), new("Timeline")); } } catch (Exception ex) { _loadError = $"Failed to load contact timeline: {ex.Message}"; } finally { _loading = false; } } void OnSearchChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e) => _search = e.Value?.ToString() ?? string.Empty; void ResetFilters() => _search = string.Empty; }
+<div class="ctl-enterprise-page" @onclick="CloseActionMenu">
+    <div class="ctl-header">
+        <div class="ctl-header-left">
+            <div class="ctl-lob-icon"><i class="bi bi-clock-history" aria-hidden="true"></i></div>
+            <div class="ctl-header-info">
+                <div class="ctl-title-row">
+                    <h1 class="ctl-page-title">@ContactName Timeline</h1>
+                    <span class="ctl-status-pill">@Filtered.Count() visible</span>
+                    @if (HasFilters)
+                    {
+                        <span class="ctl-filter-pill">Filtered</span>
+                    }
+                </div>
+                <div class="ctl-sub-row">
+                    <span class="ctl-sub-chip"><i class="bi bi-person-vcard" aria-hidden="true"></i>@(_contact?.ContactTypeCode ?? "Contact")</span>
+                    <span class="ctl-sub-chip"><i class="bi bi-building" aria-hidden="true"></i>@(_contact?.AccountName ?? "Account pending")</span>
+                    <span class="ctl-sub-chip"><i class="bi bi-activity" aria-hidden="true"></i>@_events.Count events</span>
+                    <span class="ctl-sub-chip"><i class="bi bi-shield-check" aria-hidden="true"></i>@(_contact?.StatusCode ?? "Loading")</span>
+                </div>
+            </div>
+        </div>
+        <div class="ctl-header-actions">
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "ctl-spin" : "")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenContact360" disabled="@(_contact is null)"><i class="bi bi-person-circle" aria-hidden="true"></i> Contact 360</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/client/contacts")'><i class="bi bi-people" aria-hidden="true"></i> Directory</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/client/contacts/roles")'><i class="bi bi-shield-check" aria-hidden="true"></i> Roles</button>
+            <div class="ctl-action-menu-wrap" @onclick:stopPropagation="true">
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ctl-ctx-btn" aria-haspopup="menu" aria-expanded="@_showActionMenu" title="Timeline actions" @onclick="ToggleActionMenu">
+                    <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                </button>
+                @if (_showActionMenu)
+                {
+                    <div class="ctl-action-menu" role="menu" aria-label="Contact timeline actions">
+                        <div class="ctl-action-menu-summary">
+                            <strong>@ContactName</strong>
+                            <span>@(_contact?.AccountName ?? "Account") · @(_contact?.StatusCode ?? "Status")</span>
+                        </div>
+                        @foreach (var item in _actionItems)
+                        {
+                            <button type="button" class="um-action-menu-item @(item.IsDanger ? "um-action-menu-item--danger" : null)" role="menuitem" @onclick="() => HandleActionAsync(item.Text)">
+                                <i class="@item.IconCss" aria-hidden="true"></i>
+                                <span>@item.Text</span>
+                            </button>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger ctl-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
+    <div class="ctl-kpi-strip">
+        @KpiCard("bi-clock-history", "All Events", _events.Count.ToString(), "ctl-kpi-total", null)
+        @KpiCard("bi-person-plus", "Contact", CountByType("Contact"), "ctl-kpi-contact", "Contact")
+        @KpiCard("bi-shield-check", "Role", CountByType("Role"), "ctl-kpi-role", "Role")
+        @KpiCard("bi-lightning", "Activity", CountByType("Activity"), "ctl-kpi-activity", "Activity")
+        @KpiCard("bi-globe", "Portal", CountByType("Portal"), "ctl-kpi-portal", "Portal")
+        @KpiCard("bi-building", "Account", CountByType("Account"), "ctl-kpi-account", "Account")
+    </div>
+
+    <div class="ctl-enterprise-search" role="search" aria-label="Search contact timeline">
+        <div class="ctl-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="ctl-search-body">
+            <label for="ctl-search-input">Enterprise search</label>
+            <input id="ctl-search-input" class="ctl-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search title, type, description, account, contact, status…" />
+            <div class="ctl-search-hint">Searches timeline events plus contact master context such as account, status, role, contact methods, and IDs.</div>
+        </div>
+        <div class="ctl-search-result"><strong>@Filtered.Count()</strong><span>matches</span></div>
+        @if (!string.IsNullOrWhiteSpace(_search))
+        {
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ctl-search-clear" @onclick="ResetFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+        }
+    </div>
+
+    <div class="ctl-view-tabs">
+        <button class="ctl-view-tab @(_activeFilter is null ? "ctl-view-tab--active" : "")" type="button" @onclick='() => SetFilter(null)'><i class="bi bi-stack" aria-hidden="true"></i> All <span class="ctl-tab-count">@_events.Count</span></button>
+        @foreach (var type in EventTypes)
+        {
+            <button class="ctl-view-tab @(_activeFilter == type ? "ctl-view-tab--active" : "")" type="button" @onclick="() => SetFilter(type)"><i class="bi @IconForType(type)" aria-hidden="true"></i> @type <span class="ctl-tab-count">@CountByType(type)</span></button>
+        }
+    </div>
+
+    <div class="ctl-timeline-wrap">
+        @if (_loading)
+        {
+            <div class="ctl-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading contact timeline…</span></div>
+        }
+        else
+        {
+            <div class="ctl-toolbar">
+                <div>
+                    <strong>@Filtered.Count()</strong> timeline events
+                    @if (HasFilters)
+                    {
+                        <span class="ctl-filter-note">filtered</span>
+                    }
+                </div>
+                <div class="ctl-tools">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportAsync" disabled="@(!Filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+                </div>
+            </div>
+            <div class="ctl-feed">
+                @foreach (var group in Filtered.GroupBy(x => x.DateUtc.Date).OrderByDescending(g => g.Key))
+                {
+                    <div class="ctl-date-sep"><span>@group.Key.ToString("MMM d, yyyy")</span></div>
+                    @foreach (var item in group.OrderByDescending(x => x.DateUtc))
+                    {
+                        <article class="ctl-feed-item">
+                            <div class="ctl-feed-icon ctl-tone-@item.Tone"><i class="bi @item.Icon" aria-hidden="true"></i></div>
+                            <div class="ctl-feed-body">
+                                <div class="ctl-feed-hdr">
+                                    <span class="ctl-feed-title">@item.Title</span>
+                                    <span class="ctl-type-chip ctl-tone-@item.Tone">@item.Type</span>
+                                </div>
+                                <div class="ctl-feed-notes">@item.Description</div>
+                                <div class="ctl-feed-meta">
+                                    <span><i class="bi bi-clock" aria-hidden="true"></i> @item.DateUtc.ToLocalTime().ToString("h:mm tt")</span>
+                                    <span><i class="bi bi-person" aria-hidden="true"></i> @ContactName</span>
+                                    @if (!string.IsNullOrWhiteSpace(_contact?.AccountName))
+                                    {
+                                        <span><i class="bi bi-building" aria-hidden="true"></i> @_contact.AccountName</span>
+                                    }
+                                </div>
+                            </div>
+                        </article>
+                    }
+                }
+                @if (!Filtered.Any())
+                {
+                    <div class="ctl-empty-state">
+                        <i class="bi bi-clock-history" aria-hidden="true"></i>
+                        <strong>No timeline events found</strong>
+                        <span>Adjust the current KPI, type, or search criteria.</span>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public Guid ContactId { get; set; }
+
+    Guid _tenantAdminUserId;
+    ContactDto? _contact;
+    ContactTimelineFormModel _form = new();
+    List<ContactTimelineItem> _events = [];
+    string _search = string.Empty;
+    string? _activeFilter;
+    string? _loadError;
+    bool _loading;
+    bool _actionBusy;
+    bool _showActionMenu;
+    bool _showEditDialog;
+    bool _showConfirmDialog;
+    bool _toastVisible;
+    string _toastMessage = string.Empty;
+    string _toastKind = "success";
+    string _pendingAction = string.Empty;
+    string _confirmTitle = "Confirm action";
+    string _confirmMessage = "Confirm this contact timeline action?";
+    string _confirmIcon = "bi-question-circle";
+
+    readonly ActionMenuItem[] _actionItems =
+    [
+        new("Open Contact 360", "bi bi-person-circle"),
+        new("Edit Contact", "bi bi-pencil-square"),
+        new("Open Account", "bi bi-building"),
+        new("Email Contact", "bi bi-envelope"),
+        new("Call Contact", "bi bi-telephone"),
+        new("Enable Portal", "bi bi-globe"),
+        new("Mark Key Contact", "bi bi-star"),
+        new("Sync Workflow", "bi bi-arrow-repeat"),
+        new("Activate Contact", "bi bi-check-circle"),
+        new("Deactivate Contact", "bi bi-slash-circle"),
+        new("Delete Contact", "bi bi-trash"),
+    ];
+
+    IEnumerable<string> EventTypes => _events.Select(x => x.Type).Distinct().Order();
+    IEnumerable<ContactTimelineItem> Filtered => _events.Where(x => (_activeFilter is null || x.Type == _activeFilter) && MatchesSearch(x));
+    bool HasFilters => _activeFilter is not null || !string.IsNullOrWhiteSpace(_search);
+    string ContactName => _contact is null ? "Contact" : ContactPageConstants.FullName(_contact);
+
+    string SearchText
+    {
+        get => _search;
+        set => _search = value ?? string.Empty;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Contacts", "/client/contacts"), new("Timeline"));
+        await LoadAsync();
+    }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantAdminUserId = context.UserId;
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _contact = await Api.GetContactByIdAsync(ContactId);
+            _events = _contact is null ? [] : ContactPageData.BuildTimeline(_contact);
+            if (_contact is not null)
+            {
+                Breadcrumbs.SetCrumbs(new("Contacts", "/client/contacts"), new(ContactName, $"/client/contacts/{ContactId}"), new("Timeline"));
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load contact timeline: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    bool MatchesSearch(ContactTimelineItem item)
+    {
+        if (string.IsNullOrWhiteSpace(_search))
+            return true;
+
+        var term = _search.Trim();
+        return Contains(item.Title, term)
+            || Contains(item.Type, term)
+            || Contains(item.Description, term)
+            || Contains(ContactName, term)
+            || Contains(_contact?.AccountName, term)
+            || Contains(_contact?.ContactTypeCode, term)
+            || Contains(_contact?.StatusCode, term)
+            || Contains(_contact?.Email, term)
+            || Contains(_contact?.Phone, term)
+            || Contains(ContactId.ToString(), term)
+            || Contains(item.DateUtc.ToString("MM/dd/yyyy"), term)
+            || Contains(item.DateUtc.ToString("yyyy-MM-dd"), term);
+    }
+
+    static bool Contains(string? source, string term) =>
+        !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+
+    string CountByType(string type) => _events.Count(x => x.Type == type).ToString();
+
+    void SetFilter(string? key) => _activeFilter = _activeFilter == key ? null : key;
+
+    void ResetFilters()
+    {
+        _activeFilter = null;
+        _search = string.Empty;
+    }
+
+    void OpenContact360() => Nav.NavigateTo($"/client/contacts/{ContactId}");
+
+    void ToggleActionMenu() => _showActionMenu = !_showActionMenu;
+
+    void CloseActionMenu()
+    {
+        if (_actionBusy) return;
+        _showActionMenu = false;
+    }
+
+    Task HandleActionAsync(string action)
+    {
+        _showActionMenu = false;
+        if (_contact is null)
+        {
+            ShowToast("Load the contact before running an action.", "danger");
+            return Task.CompletedTask;
+        }
+
+        switch (action)
+        {
+            case "Open Contact 360":
+                OpenContact360();
+                break;
+            case "Edit Contact":
+                OpenEditDialog();
+                break;
+            case "Open Account":
+                Nav.NavigateTo($"/accounts/{_contact.AccountId}");
+                break;
+            case "Email Contact":
+                if (string.IsNullOrWhiteSpace(_contact.Email)) ShowToast("This contact does not have an email address.", "danger");
+                else Nav.NavigateTo($"mailto:{_contact.Email}", forceLoad: true);
+                break;
+            case "Call Contact":
+                if (string.IsNullOrWhiteSpace(_contact.Phone)) ShowToast("This contact does not have a phone number.", "danger");
+                else Nav.NavigateTo($"tel:{_contact.Phone}", forceLoad: true);
+                break;
+            case "Enable Portal":
+            case "Mark Key Contact":
+            case "Sync Workflow":
+            case "Activate Contact":
+            case "Deactivate Contact":
+            case "Delete Contact":
+                OpenConfirmDialog(action);
+                break;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    void OpenEditDialog()
+    {
+        if (_contact is null) return;
+        _form = ContactTimelineFormModel.From(_contact);
+        _showEditDialog = true;
+    }
+
+    void CloseEditDialog()
+    {
+        if (_actionBusy) return;
+        _showEditDialog = false;
+    }
+
+    async Task SaveContactAsync()
+    {
+        if (_contact is null) return;
+
+        _actionBusy = true;
+        try
+        {
+            await Api.UpdateContactAsync(ContactId, BuildUpdateRequest(_form));
+            _showEditDialog = false;
+            ShowToast("Contact timeline profile updated.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    Task NotifyValidationAsync()
+    {
+        ShowToast("Please correct the highlighted fields before continuing.", "danger");
+        return Task.CompletedTask;
+    }
+
+    void OpenConfirmDialog(string action)
+    {
+        _pendingAction = action;
+        (_confirmTitle, _confirmMessage, _confirmIcon) = action switch
+        {
+            "Enable Portal" => ($"Enable portal for {ContactName}?", "This marks the contact as portal-ready and synchronizes the portal timeline event.", "bi-globe"),
+            "Mark Key Contact" => ($"Mark {ContactName} as key contact?", "This flags the contact as key for account and decision workflows.", "bi-star"),
+            "Sync Workflow" => ($"Sync workflow for {ContactName}?", "This opens the workflow center scoped to this contact timeline.", "bi-arrow-repeat"),
+            "Activate Contact" => ($"Activate {ContactName}?", "This sets the contact status to Active and refreshes the timeline.", "bi-check-circle"),
+            "Deactivate Contact" => ($"Deactivate {ContactName}?", "This sets the contact status to Inactive while preserving the timeline for audit.", "bi-slash-circle"),
+            "Delete Contact" => ($"Delete {ContactName}?", "This will soft-delete the contact. Related audit history remains available in the database.", "bi-trash"),
+            _ => ("Confirm action", "Confirm this contact timeline action?", "bi-question-circle")
+        };
+        _showConfirmDialog = true;
+    }
+
+    void CloseConfirmDialog()
+    {
+        if (_actionBusy) return;
+        _showConfirmDialog = false;
+    }
+
+    async Task ExecuteConfirmedActionAsync()
+    {
+        if (_contact is null) return;
+
+        _actionBusy = true;
+        try
+        {
+            switch (_pendingAction)
+            {
+                case "Sync Workflow":
+                    _showConfirmDialog = false;
+                    ShowToast("Workflow center opened for contact timeline synchronization.");
+                    Nav.NavigateTo($"/workflow?entity=Contact&entityId={ContactId}");
+                    break;
+                case "Enable Portal":
+                    await UpdateContactFlagsAsync(portal: true);
+                    ShowToast("Portal access flag enabled.");
+                    break;
+                case "Mark Key Contact":
+                    await UpdateContactFlagsAsync(key: true);
+                    ShowToast("Contact marked as key.");
+                    break;
+                case "Activate Contact":
+                    await UpdateContactFlagsAsync(status: "Active");
+                    ShowToast("Contact activated.");
+                    break;
+                case "Deactivate Contact":
+                    await UpdateContactFlagsAsync(status: "Inactive");
+                    ShowToast("Contact deactivated.");
+                    break;
+                case "Delete Contact":
+                    await Api.DeleteContactAsync(ContactId);
+                    ShowToast("Contact deleted.");
+                    Nav.NavigateTo("/client/contacts");
+                    break;
+            }
+
+            _showConfirmDialog = false;
+            if (_pendingAction is not "Sync Workflow" and not "Delete Contact")
+            {
+                await LoadAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    async Task UpdateContactFlagsAsync(string? status = null, bool? key = null, bool? portal = null)
+    {
+        if (_contact is null) return;
+        var form = ContactTimelineFormModel.From(_contact);
+        form.StatusCode = status ?? form.StatusCode;
+        form.IsKeyContact = key ?? form.IsKeyContact;
+        form.IsPortalUser = portal ?? form.IsPortalUser;
+        await Api.UpdateContactAsync(ContactId, BuildUpdateRequest(form));
+    }
+
+    UpdateContactRequest BuildUpdateRequest(ContactTimelineFormModel form) => new()
+    {
+        FirstName = form.FirstName,
+        LastName = form.LastName,
+        Email = ContactPageConstants.Normalize(form.Email),
+        Phone = ContactPageConstants.Normalize(form.Phone),
+        JobTitle = ContactPageConstants.Normalize(form.JobTitle),
+        ContactTypeCode = form.ContactTypeCode,
+        IsBillingContact = form.IsBillingContact,
+        IsServiceContact = form.IsServiceContact,
+        IsPortalUser = form.IsPortalUser,
+        IsKeyContact = form.IsKeyContact,
+        PreferredContactMethod = ContactPageConstants.Normalize(form.PreferredContactMethod),
+        StatusCode = form.StatusCode,
+        ModifiedByUserId = _tenantAdminUserId
+    };
+
+    Task ExportAsync()
+    {
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("Date,Time,Type,Title,Description,Contact,Account,Status");
+        foreach (var item in Filtered.OrderByDescending(x => x.DateUtc))
+        {
+            csv.AppendLine(string.Join(',', Csv(item.DateUtc.ToLocalTime().ToString("MM/dd/yyyy")), Csv(item.DateUtc.ToLocalTime().ToString("h:mm tt")), Csv(item.Type), Csv(item.Title), Csv(item.Description), Csv(ContactName), Csv(_contact?.AccountName), Csv(_contact?.StatusCode)));
+        }
+        Nav.NavigateTo("data:text/csv;charset=utf-8," + Uri.EscapeDataString(csv.ToString()), forceLoad: true);
+        ShowToast("Contact timeline export generated.");
+        return Task.CompletedTask;
+    }
+
+    static string Csv(string? value)
+    {
+        var text = value ?? string.Empty;
+        return string.Concat("\"", text.Replace("\"", "\"\""), "\"");
+    }
+
+    RenderFragment KpiCard(string icon, string label, string val, string css, string? filterKey)
+    {
+        var isActive = _activeFilter == filterKey;
+        return @<button type="button" class="ctl-kpi-card @css @(isActive ? "ctl-kpi-active" : "")" @onclick="() => SetFilter(filterKey)" title="@(filterKey is null ? "Show all timeline events" : (isActive ? "Clear filter" : $"Filter by {label}"))">
+            <div class="ctl-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
+            <div class="ctl-kpi-val">@val</div>
+        </button>;
+    }
+
+    static string IconForType(string type) => type switch
+    {
+        "Contact" => "bi-person-plus",
+        "Role" => "bi-shield-check",
+        "Activity" => "bi-lightning",
+        "Portal" => "bi-globe",
+        "Account" => "bi-building",
+        _ => "bi-clock-history"
+    };
+
+    void ShowToast(string message, string kind = "success")
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    void HideToast() => _toastVisible = false;
+
+    sealed record ActionMenuItem(string Text, string IconCss)
+    {
+        public bool IsDanger => Text is "Delete Contact" or "Deactivate Contact";
+    }
+
+    sealed class ContactTimelineFormModel
+    {
+        [Required(ErrorMessage = "First Name is required.")]
+        [StringLength(100, ErrorMessage = "First Name cannot exceed 100 characters.")]
+        public string FirstName { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Last Name is required.")]
+        [StringLength(100, ErrorMessage = "Last Name cannot exceed 100 characters.")]
+        public string LastName { get; set; } = string.Empty;
+
+        [StringLength(200, ErrorMessage = "Email cannot exceed 200 characters.")]
+        [EmailAddress(ErrorMessage = "Email must be a valid email address.")]
+        public string? Email { get; set; }
+
+        [StringLength(50, ErrorMessage = "Phone cannot exceed 50 characters.")]
+        public string? Phone { get; set; }
+
+        [StringLength(100, ErrorMessage = "Job Title cannot exceed 100 characters.")]
+        public string? JobTitle { get; set; }
+
+        [Required(ErrorMessage = "Contact Type is required.")]
+        [StringLength(50, ErrorMessage = "Contact Type cannot exceed 50 characters.")]
+        public string ContactTypeCode { get; set; } = "Primary";
+
+        [Required(ErrorMessage = "Status is required.")]
+        [StringLength(50, ErrorMessage = "Status cannot exceed 50 characters.")]
+        public string StatusCode { get; set; } = "Active";
+
+        [StringLength(50, ErrorMessage = "Preferred Method cannot exceed 50 characters.")]
+        public string? PreferredContactMethod { get; set; }
+
+        public bool IsBillingContact { get; set; }
+        public bool IsServiceContact { get; set; }
+        public bool IsPortalUser { get; set; }
+        public bool IsKeyContact { get; set; }
+
+        public static ContactTimelineFormModel From(ContactDto contact) => new()
+        {
+            FirstName = contact.FirstName,
+            LastName = contact.LastName,
+            Email = contact.Email,
+            Phone = contact.Phone,
+            JobTitle = contact.JobTitle,
+            ContactTypeCode = string.IsNullOrWhiteSpace(contact.ContactTypeCode) ? "Primary" : contact.ContactTypeCode,
+            StatusCode = string.IsNullOrWhiteSpace(contact.StatusCode) ? "Active" : contact.StatusCode,
+            PreferredContactMethod = contact.PreferredContactMethod,
+            IsBillingContact = contact.IsBillingContact,
+            IsServiceContact = contact.IsServiceContact,
+            IsPortalUser = contact.IsPortalUser,
+            IsKeyContact = contact.IsKeyContact
+        };
+    }
+}
