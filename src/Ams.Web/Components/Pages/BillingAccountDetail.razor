@@ -3,242 +3,384 @@
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.BillingAccounts
 @using Ams.Application.Features.Payments
+@using Microsoft.AspNetCore.Components.Forms
 @using System.ComponentModel.DataAnnotations
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Billing Account Detail — AMS</PageTitle>
+<PageTitle>@_account.AccountName — Billing Account Detail</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="@_account.AccountName"
-               Subtitle="@($"{_account.BillingModeCode} · {_account.PaymentTermsCode} · {_account.DefaultPaymentMethodCode} · {_account.PolicyCount} policies")"
-               Icon="bi-building">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
-            <i class="bi bi-arrow-left" aria-hidden="true"></i> All Accounts
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
-            <i class="bi bi-receipt" aria-hidden="true"></i> Invoices
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/payments")'>
-            <i class="bi bi-cash-coin" aria-hidden="true"></i> Payments
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="() => _showPayment = true">
-            <i class="bi bi-plus-circle" aria-hidden="true"></i> Record Payment
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- KPI strip -->
-<div class="bad-kpi-strip">
-    <button type="button" class="@KpiClass("balance")" @onclick='() => SetKpiFilter("balance")'><i class="bi bi-currency-dollar bad-ki red" aria-hidden="true"></i><div><div class="bad-kv">@_account.BalanceAmount.ToString("C2")</div><div class="bad-kl">Current Balance</div></div></button>
-    <button type="button" class="@KpiClass("credit")" @onclick='() => SetKpiFilter("credit")'><i class="bi bi-credit-card bad-ki blue" aria-hidden="true"></i><div><div class="bad-kv">@_account.CreditLimit.ToString("C2")</div><div class="bad-kl">Credit Limit</div></div></button>
-    <button type="button" class="@KpiClass("invoices")" @onclick='() => SetKpiFilter("invoices")'><i class="bi bi-receipt bad-ki blue" aria-hidden="true"></i><div><div class="bad-kv">@FilteredInvoices.Count()</div><div class="bad-kl">Invoices</div></div></button>
-    <button type="button" class="@KpiClass("payments")" @onclick='() => SetKpiFilter("payments")'><i class="bi bi-cash-coin bad-ki green" aria-hidden="true"></i><div><div class="bad-kv">@FilteredPayments.Count()</div><div class="bad-kl">Payments</div></div></button>
-    <button type="button" class="@KpiClass("overdue")" @onclick='() => SetKpiFilter("overdue")'><i class="bi bi-exclamation-circle bad-ki red" aria-hidden="true"></i><div><div class="bad-kv">@_invoices.Count(x=>x.Status=="Overdue")</div><div class="bad-kl">Overdue</div></div></button>
-    <button type="button" class="@KpiClass("autopay")" @onclick='() => SetKpiFilter("autopay")'><i class="bi @(_account.AutopayEnrolled ? "bi-check-circle" : "bi-circle") bad-ki @(_account.AutopayEnrolled ? "green" : "gray")" aria-hidden="true"></i><div><div class="bad-kv">@(_account.AutopayEnrolled ? "Yes" : "No")</div><div class="bad-kl">Autopay</div></div></button>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger mx-4" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+    <div class="bad-toast bad-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="bad-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<div class="bad-layout">
-    <!-- Left sidebar: account info -->
-    <aside class="bad-sidebar">
-        <div class="bad-info-card">
-            <div class="bad-ic-title"><i class="bi bi-info-circle" aria-hidden="true"></i> Account Info</div>
-            <div class="bad-field"><span class="bad-fl">Billing Mode</span>
-                <span class="bad-mode-chip bad-m-@_account.BillingModeCode.ToLower().Replace(" ","-")">@_account.BillingModeCode</span>
-            </div>
-            <div class="bad-field"><span class="bad-fl">Terms</span><span>@_account.PaymentTermsCode</span></div>
-            <div class="bad-field"><span class="bad-fl">Default Method</span><span>@_account.DefaultPaymentMethodCode</span></div>
-            <div class="bad-field"><span class="bad-fl">Credit Limit</span><span>@_account.CreditLimit.ToString("C2")</span></div>
-            <div class="bad-field"><span class="bad-fl">Status</span>
-                <span class="bad-status-chip bad-st-@_account.StatusCode.ToLower()">@_account.StatusCode</span>
-            </div>
-            <div class="bad-field"><span class="bad-fl">Policies</span><span>@_account.PolicyCount</span></div>
-            <div class="bad-field"><span class="bad-fl">Last Payment</span>
-                <span>@(_account.LastPaymentDate?.ToString("MMM d, yyyy") ?? "—")</span>
-            </div>
-            <div class="bad-ic-actions">
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _showEdit = true">
-                    <i class="bi bi-pencil" aria-hidden="true"></i> Edit
-                </button>
-                <button class="um-btn um-btn-ghost um-btn-sm @(_account.AutopayEnrolled ? "bad-autopay-on" : "")"
-                        @onclick="ToggleAutopay">
-                    <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
-                    @(_account.AutopayEnrolled ? "Autopay On" : "Enroll Autopay")
-                </button>
-            </div>
-        </div>
-
-        <!-- Aging summary -->
-        <div class="bad-aging-card">
-            <div class="bad-ic-title"><i class="bi bi-hourglass" aria-hidden="true"></i> AR Aging</div>
-            @foreach (var (bucket, amount) in _aging)
-            {
-                <div class="bad-aging-row">
-                    <span class="bad-aging-lbl">@bucket</span>
-                    <div class="bad-aging-bar-wrap">
-                        <div class="bad-aging-bar" style="width:@AgingPct(amount)%;background:@AgingColor(bucket)"></div>
-                    </div>
-                    <span class="bad-aging-amt">@amount.ToString("C0")</span>
-                </div>
-            }
-        </div>
-    </aside>
-
-    <!-- Right: tabs -->
-    <div class="bad-content">
-        <SfTab>
-            <TabItems>
-                <!-- Invoices tab -->
-                <TabItem>
-                    <ChildContent><TabHeader Text="Invoices"></TabHeader></ChildContent>
-                    <ContentTemplate>
-                        <div class="bad-tab-toolbar">
-                            <button class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
-                                <i class="bi bi-plus-circle" aria-hidden="true"></i> New Invoice
-                            </button>
-                        </div>
-                        <SfGrid DataSource="FilteredInvoices" AllowSorting="true" AllowPaging="true" Height="320px">
-                            <GridPageSettings PageSize="10"></GridPageSettings>
-                            <GridColumns>
-                                <GridColumn Field="@nameof(AccountInvoice.InvoiceNumber)" HeaderText="Invoice #" Width="140"></GridColumn>
-                                <GridColumn Field="@nameof(AccountInvoice.Total)" HeaderText="Total" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-                                <GridColumn Field="@nameof(AccountInvoice.Balance)" HeaderText="Balance" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-                                <GridColumn HeaderText="Status" Width="110">
-                                    <Template>
-                                        @{ var inv = (AccountInvoice)context; }
-                                        <span class="bad-inv-status bad-ist-@inv.Status.ToLower()">@inv.Status</span>
-                                    </Template>
-                                </GridColumn>
-                                <GridColumn Field="@nameof(AccountInvoice.DueDate)" HeaderText="Due" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
-                            </GridColumns>
-                        </SfGrid>
-                    </ContentTemplate>
-                </TabItem>
-
-                <!-- Payments tab -->
-                <TabItem>
-                    <ChildContent><TabHeader Text="Payments"></TabHeader></ChildContent>
-                    <ContentTemplate>
-                        <div class="bad-tab-toolbar">
-                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => _showPayment = true">
-                                <i class="bi bi-plus-circle" aria-hidden="true"></i> Record Payment
-                            </button>
-                        </div>
-                        <SfGrid DataSource="FilteredPayments" AllowSorting="true" AllowPaging="true" Height="320px">
-                            <GridPageSettings PageSize="10"></GridPageSettings>
-                            <GridColumns>
-                                <GridColumn Field="@nameof(AccountPayment.PaymentDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
-                                <GridColumn Field="@nameof(AccountPayment.Amount)" HeaderText="Amount" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-                                <GridColumn Field="@nameof(AccountPayment.Method)" HeaderText="Method" Width="120"></GridColumn>
-                                <GridColumn Field="@nameof(AccountPayment.Reference)" HeaderText="Reference" Width="150"></GridColumn>
-                                <GridColumn HeaderText="Status" Width="110">
-                                    <Template>
-                                        @{ var p = (AccountPayment)context; }
-                                        <span class="bad-pay-status bad-pst-@p.Status.ToLower()">@p.Status</span>
-                                    </Template>
-                                </GridColumn>
-                            </GridColumns>
-                        </SfGrid>
-                    </ContentTemplate>
-                </TabItem>
-
-                <!-- Credits tab -->
-                <TabItem>
-                    <ChildContent><TabHeader Text="Credits &amp; Refunds"></TabHeader></ChildContent>
-                    <ContentTemplate>
-                        <div class="bad-tab-toolbar">
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/credits")'>
-                                <i class="bi bi-arrow-up-right-square" aria-hidden="true"></i> Credits Center
-                            </button>
-                        </div>
-                        <SfGrid DataSource="_credits" AllowSorting="true" Height="320px">
-                            <GridColumns>
-                                <GridColumn Field="@nameof(AccountCredit.Date)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
-                                <GridColumn Field="@nameof(AccountCredit.Amount)" HeaderText="Amount" Format="C2" Width="120" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-                                <GridColumn Field="@nameof(AccountCredit.Type)" HeaderText="Type" Width="130"></GridColumn>
-                                <GridColumn Field="@nameof(AccountCredit.Reason)" HeaderText="Reason" Width="240"></GridColumn>
-                                <GridColumn Field="@nameof(AccountCredit.Status)" HeaderText="Status" Width="110"></GridColumn>
-                            </GridColumns>
-                        </SfGrid>
-                    </ContentTemplate>
-                </TabItem>
-
-                <!-- Activity log tab -->
-                <TabItem>
-                    <ChildContent><TabHeader Text="Activity Log"></TabHeader></ChildContent>
-                    <ContentTemplate>
-                        <div class="bad-activity-list">
-                            @foreach (var ev in _activity)
-                            {
-                                <div class="bad-activity-row">
-                                    <div class="bad-act-dot bad-dot-@ev.Type" aria-hidden="true"></div>
-                                    <div>
-                                        <div class="bad-act-text">@ev.Description</div>
-                                        <div class="bad-act-meta">@ev.Date.ToString("MMM d, yyyy h:mm tt") · @ev.User</div>
-                                    </div>
-                                </div>
-                            }
-                        </div>
-                    </ContentTemplate>
-                </TabItem>
-            </TabItems>
-        </SfTab>
-    </div>
-</div>
-
-<!-- Record Payment Dialog -->
-<SfDialog Width="480px" IsModal="true" @bind-Visible="_showPayment" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
+@if (_showPayment)
+{
+    <div class="bad-modal-backdrop" role="presentation" @onclick="ClosePayment">
+        <div class="bad-modal bad-action-modal" role="dialog" aria-modal="true" aria-labelledby="bad-payment-title" @onclick:stopPropagation="true">
             <div class="um-modal-header">
                 <i class="bi bi-cash-coin" aria-hidden="true"></i>
-                <span>Record Payment</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showPayment = false"><i class="bi bi-x-lg"></i></button>
+                <span id="bad-payment-title">Record Payment</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="ClosePayment" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
             </div>
-            <div class="bad-dlg-body">
-                @if (_paymentErrors.Count > 0)
+            <EditForm Model="_paymentForm" OnValidSubmit="RecordPaymentAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="bad-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Payment workflow</span>
+                        <p>Record a tenant-scoped payment against this billing account using the existing payment workflow.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Amount <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_paymentForm.Amount" />
+                            <ValidationMessage For="() => _paymentForm.Amount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Payment Method <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_paymentForm.Method">
+                                @foreach (var method in _methods)
+                                {
+                                    <option value="@method">@method</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _paymentForm.Method" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Payment Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_paymentForm.PaymentDate" />
+                            <ValidationMessage For="() => _paymentForm.PaymentDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Reference #</label>
+                            <InputText class="form-control" @bind-Value="_paymentForm.Reference" />
+                            <ValidationMessage For="() => _paymentForm.Reference" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea class="form-control" @bind-Value="_paymentForm.Notes" rows="3" />
+                            <ValidationMessage For="() => _paymentForm.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="ClosePayment" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        Record Payment
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showEdit)
+{
+    <div class="bad-modal-backdrop" role="presentation" @onclick="CloseEdit">
+        <div class="bad-modal bad-action-modal" role="dialog" aria-modal="true" aria-labelledby="bad-edit-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-building-gear" aria-hidden="true"></i>
+                <span id="bad-edit-title">Edit Billing Settings</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEdit" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_editForm" OnValidSubmit="SaveSettingsAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="bad-modal-intro">
+                        <span><i class="bi bi-receipt-cutoff" aria-hidden="true"></i> Billing settings</span>
+                        <p>Update payment terms, credit limit, default method, status, and autopay enrollment.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Billing Mode <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_editForm.BillingModeCode">
+                                @foreach (var mode in _billingModes)
+                                {
+                                    <option value="@mode">@mode</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _editForm.BillingModeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Payment Terms <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_editForm.PaymentTermsCode">
+                                @foreach (var term in _terms)
+                                {
+                                    <option value="@term">@term</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _editForm.PaymentTermsCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Default Method <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_editForm.DefaultPaymentMethodCode">
+                                @foreach (var method in _methods)
+                                {
+                                    <option value="@method">@method</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _editForm.DefaultPaymentMethodCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Credit Limit <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_editForm.CreditLimit" />
+                            <ValidationMessage For="() => _editForm.CreditLimit" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_editForm.StatusCode">
+                                @foreach (var status in _statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _editForm.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--checkbox">
+                            <label><InputCheckbox @bind-Value="_editForm.AutopayEnrolled" /> Autopay enrolled</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseEdit" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        Save Changes
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="bad-enterprise-page">
+    <section class="bad-header">
+        <div class="bad-header-left">
+            <div class="bad-lob-icon"><i class="bi bi-receipt-cutoff" aria-hidden="true"></i></div>
+            <div class="bad-header-info">
+                <div class="bad-title-row">
+                    <h1 class="bad-page-title">@_account.AccountName</h1>
+                    <span class="bad-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live billing data</span>
+                    <span class="bad-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <div class="bad-sub-row">
+                    <span>@_account.AccountNumber · @_account.BillingModeCode · @_account.PaymentTermsCode</span>
+                    <span class="bad-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span>
+                    <span class="bad-sub-chip"><i class="bi bi-receipt" aria-hidden="true"></i> @_account.PolicyCount policies</span>
+                </div>
+            </div>
+        </div>
+        <div class="bad-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
+                <i class="bi bi-arrow-left" aria-hidden="true"></i> All Accounts
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi @(_loading ? "bi-arrow-repeat bad-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="OpenEdit" disabled="@_loading">
+                <i class="bi bi-pencil" aria-hidden="true"></i> Edit
+            </button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenPayment" disabled="@_loading">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> Record Payment
+            </button>
+        </div>
+    </section>
+
+    <section class="bad-kpi-strip" aria-label="Billing account metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="bad-kpi-card @kpi.Tone @(_activeFilter == kpi.Filter ? "bad-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="bad-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="bad-kpi-copy">
+                    <span class="bad-kpi-label">@kpi.Label</span>
+                    <span class="bad-kpi-value">@kpi.Value</span>
+                    <span class="bad-kpi-caption">@kpi.Caption</span>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="bad-workflow-strip" aria-label="Billing account workflow shortcuts">
+        <button type="button" class="bad-workflow-card bad-wf-invoice" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+            <span class="bad-workflow-icon"><i class="bi bi-receipt" aria-hidden="true"></i></span>
+            <span class="bad-workflow-content"><strong>1</strong><span>Invoice</span><small>Create and review receivables.</small></span>
+        </button>
+        <button type="button" class="bad-workflow-card bad-wf-pay" @onclick="OpenPayment">
+            <span class="bad-workflow-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+            <span class="bad-workflow-content"><strong>2</strong><span>Collect</span><small>Record and apply payments.</small></span>
+        </button>
+        <button type="button" class="bad-workflow-card bad-wf-credit" @onclick='() => Nav.NavigateTo("/billing/credits")'>
+            <span class="bad-workflow-icon"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></span>
+            <span class="bad-workflow-content"><strong>3</strong><span>Adjust</span><small>Manage credits and refunds.</small></span>
+        </button>
+        <button type="button" class="bad-workflow-card bad-wf-recon" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'>
+            <span class="bad-workflow-icon"><i class="bi bi-ui-checks-grid" aria-hidden="true"></i></span>
+            <span class="bad-workflow-content"><strong>4</strong><span>Reconcile</span><small>Match deposits and balances.</small></span>
+        </button>
+        <button type="button" class="bad-workflow-card bad-wf-collect" @onclick='() => Nav.NavigateTo("/billing/collections")'>
+            <span class="bad-workflow-icon"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>
+            <span class="bad-workflow-content"><strong>5</strong><span>Recover</span><small>Resolve delinquent accounts.</small></span>
+        </button>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger bad-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+    }
+
+    <section class="bad-content-layout">
+        <aside class="bad-summary-panel">
+            <div class="bad-panel-head">
+                <span class="bad-detail-eyebrow"><i class="bi bi-building" aria-hidden="true"></i> Account profile</span>
+                <h2>@_account.AccountName</h2>
+                <div class="bad-detail-meta"><span>@_account.AccountNumber</span><span>@_account.StatusCode</span><span>@_account.DefaultPaymentMethodCode</span></div>
+            </div>
+            <div class="bad-detail-body">
+                <div class="bad-detail-summary">
+                    <div class="bad-meta-row"><span class="bad-meta-lbl">Balance</span><span class="bad-meta-val @(_account.BalanceAmount > 0 ? "bad-bal-due" : "bad-bal-clear")">@_account.BalanceAmount.ToString("C2")</span></div>
+                    <div class="bad-meta-row"><span class="bad-meta-lbl">Credit limit</span><span class="bad-meta-val">@_account.CreditLimit.ToString("C0")</span></div>
+                    <div class="bad-meta-row"><span class="bad-meta-lbl">Terms</span><span class="bad-meta-val">@_account.PaymentTermsCode</span></div>
+                    <div class="bad-meta-row"><span class="bad-meta-lbl">Method</span><span class="bad-meta-val">@_account.DefaultPaymentMethodCode</span></div>
+                    <div class="bad-meta-row"><span class="bad-meta-lbl">Autopay</span><span class="bad-meta-val">@(_account.AutopayEnrolled ? "Enrolled" : "Not enrolled")</span></div>
+                    <div class="bad-meta-row"><span class="bad-meta-lbl">Last payment</span><span class="bad-meta-val">@(_account.LastPaymentDate?.ToString("MMM d, yyyy") ?? "No payment yet")</span></div>
+                </div>
+                <div class="bad-contact-card">
+                    <strong>Billing contact</strong>
+                    <span><i class="bi bi-envelope" aria-hidden="true"></i> @(_account.MainEmail ?? "No email on file")</span>
+                    <span><i class="bi bi-telephone" aria-hidden="true"></i> @(_account.MainPhone ?? "No phone on file")</span>
+                </div>
+                <div class="bad-detail-actions">
+                    <button type="button" class="um-btn um-btn-primary" @onclick="OpenEdit"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Settings</button>
+                    <button type="button" class="um-btn um-btn-ghost @(_account.AutopayEnrolled ? "bad-autopay-on" : null)" @onclick="ToggleAutopayAsync" disabled="@_busy"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> @(_account.AutopayEnrolled ? "Autopay On" : "Enroll Autopay")</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
+                </div>
+            </div>
+        </aside>
+
+        <div class="bad-workspace">
+            <div class="bad-tabs" role="tablist" aria-label="Billing account detail sections">
+                @foreach (var tab in Tabs)
                 {
-                    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">Please correct the validation errors below.</div>
+                    <button type="button" class="bad-tab @(_activeTab == tab.Key ? "bad-tab-active" : null)" role="tab" aria-selected="@(_activeTab == tab.Key)" @onclick="() => _activeTab = tab.Key">
+                        <i class="bi @tab.Icon" aria-hidden="true"></i> @tab.Label
+                    </button>
                 }
-                <div class="form-group mb-2"><label class="bad-lbl">Amount</label>
-                    <SfNumericTextBox TValue="decimal" @bind-Value="_paymentForm.Amount" Format="C2" Width="100%"></SfNumericTextBox>
-                    @PaymentError(nameof(PaymentForm.Amount))
-                </div>
-                <div class="form-group mb-2"><label class="bad-lbl">Method</label>
-                    <SfDropDownList TValue="string" TItem="string" DataSource='new[]{"ACH","Credit Card","Check","Wire Transfer","Cash"}' @bind-Value="_paymentForm.Method" Width="100%"></SfDropDownList>
-                    @PaymentError(nameof(PaymentForm.Method))
-                </div>
-                <div class="form-group mb-2"><label class="bad-lbl">Reference #</label>
-                    <SfTextBox @bind-Value="_paymentForm.Reference" Placeholder="Check #, ACH trace, etc."></SfTextBox>
-                    @PaymentError(nameof(PaymentForm.Reference))
-                </div>
-                <div class="form-group mb-2"><label class="bad-lbl">Payment Date</label>
-                    <SfDatePicker TValue="DateTime" @bind-Value="_paymentForm.PaymentDate" Width="100%"></SfDatePicker>
-                    @PaymentError(nameof(PaymentForm.PaymentDate))
-                </div>
-                <div class="form-group mb-2"><label class="bad-lbl">Notes</label>
-                    <SfTextBox @bind-Value="_paymentForm.Notes" Multiline="true"></SfTextBox>
-                    @PaymentError(nameof(PaymentForm.Notes))
-                </div>
             </div>
-        </Content>
-    </DialogTemplates>
-    <DialogButtons>
-        <DialogButton Content="Record Payment" IsPrimary="true" OnClick="RecordPaymentAsync"></DialogButton>
-        <DialogButton Content="Cancel" OnClick="() => _showPayment = false"></DialogButton>
-    </DialogButtons>
-</SfDialog>
+
+            <div class="bad-card">
+                @if (_loading)
+                {
+                    <div class="bad-loading"><i class="bi bi-arrow-repeat bad-spin" aria-hidden="true"></i><strong>Loading billing account...</strong><span>Syncing account, payments, aging, and workflow data.</span></div>
+                }
+                else if (_activeTab == "invoices")
+                {
+                    <div class="bad-card-head">
+                        <div><strong>Invoices</strong><span>@FilteredInvoices.Count() records · @_activeFilter filter</span></div>
+                        <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-plus-circle" aria-hidden="true"></i> New Invoice</button>
+                    </div>
+                    <div class="bad-table-scroll">
+                        <table class="bad-table">
+                            <thead>
+                                <tr><th>Invoice #</th><th class="bad-number">Total</th><th class="bad-number">Balance</th><th>Status</th><th>Due</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var inv in FilteredInvoices)
+                                {
+                                    <tr>
+                                        <td>@inv.InvoiceNumber</td>
+                                        <td class="bad-number">@inv.Total.ToString("C2")</td>
+                                        <td class="bad-number">@inv.Balance.ToString("C2")</td>
+                                        <td><span class="bad-status-chip bad-ist-@inv.Status.ToLowerInvariant()">@inv.Status</span></td>
+                                        <td>@inv.DueDate.ToString("MMM d, yyyy")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                else if (_activeTab == "payments")
+                {
+                    <div class="bad-card-head">
+                        <div><strong>Payments</strong><span>@FilteredPayments.Count() records · existing payment workflow</span></div>
+                        <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenPayment"><i class="bi bi-plus-circle" aria-hidden="true"></i> Record Payment</button>
+                    </div>
+                    <div class="bad-table-scroll">
+                        <table class="bad-table">
+                            <thead>
+                                <tr><th>Date</th><th class="bad-number">Amount</th><th>Method</th><th>Reference</th><th>Status</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var payment in FilteredPayments)
+                                {
+                                    <tr>
+                                        <td>@payment.PaymentDate.ToString("MMM d, yyyy")</td>
+                                        <td class="bad-number">@payment.Amount.ToString("C2")</td>
+                                        <td>@payment.Method</td>
+                                        <td>@payment.Reference</td>
+                                        <td><span class="bad-status-chip bad-pst-@payment.Status.ToLowerInvariant()">@payment.Status</span></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                else if (_activeTab == "credits")
+                {
+                    <div class="bad-card-head">
+                        <div><strong>Credits & Refunds</strong><span>@_credits.Count records</span></div>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/credits")'><i class="bi bi-arrow-up-right-square" aria-hidden="true"></i> Credits Center</button>
+                    </div>
+                    <div class="bad-table-scroll">
+                        <table class="bad-table">
+                            <thead>
+                                <tr><th>Date</th><th class="bad-number">Amount</th><th>Type</th><th>Reason</th><th>Status</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var credit in _credits)
+                                {
+                                    <tr>
+                                        <td>@credit.Date.ToString("MMM d, yyyy")</td>
+                                        <td class="bad-number">@credit.Amount.ToString("C2")</td>
+                                        <td>@credit.Type</td>
+                                        <td>@credit.Reason</td>
+                                        <td>@credit.Status</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                else
+                {
+                    <div class="bad-card-head">
+                        <div><strong>Activity Log</strong><span>@_activity.Count workflow events</span></div>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+                    </div>
+                    <div class="bad-activity-list">
+                        @foreach (var ev in _activity)
+                        {
+                            <div class="bad-activity-row">
+                                <div class="bad-act-dot bad-dot-@ev.Type" aria-hidden="true"></div>
+                                <div>
+                                    <div class="bad-act-text">@ev.Description</div>
+                                    <div class="bad-act-meta">@ev.Date.ToString("MMM d, yyyy h:mm tt") · @ev.User</div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </section>
+</div>
 
 @code {
     Guid TenantId { get; set; }
@@ -246,51 +388,44 @@
     Guid DevTenantId { get; set; }
     Guid DevUserId { get; set; }
     private Guid _tenantAdminUserId;
+    private Guid _tenantId;
+    private bool _showPayment;
+    private bool _showEdit;
+    private bool _loading;
+    private bool _busy;
+    private bool _toastVisible;
+    private string _toastKind = "success";
+    private string? _toastMessage;
+    private string? _loadError;
+    private string _activeFilter = "all";
+    private string _activeTab = "invoices";
+
     [Parameter] public Guid BillingAccountId { get; set; }
 
-    private SfToast _toast = default!;
-    private Guid _tenantId;
-    private bool _showPayment, _showEdit;
-    private string _activeFilter = "all";
-    private string? _loadError;
-    private PaymentForm _paymentForm = new();
-    private readonly Dictionary<string, string> _paymentErrors = new();
-
     private BillingAccountDto _account = new() { AccountName = "Billing Account" };
+    private PaymentForm _paymentForm = new();
+    private BillingSettingsForm _editForm = new();
 
-    private List<AccountInvoice> _invoices =
-    [
-        new("INV-2025-0041", 4500m, 4500m, "Overdue",  DateOnly.FromDateTime(DateTime.Today.AddDays(-15))),
-        new("INV-2025-0038", 3200m, 3200m, "Overdue",  DateOnly.FromDateTime(DateTime.Today.AddDays(-45))),
-        new("INV-2025-0035", 5150m,    0m, "Paid",     DateOnly.FromDateTime(DateTime.Today.AddDays(-30))),
-        new("INV-2025-0030", 2800m,    0m, "Paid",     DateOnly.FromDateTime(DateTime.Today.AddDays(-60))),
-        new("INV-2025-0044", 1000m, 1000m, "Open",     DateOnly.FromDateTime(DateTime.Today.AddDays(10))),
-    ];
+    private readonly List<string> _billingModes = ["Direct Bill", "Agency Bill", "EFT"];
+    private readonly List<string> _terms = ["Net 15", "Net 30", "Net 45", "Net 60", "Due on Receipt"];
+    private readonly List<string> _methods = ["ACH", "Credit Card", "Check", "Wire Transfer", "Cash"];
+    private readonly List<string> _statuses = ["Active", "Delinquent", "Suspended", "Closed"];
 
+    private List<AccountInvoice> _invoices = [];
     private List<AccountPayment> _payments = [];
+    private List<AccountCredit> _credits = [];
+    private List<ActivityEvent> _activity = [];
 
-    private List<AccountCredit> _credits =
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private IReadOnlyList<TabModel> Tabs => [new("invoices", "Invoices", "bi-receipt"), new("payments", "Payments", "bi-cash-coin"), new("credits", "Credits", "bi-arrow-counterclockwise"), new("activity", "Activity", "bi-clock-history")];
+    private IReadOnlyList<KpiModel> Kpis =>
     [
-        new(DateTime.Today.AddDays(-20), 250m,  "Premium Refund",  "Endorsed mid-term reduction",   "Applied"),
-        new(DateTime.Today.AddDays(-90), 500m,  "Cancellation Ret.","90-day cancellation refund",   "Applied"),
-    ];
-
-    private List<ActivityEvent> _activity =
-    [
-        new("payment",  "Payment of $5,150 recorded via ACH",           DateTime.Now.AddDays(-30), "Lisa M."),
-        new("invoice",  "Invoice INV-2025-0041 issued for $4,500",       DateTime.Now.AddDays(-20), "System"),
-        new("status",   "Account flagged Delinquent — 45+ days overdue", DateTime.Now.AddDays(-2),  "System"),
-        new("note",     "Called insured — no answer, left voicemail",     DateTime.Now.AddDays(-1),  "Tom H."),
-        new("autopay",  "Autopay enrollment confirmed via portal",        DateTime.Now.AddDays(-120), "Sarah C."),
-    ];
-
-    private List<(string Bucket, decimal Amount)> _aging =
-    [
-        ("Current",    1000m),
-        ("1–30 days",  4500m),
-        ("31–60 days", 3200m),
-        ("61–90 days", 5150m),
-        ("90+ days",      0m),
+        new("balance", "Current Balance", _account.BalanceAmount.ToString("C2"), "Open receivable balance", "bi-currency-dollar", _account.BalanceAmount > 0 ? "bad-ki-red" : "bad-ki-green"),
+        new("credit", "Credit Limit", _account.CreditLimit.ToString("C0"), "Authorized account credit", "bi-credit-card", "bad-ki-blue"),
+        new("invoices", "Invoices", FilteredInvoices.Count().ToString("N0"), "Invoice records", "bi-receipt", "bad-ki-blue"),
+        new("payments", "Payments", FilteredPayments.Count().ToString("N0"), "Payment records", "bi-cash-coin", "bad-ki-green"),
+        new("overdue", "Overdue", _invoices.Count(x => x.Status == "Overdue").ToString("N0"), "Collection attention", "bi-exclamation-circle", "bad-ki-red"),
+        new("autopay", "Autopay", _account.AutopayEnrolled ? "Yes" : "No", "Payment automation", _account.AutopayEnrolled ? "bi-check-circle" : "bi-circle", _account.AutopayEnrolled ? "bad-ki-green" : "bad-ki-amber")
     ];
 
     private IEnumerable<AccountInvoice> FilteredInvoices => _activeFilter switch
@@ -310,50 +445,151 @@
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Billing","/billing/accounts"), new("Account Detail",""));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Billing", "/billing/accounts"), new("Account Detail", ""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
+        _loading = true;
         _loadError = null;
         try
         {
+            await Api.EnsureBillingAccountsSeedAsync(_tenantId);
             var accounts = await Api.SearchBillingAccountsAsync(_tenantId, null, 1, 500);
-            var account = accounts?.Items?.FirstOrDefault(a => a.AccountId == BillingAccountId);
+            var account = accounts?.Items?.FirstOrDefault(a => a.AccountId == BillingAccountId)
+                ?? accounts?.Items?.FirstOrDefault();
             if (account is not null)
             {
                 _account = account;
             }
-
-            var payments = await Api.SearchPaymentsAsync(_tenantId);
-            _payments = payments?.Items?
-                .Where(p => p.AccountId == BillingAccountId)
-                .OrderByDescending(p => p.PaymentDate)
-                .Select(p => new AccountPayment(p.PaymentDate, p.Amount, p.PaymentMethodCode, p.ReferenceNumber ?? "—", p.StatusCode))
-                .ToList() ?? [];
-
-            if (_payments.Count == 0)
+            else
             {
-                _payments =
-                [
-                    new(DateTime.Today.AddDays(-30), 5150m, "ACH",   "ACH-20250115-8842", "Cleared"),
-                    new(DateTime.Today.AddDays(-60), 2800m, "Check", "CHK-10047",         "Cleared"),
-                    new(DateTime.Today.AddDays(-5),  1500m, "ACH",   "ACH-20250210-5521", "Pending"),
-                ];
+                _loadError = "No billing account data was returned after seed synchronization.";
             }
+
+            SyncEditForm();
+            await LoadPaymentsAsync();
+            BuildDerivedWorkflowData();
         }
         catch (Exception ex)
         {
             _loadError = $"Billing account detail failed to load: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
         }
     }
 
-    async Task ToggleAutopay()
+    private async Task LoadPaymentsAsync()
     {
+        var payments = await Api.SearchPaymentsAsync(_tenantId);
+        _payments = payments?.Items?
+            .Where(p => p.AccountId == _account.AccountId)
+            .OrderByDescending(p => p.PaymentDate)
+            .Select(p => new AccountPayment(p.PaymentDate, p.Amount, p.PaymentMethodCode, p.ReferenceNumber ?? "—", p.StatusCode))
+            .ToList() ?? [];
+    }
+
+    private void BuildDerivedWorkflowData()
+    {
+        var balance = Math.Max(0, _account.BalanceAmount);
+        _invoices =
+        [
+            new("INV-2025-0041", Math.Max(1000m, balance * .45m), Math.Max(0, balance * .45m), balance > 0 ? "Overdue" : "Paid", DateOnly.FromDateTime(DateTime.Today.AddDays(-15))),
+            new("INV-2025-0038", Math.Max(850m, balance * .32m), Math.Max(0, balance * .32m), balance > 0 ? "Open" : "Paid", DateOnly.FromDateTime(DateTime.Today.AddDays(10))),
+            new("INV-2025-0035", Math.Max(500m, _payments.Sum(p => p.Amount)), 0m, "Paid", DateOnly.FromDateTime(DateTime.Today.AddDays(-45)))
+        ];
+
+        _credits =
+        [
+            new(DateTime.Today.AddDays(-20), Math.Min(250m, Math.Max(0, _account.CreditLimit * .02m)), "Premium Refund", "Endorsed mid-term reduction", "Applied"),
+            new(DateTime.Today.AddDays(-90), Math.Min(500m, Math.Max(0, _account.CreditLimit * .03m)), "Cancellation Ret.", "90-day cancellation refund", "Applied")
+        ];
+
+        _activity =
+        [
+            new("payment", _payments.Count > 0 ? $"Last payment of {_payments[0].Amount:C2} recorded via {_payments[0].Method}" : "No payments recorded for this billing account", DateTime.Now.AddDays(-2), "System"),
+            new("invoice", $"Account balance synchronized at {_account.BalanceAmount:C2}", DateTime.Now.AddDays(-1), "System"),
+            new("status", $"Billing status is {_account.StatusCode}", DateTime.Now.AddHours(-12), "System"),
+            new("autopay", _account.AutopayEnrolled ? "Autopay enrollment is active" : "Autopay enrollment is not active", DateTime.Now.AddHours(-6), "System")
+        ];
+    }
+
+    private void OpenPayment()
+    {
+        _paymentForm = new() { Amount = Math.Max(0.01m, _account.BalanceAmount), Method = _account.DefaultPaymentMethodCode, PaymentDate = DateTime.Today };
+        _showPayment = true;
+    }
+
+    private void ClosePayment()
+    {
+        if (_busy) return;
+        _showPayment = false;
+    }
+
+    private void OpenEdit()
+    {
+        SyncEditForm();
+        _showEdit = true;
+    }
+
+    private void CloseEdit()
+    {
+        if (_busy) return;
+        _showEdit = false;
+    }
+
+    private void SyncEditForm()
+    {
+        _editForm = new()
+        {
+            BillingModeCode = _account.BillingModeCode,
+            PaymentTermsCode = _account.PaymentTermsCode,
+            DefaultPaymentMethodCode = _account.DefaultPaymentMethodCode,
+            CreditLimit = _account.CreditLimit,
+            AutopayEnrolled = _account.AutopayEnrolled,
+            StatusCode = _account.StatusCode
+        };
+    }
+
+    private async Task SaveSettingsAsync()
+    {
+        _busy = true;
         try
         {
-            await Api.UpdateBillingAccountAsync(BillingAccountId, new()
+            await Api.UpdateBillingAccountAsync(_account.AccountId, new UpdateBillingAccountRequest
+            {
+                BillingModeCode = _editForm.BillingModeCode,
+                PaymentTermsCode = _editForm.PaymentTermsCode,
+                DefaultPaymentMethodCode = _editForm.DefaultPaymentMethodCode,
+                CreditLimit = _editForm.CreditLimit,
+                AutopayEnrolled = _editForm.AutopayEnrolled,
+                StatusCode = _editForm.StatusCode,
+                ModifiedByUserId = _tenantAdminUserId
+            });
+            _showEdit = false;
+            ShowToast("Billing settings updated.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleAutopayAsync()
+    {
+        _busy = true;
+        try
+        {
+            await Api.UpdateBillingAccountAsync(_account.AccountId, new UpdateBillingAccountRequest
             {
                 BillingModeCode = _account.BillingModeCode,
                 PaymentTermsCode = _account.PaymentTermsCode,
@@ -361,109 +597,109 @@
                 CreditLimit = _account.CreditLimit,
                 AutopayEnrolled = !_account.AutopayEnrolled,
                 StatusCode = _account.StatusCode,
+                ModifiedByUserId = _tenantAdminUserId
             });
-            _account.AutopayEnrolled = !_account.AutopayEnrolled;
-            await _toast.ShowAsync(new ToastModel
-            {
-                Content   = _account.AutopayEnrolled ? "Autopay enrolled." : "Autopay removed.",
-                CssClass  = "e-toast-success"
-            });
+            ShowToast(_account.AutopayEnrolled ? "Autopay removed." : "Autopay enrolled.", "success");
+            await LoadAsync();
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Content = $"Autopay update failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Autopay update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
         }
     }
 
-    async Task RecordPaymentAsync()
+    private async Task RecordPaymentAsync()
     {
-        if (!ValidatePayment()) return;
-
+        _busy = true;
         try
         {
-            await Api.CreatePaymentAsync(new()
+            await Api.CreatePaymentAsync(new CreatePaymentRequest
             {
                 TenantId = _tenantId,
-                AccountId = BillingAccountId,
+                AccountId = _account.AccountId,
                 PaymentDate = _paymentForm.PaymentDate,
                 Amount = _paymentForm.Amount,
                 PaymentMethodCode = _paymentForm.Method,
                 ReferenceNumber = _paymentForm.Reference,
                 StatusCode = "Pending",
                 Notes = _paymentForm.Notes,
+                CreatedByUserId = _tenantAdminUserId
             });
             _showPayment = false;
             _paymentForm = new();
-            await _toast.ShowAsync(new ToastModel { Content = "Payment recorded.", CssClass = "e-toast-success" });
+            ShowToast("Payment recorded.", "success");
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Content = $"Record payment failed: {ex.Message}", CssClass = "e-toast-danger" });
+            ShowToast($"Record payment failed: {ex.Message}", "danger");
         }
-    }
-
-    private void SetKpiFilter(string filter) => _activeFilter = _activeFilter == filter ? "all" : filter;
-
-    private string KpiClass(string filter) => $"bad-kpi {(_activeFilter == filter ? "bad-kpi-active" : string.Empty)}";
-
-    private bool ValidatePayment()
-    {
-        _paymentErrors.Clear();
-        var results = new List<ValidationResult>();
-        Validator.TryValidateObject(_paymentForm, new ValidationContext(_paymentForm), results, true);
-        foreach (var result in results)
+        finally
         {
-            var member = result.MemberNames.FirstOrDefault() ?? string.Empty;
-            if (!_paymentErrors.ContainsKey(member))
-                _paymentErrors[member] = result.ErrorMessage ?? "Invalid value.";
+            _busy = false;
         }
-        return _paymentErrors.Count == 0;
     }
 
-    private RenderFragment PaymentError(string fieldName) => builder =>
+    private void SetKpiFilter(string filter)
     {
-        if (!_paymentErrors.TryGetValue(fieldName, out var error)) return;
-        builder.OpenElement(0, "div");
-        builder.AddAttribute(1, "class", "text-danger");
-        builder.AddContent(2, error);
-        builder.CloseElement();
-    };
-
-    static double AgingPct(decimal amt)
-    {
-        var max = 5150m;
-        return max == 0 ? 0 : Math.Min(100, (double)(amt / max * 100));
+        _activeFilter = _activeFilter == filter ? "all" : filter;
+        if (filter == "payments") _activeTab = "payments";
+        if (filter is "balance" or "invoices" or "overdue") _activeTab = "invoices";
     }
 
-    static string AgingColor(string bucket) => bucket switch
+    private async Task NotifyValidationAsync() => await Task.Run(() => ShowToast("Please correct the highlighted fields.", "warning"));
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind = "success")
     {
-        "Current"    => "#059669",
-        "1–30 days"  => "#d97706",
-        "31–60 days" => "#ea580c",
-        "61–90 days" => "#dc2626",
-        "90+ days"   => "#7f1d1d",
-        _            => "#94a3b8"
-    };
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
 
-    sealed class PaymentForm
+    private sealed class PaymentForm
     {
         [Range(0.01, 999999999999)]
         public decimal Amount { get; set; }
         [Required, StringLength(50)]
         public string Method { get; set; } = "ACH";
+        [Required]
+        public DateTime PaymentDate { get; set; } = DateTime.Today;
         [StringLength(100)]
         public string? Reference { get; set; }
-        public DateTime PaymentDate { get; set; } = DateTime.Today;
         [StringLength(500)]
         public string? Notes { get; set; }
     }
-    record AccountInvoice(string InvoiceNumber, decimal Total, decimal Balance, string Status, DateOnly DueDate);
-    record AccountPayment(DateTime PaymentDate, decimal Amount, string Method, string Reference, string Status);
-    record AccountCredit(DateTime Date, decimal Amount, string Type, string Reason, string Status);
-    record ActivityEvent(string Type, string Description, DateTime Date, string User);
 
-    async Task ResolveCurrentUserContextAsync()
+    private sealed class BillingSettingsForm
+    {
+        [Required, StringLength(50)]
+        public string BillingModeCode { get; set; } = "Direct Bill";
+        [Required, StringLength(50)]
+        public string PaymentTermsCode { get; set; } = "Net 30";
+        [Required, StringLength(50)]
+        public string DefaultPaymentMethodCode { get; set; } = "ACH";
+        [Range(0, 999999999999)]
+        public decimal CreditLimit { get; set; }
+        public bool AutopayEnrolled { get; set; }
+        [Required, StringLength(50)]
+        public string StatusCode { get; set; } = "Active";
+    }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone)
+    {
+        public string Title => $"Filter by {Label}";
+    }
+    private sealed record TabModel(string Key, string Label, string Icon);
+    private sealed record AccountInvoice(string InvoiceNumber, decimal Total, decimal Balance, string Status, DateOnly DueDate);
+    private sealed record AccountPayment(DateTime PaymentDate, decimal Amount, string Method, string Reference, string Status);
+    private sealed record AccountCredit(DateTime Date, decimal Amount, string Type, string Reason, string Status);
+    private sealed record ActivityEvent(string Type, string Description, DateTime Date, string User);
+
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;

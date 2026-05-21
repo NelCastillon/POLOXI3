@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Commissions;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -27,6 +28,42 @@ public sealed class CommissionTransactionRepository : ICommissionTransactionRepo
         var items = (await multi.ReadAsync<CommissionTransactionDto>()).AsList();
         var total = await multi.ReadSingleAsync<int>();
         return new PagedResult<CommissionTransactionDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateCommissionTransactionRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAndSeedAsync(request.TenantId, cancellationToken);
+
+        var id = Guid.NewGuid();
+        var amount = request.CommissionAmount > 0 ? request.CommissionAmount : Math.Round(request.GrossAmount * request.CommissionRate / 100m, 2);
+        const string sql = @"
+INSERT INTO Commission.CommissionTransaction (TransactionId, TenantId, PayeeId, CommissionPlanId, SourceEntityName, SourceEntityId, TransactionDate, GrossAmount, CommissionRate, CommissionAmount, StatusCode, PayoutId, CreatedDateUtc, IsDeleted)
+VALUES (@Id, @TenantId, @PayeeId, @CommissionPlanId, @SourceEntityName, @SourceEntityId, @TransactionDate, @GrossAmount, @CommissionRate, @CommissionAmount, @StatusCode, @PayoutId, SYSUTCDATETIME(), 0);";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.PayeeId, request.CommissionPlanId, request.SourceEntityName, request.SourceEntityId, request.TransactionDate, request.GrossAmount, request.CommissionRate, CommissionAmount = amount, request.StatusCode, request.PayoutId }, cancellationToken: cancellationToken));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateCommissionTransactionRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAndSeedAsync(request.TenantId, cancellationToken);
+
+        var amount = request.CommissionAmount > 0 ? request.CommissionAmount : Math.Round(request.GrossAmount * request.CommissionRate / 100m, 2);
+        const string sql = @"
+UPDATE Commission.CommissionTransaction
+SET PayeeId = @PayeeId,
+    CommissionPlanId = @CommissionPlanId,
+    SourceEntityName = @SourceEntityName,
+    SourceEntityId = @SourceEntityId,
+    TransactionDate = @TransactionDate,
+    GrossAmount = @GrossAmount,
+    CommissionRate = @CommissionRate,
+    CommissionAmount = @CommissionAmount,
+    StatusCode = @StatusCode,
+    PayoutId = @PayoutId
+WHERE TransactionId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.PayeeId, request.CommissionPlanId, request.SourceEntityName, request.SourceEntityId, request.TransactionDate, request.GrossAmount, request.CommissionRate, CommissionAmount = amount, request.StatusCode, request.PayoutId }, cancellationToken: cancellationToken));
     }
 
     private async Task EnsureSchemaAndSeedAsync(Guid? tenantId, CancellationToken cancellationToken)

@@ -1,973 +1,1314 @@
 @page "/documents"
+@using System.ComponentModel.DataAnnotations
+@using System.Text
+@using Microsoft.AspNetCore.Components.Rendering
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Documents
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Web
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
-@using Ams.Application.Features.Documents
-@using Microsoft.AspNetCore.Components.Forms
 
-<PageTitle>Documents Hub — AMS</PageTitle>
-<AppPageHeader Title="Documents Hub"
-               Subtitle="Policies, forms, certificates, correspondence and all client documents in one place"
-               Icon="bi-folder2-open">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents/forms")'>
-            <i class="bi bi-file-earmark-medical" aria-hidden="true"></i> ACORD Forms
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents/esign")'>
-            <i class="bi bi-pen" aria-hidden="true"></i> E-Sign
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents/packets")'>
-            <i class="bi bi-collection" aria-hidden="true"></i> Packets
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="() => _showUpload = true">
-            <i class="bi bi-upload" aria-hidden="true"></i> Upload Document
-        </button>
-    </Actions>
-</AppPageHeader>
+<PageTitle>Documents Hub — AMS Enterprise</PageTitle>
 
-<!-- ── TENANT ADMIN DOCUMENTS WORKFLOW ────────────────────────────── -->
-<section class="docs-hero" aria-label="Documents workflow overview">
-    <div>
-        <span class="docs-eyebrow">Tenant administration</span>
-        <h2>Documents Workflow</h2>
-        <p>Govern document intake, classification, ACORD forms, e-signature, OCR exception resolution, packet assembly, retention, and audit controls.</p>
+@if (_toastVisible)
+{
+    <div class="dh-toast dh-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="dh-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
-    <div class="docs-hero-grid">
-        @foreach (var action in _docQuickActions)
-        {
-            <button class="docs-quick-action" @onclick="() => Nav.NavigateTo(action.Url)">
-                <i class="bi @action.Icon" aria-hidden="true"></i>
-                <span>@action.Label</span>
-            </button>
-        }
-    </div>
-</section>
+}
 
-<section class="docs-kpi-grid" aria-label="Documents workflow metrics">
-    @DocWorkflowKpi("Repository", (_items?.Count ?? 0).ToString(), "Indexed tenant documents", "bi-folder2-open", "docs-tone-blue")
-    @DocWorkflowKpi("E-Sign", _kpiEsign.ToString(), "Pending signatures", "bi-pen", "docs-tone-amber")
-    @DocWorkflowKpi("OCR Review", _kpiExceptions.ToString(), "Exceptions to classify", "bi-exclamation-triangle", "docs-tone-red")
-    @DocWorkflowKpi("Audit Ready", _docWorkflow.Count(x => x.Stage == "Audit").ToString(), "Retention and access evidence", "bi-shield-check", "docs-tone-green")
-</section>
-
-<section class="docs-command-bar" aria-label="Documents workflow filters">
-    <div class="docs-search-wrap">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        <input type="search"
-               placeholder="Search workflow, owner, document type, control..."
-               @bind="_workflowSearch"
-               @bind:event="oninput" />
-    </div>
-    <div class="docs-pill-group" role="group" aria-label="Documents workflow filter">
-        @foreach (var filter in _docFilters)
-        {
-            <button class="docs-pill @(_workflowFilter == filter.Key ? "docs-pill--active" : "")"
-                    @onclick="() => _workflowFilter = filter.Key">
-                @filter.Label
-                <span>@DocFilterCount(filter.Key)</span>
-            </button>
-        }
-    </div>
-</section>
-
-<section class="docs-layout">
-    <div class="docs-flow" aria-label="Documents workflow lanes">
-        @foreach (var lane in _docLanes)
-        {
-            var laneItems = FilteredDocWorkflow.Where(x => x.Stage == lane.Key).ToList();
-            <article class="docs-lane">
-                <header class="docs-lane-header">
-                    <div>
-                        <span class="docs-lane-title">@lane.Label</span>
-                        <span class="docs-lane-subtitle">@lane.Description</span>
+@if (_showUpload)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseUpload">
+        <div class="mt-modal dh-action-modal" role="dialog" aria-modal="true" aria-labelledby="dh-upload-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-upload" aria-hidden="true"></i>
+                <span id="dh-upload-title">Upload Document</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseUpload" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_uploadForm" OnValidSubmit="SubmitUploadAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="dh-modal-intro">
+                        <span class="dh-modal-chip"><i class="bi bi-folder-check" aria-hidden="true"></i> Enterprise repository</span>
+                        <p>Upload, classify, retain, and audit tenant documents through the governed document workflow.</p>
                     </div>
-                    <span class="docs-lane-count">@laneItems.Count</span>
-                </header>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Document File <span class="text-danger">*</span></label>
+                            <InputFile OnChange="OnUploadFileChanged" />
+                            @if (_uploadFile is null && _uploadAttempted)
+                            {
+                                <div class="text-danger">A document file is required.</div>
+                            }
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>File Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_uploadForm.FileName" />
+                            <ValidationMessage For="() => _uploadForm.FileName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Category <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_uploadForm.CategoryCode">
+                                @foreach (var category in UploadCategories)
+                                {
+                                    <option value="@category.Code">@category.Label</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _uploadForm.CategoryCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Document Type <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_uploadForm.DocumentTypeCode" />
+                            <ValidationMessage For="() => _uploadForm.DocumentTypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Linked Entity</label>
+                            <InputText class="form-control" @bind-Value="_uploadForm.EntityName" placeholder="Account, Policy, Claim..." />
+                            <ValidationMessage For="() => _uploadForm.EntityName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Retention Date</label>
+                            <InputDate class="form-control" @bind-Value="_uploadForm.RetentionDate" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description</label>
+                            <InputTextArea class="form-control" rows="3" @bind-Value="_uploadForm.Description" />
+                            <ValidationMessage For="() => _uploadForm.Description" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Tags</label>
+                            <InputText class="form-control" @bind-Value="_uploadForm.Tags" placeholder="policy, certificate, renewal" />
+                            <ValidationMessage For="() => _uploadForm.Tags" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Uploaded By</label>
+                            <InputText class="form-control" @bind-Value="_uploadForm.UploadedByName" />
+                            <ValidationMessage For="() => _uploadForm.UploadedByName" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseUpload" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        Upload Document
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
-                <div class="docs-lane-list">
-                    @if (laneItems.Count == 0)
-                    {
-                        <div class="docs-empty-mini">No visible workflow items.</div>
-                    }
-                    else
-                    {
-                        @foreach (var item in laneItems)
+@if (_showMetadata && _selected is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseMetadata">
+        <div class="mt-modal dh-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="dh-metadata-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-tags" aria-hidden="true"></i>
+                <span id="dh-metadata-title">Edit Metadata</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseMetadata" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_metadataForm" OnValidSubmit="SubmitMetadataAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Description</label>
+                            <InputTextArea class="form-control" rows="4" @bind-Value="_metadataForm.Description" />
+                            <ValidationMessage For="() => _metadataForm.Description" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Tags</label>
+                            <InputText class="form-control" @bind-Value="_metadataForm.Tags" />
+                            <ValidationMessage For="() => _metadataForm.Tags" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Retention Date</label>
+                            <InputDate class="form-control" @bind-Value="_metadataForm.RetentionDate" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseMetadata" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">Save Metadata</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showNewVersion && _selected is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseVersion">
+        <div class="mt-modal dh-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="dh-version-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-layers" aria-hidden="true"></i>
+                <span id="dh-version-title">Upload New Version</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseVersion" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_versionForm" OnValidSubmit="SubmitVersionAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Version File <span class="text-danger">*</span></label>
+                            <InputFile OnChange="OnVersionFileChanged" />
+                            @if (_versionFile is null && _versionAttempted)
+                            {
+                                <div class="text-danger">A version file is required.</div>
+                            }
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>File Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_versionForm.FileName" />
+                            <ValidationMessage For="() => _versionForm.FileName" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Change Notes</label>
+                            <InputTextArea class="form-control" rows="4" @bind-Value="_versionForm.ChangeNotes" />
+                            <ValidationMessage For="() => _versionForm.ChangeNotes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseVersion" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">Upload Version</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showShareDialog && _selected is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseShare">
+        <div class="mt-modal dh-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="dh-share-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-share" aria-hidden="true"></i>
+                <span id="dh-share-title">Create Share Link</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseShare" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_shareForm" OnValidSubmit="SubmitShareLinkAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Expires UTC <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_shareForm.ExpiresDateUtc" />
+                            <ValidationMessage For="() => _shareForm.ExpiresDateUtc" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Max Access Count</label>
+                            <InputNumber class="form-control" @bind-Value="_shareForm.MaxAccessCount" />
+                            <ValidationMessage For="() => _shareForm.MaxAccessCount" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--checkbox">
+                            <label><InputCheckbox @bind-Value="_shareForm.RequiresPin" /> Require PIN</label>
+                        </div>
+                        @if (_shareForm.RequiresPin)
                         {
-                            <button class="docs-work-card @(item.Risk == "High" ? "docs-work-card--risk" : "")"
-                                    @onclick="() => _selectedWorkflow = item">
-                                <div class="docs-work-topline">
-                                    <span class="docs-chip @DocToneCss(item.Type)">@item.Type</span>
-                                    <span class="docs-status @DocRiskCss(item.Risk)">@item.Risk</span>
-                                </div>
-                                <strong>@item.Title</strong>
-                                <p>@item.Summary</p>
-                                <div class="docs-work-meta">
-                                    <span><i class="bi bi-person" aria-hidden="true"></i> @item.Owner</span>
-                                    <span><i class="bi bi-clock" aria-hidden="true"></i> @item.Sla</span>
-                                </div>
-                            </button>
+                            <div class="um-field">
+                                <label>PIN <span class="text-danger">*</span></label>
+                                <InputText type="password" class="form-control" @bind-Value="_shareForm.Pin" />
+                                <ValidationMessage For="() => _shareForm.Pin" class="text-danger" />
+                            </div>
                         }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseShare" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">Create Link</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showRename && _selected is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseRename">
+        <div class="mt-modal dh-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="dh-rename-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-pencil" aria-hidden="true"></i>
+                <span id="dh-rename-title">Rename Document</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseRename" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_renameForm" OnValidSubmit="SubmitRenameAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>New File Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_renameForm.NewFileName" />
+                            <ValidationMessage For="() => _renameForm.NewFileName" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRename" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">Rename</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_confirmAction is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseConfirm">
+        <div class="mt-modal dh-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="dh-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @ConfirmIconClass"><i class="bi @ConfirmIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-message">
+                    <h6 id="dh-confirm-title">@_confirmAction Document?</h6>
+                    <p>@ConfirmMessage</p>
+                </div>
+                <div class="um-modal-footer w-100">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConfirm" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @ConfirmButtonClass" @onclick="ExecuteConfirmAsync" disabled="@_busy">@_confirmAction</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_shareLinksVisible && _selected is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseShareLinks">
+        <div class="mt-modal dh-action-modal" role="dialog" aria-modal="true" aria-labelledby="dh-links-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-link-45deg" aria-hidden="true"></i>
+                <span id="dh-links-title">Share Links — @_selected.FileName</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseShareLinks"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="um-modal-body">
+                @if (!_shareLinks.Any())
+                {
+                    <div class="dh-empty-inline"><i class="bi bi-link" aria-hidden="true"></i><strong>No share links</strong><span>Create a share link from document actions.</span></div>
+                }
+                else
+                {
+                    <div class="dh-mini-table-wrap">
+                        <table class="dh-mini-table" aria-label="Document share links">
+                            <thead><tr><th>Token</th><th>Expires</th><th>Access</th><th>PIN</th><th>State</th><th></th></tr></thead>
+                            <tbody>
+                                @foreach (var link in _shareLinks)
+                                {
+                                    <tr>
+                                        <td><code>@link.Token</code></td>
+                                        <td>@link.ExpiresDateUtc.ToLocalTime().ToString("MM/dd/yyyy")</td>
+                                        <td>@link.AccessCount / @(link.MaxAccessCount?.ToString() ?? "∞")</td>
+                                        <td>@(link.RequiresPin ? "Required" : "No")</td>
+                                        <td>@(link.IsRevoked ? "Revoked" : "Active")</td>
+                                        <td>
+                                            @if (!link.IsRevoked)
+                                            {
+                                                <button type="button" class="um-btn um-btn-danger um-btn-xs" @onclick="() => OpenRevokeConfirm(link)">Revoke</button>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseShareLinks">Close</button></div>
+        </div>
+    </div>
+}
+
+@if (_drawerRow is not null)
+{
+    <div class="dh-drawer-backdrop" @onclick="CloseDrawer"></div>
+    <aside class="dh-drawer" aria-label="Document details">
+        <div class="dh-drawer-head">
+            <div>
+                <h2 class="dh-drawer-title">@_drawerRow.FileName</h2>
+                <span class="dh-drawer-sub">@_drawerRow.CategoryCode · @_drawerRow.DocumentTypeCode · v@_drawerRow.VersionNumber</span>
+            </div>
+            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="CloseDrawer"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+        <div class="dh-drawer-body">
+            <div class="dh-drawer-banner dh-drawer-banner--@CssSafe(_drawerRow.StatusCode)">
+                <i class="bi @StatusIcon(_drawerRow.StatusCode)" aria-hidden="true"></i>
+                <span>@_drawerRow.StatusCode</span>
+                <strong>@LifecycleLabel(_drawerRow)</strong>
+            </div>
+            <div class="dh-drawer-meta">
+                @DrawerField("Category", _drawerRow.CategoryCode)
+                @DrawerField("Type", _drawerRow.DocumentTypeCode)
+                @DrawerField("Version", $"v{_drawerRow.VersionNumber}")
+                @DrawerField("Size", FormatSize(_drawerRow.FileSizeBytes))
+                @DrawerField("Entity", string.IsNullOrWhiteSpace(_drawerRow.EntityName) ? "—" : _drawerRow.EntityName!)
+                @DrawerField("Retention", _drawerRow.RetentionDate?.ToString("MM/dd/yyyy") ?? "—")
+                @DrawerField("Uploaded", _drawerRow.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy"))
+                @DrawerField("Modified", _drawerRow.ModifiedDateUtc?.ToLocalTime().ToString("MM/dd/yyyy") ?? "—")
+            </div>
+            <section class="dh-drawer-section">
+                <h3><i class="bi bi-card-text" aria-hidden="true"></i> Description</h3>
+                <p>@(string.IsNullOrWhiteSpace(_drawerRow.Description) ? "No description has been provided." : _drawerRow.Description)</p>
+            </section>
+            <section class="dh-drawer-section">
+                <h3><i class="bi bi-tags" aria-hidden="true"></i> Tags</h3>
+                @if (DocumentTags(_drawerRow).Any())
+                {
+                    <div class="dh-tag-list">
+                        @foreach (var tag in DocumentTags(_drawerRow))
+                        {
+                            <span>@tag</span>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <p>No tags have been assigned.</p>
+                }
+            </section>
+            <section class="dh-drawer-section">
+                <h3><i class="bi bi-layers" aria-hidden="true"></i> Version History</h3>
+                @if (_relatedLoading)
+                {
+                    <p>Loading related activity…</p>
+                }
+                else if (_versions.Any())
+                {
+                    <div class="dh-mini-list">
+                        @foreach (var version in _versions.Take(6))
+                        {
+                            <div class="dh-mini-item">
+                                <strong>v@version.VersionNumber · @version.FileName</strong>
+                                <span>@version.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy h:mm tt") · @(version.ChangeNotes ?? "No notes")</span>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <p>No version history is available.</p>
+                }
+            </section>
+            <section class="dh-drawer-section">
+                <h3><i class="bi bi-shield-check" aria-hidden="true"></i> Workflow & Audit</h3>
+                <div class="dh-tag-list">
+                    <span>@AiClassify(_drawerRow)</span>
+                    <span>@WorkflowStage(_drawerRow)</span>
+                    <span>@(DocumentRisk(_drawerRow) == "High" ? "High risk" : "Standard risk")</span>
+                    <span>@_accessLog.Count access events</span>
+                </div>
+            </section>
+            <div class="dh-drawer-actions">
+                <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => Download(_drawerRow)"><i class="bi bi-download" aria-hidden="true"></i> Download</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenMetadata(_drawerRow)"><i class="bi bi-tags" aria-hidden="true"></i> Metadata</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenVersion(_drawerRow)"><i class="bi bi-layers" aria-hidden="true"></i> New Version</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenShare(_drawerRow)"><i class="bi bi-share" aria-hidden="true"></i> Share</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenRename(_drawerRow)"><i class="bi bi-pencil" aria-hidden="true"></i> Rename</button>
+                <button type="button" class="um-btn um-btn-warning um-btn-sm" @onclick='() => OpenConfirm(_drawerRow, "Archive")' disabled="@(_drawerRow.StatusCode == "Archived")"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button>
+            </div>
+        </div>
+    </aside>
+}
+
+<div class="dh-enterprise-page" @onclick="CloseActionMenu">
+    <div class="dh-header">
+        <div class="dh-header-left">
+            <div class="dh-lob-icon"><i class="bi bi-folder2-open" aria-hidden="true"></i></div>
+            <div class="dh-header-info">
+                <div class="dh-title-row">
+                    <h1 class="dh-page-title">Documents Hub</h1>
+                    <span class="dh-status-pill">@FilteredRows.Count() visible</span>
+                    @if (HasFilters)
+                    {
+                        <span class="dh-filter-pill">Filtered</span>
                     }
                 </div>
-            </article>
+                <div class="dh-sub-row">
+                    <span class="dh-sub-chip"><i class="bi bi-stack" aria-hidden="true"></i>@_rows.Count total documents</span>
+                    <span class="dh-sub-chip"><i class="bi bi-check-circle" aria-hidden="true"></i>@_rows.Count(r => r.StatusCode == "Active") active</span>
+                    <span class="dh-sub-chip"><i class="bi bi-archive" aria-hidden="true"></i>@_rows.Count(r => r.StatusCode == "Archived") archived</span>
+                    <span class="dh-sub-chip"><i class="bi bi-diagram-3" aria-hidden="true"></i>@_workflowTemplates.Count workflows</span>
+                </div>
+            </div>
+        </div>
+        <div class="dh-header-actions">
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @_loadingIconClass" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenUpload"><i class="bi bi-upload" aria-hidden="true"></i> Upload Document</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/tenant/documents/workflow")'><i class="bi bi-diagram-3" aria-hidden="true"></i> Workflow</button>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/documents/forms")'><i class="bi bi-file-earmark-medical" aria-hidden="true"></i> ACORD Forms</button>
+        </div>
+    </div>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger dh-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError</div>
+    }
+
+    <div class="dh-kpi-strip">
+        @KpiCard("bi-folder2-open", "Total", _rows.Count.ToString(), "Repository inventory", "dh-kpi-total", null)
+        @KpiCard("bi-check-circle-fill", "Active", _rows.Count(r => r.StatusCode == "Active").ToString(), "Ready for servicing", "dh-kpi-active", "Active")
+        @KpiCard("bi-archive-fill", "Archived", _rows.Count(r => r.StatusCode == "Archived").ToString(), "Retained for audit", "dh-kpi-archived", "Archived")
+        @KpiCard("bi-stars", "Classified", _rows.Count(r => !string.IsNullOrWhiteSpace(r.CategoryCode)).ToString(), "AI indexed metadata", "dh-kpi-classified", "__classified")
+        @KpiCard("bi-exclamation-triangle-fill", "Unclassified", _rows.Count(r => string.IsNullOrWhiteSpace(r.CategoryCode)).ToString(), "Needs review", "dh-kpi-unclassified", "__unclassified")
+        @KpiCard("bi-calendar-check", "This Week", _rows.Count(r => r.CreatedDateUtc >= DateTime.UtcNow.AddDays(-7)).ToString(), "Recent uploads", "dh-kpi-week", "__week")
+    </div>
+
+    <div class="dh-enterprise-search" role="search" aria-label="Search documents">
+        <div class="dh-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="dh-search-body">
+            <label for="dh-search-input">Enterprise search</label>
+            <input id="dh-search-input" class="dh-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search file, category, type, tags, entity, status, owner, dates…" />
+            <div class="dh-search-hint">Searches document metadata, workflow state, classification, tags, linked entity, and upload dates as you type.</div>
+        </div>
+        <div class="dh-search-result"><strong>@FilteredRows.Count()</strong><span>matches</span></div>
+        @if (HasFilters)
+        {
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm dh-search-clear" @onclick="ClearFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
         }
     </div>
 
-    <aside class="docs-admin-panel" aria-label="Tenant document administration controls">
-        @if (_selectedWorkflow is null)
+    <div class="dh-view-tabs" role="tablist" aria-label="Document views">
+        @foreach (var tab in _tabs)
         {
-            <div class="docs-side-empty">
-                <i class="bi bi-folder-check" aria-hidden="true"></i>
-                <h3>Document governance</h3>
-                <p>Select a workflow item to review ownership, SLA, retention, audit controls, and downstream module actions.</p>
-            </div>
+            <button class="@ViewTabClass(tab.Key)" type="button" role="tab" aria-selected="@(_activeTab == tab.Key)" @onclick="() => SetActiveTab(tab.Key)">
+                <i class="bi @tab.Icon" aria-hidden="true"></i>
+                <span>@tab.Label</span>
+                <span class="dh-tab-count">@TabCount(tab.Key)</span>
+            </button>
+        }
+    </div>
+
+    <div class="dh-workflow-strip" aria-label="Document workflow summary">
+        @foreach (var lane in _workflowLanes)
+        {
+            var count = _rows.Count(r => WorkflowStage(r) == lane.Key);
+            <button type="button" class="@WorkflowCardClass(lane.FilterKey)" @onclick="() => SetActiveTab(lane.FilterKey)">
+                <i class="bi @lane.Icon" aria-hidden="true"></i>
+                <strong>@count</strong>
+                <span>@lane.Label</span>
+                <small>@lane.Description</small>
+            </button>
+        }
+    </div>
+
+    <div class="dh-module-grid" aria-label="Documents modules">
+        @foreach (var module in _docModules)
+        {
+            <button type="button" class="dh-module-card" @onclick="() => Nav.NavigateTo(module.Url)">
+                <span class="dh-module-icon @ToneCss(module.Type)"><i class="bi @module.Icon" aria-hidden="true"></i></span>
+                <span class="dh-module-content"><strong>@module.Title</strong><small>@module.Description</small></span>
+                <i class="bi bi-chevron-right dh-module-arrow" aria-hidden="true"></i>
+            </button>
+        }
+    </div>
+
+    <div class="dh-grid-wrap">
+        @if (_loading)
+        {
+            <div class="dh-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Loading documents…</span></div>
+        }
+        else if (!PagedRows.Any())
+        {
+            <div class="dh-empty-state"><i class="bi bi-folder-x" aria-hidden="true"></i><strong>No documents found</strong><span>Upload a document or adjust the current tab, KPI, or search criteria.</span></div>
         }
         else
         {
-            <div class="docs-detail-header">
-                <span class="docs-chip @DocToneCss(_selectedWorkflow.Type)">@_selectedWorkflow.Type</span>
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selectedWorkflow = null" aria-label="Close details">
-                    <i class="bi bi-x-lg" aria-hidden="true"></i>
-                </button>
+            <div class="dh-grid-toolbar">
+                <div><strong>@FilteredRows.Count()</strong> documents @if (HasFilters) { <span class="dh-filter-note">Filtered</span> }</div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
             </div>
-            <h3>@_selectedWorkflow.Title</h3>
-            <p>@_selectedWorkflow.Summary</p>
-
-            <dl class="docs-detail-list">
-                <div><dt>Owner</dt><dd>@_selectedWorkflow.Owner</dd></div>
-                <div><dt>Stage</dt><dd>@_selectedWorkflow.Stage</dd></div>
-                <div><dt>Risk</dt><dd><span class="docs-status @DocRiskCss(_selectedWorkflow.Risk)">@_selectedWorkflow.Risk</span></dd></div>
-                <div><dt>SLA</dt><dd>@_selectedWorkflow.Sla</dd></div>
-                <div><dt>Control</dt><dd>@_selectedWorkflow.Control</dd></div>
-            </dl>
-
-            <div class="docs-policy-card">
-                <strong>Tenant controls</strong>
-                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Metadata, category, and retention policy enforced</span>
-                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Share links, e-sign, and access activity audited</span>
-                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> OCR exceptions routed for manual classification</span>
+            <div class="dh-table-scroll">
+                <table class="dh-table" aria-label="Documents register">
+                    <thead>
+                        <tr>
+                            <th>Document</th>
+                            <th>Category</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                            <th>Workflow</th>
+                            <th>Version</th>
+                            <th>Retention</th>
+                            <th>Uploaded</th>
+                            <th class="dh-actions-col"><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in PagedRows)
+                        {
+                            <tr class="dh-table-row" @onclick="() => OpenDetailAsync(row)">
+                                <td>
+                                    <div class="dh-doc-cell">
+                                        <span class="dh-avatar"><i class="bi @DocIcon(row.ContentType, row.FileName)" aria-hidden="true"></i></span>
+                                        <div><strong>@row.FileName</strong><span>@(row.Description ?? row.Tags ?? "Document repository item")</span></div>
+                                    </div>
+                                </td>
+                                <td>@CategoryChip(row)</td>
+                                <td>@TypeChip(row.DocumentTypeCode)</td>
+                                <td>@StatusChip(row.StatusCode)</td>
+                                <td>@WorkflowCell(row)</td>
+                                <td><span class="dh-version">v@row.VersionNumber</span></td>
+                                <td>@(row.RetentionDate?.ToString("MM/dd/yyyy") ?? "—")</td>
+                                <td>@row.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy")</td>
+                                <td class="dh-actions-col">@CtxBtn(row)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
             </div>
-
-            <div class="docs-detail-actions">
-                <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selectedWorkflow.Url)">
-                    <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Module
-                </button>
-                <button class="um-btn um-btn-ghost" @onclick="() => AdvanceWorkflow(_selectedWorkflow)">
-                    <i class="bi bi-arrow-right-circle" aria-hidden="true"></i> Advance
-                </button>
+            <div class="dh-pager">
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                <span class="dh-page-chip">@PageSummary</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
             </div>
         }
-    </aside>
-</section>
-
-<section class="docs-module-grid" aria-label="Documents modules">
-    @foreach (var module in _docModules)
-    {
-        <button class="docs-module-card" @onclick="() => Nav.NavigateTo(module.Url)">
-            <span class="docs-module-icon @DocToneCss(module.Type)"><i class="bi @module.Icon" aria-hidden="true"></i></span>
-            <span class="docs-module-content">
-                <strong>@module.Title</strong>
-                <small>@module.Description</small>
-            </span>
-            <i class="bi bi-chevron-right docs-module-arrow" aria-hidden="true"></i>
-        </button>
-    }
-</section>
-
-<!-- ── KPI STRIP ──────────────────────────────────────────────────── -->
-<div class="dh-kpi-strip">
-    @DhKpi("bi-folder2",           "Total Documents",      (_items?.Count ?? 0).ToString(),                                             "dh-ki-blue")
-    @DhKpi("bi-pen",               "Pending Signature",    _kpiEsign.ToString(),                                                         "dh-ki-amber")
-    @DhKpi("bi-file-earmark-medical","ACORD Forms",        _kpiAcord.ToString(),                                                         "dh-ki-purple")
-    @DhKpi("bi-exclamation-triangle","OCR Exceptions",     _kpiExceptions.ToString(),                                                    "dh-ki-red")
-    @DhKpi("bi-archive",           "Archived",             (_items?.Count(d => d.StatusCode == "Archived") ?? 0).ToString(),            "dh-ki-gray")
-    @DhKpi("bi-calendar-plus",     "This Week",            (_items?.Count(d => d.CreatedDateUtc >= DateTime.UtcNow.AddDays(-7)) ?? 0).ToString(), "dh-ki-green")
-    @DhKpi("bi-stars",             "AI Classified",        _kpiAiClassified.ToString(),                                                  "dh-ki-purple")
-    @DhKpi("bi-exclamation-circle","Unclassified",         (_items?.Count(d => string.IsNullOrEmpty(d.CategoryCode)) ?? 0).ToString(),  "dh-ki-amber")
-</div>
-
-<!-- ── SUB-NAV STRIP ───────────────────────────────────────────── -->
-<div class="dh-subnav">
-    <button class="dh-subnav-btn dh-subnav-active">
-        <i class="bi bi-folder2" aria-hidden="true"></i> All Documents
-    </button>
-    <button class="dh-subnav-btn" @onclick='() => Nav.NavigateTo("/documents/forms")'>
-        <i class="bi bi-file-earmark-medical" aria-hidden="true"></i> ACORD Forms
-    </button>
-    <button class="dh-subnav-btn" @onclick='() => Nav.NavigateTo("/documents/esign")'>
-        <i class="bi bi-pen" aria-hidden="true"></i> E-Signature Queue
-        @if (_kpiEsign > 0) { <span class="dh-subnav-badge">@_kpiEsign</span> }
-    </button>
-    <button class="dh-subnav-btn" @onclick='() => Nav.NavigateTo("/documents/exceptions")'>
-        <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> OCR Exceptions
-        @if (_kpiExceptions > 0) { <span class="dh-subnav-badge dh-snb-red">@_kpiExceptions</span> }
-    </button>
-    <button class="dh-subnav-btn" @onclick='() => Nav.NavigateTo("/documents/packets")'>
-        <i class="bi bi-collection" aria-hidden="true"></i> Packet Builder
-    </button>
-</div>
-
-<div class="dh-toolbar">
-    <SfDropDownList TItem="CategoryOption" TValue="string" DataSource="_categories" @bind-Value="_categoryFilter"
-                    Placeholder="All Categories" Width="180px">
-        <DropDownListFieldSettings Text="Label" Value="Code"></DropDownListFieldSettings>
-    </SfDropDownList>
-    <SfTextBox Placeholder="Search files, types, tags…" @bind-Value="_searchTerm" Width="280px"></SfTextBox>
-    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync">
-        <i class="bi bi-search" aria-hidden="true"></i> Search
-    </button>
-    <div class="dh-toolbar-right">
-        <select class="e-input dh-view-sel" @bind="_viewMode">
-            <option value="grid">Grid View</option>
-            <option value="list">List View</option>
-        </select>
     </div>
 </div>
 
-@if (_items is null)
+@if (_openActionMenuFor is not null)
 {
-    <p>Loading...</p>
+    <div class="dh-context-menu" style="left:@_menuXpx; top:@_menuYpx" @onclick:stopPropagation="true">
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("View")'><i class="bi bi-eye" aria-hidden="true"></i><span>View details</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Download")'><i class="bi bi-download" aria-hidden="true"></i><span>Download</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Metadata")'><i class="bi bi-tags" aria-hidden="true"></i><span>Edit metadata</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Version")'><i class="bi bi-layers" aria-hidden="true"></i><span>Upload new version</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Share")'><i class="bi bi-share" aria-hidden="true"></i><span>Create share link</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("ShareLinks")'><i class="bi bi-link-45deg" aria-hidden="true"></i><span>Share links</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Rename")'><i class="bi bi-pencil" aria-hidden="true"></i><span>Rename</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Archive")' disabled="@IsMenuArchived"><i class="bi bi-archive" aria-hidden="true"></i><span>Archive</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("Delete")'><i class="bi bi-trash3" aria-hidden="true"></i><span>Delete</span></button>
+        <button type="button" @onclick='() => ExecuteMenuActionAsync("ESign")'><i class="bi bi-pen" aria-hidden="true"></i><span>Send for E-Sign</span></button>
+    </div>
 }
-else
-{
-    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="480px">
-        <GridEvents RowSelected="OnRowSelected" TValue="DocumentDto"></GridEvents>
-        <GridPageSettings PageSize="10"></GridPageSettings>
-        <GridColumns>
-                <GridColumn Field="@nameof(DocumentDto.FileName)" HeaderText="File Name" Width="220">
-                    <Template>
-                        @{ var doc = (DocumentDto)context; }
-                        <div class="dh-fn-cell">
-                            <i class="bi @DocIcon(doc.ContentType) dh-fn-icon" aria-hidden="true"></i>
-                            <div>
-                                <div class="dh-fn-name">@doc.FileName</div>
-                                @if (!string.IsNullOrEmpty(doc.Description))
-                                {
-                                    <div class="dh-fn-desc">@doc.Description</div>
-                                }
-                            </div>
-                        </div>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="AI Classification" Width="160">
-                    <Template>
-                        @{ var doc2 = (DocumentDto)context; }
-                        <span class="dh-ai-class-chip @(string.IsNullOrEmpty(doc2.CategoryCode) ? "dh-ai-unclassified" : "dh-ai-classified")">
-                            <i class="bi @(string.IsNullOrEmpty(doc2.CategoryCode) ? "bi-question-circle" : "bi-stars")" aria-hidden="true"></i>
-                            @AiClassify(doc2)
-                        </span>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(DocumentDto.CategoryCode)" HeaderText="Category" Width="130"></GridColumn>
-                <GridColumn Field="@nameof(DocumentDto.DocumentTypeCode)" HeaderText="Type" Width="130"></GridColumn>
-                <GridColumn Field="@nameof(DocumentDto.EntityName)" HeaderText="Linked Entity" Width="130"></GridColumn>
-                <GridColumn Field="@nameof(DocumentDto.VersionNumber)" HeaderText="Ver" Width="60" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center"></GridColumn>
-                <GridColumn Field="@nameof(DocumentDto.Tags)" HeaderText="Tags" Width="160"></GridColumn>
-                <GridColumn HeaderText="Status" Width="110">
-                    <Template>
-                        @{ var doc3 = (DocumentDto)context; }
-                        <span class="dh-status-badge dh-st-@(doc3.StatusCode?.ToLower() ?? "active")">
-                            @doc3.StatusCode
-                        </span>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(DocumentDto.RetentionDate)" HeaderText="Retention" Width="110"></GridColumn>
-                <GridColumn Field="@nameof(DocumentDto.CreatedDateUtc)" HeaderText="Uploaded" Type="ColumnType.DateTime" Format="g" Width="145"></GridColumn>
-                <GridColumn HeaderText="Actions" Width="105">
-                    <Template>
-                        @{ var docA = (DocumentDto)context; }
-                        <div class="dh-row-actions">
-                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo($"/documents/{docA.DocumentId}")' title="Open detail">
-                                <i class="bi bi-arrow-up-right-square" aria-hidden="true"></i>
-                            </button>
-                            <button class="um-btn um-btn-ghost um-btn-xs" title="Send for E-Sign"
-                                    @onclick='() => Nav.NavigateTo("/documents/esign")'>
-                                <i class="bi bi-pen" aria-hidden="true"></i>
-                            </button>
-                        </div>
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-    </SfGrid>
-}
-
-@* ── Upload Dialog ─────────────────────────────────────── *@
-<SfDialog Width="1120px" IsModal="true" @bind-Visible="_showUpload" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header">
-                <i class="bi bi-upload" aria-hidden="true"></i>
-                <span>Upload Document</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showUpload = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
-            </div>
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-            <div class="um-field um-field--full">
-                <label>Document File</label>
-                <InputFile OnChange="OnUploadFileChanged" />
-            </div>
-            <div class="um-field">
-                <label>File Name</label>
-                <SfTextBox @bind-Value="_newDoc.FileName"></SfTextBox>
-            </div>
-            <div class="um-field">
-                <label>Category</label>
-                <SfDropDownList TItem="CategoryOption" TValue="string" DataSource="_uploadCategories" @bind-Value="_newDoc.CategoryCode" Width="100%">
-                    <DropDownListFieldSettings Text="Label" Value="Code"></DropDownListFieldSettings>
-                </SfDropDownList>
-            </div>
-            <div class="um-field">
-                <label>Document Type Code</label>
-                <SfTextBox @bind-Value="_newDoc.DocumentTypeCode"></SfTextBox>
-            </div>
-            <div class="um-field">
-                <label>Content Type</label>
-                <SfTextBox @bind-Value="_newDoc.ContentType"></SfTextBox>
-            </div>
-            <div class="um-field">
-                <label>Entity Name (e.g. Account, Agreement)</label>
-                <SfTextBox @bind-Value="_newDoc.EntityName"></SfTextBox>
-            </div>
-            <div class="um-field um-field--full">
-                <label>Description</label>
-                <SfTextBox @bind-Value="_newDoc.Description" Multiline="true"></SfTextBox>
-            </div>
-            <div class="um-field">
-                <label>Tags (comma-separated)</label>
-                <SfTextBox @bind-Value="_newDoc.Tags"></SfTextBox>
-            </div>
-            <div class="um-field">
-                <label>Uploaded By</label>
-                <SfTextBox @bind-Value="_newDoc.UploadedByName"></SfTextBox>
-            </div>
-                </div>
-            </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showUpload = false">Cancel</button>
-                <button type="button" class="um-btn um-btn-primary" @onclick="SubmitUploadAsync">Upload</button>
-            </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-@* ── Detail / Actions Dialog ──────────────────────────── *@
-<SfDialog Width="1120px" IsModal="true" @bind-Visible="_showDetail" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header">
-                <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
-                <span>@(_selected?.FileName ?? "Document Details")</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showDetail = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
-            </div>
-            @if (_selected is not null)
-            {
-                <div class="um-modal-body"><SfTab>
-                    <TabItems>
-                        <TabItem>
-                            <ChildContent><TabHeader Text="Details"></TabHeader></ChildContent>
-                            <ContentTemplate>
-                                <div class="row mt-3">
-                                    <div class="col-6"><strong>Category:</strong> @_selected.CategoryCode</div>
-                                    <div class="col-6"><strong>Type:</strong> @_selected.DocumentTypeCode</div>
-                                </div>
-                                <div class="row mt-2">
-                                    <div class="col-6"><strong>Status:</strong> @_selected.StatusCode</div>
-                                    <div class="col-6"><strong>Version:</strong> @_selected.VersionNumber</div>
-                                </div>
-                                <div class="row mt-2">
-                                    <div class="col-6"><strong>Content Type:</strong> @_selected.ContentType</div>
-                                    <div class="col-6"><strong>Size:</strong> @FormatSize(_selected.FileSizeBytes)</div>
-                                </div>
-                                <div class="row mt-2">
-                                    <div class="col-6"><strong>Linked Entity:</strong> @_selected.EntityName</div>
-                                    <div class="col-6"><strong>Retention:</strong> @_selected.RetentionDate</div>
-                                </div>
-                                <div class="row mt-2">
-                                    <div class="col-12"><strong>Description:</strong> @_selected.Description</div>
-                                </div>
-                                <div class="row mt-2">
-                                    <div class="col-12"><strong>Tags:</strong> @_selected.Tags</div>
-                                </div>
-                                <hr />
-                                <div class="d-flex gap-2 flex-wrap">
-                                    <SfButton CssClass="e-warning" OnClick="ArchiveSelectedAsync">Archive</SfButton>
-                                    <SfButton CssClass="e-info" OnClick="() => _showMetadata = true">Edit Metadata</SfButton>
-                                    <SfButton CssClass="e-success" OnClick="() => _showNewVersion = true">New Version</SfButton>
-                                    <SfButton CssClass="e-primary" OnClick="() => _showShareDialog = true">Share</SfButton>
-                                    <SfButton CssClass="e-secondary" OnClick="OpenRenameDialog">Rename</SfButton>
-                                    <SfButton CssClass="e-danger" OnClick="DeleteSelectedAsync">Delete</SfButton>
-                                </div>
-                            </ContentTemplate>
-                        </TabItem>
-                        <TabItem>
-                            <ChildContent><TabHeader Text="Versions"></TabHeader></ChildContent>
-                            <ContentTemplate>
-                                @if (_versions is null) { <p>Loading...</p> }
-                                else
-                                {
-                                    <SfGrid DataSource="_versions" AllowSorting="true" Height="260px">
-                                        <GridColumns>
-                                            <GridColumn Field="@nameof(DocumentVersionDto.VersionNumber)" HeaderText="Ver" Width="60"></GridColumn>
-                                            <GridColumn Field="@nameof(DocumentVersionDto.FileName)" HeaderText="File" Width="200"></GridColumn>
-                                            <GridColumn Field="@nameof(DocumentVersionDto.ChangeNotes)" HeaderText="Notes" Width="200"></GridColumn>
-                                            <GridColumn Field="@nameof(DocumentVersionDto.CreatedDateUtc)" HeaderText="Date" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
-                                        </GridColumns>
-                                    </SfGrid>
-                                }
-                            </ContentTemplate>
-                        </TabItem>
-                        <TabItem>
-                            <ChildContent><TabHeader Text="Share Links"></TabHeader></ChildContent>
-                            <ContentTemplate>
-                                @if (_shareLinks is null) { <p>Loading...</p> }
-                                else
-                                {
-                                    <SfGrid DataSource="_shareLinks" AllowSorting="true" Height="260px">
-                                        <GridColumns>
-                                            <GridColumn Field="@nameof(DocumentShareLinkDto.Token)" HeaderText="Token" Width="180"></GridColumn>
-                                            <GridColumn Field="@nameof(DocumentShareLinkDto.ExpiresDateUtc)" HeaderText="Expires" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
-                                            <GridColumn Field="@nameof(DocumentShareLinkDto.AccessCount)" HeaderText="Accessed" Width="90"></GridColumn>
-                                            <GridColumn Field="@nameof(DocumentShareLinkDto.MaxAccessCount)" HeaderText="Max" Width="70"></GridColumn>
-                                            <GridColumn Field="@nameof(DocumentShareLinkDto.IsRevoked)" HeaderText="Revoked" Width="90"></GridColumn>
-                                            <GridColumn HeaderText="Actions" Width="90">
-                                                <Template>
-                                                    @{
-                                                        var lnk = (DocumentShareLinkDto)context;
-                                                    }
-                                                    @if (!lnk.IsRevoked)
-                                                    {
-                                                        <SfButton CssClass="e-danger e-small" OnClick="@(() => RevokeShareLinkAsync(lnk.ShareLinkId))">Revoke</SfButton>
-                                                    }
-                                                </Template>
-                                            </GridColumn>
-                                        </GridColumns>
-                                    </SfGrid>
-                                }
-                            </ContentTemplate>
-                        </TabItem>
-                        <TabItem>
-                            <ChildContent><TabHeader Text="Audit Trail"></TabHeader></ChildContent>
-                            <ContentTemplate>
-                                @if (_accessLog is null) { <p>Loading...</p> }
-                                else
-                                {
-                                    <SfGrid DataSource="_accessLog" AllowSorting="true" Height="260px">
-                                        <GridColumns>
-                                            <GridColumn Field="@nameof(DocumentAccessLogDto.ActionCode)" HeaderText="Action" Width="120"></GridColumn>
-                                            <GridColumn Field="@nameof(DocumentAccessLogDto.UserId)" HeaderText="User" Width="200"></GridColumn>
-                                            <GridColumn Field="@nameof(DocumentAccessLogDto.IpAddress)" HeaderText="IP" Width="140"></GridColumn>
-                                            <GridColumn Field="@nameof(DocumentAccessLogDto.AccessDateUtc)" HeaderText="Date" Type="ColumnType.DateTime" Format="g" Width="160"></GridColumn>
-                                        </GridColumns>
-                                    </SfGrid>
-                                }
-                            </ContentTemplate>
-                        </TabItem>
-                    </TabItems>
-                </SfTab></div>
-            }
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDetail = false">Close</button>
-            </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-@* ── Edit Metadata Dialog ─────────────────────────────── *@
-<SfDialog Width="760px" IsModal="true" @bind-Visible="_showMetadata" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-tags" aria-hidden="true"></i><span>Edit Metadata</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showMetadata = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
-            <div class="um-modal-body"><div class="um-form-grid">
-            <div class="um-field um-field--full">
-                <label>Description</label>
-                <SfTextBox @bind-Value="_metaRequest.Description" Multiline="true"></SfTextBox>
-            </div>
-            <div class="um-field um-field--full">
-                <label>Tags</label>
-                <SfTextBox @bind-Value="_metaRequest.Tags"></SfTextBox>
-            </div>
-            </div></div>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showMetadata = false">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SubmitMetadataAsync">Save</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-@* ── New Version Dialog ───────────────────────────────── *@
-<SfDialog Width="920px" IsModal="true" @bind-Visible="_showNewVersion" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-layers" aria-hidden="true"></i><span>Upload New Version</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showNewVersion = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
-            <div class="um-modal-body"><div class="um-form-grid">
-            <div class="um-field um-field--full">
-                <label>Version File</label>
-                <InputFile OnChange="OnVersionFileChanged" />
-            </div>
-            <div class="um-field">
-                <label>File Name</label>
-                <SfTextBox @bind-Value="_versionRequest.FileName"></SfTextBox>
-            </div>
-            <div class="um-field um-field--full">
-                <label>Change Notes</label>
-                <SfTextBox @bind-Value="_versionRequest.ChangeNotes" Multiline="true"></SfTextBox>
-            </div>
-            </div></div>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showNewVersion = false">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SubmitVersionAsync">Upload Version</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-@* ── Share Link Dialog ────────────────────────────────── *@
-<SfDialog Width="760px" IsModal="true" @bind-Visible="_showShareDialog" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-share" aria-hidden="true"></i><span>Create Share Link</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showShareDialog = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
-            <div class="um-modal-body"><div class="um-form-grid">
-            <div class="um-field">
-                <label>Expires (UTC)</label>
-                <SfDateTimePicker TValue="DateTime" @bind-Value="_shareExpires" Width="100%"></SfDateTimePicker>
-            </div>
-            <div class="um-field">
-                <label>Max Access Count (blank = unlimited)</label>
-                <SfNumericTextBox TValue="int?" @bind-Value="_shareMaxAccess" Width="100%"></SfNumericTextBox>
-            </div>
-            <div class="um-field">
-                <SfCheckBox Label="Require PIN" @bind-Checked="_shareRequiresPin"></SfCheckBox>
-            </div>
-            @if (_shareRequiresPin)
-            {
-                <div class="um-field">
-                    <label>PIN</label>
-                    <SfTextBox @bind-Value="_sharePin" Type="InputType.Password"></SfTextBox>
-                </div>
-            }
-            </div></div>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showShareDialog = false">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SubmitShareLinkAsync">Create Link</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-@* ── Rename Dialog ───────────────────────────────────────── *@
-<SfDialog Width="620px" IsModal="true" @bind-Visible="_showRename" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-pencil" aria-hidden="true"></i><span>Rename Document</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showRename = false"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
-            <div class="um-modal-body"><div class="um-form-grid">
-            <div class="um-field um-field--full">
-                <label>New File Name</label>
-                <SfTextBox @bind-Value="_renameRequest.NewFileName"></SfTextBox>
-            </div>
-            </div></div>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _showRename = false">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SubmitRenameAsync">Rename</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private string? _searchTerm;
-    private string? _categoryFilter;
-    private string _workflowSearch = string.Empty;
-    private string _workflowFilter = string.Empty;
-    private List<DocumentDto>? _items;
-    private string _viewMode = "grid";
-
-    // KPI counters (stubs — in production drive from real API)
-    private int _kpiEsign      = 7;
-    private int _kpiAcord      = 24;
-    private int _kpiExceptions = 3;
-    private int _kpiAiClassified => _items?.Count(d => !string.IsNullOrEmpty(d.CategoryCode)) ?? 0;
-
-    // Detail panel
-    private DocumentDto? _selected;
-    private DocumentWorkflowItem? _selectedWorkflow;
-    private bool _showDetail;
-    private List<DocumentVersionDto>? _versions;
-    private List<DocumentShareLinkDto>? _shareLinks;
-    private List<DocumentAccessLogDto>? _accessLog;
-
-    // Upload
+    private Guid _tenantAdminUserId;
+    private bool _loading;
+    private bool _busy;
+    private bool _relatedLoading;
+    private bool _toastVisible;
     private bool _showUpload;
-    private CreateDocumentRequest _newDoc = new();
-    private IBrowserFile? _uploadFile;
-
-    // Metadata edit
     private bool _showMetadata;
-    private UpdateDocumentMetadataRequest _metaRequest = new();
-
-    // New version
     private bool _showNewVersion;
-    private CreateDocumentVersionRequest _versionRequest = new();
-    private IBrowserFile? _versionFile;
-
-    // Share link
     private bool _showShareDialog;
-    private DateTime _shareExpires = DateTime.UtcNow.AddDays(7);
-    private int? _shareMaxAccess;
-    private bool _shareRequiresPin;
-    private string? _sharePin;
-
-    // Rename
     private bool _showRename;
-    private RenameDocumentRequest _renameRequest = new();
+    private bool _shareLinksVisible;
+    private bool _uploadAttempted;
+    private bool _versionAttempted;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _searchText;
+    private string? _kpiFilter;
+    private string? _confirmAction;
+    private string _activeTab = "all";
+    private Guid? _openActionMenuFor;
+    private string _menuXpx = "0px";
+    private string _menuYpx = "0px";
+    private int _page = 1;
+    private const int PageSize = 20;
 
-    private readonly List<DocumentWorkflowItem> _docWorkflow = [];
+    private readonly List<DocumentDto> _rows = [];
+    private readonly List<DocumentVersionDto> _versions = [];
+    private readonly List<DocumentShareLinkDto> _shareLinks = [];
+    private readonly List<DocumentAccessLogDto> _accessLog = [];
+    private readonly List<DocumentWorkflowTemplateDto> _workflowTemplates = [];
+    private readonly List<DocumentWorkflowInstanceDto> _workflowInstances = [];
+    private readonly List<DocumentApprovalDto> _approvals = [];
+    private readonly List<DocumentReviewDto> _reviews = [];
+    private readonly List<DocumentClassificationQueueDto> _classifications = [];
 
-    private readonly WorkflowLane[] _docLanes =
+    private DocumentDto? _selected;
+    private DocumentDto? _drawerRow;
+    private DocumentDto? _confirmTarget;
+    private DocumentShareLinkDto? _revokeTarget;
+    private IBrowserFile? _uploadFile;
+    private IBrowserFile? _versionFile;
+    private UploadFormModel _uploadForm = new();
+    private MetadataFormModel _metadataForm = new();
+    private VersionFormModel _versionForm = new();
+    private ShareFormModel _shareForm = new();
+    private RenameFormModel _renameForm = new();
+
+    private readonly TabDef[] _tabs =
     [
-        new("Intake", "Intake", "Uploads and client submissions"),
-        new("Classify", "Classify", "AI/OCR metadata assignment"),
-        new("Prepare", "Prepare", "Forms, packets, and versions"),
-        new("Sign", "Sign", "E-signature and acknowledgements"),
-        new("Audit", "Audit", "Retention, access, and compliance")
+        new("all", "All", "bi-stack"),
+        new("active", "Active", "bi-check-circle"),
+        new("archived", "Archived", "bi-archive"),
+        new("classified", "Classified", "bi-stars"),
+        new("unclassified", "Unclassified", "bi-exclamation-triangle"),
+        new("week", "This Week", "bi-calendar-check"),
+        new("workflow", "Workflow", "bi-diagram-3")
     ];
 
-    private readonly WorkflowFilter[] _docFilters =
+    private readonly WorkflowLane[] _workflowLanes =
     [
-        new("", "All"),
-        new("risk", "High Risk"),
-        new("ocr", "OCR"),
-        new("esign", "E-Sign"),
-        new("audit", "Audit")
+        new("Intake", "Intake", "Uploads and client submissions", "bi-inbox", "workflow"),
+        new("Classify", "Classify", "AI/OCR metadata assignment", "bi-tags", "unclassified"),
+        new("Prepare", "Prepare", "Forms, packets, and versions", "bi-collection", "classified"),
+        new("Sign", "Sign", "E-signature and acknowledgements", "bi-pen", "workflow"),
+        new("Audit", "Audit", "Retention and access controls", "bi-shield-check", "archived")
     ];
 
     private readonly DocumentModule[] _docModules =
     [
-        new("Documents Hub", "Search, upload, version, share, archive, and manage document metadata.", "/documents", "bi-folder2", "Repository"),
         new("ACORD Forms Center", "Browse, pre-fill, complete, and route standard ACORD forms.", "/documents/forms", "bi-file-earmark-medical", "ACORD"),
         new("E-Signature Queue", "Send signature requests, monitor completion, void requests, and escalate.", "/documents/esign", "bi-pen", "E-Sign"),
         new("OCR Exceptions", "Resolve failed OCR, apply AI suggestions, and correct indexing.", "/documents/exceptions", "bi-exclamation-triangle", "OCR"),
         new("Packet Builder", "Assemble renewal, claims, onboarding, and service document packets.", "/documents/packets", "bi-collection", "Packet"),
-        new("Audit Log", "Review access history, changes, retention evidence, and compliance events.", "/audit", "bi-shield-check", "Audit")
+        new("Document Workflow", "Configure templates, queues, retention policies, and workflow audit trails.", "/tenant/documents/workflow", "bi-diagram-3", "Workflow"),
+        new("Storage Settings", "Manage tenant storage providers, retention defaults, and indexing controls.", "/tenant/documents/storage", "bi-hdd", "Storage")
     ];
 
-    private DocumentModule[] _docQuickActions =>
+    private static readonly CategoryOption[] Categories =
     [
-        new("ACORD", "", "/documents/forms", "bi-file-earmark-medical", "ACORD"),
-        new("E-Sign", "", "/documents/esign", "bi-pen", "E-Sign"),
-        new("OCR", "", "/documents/exceptions", "bi-exclamation-triangle", "OCR"),
-        new("Packets", "", "/documents/packets", "bi-collection", "Packet")
-    ];
-
-    private IEnumerable<DocumentWorkflowItem> FilteredDocWorkflow => _docWorkflow.Where(item =>
-        (string.IsNullOrWhiteSpace(_workflowFilter) || _workflowFilter switch
-        {
-            "risk" => item.Risk == "High",
-            "ocr" => item.Type == "OCR",
-            "esign" => item.Type == "E-Sign",
-            "audit" => item.Stage == "Audit" || item.Type == "Audit",
-            _ => true
-        }) &&
-        (string.IsNullOrWhiteSpace(_workflowSearch) ||
-         item.Title.Contains(_workflowSearch, StringComparison.OrdinalIgnoreCase) ||
-         item.Summary.Contains(_workflowSearch, StringComparison.OrdinalIgnoreCase) ||
-         item.Owner.Contains(_workflowSearch, StringComparison.OrdinalIgnoreCase) ||
-         item.Type.Contains(_workflowSearch, StringComparison.OrdinalIgnoreCase) ||
-         item.Control.Contains(_workflowSearch, StringComparison.OrdinalIgnoreCase)))
-        .OrderByDescending(item => item.Risk == "High")
-        .ThenBy(item => item.Stage)
-        .ThenBy(item => item.Title);
-
-    // Category options
-    private readonly List<CategoryOption> _categories = new()
-    {
         new("", "All Categories"),
+        new("Policy", "Policy"),
+        new("Certificate", "Certificate"),
+        new("Endorsement", "Endorsement"),
+        new("Binder", "Binder"),
+        new("Claim", "Claim"),
+        new("Compliance", "Compliance"),
         new("Proposal", "Proposal"),
         new("Contract", "Contract"),
-        new("Invoice", "Invoice"),
-        new("Statement", "Statement"),
-        new("ClientUpload", "Client Upload"),
-        new("ServiceDocument", "Service Document"),
-        new("CommissionStatement", "Commission Statement"),
-        new("AuditEvidence", "Audit Evidence"),
         new("Other", "Other")
-    };
+    ];
 
-    private List<CategoryOption> _uploadCategories => _categories.Where(c => !string.IsNullOrEmpty(c.Code)).ToList();
+    private static IEnumerable<CategoryOption> UploadCategories => Categories.Where(c => !string.IsNullOrEmpty(c.Code));
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Documents",""));
-        BuildDocumentWorkflow();
-        _selectedWorkflow = _docWorkflow.FirstOrDefault(x => x.Risk == "High") ?? _docWorkflow.FirstOrDefault();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents", "/documents"));
         await LoadAsync();
     }
 
-    private void BuildDocumentWorkflow()
+    private async Task ResolveCurrentUserContextAsync()
     {
-        _docWorkflow.Clear();
-        _docWorkflow.AddRange(
-        [
-            new("New client document intake", "Client upload queue awaiting metadata validation and entity linkage.", "Repository", "Medium", "Intake", "Sarah Kim", "4h SLA", "Metadata policy", "/documents"),
-            new("OCR exception classification", "Scanned policy package has low confidence OCR and requires manual classification.", "OCR", "High", "Classify", "James Park", "Same day", "OCR confidence threshold", "/documents/exceptions"),
-            new("ACORD 25 pre-fill review", "Certificate form is AI pre-filled and waiting for producer validation.", "ACORD", "Medium", "Prepare", "Maria Santos", "24h", "Form accuracy control", "/documents/forms"),
-            new("Renewal packet assembly", "Commercial renewal packet requires dec page, proposal, invoice, and disclosures.", "Packet", "Medium", "Prepare", "Lisa Chen", "2 days", "Packet completeness", "/documents/packets"),
-            new("Signature request escalation", "Policy acknowledgement has not been signed before due date.", "E-Sign", "High", "Sign", "Kevin Obi", "Overdue", "Signer audit trail", "/documents/esign"),
-            new("Share link access review", "External share links with access counts require tenant admin review.", "Audit", "Low", "Audit", "Diana Perez", "Weekly", "Access and retention audit", "/audit"),
-            new("Retention evidence review", "Archived documents must be validated against agency retention settings.", "Audit", "Medium", "Audit", "Robert Yamamoto", "Monthly", "Retention schedule", "/audit")
-        ]);
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
     }
 
     private async Task LoadAsync()
     {
-        var result = await Api.SearchDocumentsAsync(_tenantId, _categoryFilter, null, null, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchDocumentsAsync(_tenantId);
+            _rows.Clear();
+            _rows.AddRange((result?.Items ?? []).OrderByDescending(x => x.CreatedDateUtc));
+            await LoadWorkflowAsync();
+            _page = 1;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load documents: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private async Task OnRowSelected(RowSelectEventArgs<DocumentDto> args)
+    private async Task LoadWorkflowAsync()
     {
-        _selected = args.Data;
-        _versions = null;
-        _shareLinks = null;
-        _accessLog = null;
-        _showDetail = true;
-
-        var versionsTask = Api.GetDocumentVersionsAsync(_selected.DocumentId);
-        var linksTask = Api.GetDocumentShareLinksAsync(_selected.DocumentId);
-        var logTask = Api.GetDocumentAccessLogAsync(_selected.DocumentId);
-        await Task.WhenAll(versionsTask, linksTask, logTask);
-
-        _versions = (await versionsTask)?.ToList() ?? [];
-        _shareLinks = (await linksTask)?.ToList() ?? [];
-        _accessLog = (await logTask)?.ToList() ?? [];
+        try
+        {
+            var templatesTask = Api.SearchDocumentWorkflowTemplatesAsync(_tenantId, pageSize: 100);
+            var instancesTask = Api.SearchDocumentWorkflowInstancesAsync(_tenantId, pageSize: 100);
+            var approvalsTask = Api.SearchDocumentApprovalsAsync(_tenantId, approvalStatus: "Pending", pageSize: 100);
+            var reviewsTask = Api.SearchDocumentReviewsAsync(_tenantId, reviewStatus: "Pending", pageSize: 100);
+            var classificationTask = Api.SearchDocumentClassificationQueueAsync(_tenantId, pageSize: 100);
+            await Task.WhenAll(templatesTask, instancesTask, approvalsTask, reviewsTask, classificationTask);
+            _workflowTemplates.Clear();
+            _workflowInstances.Clear();
+            _approvals.Clear();
+            _reviews.Clear();
+            _classifications.Clear();
+            _workflowTemplates.AddRange((await templatesTask)?.Items ?? []);
+            _workflowInstances.AddRange((await instancesTask)?.Items ?? []);
+            _approvals.AddRange((await approvalsTask)?.Items ?? []);
+            _reviews.AddRange((await reviewsTask)?.Items ?? []);
+            _classifications.AddRange((await classificationTask)?.Items ?? []);
+        }
+        catch
+        {
+            // Workflow summary is secondary to the document register; schema migration creates the backing tables on API startup.
+        }
     }
+
+    private string? SearchText
+    {
+        get => _searchText;
+        set
+        {
+            _searchText = value;
+            _page = 1;
+        }
+    }
+
+    private IEnumerable<DocumentDto> FilteredRows => _rows.Where(MatchesActiveTab).Where(MatchesKpiFilter).Where(MatchesSearch).ToList();
+    private IEnumerable<DocumentDto> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
+    private bool HasFilters => !string.IsNullOrWhiteSpace(_searchText) || _activeTab != "all" || _kpiFilter is not null;
+    private bool IsMenuArchived => _selected?.StatusCode == "Archived";
+    private string ToastIconClass => _toastKind == "danger" ? "bi-exclamation-triangle-fill" : _toastKind == "warning" ? "bi-exclamation-circle-fill" : "bi-check-circle-fill";
+    private string _loadingIconClass => _loading ? "dh-spin" : string.Empty;
+    private string PageSummary => $"Page {_page} of {TotalPages} · {FilteredRows.Count()} records";
+    private string ConfirmIconClass => _confirmAction == "Delete" || _confirmAction == "Revoke" ? "um-confirm-icon--danger" : "um-confirm-icon--warning";
+    private string ConfirmButtonClass => _confirmAction == "Delete" || _confirmAction == "Revoke" ? "um-btn-danger" : "um-btn-warning";
+    private string ConfirmIcon => _confirmAction == "Delete" ? "bi-trash3-fill" : _confirmAction == "Revoke" ? "bi-link-45deg" : "bi-archive-fill";
+    private string ConfirmMessage => _confirmAction switch
+    {
+        "Delete" when _confirmTarget is not null => $"Delete '{_confirmTarget.FileName}'? The record will be removed from active document views and the backing file will be deleted.",
+        "Archive" when _confirmTarget is not null => $"Archive '{_confirmTarget.FileName}'? The document will remain retained for audit and search.",
+        "Revoke" when _revokeTarget is not null => $"Revoke share link '{_revokeTarget.Token}'? External access through this link will stop immediately.",
+        _ => "Confirm this document action."
+    };
+
+    private bool MatchesActiveTab(DocumentDto row) => _activeTab switch
+    {
+        "active" => row.StatusCode == "Active",
+        "archived" => row.StatusCode == "Archived",
+        "classified" => !string.IsNullOrWhiteSpace(row.CategoryCode),
+        "unclassified" => string.IsNullOrWhiteSpace(row.CategoryCode),
+        "week" => row.CreatedDateUtc >= DateTime.UtcNow.AddDays(-7),
+        "workflow" => WorkflowStage(row) is "Classify" or "Sign" or "Audit",
+        _ => true
+    };
+
+    private bool MatchesKpiFilter(DocumentDto row) => _kpiFilter switch
+    {
+        null => true,
+        "__classified" => !string.IsNullOrWhiteSpace(row.CategoryCode),
+        "__unclassified" => string.IsNullOrWhiteSpace(row.CategoryCode),
+        "__week" => row.CreatedDateUtc >= DateTime.UtcNow.AddDays(-7),
+        _ => row.StatusCode == _kpiFilter
+    };
+
+    private bool MatchesSearch(DocumentDto row)
+    {
+        if (string.IsNullOrWhiteSpace(_searchText)) return true;
+        var s = _searchText.Trim();
+        return Contains(row.FileName, s)
+            || Contains(row.CategoryCode, s)
+            || Contains(row.DocumentTypeCode, s)
+            || Contains(row.StatusCode, s)
+            || Contains(row.Description, s)
+            || Contains(row.Tags, s)
+            || Contains(row.EntityName, s)
+            || Contains(row.UploadedByName, s)
+            || Contains(AiClassify(row), s)
+            || Contains(WorkflowStage(row), s)
+            || Contains(row.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy"), s)
+            || Contains(row.RetentionDate?.ToString("MM/dd/yyyy"), s);
+    }
+
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+    private string ViewTabClass(string key) => _activeTab == key ? "dh-view-tab dh-view-tab--active" : "dh-view-tab";
+    private string WorkflowCardClass(string filterKey) => _activeTab == filterKey ? "dh-workflow-card dh-workflow-card--active" : "dh-workflow-card";
+    private void SetActiveTab(string key) { _activeTab = key; _page = 1; }
+    private void SetKpiFilter(string? key) { _kpiFilter = Equals(_kpiFilter, key) ? null : key; _page = 1; }
+    private void ClearFilters() { _searchText = null; _kpiFilter = null; _activeTab = "all"; _page = 1; }
+    private void PreviousPage() => _page = Math.Max(1, _page - 1);
+    private void NextPage() => _page = Math.Min(TotalPages, _page + 1);
+
+    private int TabCount(string key) => key switch
+    {
+        "active" => _rows.Count(r => r.StatusCode == "Active"),
+        "archived" => _rows.Count(r => r.StatusCode == "Archived"),
+        "classified" => _rows.Count(r => !string.IsNullOrWhiteSpace(r.CategoryCode)),
+        "unclassified" => _rows.Count(r => string.IsNullOrWhiteSpace(r.CategoryCode)),
+        "week" => _rows.Count(r => r.CreatedDateUtc >= DateTime.UtcNow.AddDays(-7)),
+        "workflow" => _workflowInstances.Count + _approvals.Count + _reviews.Count + _classifications.Count,
+        _ => _rows.Count
+    };
+
+    private void OpenUpload()
+    {
+        _uploadAttempted = false;
+        _uploadFile = null;
+        _uploadForm = new UploadFormModel { CategoryCode = "Other", DocumentTypeCode = "General", RetentionDate = DateOnly.FromDateTime(DateTime.Today.AddYears(7)) };
+        _showUpload = true;
+    }
+
+    private void CloseUpload() => _showUpload = false;
 
     private async Task SubmitUploadAsync()
     {
-        _newDoc.TenantId = _tenantId;
+        _uploadAttempted = true;
+        if (_uploadFile is null)
+        {
+            ShowToast("A document file is required.", "danger");
+            return;
+        }
 
-        if (_uploadFile is not null)
+        _busy = true;
+        try
         {
             await using var stream = _uploadFile.OpenReadStream(104_857_600);
-            await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
+            var id = await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
             {
                 TenantId = _tenantId,
-                DocumentTypeCode = _newDoc.DocumentTypeCode,
-                CategoryCode = _newDoc.CategoryCode,
-                FileName = string.IsNullOrWhiteSpace(_newDoc.FileName) ? _uploadFile.Name : _newDoc.FileName,
+                DocumentTypeCode = _uploadForm.DocumentTypeCode,
+                CategoryCode = _uploadForm.CategoryCode,
+                FileName = _uploadForm.FileName,
                 OriginalFileName = _uploadFile.Name,
-                EntityName = _newDoc.EntityName,
-                EntityId = _newDoc.EntityId,
-                Description = _newDoc.Description,
-                Tags = _newDoc.Tags,
-                RetentionDate = _newDoc.RetentionDate,
-                UploadedByName = _newDoc.UploadedByName,
+                EntityName = _uploadForm.EntityName,
+                Description = _uploadForm.Description,
+                Tags = _uploadForm.Tags,
+                RetentionDate = _uploadForm.RetentionDate,
+                UploadedByName = _uploadForm.UploadedByName,
                 CreatedByUserId = _tenantAdminUserId,
                 Content = stream
             });
+            _showUpload = false;
+            ShowToast("Document uploaded successfully.");
+            await LoadAsync();
+            var uploaded = _rows.FirstOrDefault(r => r.DocumentId == id);
+            if (uploaded is not null) await OpenDetailAsync(uploaded);
         }
-        else
+        catch (Exception ex)
         {
-            await Api.CreateDocumentAsync(_newDoc);
+            ShowToast($"Upload failed: {ex.Message}", "danger");
         }
-
-        _newDoc = new();
-        _uploadFile = null;
-        _showUpload = false;
-        await LoadAsync();
-    }
-
-    private async Task SubmitMetadataAsync()
-    {
-        if (_selected is null) return;
-        _metaRequest.DocumentId = _selected.DocumentId;
-        await Api.UpdateDocumentMetadataAsync(_metaRequest);
-        _showMetadata = false;
-        _selected = await Api.GetDocumentByIdAsync(_selected.DocumentId);
-    }
-
-    private async Task ArchiveSelectedAsync()
-    {
-        if (_selected is null) return;
-        await Api.ArchiveDocumentAsync(_selected.DocumentId);
-        _showDetail = false;
-        await LoadAsync();
-    }
-
-    private async Task SubmitVersionAsync()
-    {
-        if (_selected is null) return;
-
-        if (_versionFile is not null)
+        finally
         {
-            await using var stream = _versionFile.OpenReadStream(104_857_600);
-            await Api.UploadDocumentVersionAsync(_selected.DocumentId, new ApiClient.UploadDocumentVersionRequest
-            {
-                FileName = string.IsNullOrWhiteSpace(_versionRequest.FileName) ? _versionFile.Name : _versionRequest.FileName,
-                OriginalFileName = _versionFile.Name,
-                ChangeNotes = _versionRequest.ChangeNotes,
-                CreatedByUserId = _tenantAdminUserId,
-                Content = stream
-            });
+            _busy = false;
         }
-        else
-        {
-            _versionRequest.TenantId = _tenantId;
-            _versionRequest.DocumentId = _selected.DocumentId;
-            await Api.CreateDocumentVersionAsync(_versionRequest);
-        }
-
-        _versionRequest = new();
-        _versionFile = null;
-        _showNewVersion = false;
-        _versions = (await Api.GetDocumentVersionsAsync(_selected.DocumentId))?.ToList() ?? [];
-        _selected = await Api.GetDocumentByIdAsync(_selected.DocumentId);
     }
 
     private void OnUploadFileChanged(InputFileChangeEventArgs args)
     {
         _uploadFile = args.File;
-        if (string.IsNullOrWhiteSpace(_newDoc.FileName))
-            _newDoc.FileName = _uploadFile.Name;
+        if (string.IsNullOrWhiteSpace(_uploadForm.FileName)) _uploadForm.FileName = _uploadFile.Name;
+        if (string.IsNullOrWhiteSpace(_uploadForm.DocumentTypeCode)) _uploadForm.DocumentTypeCode = GuessDocumentType(_uploadFile.Name);
+    }
 
-        _newDoc.ContentType = _uploadFile.ContentType;
+    private async Task OpenDetailAsync(DocumentDto row)
+    {
+        _selected = row;
+        _drawerRow = row;
+        await LoadRelatedAsync(row.DocumentId);
+    }
+
+    private async Task LoadRelatedAsync(Guid documentId)
+    {
+        _relatedLoading = true;
+        try
+        {
+            _versions.Clear();
+            _shareLinks.Clear();
+            _accessLog.Clear();
+            var versionsTask = Api.GetDocumentVersionsAsync(documentId);
+            var linksTask = Api.GetDocumentShareLinksAsync(documentId);
+            var logTask = Api.GetDocumentAccessLogAsync(documentId);
+            await Task.WhenAll(versionsTask, linksTask, logTask);
+            _versions.AddRange(await versionsTask ?? []);
+            _shareLinks.AddRange(await linksTask ?? []);
+            _accessLog.AddRange(await logTask ?? []);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Related document data failed to load: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _relatedLoading = false;
+        }
+    }
+
+    private void CloseDrawer() => _drawerRow = null;
+    private void Download(DocumentDto row) => Nav.NavigateTo(Api.GetDocumentDownloadUrl(row.DocumentId), forceLoad: true);
+
+    private void OpenMetadata(DocumentDto row)
+    {
+        _selected = row;
+        _metadataForm = new MetadataFormModel { Description = row.Description, Tags = row.Tags, RetentionDate = row.RetentionDate };
+        _showMetadata = true;
+    }
+
+    private void CloseMetadata() => _showMetadata = false;
+
+    private async Task SubmitMetadataAsync()
+    {
+        if (_selected is null) return;
+        _busy = true;
+        try
+        {
+            await Api.UpdateDocumentMetadataAsync(new UpdateDocumentMetadataRequest { DocumentId = _selected.DocumentId, Description = _metadataForm.Description, Tags = _metadataForm.Tags, RetentionDate = _metadataForm.RetentionDate, ModifiedByUserId = _tenantAdminUserId });
+            _showMetadata = false;
+            ShowToast("Document metadata updated.");
+            await RefreshSelectedAsync(_selected.DocumentId);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Metadata save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OpenVersion(DocumentDto row)
+    {
+        _selected = row;
+        _versionAttempted = false;
+        _versionFile = null;
+        _versionForm = new VersionFormModel { FileName = row.FileName };
+        _showNewVersion = true;
+    }
+
+    private void CloseVersion() => _showNewVersion = false;
+
+    private async Task SubmitVersionAsync()
+    {
+        _versionAttempted = true;
+        if (_selected is null || _versionFile is null)
+        {
+            ShowToast("A version file is required.", "danger");
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await using var stream = _versionFile.OpenReadStream(104_857_600);
+            await Api.UploadDocumentVersionAsync(_selected.DocumentId, new ApiClient.UploadDocumentVersionRequest { FileName = _versionForm.FileName, OriginalFileName = _versionFile.Name, ChangeNotes = _versionForm.ChangeNotes, CreatedByUserId = _tenantAdminUserId, Content = stream });
+            _showNewVersion = false;
+            ShowToast("New document version uploaded.");
+            await RefreshSelectedAsync(_selected.DocumentId);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Version upload failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
     private void OnVersionFileChanged(InputFileChangeEventArgs args)
     {
         _versionFile = args.File;
-        if (string.IsNullOrWhiteSpace(_versionRequest.FileName))
-            _versionRequest.FileName = _versionFile.Name;
-
-        _versionRequest.ContentType = _versionFile.ContentType;
+        if (string.IsNullOrWhiteSpace(_versionForm.FileName)) _versionForm.FileName = _versionFile.Name;
     }
+
+    private void OpenShare(DocumentDto row)
+    {
+        _selected = row;
+        _shareForm = new ShareFormModel { ExpiresDateUtc = DateTime.UtcNow.Date.AddDays(7), MaxAccessCount = null };
+        _showShareDialog = true;
+    }
+
+    private void CloseShare() => _showShareDialog = false;
 
     private async Task SubmitShareLinkAsync()
     {
         if (_selected is null) return;
-        var request = new CreateDocumentShareLinkRequest
+        _busy = true;
+        try
         {
-            TenantId = _tenantId,
-            DocumentId = _selected.DocumentId,
-            CreatedByUserId = Guid.Empty,
-            ExpiresDateUtc = _shareExpires,
-            MaxAccessCount = _shareMaxAccess,
-            RequiresPin = _shareRequiresPin,
-            Pin = _sharePin
-        };
-        await Api.CreateDocumentShareLinkAsync(request);
-        _showShareDialog = false;
-        _shareLinks = (await Api.GetDocumentShareLinksAsync(_selected.DocumentId))?.ToList() ?? [];
+            await Api.CreateDocumentShareLinkAsync(new CreateDocumentShareLinkRequest { TenantId = _tenantId, DocumentId = _selected.DocumentId, CreatedByUserId = _tenantAdminUserId, ExpiresDateUtc = _shareForm.ExpiresDateUtc, MaxAccessCount = _shareForm.MaxAccessCount, RequiresPin = _shareForm.RequiresPin, Pin = _shareForm.Pin });
+            _showShareDialog = false;
+            ShowToast("Secure share link created.");
+            await LoadRelatedAsync(_selected.DocumentId);
+            _shareLinksVisible = true;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Share link creation failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
-    private void OpenRenameDialog()
+    private void CloseShareLinks() => _shareLinksVisible = false;
+
+    private void OpenRename(DocumentDto row)
     {
-        if (_selected is null) return;
-        _renameRequest = new RenameDocumentRequest { DocumentId = _selected.DocumentId, NewFileName = _selected.FileName };
+        _selected = row;
+        _renameForm = new RenameFormModel { NewFileName = row.FileName };
         _showRename = true;
     }
 
+    private void CloseRename() => _showRename = false;
+
     private async Task SubmitRenameAsync()
     {
-        await Api.RenameDocumentAsync(_renameRequest);
-        _showRename = false;
-        _selected = await Api.GetDocumentByIdAsync(_selected!.DocumentId);
-        await LoadAsync();
-    }
-
-    private async Task DeleteSelectedAsync()
-    {
         if (_selected is null) return;
-        await Api.DeleteDocumentAsync(_selected.DocumentId);
-        _showDetail = false;
+        _busy = true;
+        try
+        {
+            await Api.RenameDocumentAsync(new RenameDocumentRequest { DocumentId = _selected.DocumentId, NewFileName = _renameForm.NewFileName, ModifiedByUserId = _tenantAdminUserId });
+            _showRename = false;
+            ShowToast("Document renamed.");
+            await RefreshSelectedAsync(_selected.DocumentId);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Rename failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OpenConfirm(DocumentDto row, string action)
+    {
+        _confirmTarget = row;
+        _revokeTarget = null;
+        _confirmAction = action;
+    }
+
+    private void OpenRevokeConfirm(DocumentShareLinkDto link)
+    {
+        _revokeTarget = link;
+        _confirmTarget = null;
+        _confirmAction = "Revoke";
+    }
+
+    private void CloseConfirm()
+    {
+        _confirmTarget = null;
+        _revokeTarget = null;
+        _confirmAction = null;
+    }
+
+    private async Task ExecuteConfirmAsync()
+    {
+        _busy = true;
+        try
+        {
+            if (_confirmAction == "Archive" && _confirmTarget is not null)
+            {
+                await Api.ArchiveDocumentAsync(_confirmTarget.DocumentId, _tenantAdminUserId);
+                ShowToast("Document archived.", "warning");
+                var id = _confirmTarget.DocumentId;
+                CloseConfirm();
+                await RefreshSelectedAsync(id);
+            }
+            else if (_confirmAction == "Delete" && _confirmTarget is not null)
+            {
+                await Api.DeleteDocumentAsync(_confirmTarget.DocumentId, _tenantAdminUserId);
+                ShowToast("Document deleted.", "warning");
+                CloseDrawer();
+                CloseConfirm();
+                await LoadAsync();
+            }
+            else if (_confirmAction == "Revoke" && _revokeTarget is not null)
+            {
+                await Api.RevokeDocumentShareLinkAsync(_revokeTarget.ShareLinkId);
+                ShowToast("Share link revoked.", "warning");
+                CloseConfirm();
+                if (_selected is not null) await LoadRelatedAsync(_selected.DocumentId);
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Document action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RefreshSelectedAsync(Guid documentId)
+    {
         await LoadAsync();
+        var updated = await Api.GetDocumentByIdAsync(documentId);
+        if (updated is not null)
+        {
+            _selected = updated;
+            _drawerRow = updated;
+            await LoadRelatedAsync(documentId);
+        }
     }
 
-    private async Task RevokeShareLinkAsync(Guid shareLinkId)
+    private void OpenActionMenu(DocumentDto row, MouseEventArgs args)
     {
-        await Api.RevokeDocumentShareLinkAsync(shareLinkId);
-        if (_selected is not null)
-            _shareLinks = (await Api.GetDocumentShareLinksAsync(_selected.DocumentId))?.ToList() ?? [];
+        _selected = row;
+        _openActionMenuFor = row.DocumentId;
+        _menuXpx = $"{Math.Min(args.ClientX, 1420)}px";
+        _menuYpx = $"{Math.Min(args.ClientY, 820)}px";
     }
 
-    // ── Helpers ─────────────────────────────────────
-    static string AiClassify(DocumentDto d)
+    private void CloseActionMenu() => _openActionMenuFor = null;
+
+    private async Task ExecuteMenuActionAsync(string action)
     {
-        if (!string.IsNullOrEmpty(d.CategoryCode)) return d.CategoryCode;
-        var name = (d.FileName ?? "").ToLowerInvariant();
-        if (name.Contains("acord") || name.Contains("form"))    return "ACORD Form";
-        if (name.Contains("policy") || name.Contains("dec"))    return "Policy / Dec Page";
-        if (name.Contains("claim")  || name.Contains("fnol"))   return "Claim Document";
-        if (name.Contains("cert")   || name.Contains("coi"))    return "Certificate";
-        if (name.Contains("endorse")|| name.Contains("endo"))   return "Endorsement";
-        if (name.Contains("invoice")|| name.Contains("bill"))   return "Billing";
-        if (name.Contains("audit"))                              return "Audit";
-        if (name.Contains("proposal"))                          return "Proposal";
+        var row = _selected;
+        CloseActionMenu();
+        if (row is null) return;
+
+        switch (action)
+        {
+            case "View": await OpenDetailAsync(row); break;
+            case "Download": Download(row); break;
+            case "Metadata": OpenMetadata(row); break;
+            case "Version": OpenVersion(row); break;
+            case "Share": OpenShare(row); break;
+            case "ShareLinks": await OpenDetailAsync(row); _shareLinksVisible = true; break;
+            case "Rename": OpenRename(row); break;
+            case "Archive": OpenConfirm(row, "Archive"); break;
+            case "Delete": OpenConfirm(row, "Delete"); break;
+            case "ESign": Nav.NavigateTo("/documents/esign"); break;
+        }
+    }
+
+    private Task ExportAsync()
+    {
+        var csv = new StringBuilder();
+        csv.AppendLine("File Name,Category,Type,Status,Workflow,Version,Retention,Uploaded By,Uploaded Date,Tags");
+        foreach (var row in FilteredRows)
+        {
+            csv.AppendLine(string.Join(',', Csv(row.FileName), Csv(row.CategoryCode), Csv(row.DocumentTypeCode), Csv(row.StatusCode), Csv(WorkflowStage(row)), row.VersionNumber.ToString(), Csv(row.RetentionDate?.ToString("MM/dd/yyyy")), Csv(row.UploadedByName), Csv(row.CreatedDateUtc.ToLocalTime().ToString("MM/dd/yyyy")), Csv(row.Tags)));
+        }
+
+        var url = "data:text/csv;charset=utf-8," + Uri.EscapeDataString(csv.ToString());
+        Nav.NavigateTo(url, forceLoad: true);
+        ShowToast("Document export generated.");
+        return Task.CompletedTask;
+    }
+
+    private RenderFragment KpiCard(string icon, string label, string value, string caption, string cssClass, string? filterKey) =>
+        @<button type="button" class="dh-kpi-card @cssClass @(Equals(_kpiFilter, filterKey) ? "dh-kpi-card--active" : string.Empty)" title="Filter by @label" @onclick="() => SetKpiFilter(filterKey)">
+            <span class="dh-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span>
+            <span class="dh-kpi-copy"><span class="dh-kpi-label">@label</span><strong class="dh-kpi-value">@value</strong><span class="dh-kpi-caption">@caption</span></span>
+        </button>;
+
+    private RenderFragment CtxBtn(DocumentDto row) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "button");
+        builder.AddAttribute(seq++, "type", "button");
+        builder.AddAttribute(seq++, "class", "um-btn um-btn-ghost um-btn-sm dh-ctx-btn");
+        builder.AddAttribute(seq++, "title", "Actions");
+        builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, args => OpenActionMenu(row, args)));
+        builder.AddEventStopPropagationAttribute(seq++, "onclick", true);
+        builder.OpenElement(seq++, "i");
+        builder.AddAttribute(seq++, "class", "bi bi-three-dots-vertical");
+        builder.AddAttribute(seq++, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment DrawerField(string label, string value) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "dh-meta-row");
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", "dh-meta-lbl");
+        builder.AddContent(seq++, label);
+        builder.CloseElement();
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "class", "dh-meta-val");
+        builder.AddContent(seq++, value);
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private RenderFragment CategoryChip(DocumentDto row) => builder => Chip(builder, "dh-type-chip", string.IsNullOrWhiteSpace(row.CategoryCode) ? "Unclassified" : row.CategoryCode);
+    private RenderFragment TypeChip(string type) => builder => Chip(builder, "dh-type-chip", string.IsNullOrWhiteSpace(type) ? "General" : type);
+    private RenderFragment StatusChip(string status) => builder => Chip(builder, $"dh-status dh-status-{CssSafe(status)}", string.IsNullOrWhiteSpace(status) ? "Active" : status);
+    private RenderFragment WorkflowCell(DocumentDto row) => builder => Chip(builder, $"dh-lifecycle dh-lifecycle-{CssSafe(WorkflowStage(row))}", WorkflowStage(row));
+
+    private static void Chip(RenderTreeBuilder builder, string cssClass, string value)
+    {
+        builder.OpenElement(0, "span");
+        builder.AddAttribute(1, "class", cssClass);
+        builder.AddContent(2, value);
+        builder.CloseElement();
+    }
+
+    private IEnumerable<string> DocumentTags(DocumentDto row) => (row.Tags ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static string AiClassify(DocumentDto d)
+    {
+        if (!string.IsNullOrWhiteSpace(d.CategoryCode)) return d.CategoryCode;
+        var name = (d.FileName ?? string.Empty).ToLowerInvariant();
+        if (name.Contains("acord") || name.Contains("form")) return "ACORD Form";
+        if (name.Contains("policy") || name.Contains("dec")) return "Policy / Dec Page";
+        if (name.Contains("claim") || name.Contains("fnol")) return "Claim Document";
+        if (name.Contains("cert") || name.Contains("coi")) return "Certificate";
+        if (name.Contains("endorse")) return "Endorsement";
+        if (name.Contains("invoice") || name.Contains("bill")) return "Billing";
+        if (name.Contains("audit")) return "Audit";
+        if (name.Contains("proposal")) return "Proposal";
         return "Unclassified";
     }
 
-    static string DocIcon(string? mime) => mime?.ToLowerInvariant() switch
+    private static string WorkflowStage(DocumentDto row)
     {
-        var m when m?.Contains("pdf")   == true => "bi-file-earmark-pdf",
-        var m when m?.Contains("word")  == true ||
-                   m?.Contains("docx")  == true => "bi-file-earmark-word",
-        var m when m?.Contains("excel") == true ||
-                   m?.Contains("xlsx")  == true => "bi-file-earmark-excel",
-        var m when m?.Contains("image") == true => "bi-file-earmark-image",
-        _                                        => "bi-file-earmark"
-    };
-
-    RenderFragment DhKpi(string icon, string label, string val, string color) => __builder =>
-    {
-        <div class="dh-kpi-card @color">
-            <i class="bi @icon dh-kpi-icon" aria-hidden="true"></i>
-            <div><div class="dh-kpi-val">@val</div><div class="dh-kpi-lbl">@label</div></div>
-        </div>
-    };
-
-    RenderFragment DocWorkflowKpi(string label, string value, string meta, string icon, string tone) => @<article class="docs-kpi-card">
-        <span class="docs-kpi-icon @tone"><i class="bi @icon" aria-hidden="true"></i></span>
-        <div>
-            <strong>@value</strong>
-            <span>@label</span>
-            <small>@meta</small>
-        </div>
-    </article>;
-
-    private int DocFilterCount(string key) => key switch
-    {
-        "risk" => _docWorkflow.Count(x => x.Risk == "High"),
-        "ocr" => _docWorkflow.Count(x => x.Type == "OCR"),
-        "esign" => _docWorkflow.Count(x => x.Type == "E-Sign"),
-        "audit" => _docWorkflow.Count(x => x.Stage == "Audit" || x.Type == "Audit"),
-        _ => _docWorkflow.Count
-    };
-
-    private void AdvanceWorkflow(DocumentWorkflowItem item)
-    {
-        item.Stage = item.Stage switch
-        {
-            "Intake" => "Classify",
-            "Classify" => "Prepare",
-            "Prepare" => "Sign",
-            "Sign" => "Audit",
-            _ => "Audit"
-        };
+        if (row.StatusCode == "Archived") return "Audit";
+        if (string.IsNullOrWhiteSpace(row.CategoryCode)) return "Classify";
+        if (row.FileName.Contains("sign", StringComparison.OrdinalIgnoreCase) || row.Tags?.Contains("sign", StringComparison.OrdinalIgnoreCase) == true) return "Sign";
+        if (row.VersionNumber > 1 || row.FileName.Contains("packet", StringComparison.OrdinalIgnoreCase)) return "Prepare";
+        return "Intake";
     }
 
-    static string DocToneCss(string type) => type switch
+    private static string DocumentRisk(DocumentDto row)
+        => string.IsNullOrWhiteSpace(row.CategoryCode) || row.RetentionDate is null ? "High" : row.StatusCode == "Archived" ? "Low" : "Medium";
+
+    private static string DocIcon(string? mime, string? fileName) => (mime ?? fileName ?? string.Empty).ToLowerInvariant() switch
     {
-        "Repository" => "docs-tone-blue",
-        "ACORD" => "docs-tone-violet",
-        "E-Sign" => "docs-tone-amber",
-        "OCR" => "docs-tone-red",
-        "Packet" => "docs-tone-cyan",
-        "Audit" => "docs-tone-green",
-        _ => "docs-tone-neutral"
+        var m when m.Contains("pdf") => "bi-file-earmark-pdf",
+        var m when m.Contains("word") || m.Contains("docx") => "bi-file-earmark-word",
+        var m when m.Contains("excel") || m.Contains("xlsx") => "bi-file-earmark-excel",
+        var m when m.Contains("image") || m.Contains("png") || m.Contains("jpg") => "bi-file-earmark-image",
+        _ => "bi-file-earmark"
     };
 
-    static string DocRiskCss(string risk) => risk switch
+    private static string StatusIcon(string status) => status switch
     {
-        "High" => "docs-status-high",
-        "Medium" => "docs-status-medium",
-        _ => "docs-status-low"
+        "Archived" => "bi-archive-fill",
+        "Pending Review" => "bi-hourglass-split",
+        _ => "bi-check-circle-fill"
     };
+
+    private static string LifecycleLabel(DocumentDto row) => row.StatusCode switch
+    {
+        "Archived" => row.ModifiedDateUtc.HasValue ? $"Archived {row.ModifiedDateUtc.Value.ToLocalTime():MM/dd/yyyy}" : "Archived for audit",
+        "Pending Review" => "Pending review workflow",
+        _ => row.RetentionDate.HasValue ? $"Retain until {row.RetentionDate.Value:MM/dd/yyyy}" : "Active repository item"
+    };
+
+    private static string ToneCss(string type) => type switch
+    {
+        "ACORD" => "dh-tone-violet",
+        "E-Sign" => "dh-tone-amber",
+        "OCR" => "dh-tone-red",
+        "Packet" => "dh-tone-cyan",
+        "Workflow" => "dh-tone-blue",
+        "Storage" => "dh-tone-green",
+        _ => "dh-tone-neutral"
+    };
+
+    private static string GuessDocumentType(string fileName)
+    {
+        var name = fileName.ToLowerInvariant();
+        if (name.Contains("certificate") || name.Contains("coi")) return "Certificate";
+        if (name.Contains("endorsement")) return "Endorsement";
+        if (name.Contains("binder")) return "Binder";
+        if (name.Contains("policy") || name.Contains("declaration")) return "Policy";
+        if (name.Contains("claim")) return "Claim";
+        return "General";
+    }
 
     private static string FormatSize(long? bytes)
     {
@@ -981,35 +1322,57 @@ else
         };
     }
 
+    private static string Csv(string? value)
+    {
+        var text = value ?? string.Empty;
+        return string.Concat("\"", text.Replace("\"", "\"\""), "\"");
+    }
+
+    private static string CssSafe(string? value) => string.IsNullOrWhiteSpace(value) ? "unknown" : value.Trim().ToLowerInvariant().Replace(" ", "-");
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+    private Task NotifyValidationAsync() { ShowToast("Review required fields before continuing.", "danger"); return Task.CompletedTask; }
+
+    private sealed record TabDef(string Key, string Label, string Icon);
+    private sealed record WorkflowLane(string Key, string Label, string Description, string Icon, string FilterKey);
+    private sealed record DocumentModule(string Title, string Description, string Url, string Icon, string Type);
     private sealed record CategoryOption(string Code, string Label);
-    private sealed record WorkflowLane(string Key, string Label, string Description);
-    private sealed record WorkflowFilter(string Key, string Label);
-    private sealed record DocumentModule(string Title, string Description, string Url, string Icon, string Type)
+
+    private sealed class UploadFormModel
     {
-        public string Label => Title;
+        [Required, StringLength(260)] public string FileName { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string CategoryCode { get; set; } = "Other";
+        [Required, StringLength(80)] public string DocumentTypeCode { get; set; } = "General";
+        [StringLength(100)] public string? EntityName { get; set; }
+        public DateOnly? RetentionDate { get; set; }
+        [StringLength(1000)] public string? Description { get; set; }
+        [StringLength(500)] public string? Tags { get; set; }
+        [StringLength(160)] public string? UploadedByName { get; set; }
     }
 
-    private sealed class DocumentWorkflowItem(string title, string summary, string type, string risk, string stage, string owner, string sla, string control, string url)
+    private sealed class MetadataFormModel
     {
-        public string Title { get; set; } = title;
-        public string Summary { get; set; } = summary;
-        public string Type { get; set; } = type;
-        public string Risk { get; set; } = risk;
-        public string Stage { get; set; } = stage;
-        public string Owner { get; set; } = owner;
-        public string Sla { get; set; } = sla;
-        public string Control { get; set; } = control;
-        public string Url { get; set; } = url;
+        [StringLength(1000)] public string? Description { get; set; }
+        [StringLength(500)] public string? Tags { get; set; }
+        public DateOnly? RetentionDate { get; set; }
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private sealed class VersionFormModel
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        [Required, StringLength(260)] public string FileName { get; set; } = string.Empty;
+        [StringLength(1000)] public string? ChangeNotes { get; set; }
+    }
+
+    private sealed class ShareFormModel
+    {
+        [Required] public DateTime ExpiresDateUtc { get; set; } = DateTime.UtcNow.Date.AddDays(7);
+        [Range(1, 9999)] public int? MaxAccessCount { get; set; }
+        public bool RequiresPin { get; set; }
+        [StringLength(20)] public string? Pin { get; set; }
+    }
+
+    private sealed class RenameFormModel
+    {
+        [Required, StringLength(260)] public string NewFileName { get; set; } = string.Empty;
     }
 }

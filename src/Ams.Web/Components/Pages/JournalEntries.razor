@@ -1,265 +1,221 @@
 @page "/finance/journalentries"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Finance
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@inject IJSRuntime Js
 
-<PageTitle>Journal Entries</PageTitle>
+<PageTitle>Journal Entries — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Journal Entries"
-               Subtitle="Review and manage general ledger journal entries"
-               Icon="bi-journal-text">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "fa-spin" : "")" aria-hidden="true"></i> Refresh
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Entry
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- ── Search & Filter ──────────────────────────────────────────────────── -->
-<div class="fin-toolbar">
-    <div class="fin-search-box">
-        <i class="bi bi-search fin-search-icon" aria-hidden="true"></i>
-        <input class="e-input fin-search-input"
-               placeholder="Search journal entries…"
-               @bind="_searchTerm"
-               @bind:event="oninput"
-               @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" />
+@if (_toastVisible)
+{
+    <div class="je-toast je-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="je-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
-    <div class="fin-filter-buttons">
-        <button class="um-btn um-btn-ghost um-btn-sm @(_filterActive ? "um-btn-active" : "")"
-                @onclick="() => _filterActive = !_filterActive">
-            <i class="bi bi-funnel" aria-hidden="true"></i> Filter
-        </button>
+}
+
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="je-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="je-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="je-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon"><i class="bi @(_pendingStatus == "Posted" ? "bi-check-circle" : "bi-arrow-counterclockwise")"></i></div>
+                <div class="um-confirm-title" id="je-status-title">@(_pendingStatus == "Posted" ? "Post Journal Entry" : "Reopen Journal Entry")</div>
+                <div class="um-confirm-body">@(_pendingStatus == "Posted" ? "Post" : "Reopen") <strong>@_statusTarget.EntryNumber</strong>? This updates the entry status in the finance workflow.</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-primary" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@(_pendingStatus == "Posted" ? "Post Entry" : "Reopen Entry")</button>
+                </div>
+            </div>
+        </div>
     </div>
+}
+
+@if (_showForm)
+{
+    <div class="je-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="je-modal je-action-modal" role="dialog" aria-modal="true" aria-labelledby="je-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-journal-text" aria-hidden="true"></i>
+                <span id="je-form-title">@(_editingId == Guid.Empty ? "New Journal Entry" : "Edit Journal Entry")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="je-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Balanced journal workflow</span><p>Record balanced debit and credit entries for general ledger posting and reporting.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Entry Number <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.EntryNumber" /><ValidationMessage For="() => _form.EntryNumber" class="text-danger" /></div>
+                        <div class="um-field"><label>Entry Date <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_form.EntryDate" /><ValidationMessage For="() => _form.EntryDate" class="text-danger" /></div>
+                        <div class="um-field"><label>Total Debit <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.TotalDebit" /><ValidationMessage For="() => _form.TotalDebit" class="text-danger" /></div>
+                        <div class="um-field"><label>Total Credit <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.TotalCredit" /><ValidationMessage For="() => _form.TotalCredit" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.StatusCode">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Description <span class="text-danger">*</span></label><InputTextArea class="form-control" @bind-Value="_form.Description" rows="3" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Entry" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="je-enterprise-page">
+    <section class="je-header">
+        <div class="je-header-left"><div class="je-lob-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></div><div class="je-header-info"><div class="je-title-row"><h1 class="je-page-title">Journal Entries</h1><span class="je-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live journal data</span><span class="je-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div><div class="je-sub-row"><span>Review, draft, post, and export balanced general ledger journal entries.</span><span class="je-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="je-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div></div></div>
+        <div class="je-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/glaccounts")'><i class="bi bi-journals" aria-hidden="true"></i> GL Accounts</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance")'><i class="bi bi-speedometer2" aria-hidden="true"></i> Finance</button><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat je-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Entry</button></div>
+    </section>
+
+    <section class="je-kpi-strip" aria-label="Journal entry metrics">@foreach (var kpi in Kpis) { <button type="button" class="je-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "je-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="je-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="je-kpi-copy"><span class="je-kpi-label">@kpi.Label</span><span class="je-kpi-value">@kpi.Value</span><span class="je-kpi-caption">@kpi.Caption</span></span></button> }</section>
+
+    <section class="je-workflow-strip" aria-label="Journal workflow shortcuts">
+        <button type="button" class="je-workflow-card je-wf-chart" @onclick='() => Nav.NavigateTo("/finance/glaccounts")'><span class="je-workflow-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span><span class="je-workflow-content"><strong>1</strong><span>Chart</span><small>Review accounts.</small></span></button>
+        <button type="button" class="je-workflow-card je-wf-journal" @onclick="OpenCreate"><span class="je-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="je-workflow-content"><strong>2</strong><span>Journal</span><small>Create entries.</small></span></button>
+        <button type="button" class="je-workflow-card je-wf-post" @onclick='() => SetKpiFilter("draft")'><span class="je-workflow-icon"><i class="bi bi-check2-square" aria-hidden="true"></i></span><span class="je-workflow-content"><strong>3</strong><span>Post</span><small>Post balanced drafts.</small></span></button>
+        <button type="button" class="je-workflow-card je-wf-recon" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'><span class="je-workflow-icon"><i class="bi bi-ui-checks-grid" aria-hidden="true"></i></span><span class="je-workflow-content"><strong>4</strong><span>Reconcile</span><small>Validate balances.</small></span></button>
+        <button type="button" class="je-workflow-card je-wf-report" @onclick='() => Nav.NavigateTo("/analytics/finance")'><span class="je-workflow-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span><span class="je-workflow-content"><strong>5</strong><span>Report</span><small>Review analytics.</small></span></button>
+    </section>
+
+    <section class="je-enterprise-search" aria-label="Journal entry filters"><div class="je-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div><div class="je-search-body"><label for="je-search">Search journal entries</label><input id="je-search" class="je-search-input" type="search" placeholder="Search entry number, description, status..." @bind="SearchFilter" @bind:event="oninput" /><span class="je-search-hint">Filters apply instantly across synchronized journal entries.</span></div><select class="je-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select><div class="je-search-result"><strong>@_filtered.Count</strong><span>matches</span></div></section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError)) { <div class="alert alert-danger je-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div> }
+
+    <section class="je-content-layout"><div class="je-grid-wrap"><div class="je-grid-toolbar"><div><strong>Journal register</strong><span>@ActiveFilterText</span></div><div class="je-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/glaccounts")'><i class="bi bi-journals" aria-hidden="true"></i> GL Accounts</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+            @if (_loading) { <div class="je-loading"><i class="bi bi-arrow-repeat je-spin" aria-hidden="true"></i><strong>Loading journal entries...</strong><span>Syncing schema, seed data, and journal entries.</span></div> }
+            else if (!_filtered.Any()) { <div class="je-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No journal entries found</strong><span>Adjust filters or create a new journal entry.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Entry</button></div> }
+            else { <div class="je-table-scroll"><table class="je-table"><thead><tr><th>Entry</th><th>Status</th><th>Date</th><th class="je-number">Debit</th><th class="je-number">Credit</th><th class="je-number">Variance</th><th class="je-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="je-table-row @(_selected?.JournalEntryId == item.JournalEntryId ? "je-table-row--selected" : null)" @onclick="() => SelectEntry(item)"><td><div class="je-entry-cell"><span class="je-entry-icon @StatusIconTone(item.StatusCode)"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span><strong>@item.EntryNumber</strong><span>@Truncate(item.Description, 92)</span></span></div></td><td><span class="je-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td><td>@item.EntryDate.ToString("MMM d, yyyy")</td><td class="je-number">@Fmt(item.TotalDebit)</td><td class="je-number">@Fmt(item.TotalCredit)</td><td class="je-number"><span class="@(IsBalanced(item) ? "je-balanced" : "je-unbalanced")">@Fmt(Math.Abs(item.TotalDebit - item.TotalCredit))</span></td><td><div class="je-row-acts"><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="@(item.StatusCode == "Posted" ? "Reopen" : "Post")" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, item.StatusCode == "Posted" ? "Draft" : "Posted")'><i class="bi @(item.StatusCode == "Posted" ? "bi-arrow-counterclockwise" : "bi-check-circle")" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div><div class="je-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div> }
+        </div>
+        <aside class="je-detail-panel" aria-label="Selected journal entry detail">@if (_selected is null) { <div class="je-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select an entry</strong><span>Choose a row to inspect balance, posting status, and workflow actions.</span></div> } else { <div class="je-detail-head"><div><span class="je-detail-eyebrow"><i class="bi bi-journal-text" aria-hidden="true"></i> Journal entry</span><h2>@_selected.EntryNumber</h2><div class="je-detail-meta"><span>@_selected.EntryDate.ToString("MMM d, yyyy")</span><span class="je-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div><div class="je-detail-body"><div class="je-detail-summary"><div class="je-meta-row"><span class="je-meta-lbl">Debit</span><span class="je-meta-val">@Fmt(_selected.TotalDebit)</span></div><div class="je-meta-row"><span class="je-meta-lbl">Credit</span><span class="je-meta-val">@Fmt(_selected.TotalCredit)</span></div><div class="je-meta-row"><span class="je-meta-lbl">Variance</span><span class="je-meta-val @(IsBalanced(_selected) ? "je-balanced" : "je-unbalanced")">@Fmt(Math.Abs(_selected.TotalDebit - _selected.TotalCredit))</span></div><div class="je-meta-row"><span class="je-meta-lbl">Created</span><span class="je-meta-val">@_selected.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</span></div></div><div class="je-note-card"><span><i class="bi bi-journal-text" aria-hidden="true"></i> Entry description</span><p>@_selected.Description</p></div><div class="je-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, _selected.StatusCode == "Posted" ? "Draft" : "Posted")'><i class="bi @(_selected.StatusCode == "Posted" ? "bi-arrow-counterclockwise" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.StatusCode == "Posted" ? "Reopen" : "Post")</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/glaccounts")'><i class="bi bi-journals" aria-hidden="true"></i> GL Accounts</button></div></div> }</aside>
+    </section>
 </div>
 
-@if (_filterActive)
-{
-    <div class="fin-filter-panel">
-        <div class="fin-filter-group">
-            <label class="fin-filter-label">Status</label>
-            <select class="e-input" @bind="_filterStatus">
-                <option value="">All</option>
-                <option value="Draft">Draft</option>
-                <option value="Posted">Posted</option>
-            </select>
-        </div>
-    </div>
-}
-
-<!-- ── KPI Cards ──────────────────────────────────────────────────────── -->
-@if (_stats is not null)
-{
-    <div class="fin-kpi-strip">
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #dbeafe; color: #1d4ed8;"><i class="bi bi-journal-fill" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.TotalEntries</div>
-                <div class="fin-kpi-label">Total Entries</div>
-            </div>
-        </div>
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #d1fae5; color: #047857;"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.PostedEntries</div>
-                <div class="fin-kpi-label">Posted</div>
-            </div>
-        </div>
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #fef3c7; color: #b45309;"><i class="bi bi-pencil-square" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.DraftEntries</div>
-                <div class="fin-kpi-label">Draft</div>
-            </div>
-        </div>
-    </div>
-}
-
-<!-- ── Content ──────────────────────────────────────────────────────── -->
-@if (_error is not null)
-{
-    <div class="fin-alert fin-alert-warning">
-        <div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></div>
-        <div class="fin-alert-body">
-            <div class="fin-alert-title">⚠️ Database Schema Issue</div>
-            <p>@_error</p>
-        </div>
-    </div>
-}
-else if (_loading)
-{
-    <div class="fin-loading">
-        <div class="um-spinner" aria-hidden="true"></div>
-        <span>Loading Journal Entries…</span>
-    </div>
-}
-else if (_items?.Count == 0)
-{
-    <div class="fin-empty-state">
-        <i class="bi bi-inbox fin-empty-icon" aria-hidden="true"></i>
-        <h3>No Journal Entries Found</h3>
-        <p>@(_searchTerm != null ? $"No entries match \"{_searchTerm}\"." : "No journal entries have been created yet.")</p>
-    </div>
-}
-else
-{
-    <div class="fin-grid-container">
-        <SfGrid TValue="JournalEntryDto" DataSource="_items" AllowPaging="true" AllowSorting="true" Height="600px">
-            <GridEvents TValue="JournalEntryDto" RowSelected="OnRowSelected" />
-            <GridPageSettings PageSize="15"></GridPageSettings>
-            <GridColumns>
-                <GridColumn Field="@nameof(JournalEntryDto.EntryNumber)" HeaderText="Entry #" Width="120" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(JournalEntryDto.EntryDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(JournalEntryDto.Description)" HeaderText="Description" Width="280"></GridColumn>
-                <GridColumn Field="@nameof(JournalEntryDto.TotalDebit)" HeaderText="Debit" Format="C2" Width="110" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(JournalEntryDto.TotalCredit)" HeaderText="Credit" Format="C2" Width="110" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(JournalEntryDto.StatusCode)" HeaderText="Status" Width="100" AllowSorting="true">
-                    <Template>
-                        @{
-                            var entry = context as JournalEntryDto;
-                            var badgeClass = entry?.StatusCode switch
-                            {
-                                "Posted" => "fin-badge-success",
-                                "Draft" => "fin-badge-secondary",
-                                _ => "fin-badge-warning"
-                            };
-                        }
-                        <span class="fin-badge @badgeClass">@entry?.StatusCode</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="Actions" Width="90">
-                    <Template>
-                        @{ var entry = (JournalEntryDto)context; }
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(entry)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
-    </div>
-}
-
-<SfDialog @bind-Visible="_showForm" Width="680px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-journal-text" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Journal Entry" : "Edit Journal Entry")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_editContext">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Entry Number <span class="text-danger">*</span></label><InputText @bind-Value="_form.EntryNumber" class="um-input" /><ValidationMessage For="() => _form.EntryNumber" class="text-danger" /></div>
-                    <div class="um-field"><label>Entry Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.EntryDate" class="um-input" /><ValidationMessage For="() => _form.EntryDate" class="text-danger" /></div>
-                    <div class="um-field"><label>Total Debit</label><InputNumber @bind-Value="_form.TotalDebit" class="um-input" /><ValidationMessage For="() => _form.TotalDebit" class="text-danger" /></div>
-                    <div class="um-field"><label>Total Credit</label><InputNumber @bind-Value="_form.TotalCredit" class="um-input" /><ValidationMessage For="() => _form.TotalCredit" class="text-danger" /></div>
-                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option value="Draft">Draft</option><option value="Posted">Posted</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
-                    <div class="um-field um-field--full"><label>Description <span class="text-danger">*</span></label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="3" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
-                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-                </div></div>
-            </EditForm>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Entry")</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private const int PageSize = 12;
     private Guid _tenantId;
-    private string? _searchTerm;
-    private string _filterStatus = "";
-    private bool _filterActive = false;
-    private bool _loading = false;
-    private bool _showForm;
-    private bool _saving;
-    private List<JournalEntryDto>? _items;
-    private string? _error;
-    private string? _formError;
-    private Guid _editingId = Guid.Empty;
+    private Guid _tenantAdminUserId;
+    private List<JournalEntryDto> _items = [];
+    private List<JournalEntryDto> _filtered = [];
+    private JournalEntryDto? _selected;
+    private JournalEntryDto? _statusTarget;
     private JournalEntryForm _form = new();
-    private EditContext _editContext = default!;
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showStatusConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _statuses = ["Draft", "Posted"];
 
-    private class Stats
-    {
-        public int TotalEntries { get; set; }
-        public int PostedEntries { get; set; }
-        public int DraftEntries { get; set; }
-    }
+    private IEnumerable<JournalEntryDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All journal entries" : $"Filtered by {_kpiFilter}";
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Entries", _items.Count.ToString("N0"), "All entries", "bi-journal-text", "je-ki-blue"),
+        new("posted", "Posted", _items.Count(x => x.StatusCode == "Posted").ToString("N0"), "Finalized", "bi-check-circle", "je-ki-green"),
+        new("draft", "Draft", _items.Count(x => x.StatusCode == "Draft").ToString("N0"), "Needs review", "bi-pencil", "je-ki-amber"),
+        new("balanced", "Balanced", _items.Count(IsBalanced).ToString("N0"), "Debit equals credit", "bi-scale", "je-ki-green"),
+        new("debit", "Debit", Fmt(_items.Sum(x => x.TotalDebit)), "Total debits", "bi-arrow-down-circle", "je-ki-blue"),
+        new("credit", "Credit", Fmt(_items.Sum(x => x.TotalCredit)), "Total credits", "bi-arrow-up-circle", "je-ki-green")
+    ];
 
-    private Stats? _stats;
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
 
-    protected override async Task OnInitializedAsync()
-    {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home", "/"),
-            new("Finance", "/finance"),
-            new("Journal Entries", "/finance/journalentries"));
-        _editContext = new(_form);
-        await LoadAsync();
-    }
-
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Finance", "/finance"), new("Journal Entries", "/finance/journalentries")); await LoadAsync(); }
     private async Task LoadAsync()
     {
-        _loading = true;
-        _error = null;
-        _items = null;
-        try
-        {
-            var result = await Api.SearchJournalEntriesAsync(_tenantId, _searchTerm);
-            _items = result?.Items.ToList() ?? [];
-
-            if (!string.IsNullOrEmpty(_filterStatus))
-                _items = _items.Where(x => x.StatusCode == _filterStatus).ToList();
-
-            _stats = new Stats
-            {
-                TotalEntries = _items.Count,
-                PostedEntries = _items.Where(x => x.StatusCode == "Posted").Count(),
-                DraftEntries = _items.Where(x => x.StatusCode == "Draft").Count()
-            };
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            if (ex.Message.Contains("Invalid column name") || ex.Message.Contains("JournalEntry"))
-            {
-                _error = "Database schema mismatch. Please ensure 00_schema_migration.sql has been applied to your database. See db/README.md for setup instructions.";
-            }
-            _items = [];
-        }
-        finally
-        {
-            _loading = false;
-        }
+        _loading = true; _loadError = null;
+        try { var result = await Api.SearchJournalEntriesAsync(_tenantId, string.Empty); _items = result?.Items.OrderByDescending(x => x.EntryDate).ThenByDescending(x => x.CreatedDateUtc).ToList() ?? []; ApplyFilters(resetPage: true); EnsureSelectedStillVisible(); }
+        catch (Exception ex) { _loadError = $"Journal entries failed to load: {ex.Message}"; ShowToast(_loadError, "danger"); _items = []; _filtered = []; }
+        finally { _loading = false; }
     }
-
-    private void OnRowSelected(RowSelectEventArgs<JournalEntryDto> args) => OpenEdit(args.Data);
-    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
-    private void OpenEdit(JournalEntryDto entry) { _editingId = entry.JournalEntryId; _form = new JournalEntryForm { EntryNumber = entry.EntryNumber, EntryDate = entry.EntryDate.ToDateTime(TimeOnly.MinValue), Description = entry.Description, TotalDebit = entry.TotalDebit, TotalCredit = entry.TotalCredit, StatusCode = entry.StatusCode }; _editContext = new(_form); _formError = null; _showForm = true; }
-    private void CloseForm() => _showForm = false;
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<JournalEntryDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm)) { var term = _searchTerm.Trim(); query = query.Where(x => Contains(x.EntryNumber, term) || Contains(x.Description, term) || Contains(x.StatusCode, term)); }
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter);
+        query = _kpiFilter switch { "posted" => query.Where(x => x.StatusCode == "Posted"), "draft" => query.Where(x => x.StatusCode == "Draft"), "balanced" => query.Where(IsBalanced), _ => query };
+        _filtered = query.OrderByDescending(x => x.EntryDate).ThenByDescending(x => x.CreatedDateUtc).ToList(); if (resetPage) _page = 1; if (_page > TotalPages) _page = TotalPages;
+    }
+    private void SetKpiFilter(string filter) { _kpiFilter = filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _statusFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Journal entry filters reset.", "info"); }
+    private void SelectEntry(JournalEntryDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _formError = null; _form = new JournalEntryForm { EntryNumber = $"JE-{DateTime.UtcNow:yyyyMMddHHmm}" }; _showForm = true; }
+    private void OpenEdit(JournalEntryDto entry) { _editingId = entry.JournalEntryId; _formError = null; _form = new JournalEntryForm { EntryNumber = entry.EntryNumber, EntryDate = entry.EntryDate.ToDateTime(TimeOnly.MinValue), Description = entry.Description, TotalDebit = entry.TotalDebit, TotalCredit = entry.TotalCredit, StatusCode = entry.StatusCode }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; }
     private async Task SaveAsync()
     {
-        if (!_editContext.Validate()) return;
-        if (_form.TotalDebit != _form.TotalCredit) { _formError = "Total Debit must equal Total Credit."; return; }
-        _saving = true;
+        if (_form.TotalDebit != _form.TotalCredit) { _formError = "Total Debit must equal Total Credit."; ShowToast(_formError, "warning"); return; }
+        _busy = true; _formError = null;
         try
         {
-            if (_editingId == Guid.Empty)
-                await Api.CreateJournalEntryAsync(new CreateJournalEntryRequest { TenantId = _tenantId, EntryNumber = _form.EntryNumber, EntryDate = DateOnly.FromDateTime(_form.EntryDate), Description = _form.Description, TotalDebit = _form.TotalDebit, TotalCredit = _form.TotalCredit, StatusCode = _form.StatusCode });
-            else
-                await Api.UpdateJournalEntryAsync(_editingId, new UpdateJournalEntryRequest { TenantId = _tenantId, JournalEntryId = _editingId, EntryNumber = _form.EntryNumber, EntryDate = DateOnly.FromDateTime(_form.EntryDate), Description = _form.Description, TotalDebit = _form.TotalDebit, TotalCredit = _form.TotalCredit, StatusCode = _form.StatusCode });
-            _showForm = false;
-            await LoadAsync();
+            if (_editingId == Guid.Empty) { await Api.CreateJournalEntryAsync(new CreateJournalEntryRequest { TenantId = _tenantId, EntryNumber = _form.EntryNumber, EntryDate = DateOnly.FromDateTime(_form.EntryDate), Description = _form.Description, TotalDebit = _form.TotalDebit, TotalCredit = _form.TotalCredit, StatusCode = _form.StatusCode, CreatedByUserId = _tenantAdminUserId }); ShowToast("Journal entry created.", "success"); }
+            else { await Api.UpdateJournalEntryAsync(_editingId, new UpdateJournalEntryRequest { TenantId = _tenantId, JournalEntryId = _editingId, EntryNumber = _form.EntryNumber, EntryDate = DateOnly.FromDateTime(_form.EntryDate), Description = _form.Description, TotalDebit = _form.TotalDebit, TotalCredit = _form.TotalCredit, StatusCode = _form.StatusCode, ModifiedByUserId = _tenantAdminUserId }); ShowToast("Journal entry updated.", "success"); }
+            _showForm = false; await LoadAsync();
         }
-        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; }
-        finally { _saving = false; }
+        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast(_formError, "danger"); }
+        finally { _busy = false; }
     }
-
+    private void ConfirmStatusUpdate(JournalEntryDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+    private async Task ExecuteStatusUpdateAsync()
+    {
+        if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return;
+        _busy = true;
+        try { await Api.UpdateJournalEntryAsync(_statusTarget.JournalEntryId, new UpdateJournalEntryRequest { TenantId = _tenantId, JournalEntryId = _statusTarget.JournalEntryId, EntryNumber = _statusTarget.EntryNumber, EntryDate = _statusTarget.EntryDate, Description = _statusTarget.Description, TotalDebit = _statusTarget.TotalDebit, TotalCredit = _statusTarget.TotalCredit, StatusCode = _pendingStatus, ModifiedByUserId = _tenantAdminUserId }); ShowToast($"Journal entry marked {_pendingStatus.ToLowerInvariant()}.", "success"); _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; await LoadAsync(); }
+        catch (Exception ex) { ShowToast($"Update failed: {ex.Message}", "danger"); }
+        finally { _busy = false; }
+    }
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving the journal entry.", "warning"); return Task.CompletedTask; }
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any()) { ShowToast("No journal entries are available to export.", "warning"); return; }
+        var csv = new StringBuilder(); csv.AppendLine("EntryNumber,EntryDate,Description,Debit,Credit,Variance,Status,JournalEntryId");
+        foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.EntryNumber), Csv(item.EntryDate.ToString("yyyy-MM-dd")), Csv(item.Description), item.TotalDebit.ToString("0.00"), item.TotalCredit.ToString("0.00"), Math.Abs(item.TotalDebit - item.TotalCredit).ToString("0.00"), Csv(item.StatusCode), Csv(item.JournalEntryId.ToString())));
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString()); await Js.InvokeVoidAsync("amsShell.downloadBase64", $"journalentries-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes)); ShowToast($"Exported {_filtered.Count:N0} journal entries.", "success");
+    }
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.JournalEntryId == _selected.JournalEntryId) ?? _filtered.FirstOrDefault();
+    private static bool IsBalanced(JournalEntryDto item) => item.TotalDebit == item.TotalCredit;
+    private static string Fmt(decimal value) => value.ToString("C0");
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max] + "…";
+    private static string StatusCss(string status) => $"je-st-{status.ToLowerInvariant()}";
+    private static string StatusIconTone(string status) => status == "Posted" ? "je-di-green" : "je-di-amber";
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter journal entries by {Label}"; }
     private sealed class JournalEntryForm
     {
         [Required, StringLength(50)] public string EntryNumber { get; set; } = string.Empty;
@@ -268,16 +224,5 @@ else
         [Range(0, 100000000)] public decimal TotalDebit { get; set; }
         [Range(0, 100000000)] public decimal TotalCredit { get; set; }
         [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft";
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
 }

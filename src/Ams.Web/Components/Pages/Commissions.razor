@@ -1,0 +1,557 @@
+@page "/commissions2"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Commissions
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@inject IJSRuntime Js
+
+<PageTitle>Commissions — AMS Enterprise</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="cm-toast cm-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="cm-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="cm-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="cm-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="cm-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Voided" ? "um-confirm-icon--danger" : null)"><i class="bi @PendingStatusIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="cm-status-title">@PendingStatusTitle</div>
+                <div class="um-confirm-body">Mark commission transaction <strong>@ShortId(_statusTarget.TransactionId)</strong> as <strong>@_pendingStatus</strong>?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Voided" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@PendingStatusAction</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showTxForm)
+{
+    <div class="cm-modal-backdrop" role="presentation" @onclick="CloseTransactionForm">
+        <div class="cm-modal cm-action-modal" role="dialog" aria-modal="true" aria-labelledby="cm-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-cash-coin" aria-hidden="true"></i>
+                <span id="cm-form-title">@(_editingTransactionId == Guid.Empty ? "New Commission Transaction" : "Edit Commission Transaction")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseTransactionForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_txForm" OnValidSubmit="SaveTransactionAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="cm-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Commission workflow</span><p>Capture earned commissions, validate rates, and move transactions through approval and payout.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Payee <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_txForm.PayeeId"><option value="@Guid.Empty">Select payee...</option>@foreach (var payee in _payees) { <option value="@payee.PayeeId">@PayeeLabel(payee)</option> }</InputSelect>
+                            <ValidationMessage For="() => _txForm.PayeeId" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Plan <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_txForm.CommissionPlanId"><option value="@Guid.Empty">Select plan...</option>@foreach (var plan in _plans) { <option value="@plan.CommissionPlanId">@plan.PlanName</option> }</InputSelect>
+                            <ValidationMessage For="() => _txForm.CommissionPlanId" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Source <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_txForm.SourceEntityName" />
+                            <ValidationMessage For="() => _txForm.SourceEntityName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Transaction Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_txForm.TransactionDate" />
+                            <ValidationMessage For="() => _txForm.TransactionDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Gross Amount <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_txForm.GrossAmount" />
+                            <ValidationMessage For="() => _txForm.GrossAmount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Rate % <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_txForm.CommissionRate" />
+                            <ValidationMessage For="() => _txForm.CommissionRate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Commission Amount <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_txForm.CommissionAmount" />
+                            <ValidationMessage For="() => _txForm.CommissionAmount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_txForm.StatusCode">@foreach (var status in _transactionStatuses) { <option value="@status">@status</option> }</InputSelect>
+                            <ValidationMessage For="() => _txForm.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full cm-balance-preview"><span>Calculated amount</span><strong>@FormatMoney(CalculatedCommission)</strong><small>@_txForm.CommissionRate.ToString("N2")% of @FormatMoney(_txForm.GrossAmount)</small></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseTransactionForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingTransactionId == Guid.Empty ? "Create Transaction" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showPayoutForm)
+{
+    <div class="cm-modal-backdrop" role="presentation" @onclick="ClosePayoutForm">
+        <div class="cm-modal cm-action-modal" role="dialog" aria-modal="true" aria-labelledby="cm-payout-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-wallet2" aria-hidden="true"></i>
+                <span id="cm-payout-title">@(_editingPayoutId == Guid.Empty ? "New Commission Payout" : "Edit Commission Payout")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="ClosePayoutForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_payoutForm" OnValidSubmit="SavePayoutAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="cm-modal-intro"><span><i class="bi bi-bank" aria-hidden="true"></i> Payout workflow</span><p>Create payout batches from approved commissions and track processing status.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Payee <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_payoutForm.PayeeId"><option value="@Guid.Empty">Select payee...</option>@foreach (var payee in _payees) { <option value="@payee.PayeeId">@PayeeLabel(payee)</option> }</InputSelect>
+                            <ValidationMessage For="() => _payoutForm.PayeeId" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Payout Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_payoutForm.PayoutDate" />
+                            <ValidationMessage For="() => _payoutForm.PayoutDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Total Amount <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_payoutForm.TotalAmount" />
+                            <ValidationMessage For="() => _payoutForm.TotalAmount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_payoutForm.StatusCode">@foreach (var status in _payoutStatuses) { <option value="@status">@status</option> }</InputSelect>
+                            <ValidationMessage For="() => _payoutForm.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea class="form-control" @bind-Value="_payoutForm.Notes" rows="3" />
+                            <ValidationMessage For="() => _payoutForm.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="ClosePayoutForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingPayoutId == Guid.Empty ? "Create Payout" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="cm-enterprise-page">
+    <section class="cm-header">
+        <div class="cm-header-left">
+            <div class="cm-lob-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
+            <div class="cm-header-info">
+                <div class="cm-title-row"><h1 class="cm-page-title">Commissions</h1><span class="cm-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live commission data</span><span class="cm-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                <div class="cm-sub-row"><span>Manage payees, earned commission transactions, approvals, and payout execution.</span><span class="cm-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="cm-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div>
+            </div>
+        </div>
+        <div class="cm-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/plans")'><i class="bi bi-diagram-3" aria-hidden="true"></i> Plans</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat cm-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreateTransaction"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Transaction</button>
+        </div>
+    </section>
+
+    <section class="cm-kpi-strip" aria-label="Commission metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="cm-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "cm-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="cm-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="cm-kpi-copy"><span class="cm-kpi-label">@kpi.Label</span><span class="cm-kpi-value">@kpi.Value</span><span class="cm-kpi-caption">@kpi.Caption</span></span>
+            </button>
+        }
+    </section>
+
+    <section class="cm-workflow-strip" aria-label="Commission workflow shortcuts">
+        <button type="button" class="cm-workflow-card cm-wf-capture" @onclick="OpenCreateTransaction"><span class="cm-workflow-icon"><i class="bi bi-plus-circle" aria-hidden="true"></i></span><span class="cm-workflow-content"><strong>1</strong><span>Capture</span><small>Create earned transaction.</small></span></button>
+        <button type="button" class="cm-workflow-card cm-wf-approve" @onclick="ApproveSelected" disabled="@(!CanApproveSelected)"><span class="cm-workflow-icon"><i class="bi bi-check2-circle" aria-hidden="true"></i></span><span class="cm-workflow-content"><strong>2</strong><span>Approve</span><small>Approve pending earnings.</small></span></button>
+        <button type="button" class="cm-workflow-card cm-wf-payout" @onclick="OpenPayoutForSelected" disabled="@(!CanCreatePayoutSelected)"><span class="cm-workflow-icon"><i class="bi bi-wallet2" aria-hidden="true"></i></span><span class="cm-workflow-content"><strong>3</strong><span>Payout</span><small>Create payment run.</small></span></button>
+        <button type="button" class="cm-workflow-card cm-wf-plans" @onclick='() => Nav.NavigateTo("/commissions/plans")'><span class="cm-workflow-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span><span class="cm-workflow-content"><strong>4</strong><span>Plans</span><small>Maintain rates and rules.</small></span></button>
+        <button type="button" class="cm-workflow-card cm-wf-report" @onclick='() => Nav.NavigateTo("/analytics/commissions")'><span class="cm-workflow-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span><span class="cm-workflow-content"><strong>5</strong><span>Report</span><small>Analyze production pay.</small></span></button>
+    </section>
+
+    <section class="cm-enterprise-search" aria-label="Commission filters">
+        <div class="cm-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="cm-search-body"><label for="cm-search">Search commissions</label><input id="cm-search" class="cm-search-input" type="search" placeholder="Search source, payee, plan, status, amount, or date..." @bind="SearchFilter" @bind:event="oninput" /><span class="cm-search-hint">Filters apply instantly across synchronized commission transactions.</span></div>
+        <select class="cm-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _transactionStatuses) { <option value="@status">@status</option> }</select>
+        <select class="cm-filter-select" @bind="PayeeFilter" aria-label="Payee filter"><option value="">All payees</option>@foreach (var payee in _payees) { <option value="@payee.PayeeId.ToString()">@PayeeLabel(payee)</option> }</select>
+        <div class="cm-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger cm-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="cm-content-layout">
+        <div class="cm-grid-wrap">
+            <div class="cm-grid-toolbar"><div><strong>Commission register</strong><span>@ActiveFilterText</span></div><div class="cm-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ApproveSelected" disabled="@(!CanApproveSelected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Approve</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenPayoutForSelected" disabled="@(!CanCreatePayoutSelected)"><i class="bi bi-wallet2" aria-hidden="true"></i> Payout</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreateTransaction"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+            @if (_loading)
+            {
+                <div class="cm-loading"><i class="bi bi-arrow-repeat cm-spin" aria-hidden="true"></i><strong>Loading commissions...</strong><span>Syncing payees, plans, transactions, payouts, and seed data.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="cm-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No commission transactions found</strong><span>Adjust filters or create an earned commission transaction.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreateTransaction">New Transaction</button></div>
+            }
+            else
+            {
+                <div class="cm-table-scroll"><table class="cm-table"><thead><tr><th>Source</th><th>Payee</th><th>Date</th><th class="cm-number">Gross</th><th>Rate</th><th class="cm-number">Commission</th><th>Status</th><th class="cm-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="cm-table-row @(_selected?.TransactionId == item.TransactionId ? "cm-table-row--selected" : null)" @onclick="() => SelectTransaction(item)"><td><div class="cm-entry-cell"><span class="cm-entry-icon @StatusIconTone(item.StatusCode)"><i class="bi bi-cash-coin" aria-hidden="true"></i></span><span><strong>@item.SourceEntityName</strong><span>@PlanLabel(item.CommissionPlanId)</span></span></div></td><td>@PayeeName(item.PayeeId)</td><td>@item.TransactionDate.ToString("MMM d, yyyy")</td><td class="cm-number">@FormatMoney(item.GrossAmount)</td><td>@item.CommissionRate.ToString("N2")%</td><td class="cm-number cm-commission">@FormatMoney(item.CommissionAmount)</td><td><span class="cm-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td><td><div class="cm-row-acts"><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEditTransaction(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Approve" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Approved")' disabled="@(!CanApprove(item))"><i class="bi bi-check2-circle" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Payout" @onclick:stopPropagation="true" @onclick="() => OpenPayoutFor(item)" disabled="@(!CanCreatePayout(item))"><i class="bi bi-wallet2" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Void" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Voided")' disabled="@(IsVoided(item))"><i class="bi bi-x-octagon" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div>
+                <div class="cm-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+            }
+        </div>
+        <aside class="cm-detail-panel" aria-label="Selected commission detail">
+            @if (_selected is null)
+            {
+                <div class="cm-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a commission</strong><span>Choose a row to inspect payee, plan, payout status, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="cm-detail-head"><div><span class="cm-detail-eyebrow"><i class="bi bi-cash-coin" aria-hidden="true"></i> Commission transaction</span><h2>@FormatMoney(_selected.CommissionAmount)</h2><div class="cm-detail-meta"><span>@_selected.TransactionDate.ToString("MMM d, yyyy")</span><span class="cm-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditTransaction(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div>
+                <div class="cm-detail-body"><div class="cm-progress-card"><div><span>Payout readiness</span><strong>@ReadinessLabel(_selected)</strong></div><div class="cm-progress-track"><span style="width:@ReadinessPercent(_selected)%"></span></div></div><div class="cm-detail-summary"><div class="cm-meta-row"><span class="cm-meta-lbl">Payee</span><span class="cm-meta-val">@PayeeName(_selected.PayeeId)</span></div><div class="cm-meta-row"><span class="cm-meta-lbl">Plan</span><span class="cm-meta-val">@PlanLabel(_selected.CommissionPlanId)</span></div><div class="cm-meta-row"><span class="cm-meta-lbl">Gross</span><span class="cm-meta-val">@FormatMoney(_selected.GrossAmount)</span></div><div class="cm-meta-row"><span class="cm-meta-lbl">Payout</span><span class="cm-meta-val">@PayoutLabel(_selected.PayoutId)</span></div></div><div class="cm-note-card"><span><i class="bi bi-diagram-3" aria-hidden="true"></i> Commission context</span><p>@_selected.SourceEntityName with @_selected.CommissionRate.ToString("N2")% rate generated @FormatMoney(_selected.CommissionAmount).</p></div><div class="cm-payout-list"><strong>Recent payouts</strong>@foreach (var payout in _payouts.Take(3)) { <span><i class="bi bi-wallet2" aria-hidden="true"></i> @FormatMoney(payout.TotalAmount) · @payout.StatusCode · @payout.PayoutDate.ToString("MMM d")</span> }</div><div class="cm-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="ApproveSelected" disabled="@(!CanApproveSelected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Approve</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenPayoutForSelected" disabled="@(!CanCreatePayoutSelected)"><i class="bi bi-wallet2" aria-hidden="true"></i> Payout</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Voided")' disabled="@(IsVoided(_selected))"><i class="bi bi-x-octagon" aria-hidden="true"></i> Void</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/plans")'><i class="bi bi-diagram-3" aria-hidden="true"></i> Plans</button></div></div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private const int PageSize = 12;
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private List<CommissionTransactionDto> _items = [];
+    private List<CommissionTransactionDto> _filtered = [];
+    private List<CommissionPayeeDto> _payees = [];
+    private List<CommissionPayoutDto> _payouts = [];
+    private List<CommissionPlanDto> _plans = [];
+    private CommissionTransactionDto? _selected;
+    private CommissionTransactionDto? _statusTarget;
+    private TransactionForm _txForm = new();
+    private PayoutForm _payoutForm = new();
+    private Guid _editingTransactionId = Guid.Empty;
+    private Guid _editingPayoutId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _payeeFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showTxForm;
+    private bool _showPayoutForm;
+    private bool _showStatusConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _transactionStatuses = ["Pending", "Earned", "Approved", "Paid", "Voided"];
+    private readonly List<string> _payoutStatuses = ["Draft", "Approved", "Processed", "Void"];
+
+    private IEnumerable<CommissionTransactionDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private decimal TotalEarned => _items.Where(x => x.StatusCode != "Voided").Sum(x => x.CommissionAmount);
+    private decimal TotalApproved => _items.Where(x => x.StatusCode == "Approved").Sum(x => x.CommissionAmount);
+    private decimal CalculatedCommission => Math.Round(_txForm.GrossAmount * _txForm.CommissionRate / 100m, 2);
+    private bool CanApproveSelected => _selected is not null && CanApprove(_selected);
+    private bool CanCreatePayoutSelected => _selected is not null && CanCreatePayout(_selected);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All commission transactions" : $"Filtered by {_kpiFilter}";
+    private string PendingStatusIcon => _pendingStatus switch { "Approved" => "bi-check2-circle", "Paid" => "bi-wallet2", "Voided" => "bi-x-octagon-fill", _ => "bi-arrow-repeat" };
+    private string PendingStatusTitle => _pendingStatus switch { "Approved" => "Approve Commission", "Paid" => "Mark Commission Paid", "Voided" => "Void Commission", _ => "Update Commission" };
+    private string PendingStatusAction => _pendingStatus switch { "Approved" => "Approve", "Paid" => "Mark Paid", "Voided" => "Void", _ => "Update" };
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Transactions", _items.Count.ToString("N0"), "All commission rows", "bi-cash-coin", "cm-ki-blue"),
+        new("pending", "Pending", _items.Count(x => x.StatusCode == "Pending").ToString("N0"), "Needs review", "bi-clock", "cm-ki-amber"),
+        new("earned", "Earned", FormatMoney(TotalEarned), "Non-void earned", "bi-graph-up-arrow", "cm-ki-green"),
+        new("approved", "Approved", FormatMoney(TotalApproved), "Ready for payout", "bi-check2-circle", "cm-ki-cyan"),
+        new("paid", "Paid", _items.Count(x => x.StatusCode == "Paid").ToString("N0"), "Paid transactions", "bi-wallet2", "cm-ki-purple"),
+        new("payees", "Payees", _payees.Count.ToString("N0"), "Active participants", "bi-people", "cm-ki-blue")
+    ];
+
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string PayeeFilter { get => _payeeFilter; set { _payeeFilter = value; ApplyFilters(resetPage: true); } }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Commissions", "/commissions"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var plans = await Api.SearchCommissionPlansAsync(_tenantId, string.Empty);
+            _plans = plans?.Items.OrderBy(x => x.PlanName).ToList() ?? [];
+            var payees = await Api.SearchCommissionPayeesAsync(_tenantId, string.Empty);
+            _payees = payees?.Items.OrderBy(x => x.PayeeTypeCode).ToList() ?? [];
+            var transactions = await Api.SearchCommissionTransactionsAsync(_tenantId, string.Empty);
+            _items = transactions?.Items.OrderByDescending(x => x.TransactionDate).ToList() ?? [];
+            var payouts = await Api.SearchCommissionPayoutsAsync(_tenantId, string.Empty);
+            _payouts = payouts?.Items.OrderByDescending(x => x.PayoutDate).ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Commissions failed to load: {ex.Message}";
+            ShowToast(_loadError, "danger");
+            _items = [];
+            _filtered = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<CommissionTransactionDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(x.SourceEntityName, term) || Contains(x.StatusCode, term) || Contains(PayeeName(x.PayeeId), term) || Contains(PlanLabel(x.CommissionPlanId), term) || Contains(x.TransactionDate.ToString("yyyy-MM-dd"), term) || x.CommissionAmount.ToString("N2").Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_payeeFilter) && Guid.TryParse(_payeeFilter, out var payeeId)) query = query.Where(x => x.PayeeId == payeeId);
+        query = _kpiFilter switch
+        {
+            "pending" => query.Where(x => x.StatusCode == "Pending"),
+            "earned" => query.Where(x => x.StatusCode != "Voided"),
+            "approved" => query.Where(x => x.StatusCode == "Approved"),
+            "paid" => query.Where(x => x.StatusCode == "Paid"),
+            "payees" => query,
+            _ => query
+        };
+
+        _filtered = query.OrderBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.TransactionDate).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter) { _kpiFilter = filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _statusFilter = string.Empty; _payeeFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Commission filters reset.", "info"); }
+    private void SelectTransaction(CommissionTransactionDto item) => _selected = item;
+
+    private void OpenCreateTransaction()
+    {
+        _editingTransactionId = Guid.Empty;
+        _formError = null;
+        var payee = _payees.FirstOrDefault();
+        var planId = payee?.CommissionPlanId ?? _plans.FirstOrDefault()?.CommissionPlanId ?? Guid.Empty;
+        _txForm = new TransactionForm { PayeeId = payee?.PayeeId ?? Guid.Empty, CommissionPlanId = planId, TransactionDate = DateTime.Today, SourceEntityName = $"Policy POL-{DateTime.UtcNow:yyyyMMdd}", SourceEntityId = Guid.NewGuid(), GrossAmount = 25000, CommissionRate = 10, CommissionAmount = 2500, StatusCode = "Pending" };
+        _showTxForm = true;
+    }
+
+    private void OpenEditTransaction(CommissionTransactionDto item)
+    {
+        _editingTransactionId = item.TransactionId;
+        _formError = null;
+        _txForm = new TransactionForm { PayeeId = item.PayeeId, CommissionPlanId = item.CommissionPlanId, SourceEntityName = item.SourceEntityName, SourceEntityId = item.SourceEntityId, TransactionDate = item.TransactionDate.ToDateTime(TimeOnly.MinValue), GrossAmount = item.GrossAmount, CommissionRate = item.CommissionRate, CommissionAmount = item.CommissionAmount, StatusCode = item.StatusCode, PayoutId = item.PayoutId };
+        _showTxForm = true;
+    }
+
+    private void CloseTransactionForm() { if (_busy) return; _showTxForm = false; }
+
+    private async Task SaveTransactionAsync()
+    {
+        if (_txForm.PayeeId == Guid.Empty || _txForm.CommissionPlanId == Guid.Empty) { _formError = "Payee and Commission Plan are required."; ShowToast(_formError, "warning"); return; }
+        _busy = true;
+        _formError = null;
+        try
+        {
+            var amount = _txForm.CommissionAmount > 0 ? _txForm.CommissionAmount : CalculatedCommission;
+            if (_editingTransactionId == Guid.Empty)
+            {
+                await Api.CreateCommissionTransactionAsync(new CreateCommissionTransactionRequest { TenantId = _tenantId, PayeeId = _txForm.PayeeId, CommissionPlanId = _txForm.CommissionPlanId, SourceEntityName = _txForm.SourceEntityName, SourceEntityId = _txForm.SourceEntityId, TransactionDate = DateOnly.FromDateTime(_txForm.TransactionDate), GrossAmount = _txForm.GrossAmount, CommissionRate = _txForm.CommissionRate, CommissionAmount = amount, StatusCode = _txForm.StatusCode, PayoutId = _txForm.PayoutId, CreatedByUserId = _tenantAdminUserId });
+                ShowToast("Commission transaction created.", "success");
+            }
+            else
+            {
+                await Api.UpdateCommissionTransactionAsync(_editingTransactionId, new UpdateCommissionTransactionRequest { TenantId = _tenantId, TransactionId = _editingTransactionId, PayeeId = _txForm.PayeeId, CommissionPlanId = _txForm.CommissionPlanId, SourceEntityName = _txForm.SourceEntityName, SourceEntityId = _txForm.SourceEntityId, TransactionDate = DateOnly.FromDateTime(_txForm.TransactionDate), GrossAmount = _txForm.GrossAmount, CommissionRate = _txForm.CommissionRate, CommissionAmount = amount, StatusCode = _txForm.StatusCode, PayoutId = _txForm.PayoutId, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast("Commission transaction updated.", "success");
+            }
+
+            _showTxForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OpenPayoutForSelected() { if (_selected is not null) OpenPayoutFor(_selected); }
+    private void OpenPayoutFor(CommissionTransactionDto item)
+    {
+        if (!CanCreatePayout(item)) return;
+        _editingPayoutId = Guid.Empty;
+        _formError = null;
+        _payoutForm = new PayoutForm { PayeeId = item.PayeeId, PayoutDate = DateTime.Today, TotalAmount = item.CommissionAmount, StatusCode = "Draft", Notes = $"Payout for {item.SourceEntityName}" };
+        _showPayoutForm = true;
+    }
+
+    private void ClosePayoutForm() { if (_busy) return; _showPayoutForm = false; }
+
+    private async Task SavePayoutAsync()
+    {
+        if (_payoutForm.PayeeId == Guid.Empty) { _formError = "Payee is required."; ShowToast(_formError, "warning"); return; }
+        _busy = true;
+        _formError = null;
+        try
+        {
+            if (_editingPayoutId == Guid.Empty)
+            {
+                await Api.CreateCommissionPayoutAsync(new CreateCommissionPayoutRequest { TenantId = _tenantId, PayeeId = _payoutForm.PayeeId, PayoutDate = DateOnly.FromDateTime(_payoutForm.PayoutDate), TotalAmount = _payoutForm.TotalAmount, StatusCode = _payoutForm.StatusCode, ProcessedDateUtc = _payoutForm.StatusCode == "Processed" ? DateTime.UtcNow : null, Notes = _payoutForm.Notes, CreatedByUserId = _tenantAdminUserId });
+                if (_selected is not null) await MarkTransactionPaidAsync(_selected);
+                ShowToast("Commission payout created.", "success");
+            }
+            else
+            {
+                await Api.UpdateCommissionPayoutAsync(_editingPayoutId, new UpdateCommissionPayoutRequest { TenantId = _tenantId, PayoutId = _editingPayoutId, PayeeId = _payoutForm.PayeeId, PayoutDate = DateOnly.FromDateTime(_payoutForm.PayoutDate), TotalAmount = _payoutForm.TotalAmount, StatusCode = _payoutForm.StatusCode, ProcessedDateUtc = _payoutForm.StatusCode == "Processed" ? DateTime.UtcNow : null, Notes = _payoutForm.Notes, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast("Commission payout updated.", "success");
+            }
+
+            _showPayoutForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Payout failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ApproveSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Approved"); }
+    private void ConfirmStatusUpdate(CommissionTransactionDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+
+    private async Task ExecuteStatusUpdateAsync()
+    {
+        if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return;
+        _busy = true;
+        try
+        {
+            await Api.UpdateCommissionTransactionAsync(_statusTarget.TransactionId, new UpdateCommissionTransactionRequest { TenantId = _tenantId, TransactionId = _statusTarget.TransactionId, PayeeId = _statusTarget.PayeeId, CommissionPlanId = _statusTarget.CommissionPlanId, SourceEntityName = _statusTarget.SourceEntityName, SourceEntityId = _statusTarget.SourceEntityId, TransactionDate = _statusTarget.TransactionDate, GrossAmount = _statusTarget.GrossAmount, CommissionRate = _statusTarget.CommissionRate, CommissionAmount = _statusTarget.CommissionAmount, StatusCode = _pendingStatus, PayoutId = _statusTarget.PayoutId, ModifiedByUserId = _tenantAdminUserId });
+            ShowToast($"Commission transaction marked {_pendingStatus.ToLowerInvariant()}.", "success");
+            _showStatusConfirm = false;
+            _statusTarget = null;
+            _pendingStatus = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task MarkTransactionPaidAsync(CommissionTransactionDto item)
+        => Api.UpdateCommissionTransactionAsync(item.TransactionId, new UpdateCommissionTransactionRequest { TenantId = _tenantId, TransactionId = item.TransactionId, PayeeId = item.PayeeId, CommissionPlanId = item.CommissionPlanId, SourceEntityName = item.SourceEntityName, SourceEntityId = item.SourceEntityId, TransactionDate = item.TransactionDate, GrossAmount = item.GrossAmount, CommissionRate = item.CommissionRate, CommissionAmount = item.CommissionAmount, StatusCode = "Paid", PayoutId = item.PayoutId, ModifiedByUserId = _tenantAdminUserId });
+
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving.", "warning"); return Task.CompletedTask; }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any()) { ShowToast("No commission transactions are available to export.", "warning"); return; }
+        var csv = new StringBuilder();
+        csv.AppendLine("TransactionId,Source,Payee,Plan,TransactionDate,GrossAmount,CommissionRate,CommissionAmount,Status,PayoutId");
+        foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.TransactionId.ToString()), Csv(item.SourceEntityName), Csv(PayeeName(item.PayeeId)), Csv(PlanLabel(item.CommissionPlanId)), Csv(item.TransactionDate.ToString("yyyy-MM-dd")), item.GrossAmount, item.CommissionRate, item.CommissionAmount, Csv(item.StatusCode), Csv(item.PayoutId?.ToString() ?? string.Empty)));
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"commissions-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} commission transactions.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.TransactionId == _selected.TransactionId) ?? _filtered.FirstOrDefault();
+    private string PayeeName(Guid payeeId) { var payee = _payees.FirstOrDefault(x => x.PayeeId == payeeId); return payee is null ? ShortId(payeeId) : PayeeLabel(payee); }
+    private string PayeeLabel(CommissionPayeeDto payee) => $"{payee.PayeeTypeCode} · {payee.SplitPercentage:N2}%";
+    private string PlanLabel(Guid planId) { var plan = _plans.FirstOrDefault(x => x.CommissionPlanId == planId); return plan?.PlanName ?? ShortId(planId); }
+    private string PayoutLabel(Guid? payoutId) => payoutId is null || payoutId == Guid.Empty ? "Not paid" : ShortId(payoutId.Value);
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static int StatusSort(string status) => status switch { "Pending" => 0, "Earned" => 1, "Approved" => 2, "Paid" => 3, "Voided" => 4, _ => 5 };
+    private static bool CanApprove(CommissionTransactionDto item) => item.StatusCode is "Pending" or "Earned";
+    private static bool CanCreatePayout(CommissionTransactionDto item) => item.StatusCode == "Approved" && item.CommissionAmount > 0;
+    private static bool IsVoided(CommissionTransactionDto item) => item.StatusCode == "Voided";
+    private static int ReadinessPercent(CommissionTransactionDto item) => item.StatusCode switch { "Paid" => 100, "Approved" => 75, "Earned" => 50, "Pending" => 25, _ => 0 };
+    private static string ReadinessLabel(CommissionTransactionDto item) => item.StatusCode switch { "Paid" => "Paid", "Approved" => "Ready", "Earned" => "Review", "Pending" => "Pending", _ => "Blocked" };
+    private static string StatusCss(string status) => $"cm-st-{status.ToLowerInvariant()}";
+    private static string StatusIconTone(string status) => status switch { "Paid" => "cm-di-green", "Approved" => "cm-di-cyan", "Voided" => "cm-di-red", "Earned" => "cm-di-purple", _ => "cm-di-blue" };
+    private static string FormatMoney(decimal value) => value.ToString("C0");
+    private static string ShortId(Guid value) => value.ToString("N")[..8];
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter commissions by {Label}"; }
+
+    private sealed class TransactionForm
+    {
+        [RequiredGuid(ErrorMessage = "Payee is required.")] public Guid PayeeId { get; set; }
+        [RequiredGuid(ErrorMessage = "Commission Plan is required.")] public Guid CommissionPlanId { get; set; }
+        [Required, StringLength(100)] public string SourceEntityName { get; set; } = string.Empty;
+        [Required] public Guid SourceEntityId { get; set; } = Guid.NewGuid();
+        [Required] public DateTime TransactionDate { get; set; } = DateTime.Today;
+        [Range(0.01, 100000000)] public decimal GrossAmount { get; set; } = 25000;
+        [Range(0, 100)] public decimal CommissionRate { get; set; } = 10;
+        [Range(0, 100000000)] public decimal CommissionAmount { get; set; } = 2500;
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending";
+        public Guid? PayoutId { get; set; }
+    }
+
+    private sealed class PayoutForm
+    {
+        [RequiredGuid(ErrorMessage = "Payee is required.")] public Guid PayeeId { get; set; }
+        [Required] public DateTime PayoutDate { get; set; } = DateTime.Today;
+        [Range(0.01, 100000000)] public decimal TotalAmount { get; set; }
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft";
+        [StringLength(1000)] public string? Notes { get; set; }
+    }
+}

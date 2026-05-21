@@ -602,5 +602,83 @@ IF NOT EXISTS (SELECT 1 FROM Billing.Payment WHERE TenantId = @TenantId AND Refe
          'USD', 22500.00, 22500.00, 'PAY-2024-002', 2, 0, DATEADD(DAY, -15, @Now));
 
 -- =============================================================================
+-- DOCUMENT WORKFLOW TEMPLATES
+-- =============================================================================
+DECLARE @WfTemplate1 UNIQUEIDENTIFIER = '40000000-0000-0000-0000-000000000001';
+DECLARE @WfTemplate2 UNIQUEIDENTIFIER = '40000000-0000-0000-0000-000000000002';
+DECLARE @WfTemplate3 UNIQUEIDENTIFIER = '40000000-0000-0000-0000-000000000003';
+
+IF NOT EXISTS (SELECT 1 FROM DMS.DocumentWorkflowTemplate WHERE WorkflowTemplateId = @WfTemplate1)
+    INSERT INTO DMS.DocumentWorkflowTemplate 
+        (WorkflowTemplateId, TenantId, TemplateName, TemplateCode, Description, WorkflowType, 
+         IsSequential, RequiresAllApprovals, AutoArchiveOnComplete, NotifyOnStart, NotifyOnComplete,
+         TriggerOnUpload, TriggerOnCategory, TriggerOnDocType, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES 
+        (@WfTemplate1, @TenantId, 'Contract Review Approval', 'CONTRACT-REVIEW', 
+         'Multi-stage approval workflow for all client contracts requiring legal and management review.', 
+         'Approval', 1, 1, 0, 1, 1, 0, 'Contract', NULL, 1, 1, @Now, 0);
+
+IF NOT EXISTS (SELECT 1 FROM DMS.DocumentWorkflowTemplate WHERE WorkflowTemplateId = @WfTemplate2)
+    INSERT INTO DMS.DocumentWorkflowTemplate 
+        (WorkflowTemplateId, TenantId, TemplateName, TemplateCode, Description, WorkflowType, 
+         IsSequential, RequiresAllApprovals, AutoArchiveOnComplete, NotifyOnStart, NotifyOnComplete,
+         TriggerOnUpload, TriggerOnCategory, TriggerOnDocType, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES 
+        (@WfTemplate2, @TenantId, 'Compliance Document Approval', 'COMPLIANCE-APPROVAL', 
+         'Regulatory compliance workflow for E&O policies, audit reports, and carrier appointments.', 
+         'Approval', 1, 1, 1, 1, 1, 0, 'Compliance', NULL, 1, 2, @Now, 0);
+
+IF NOT EXISTS (SELECT 1 FROM DMS.DocumentWorkflowTemplate WHERE WorkflowTemplateId = @WfTemplate3)
+    INSERT INTO DMS.DocumentWorkflowTemplate 
+        (WorkflowTemplateId, TenantId, TemplateName, TemplateCode, Description, WorkflowType, 
+         IsSequential, RequiresAllApprovals, AutoArchiveOnComplete, NotifyOnStart, NotifyOnComplete,
+         TriggerOnUpload, TriggerOnCategory, TriggerOnDocType, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES 
+        (@WfTemplate3, @TenantId, 'Policy Document Review', 'POLICY-REVIEW', 
+         'Quality assurance review for policy documents, endorsements, and certificates.', 
+         'Review', 0, 0, 0, 1, 1, 1, 'Policy', NULL, 1, 3, @Now, 0);
+
+-- =============================================================================
+-- DOCUMENT RETENTION POLICIES
+-- =============================================================================
+DECLARE @RetPolicy1 UNIQUEIDENTIFIER = '50000000-0000-0000-0000-000000000001';
+DECLARE @RetPolicy2 UNIQUEIDENTIFIER = '50000000-0000-0000-0000-000000000002';
+DECLARE @RetPolicy3 UNIQUEIDENTIFIER = '50000000-0000-0000-0000-000000000003';
+
+IF NOT EXISTS (SELECT 1 FROM DMS.DocumentRetentionPolicy WHERE RetentionPolicyId = @RetPolicy1)
+    INSERT INTO DMS.DocumentRetentionPolicy
+        (RetentionPolicyId, TenantId, PolicyName, PolicyCode, Description, ApplicableCategory, 
+         RetentionPeriodYears, RetentionStartTrigger, ActionOnExpiry, RequireApprovalToDelete,
+         NotifyBeforeDays, NotifyRoleCode, RegulatoryBasis, IsActive, EffectiveDate, CreatedDateUtc, IsDeleted)
+    VALUES
+        (@RetPolicy1, @TenantId, 'Policy Documents - 7 Years', 'POLICY-7YR',
+         'Standard retention for policy documents, certificates, and endorsements per state regulations.',
+         'Policy', 7, 'PolicyExpiry', 'Archive', 1, 30, 'Admin',
+         'Most states require 7-year retention for policy records (varies by state).', 1, '2024-01-01', @Now, 0);
+
+IF NOT EXISTS (SELECT 1 FROM DMS.DocumentRetentionPolicy WHERE RetentionPolicyId = @RetPolicy2)
+    INSERT INTO DMS.DocumentRetentionPolicy
+        (RetentionPolicyId, TenantId, PolicyName, PolicyCode, Description, ApplicableCategory, 
+         RetentionPeriodYears, RetentionStartTrigger, ActionOnExpiry, RequireApprovalToDelete,
+         NotifyBeforeDays, NotifyRoleCode, RegulatoryBasis, IsActive, EffectiveDate, CreatedDateUtc, IsDeleted)
+    VALUES
+        (@RetPolicy2, @TenantId, 'Claims Files - 10 Years', 'CLAIM-10YR',
+         'Extended retention for claims documentation per carrier agreements and state law.',
+         'Claim', 10, 'ClaimClosure', 'Archive', 1, 60, 'Admin',
+         'Claims files must be retained 10 years from closure date per insurance department regulations.', 1, '2024-01-01', @Now, 0);
+
+IF NOT EXISTS (SELECT 1 FROM DMS.DocumentRetentionPolicy WHERE RetentionPolicyId = @RetPolicy3)
+    INSERT INTO DMS.DocumentRetentionPolicy
+        (RetentionPolicyId, TenantId, PolicyName, PolicyCode, Description, ApplicableCategory, 
+         RetentionPeriodYears, RetentionStartTrigger, ActionOnExpiry, RequireApprovalToDelete,
+         NotifyBeforeDays, NotifyRoleCode, RegulatoryBasis, IsActive, EffectiveDate, CreatedDateUtc, IsDeleted)
+    VALUES
+        (@RetPolicy3, @TenantId, 'Compliance & Audit - Permanent', 'COMPLIANCE-PERM',
+         'Permanent retention for E&O policies, carrier appointments, and regulatory audit documents.',
+         'Compliance', 99, 'Creation', 'Review', 1, 90, 'Admin',
+         'Agency compliance documents must be retained permanently for regulatory audit purposes.', 1, '2024-01-01', @Now, 0);
+
+-- =============================================================================
 PRINT 'Seed data applied successfully.';
 GO
+

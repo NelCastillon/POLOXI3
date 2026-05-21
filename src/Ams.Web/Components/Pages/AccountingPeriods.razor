@@ -1,244 +1,233 @@
 @page "/finance/accounting-periods"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Finance
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@inject IJSRuntime Js
 
-<PageTitle>Accounting Periods</PageTitle>
+<PageTitle>Accounting Periods â€” AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Accounting Periods"
-               Subtitle="Fiscal periods and period-end processing"
-               Icon="bi-calendar3">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "fa-spin" : "")" aria-hidden="true"></i> Refresh
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Period
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- -- Search & Filter ---------------------------------------------------- -->
-<div class="fin-toolbar">
-    <div class="fin-search-box">
-        <i class="bi bi-search fin-search-icon" aria-hidden="true"></i>
-        <input class="e-input fin-search-input"
-               placeholder="Search periods…"
-               @bind="_searchTerm"
-               @bind:event="oninput"
-               @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" />
-    </div>
-    <div class="fin-filter-buttons">
-        <button class="um-btn um-btn-ghost um-btn-sm @(_filterActive ? "um-btn-active" : "")"
-                @onclick="() => _filterActive = !_filterActive">
-            <i class="bi bi-funnel" aria-hidden="true"></i> Filter
-        </button>
-    </div>
-</div>
-
-@if (_filterActive)
+@if (_toastVisible)
 {
-    <div class="fin-filter-panel">
-        <div class="fin-filter-group">
-            <label class="fin-filter-label">Fiscal Year</label>
-            <select class="e-input" @bind="_filterYear">
-                <option value="">All Years</option>
-                <option value="2024">2024</option>
-                <option value="2025">2025</option>
-                <option value="2026">2026</option>
-            </select>
-        </div>
-        <div class="fin-filter-group">
-            <label class="fin-filter-label">Status</label>
-            <select class="e-input" @bind="_filterStatus">
-                <option value="">All</option>
-                <option value="Open">Open</option>
-                <option value="Closed">Closed</option>
-            </select>
-        </div>
+    <div class="acp-toast acp-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="acp-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<!-- -- KPI Cards -------------------------------------------------------- -->
-@if (_stats is not null)
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
 {
-    <div class="fin-kpi-strip">
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #dbeafe; color: #1d4ed8;"><i class="bi bi-calendar-fill" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.TotalPeriods</div>
-                <div class="fin-kpi-label">Total Periods</div>
-            </div>
-        </div>
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #d1fae5; color: #047857;"><i class="bi bi-unlock-fill" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.OpenPeriods</div>
-                <div class="fin-kpi-label">Open Periods</div>
-            </div>
-        </div>
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #ede9fe; color: #6d28d9;"><i class="bi bi-lock-fill" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.ClosedPeriods</div>
-                <div class="fin-kpi-label">Closed Periods</div>
+    <div class="acp-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="acp-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="acp-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Closed" ? "um-confirm-icon--danger" : null)"><i class="bi @(_pendingStatus == "Closed" ? "bi-lock" : "bi-unlock")"></i></div>
+                <div class="um-confirm-title" id="acp-status-title">@(_pendingStatus == "Closed" ? "Close Accounting Period" : "Reopen Accounting Period")</div>
+                <div class="um-confirm-body">@(_pendingStatus == "Closed" ? "Close" : "Reopen") <strong>@_statusTarget.PeriodName</strong> for fiscal processing?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Closed" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@(_pendingStatus == "Closed" ? "Close Period" : "Reopen Period")</button>
+                </div>
             </div>
         </div>
     </div>
 }
 
-<!-- -- Content -------------------------------------------------------- -->
-@if (_error is not null)
+@if (_showForm)
 {
-    <div class="fin-alert fin-alert-warning">
-        <div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></div>
-        <div class="fin-alert-body">
-            <div class="fin-alert-title">?? Database Schema Issue</div>
-            <p>Finance schema initialization required. Run: <strong>sql/01_Finance_Schema.sql</strong></p>
-        </div>
-    </div>
-}
-else if (_loading)
-{
-    <div class="fin-loading">
-        <div class="um-spinner" aria-hidden="true"></div>
-        <span>Loading Accounting Periods…</span>
-    </div>
-}
-else if (_items?.Count == 0)
-{
-    <div class="fin-empty-state">
-        <i class="bi bi-inbox fin-empty-icon" aria-hidden="true"></i>
-        <h3>No Periods Found</h3>
-        <p>@(_searchTerm != null ? $"No periods match \"{_searchTerm}\"." : "No accounting periods have been created yet.")</p>
-    </div>
-}
-else
-{
-    <div class="fin-grid-container">
-        <SfGrid TValue="AccountingPeriodDto" DataSource="_items" AllowPaging="true" AllowSorting="true" Height="600px">
-            <GridEvents TValue="AccountingPeriodDto" RowSelected="OnRowSelected" />
-            <GridPageSettings PageSize="12"></GridPageSettings>
-            <GridColumns>
-                <GridColumn Field="@nameof(AccountingPeriodDto.PeriodCode)" HeaderText="Code" Width="100" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(AccountingPeriodDto.PeriodName)" HeaderText="Period" Width="150" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(AccountingPeriodDto.StartDate)" HeaderText="Start Date" Type="ColumnType.Date" Format="d" Width="120" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(AccountingPeriodDto.EndDate)" HeaderText="End Date" Type="ColumnType.Date" Format="d" Width="120" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(AccountingPeriodDto.StatusCode)" HeaderText="Status" Width="100" AllowSorting="true">
-                    <Template>
-                        @{
-                            var period = context as AccountingPeriodDto;
-                            var badgeClass = period?.StatusCode switch
-                            {
-                                "Closed" => "fin-badge-secondary",
-                                "Open" => "fin-badge-success",
-                                _ => "fin-badge-warning"
-                            };
+    <div class="acp-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="acp-modal acp-action-modal" role="dialog" aria-modal="true" aria-labelledby="acp-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-calendar-range" aria-hidden="true"></i>
+                <span id="acp-form-title">@(_editingId == Guid.Empty ? "New Accounting Period" : "Edit Accounting Period")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="acp-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Fiscal period workflow</span><p>Define accounting periods, validate date boundaries, and control close/reopen status.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Period Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.PeriodCode" class="form-control" /><ValidationMessage For="() => _form.PeriodCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Period Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.PeriodName" class="form-control" /><ValidationMessage For="() => _form.PeriodName" class="text-danger" /></div>
+                        <div class="um-field"><label>Start Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.StartDate" class="form-control" /><ValidationMessage For="() => _form.StartDate" class="text-danger" /></div>
+                        <div class="um-field"><label>End Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.EndDate" class="form-control" /><ValidationMessage For="() => _form.EndDate" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="form-select">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Duration</label><input class="form-control" value="@FormDurationLabel" disabled /></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
                         }
-                        <span class="fin-badge @badgeClass">@period?.StatusCode</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="Actions" Width="90">
-                    <Template>
-                        @{ var period = (AccountingPeriodDto)context; }
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(period)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Period" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
     </div>
 }
 
-<SfDialog @bind-Visible="_showForm" Width="640px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates><Content>
-        <div class="um-modal-header"><i class="bi bi-calendar-range" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Accounting Period" : "Edit Accounting Period")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-        <EditForm EditContext="_editContext"><DataAnnotationsValidator />
-            <div class="um-modal-body"><div class="um-form-grid">
-                <div class="um-field"><label>Period Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.PeriodCode" class="um-input" /><ValidationMessage For="() => _form.PeriodCode" class="text-danger" /></div>
-                <div class="um-field"><label>Period Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.PeriodName" class="um-input" /><ValidationMessage For="() => _form.PeriodName" class="text-danger" /></div>
-                <div class="um-field"><label>Start Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.StartDate" class="um-input" /><ValidationMessage For="() => _form.StartDate" class="text-danger" /></div>
-                <div class="um-field"><label>End Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.EndDate" class="um-input" /><ValidationMessage For="() => _form.EndDate" class="text-danger" /></div>
-                <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option value="Open">Open</option><option value="Closed">Closed</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
-                @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-            </div></div>
-        </EditForm>
-        <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Period")</button></div>
-    </Content></DialogTemplates>
-</SfDialog>
+<div class="acp-enterprise-page">
+    <section class="acp-header">
+        <div class="acp-header-left">
+            <div class="acp-lob-icon"><i class="bi bi-calendar3" aria-hidden="true"></i></div>
+            <div class="acp-header-info">
+                <div class="acp-title-row"><h1 class="acp-page-title">Accounting Periods</h1><span class="acp-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live fiscal calendar</span><span class="acp-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                <div class="acp-sub-row"><span>Manage fiscal periods, close windows, and period-end processing readiness.</span><span class="acp-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="acp-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div>
+            </div>
+        </div>
+        <div class="acp-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/period-close")'><i class="bi bi-list-check" aria-hidden="true"></i> Period Close</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i> Journals</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat acp-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Period</button>
+        </div>
+    </section>
 
-@code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    private Guid _tenantId;
-    private string? _searchTerm;
-    private string _filterYear = "";
-    private string _filterStatus = "";
-    private bool _filterActive = false;
-    private bool _loading = false;
-    private bool _showForm;
-    private bool _saving;
-    private List<AccountingPeriodDto>? _items;
-    private string? _error;
-    private string? _formError;
-    private Guid _editingId = Guid.Empty;
-    private PeriodForm _form = new();
-    private EditContext _editContext = default!;
+    <section class="acp-kpi-strip" aria-label="Accounting period metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="acp-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "acp-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="acp-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="acp-kpi-copy"><span class="acp-kpi-label">@kpi.Label</span><span class="acp-kpi-value">@kpi.Value</span><span class="acp-kpi-caption">@kpi.Caption</span></span>
+            </button>
+        }
+    </section>
 
-    private class Stats
+    <section class="acp-workflow-strip" aria-label="Accounting period workflow shortcuts">
+        <button type="button" class="acp-workflow-card acp-wf-calendar" @onclick="OpenCreate"><span class="acp-workflow-icon"><i class="bi bi-calendar-plus" aria-hidden="true"></i></span><span class="acp-workflow-content"><strong>1</strong><span>Create</span><small>Define periods.</small></span></button>
+        <button type="button" class="acp-workflow-card acp-wf-ledger" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><span class="acp-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="acp-workflow-content"><strong>2</strong><span>Post</span><small>Review journals.</small></span></button>
+        <button type="button" class="acp-workflow-card acp-wf-close" @onclick='() => SetKpiFilter("open")'><span class="acp-workflow-icon"><i class="bi bi-lock" aria-hidden="true"></i></span><span class="acp-workflow-content"><strong>3</strong><span>Close</span><small>Lock open periods.</small></span></button>
+        <button type="button" class="acp-workflow-card acp-wf-reconcile" @onclick='() => Nav.NavigateTo("/finance/bank-reconciliation")'><span class="acp-workflow-icon"><i class="bi bi-bank" aria-hidden="true"></i></span><span class="acp-workflow-content"><strong>4</strong><span>Reconcile</span><small>Confirm balances.</small></span></button>
+        <button type="button" class="acp-workflow-card acp-wf-report" @onclick='() => Nav.NavigateTo("/analytics/finance")'><span class="acp-workflow-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span><span class="acp-workflow-content"><strong>5</strong><span>Report</span><small>Analyze results.</small></span></button>
+    </section>
+
+    <section class="acp-enterprise-search" aria-label="Accounting period filters">
+        <div class="acp-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="acp-search-body"><label for="acp-search">Search periods</label><input id="acp-search" class="acp-search-input" type="search" placeholder="Search period code, name, status..." @bind="SearchFilter" @bind:event="oninput" /><span class="acp-search-hint">Filters apply instantly across synchronized accounting periods.</span></div>
+        <select class="acp-filter-select" @bind="YearFilter" aria-label="Fiscal year filter"><option value="">All years</option>@foreach (var year in Years) { <option value="@year">@year</option> }</select>
+        <select class="acp-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select>
+        <div class="acp-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        public int TotalPeriods { get; set; }
-        public int OpenPeriods { get; set; }
-        public int ClosedPeriods { get; set; }
+        <div class="alert alert-danger acp-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
     }
 
-    private Stats? _stats;
+    <section class="acp-content-layout">
+        <div class="acp-grid-wrap">
+            <div class="acp-grid-toolbar"><div><strong>Fiscal period register</strong><span>@ActiveFilterText</span></div><div class="acp-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/period-close")'><i class="bi bi-list-check" aria-hidden="true"></i> Close</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+            @if (_loading)
+            {
+                <div class="acp-loading"><i class="bi bi-arrow-repeat acp-spin" aria-hidden="true"></i><strong>Loading accounting periods...</strong><span>Syncing schema, seed data, and fiscal periods.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="acp-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No accounting periods found</strong><span>Adjust filters or create a new period.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Period</button></div>
+            }
+            else
+            {
+                <div class="acp-table-scroll"><table class="acp-table"><thead><tr><th>Period</th><th>Fiscal Year</th><th>Start</th><th>End</th><th>Duration</th><th>Status</th><th class="acp-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="acp-table-row @(_selected?.AccountingPeriodId == item.AccountingPeriodId ? "acp-table-row--selected" : null)" @onclick="() => SelectPeriod(item)"><td><div class="acp-entry-cell"><span class="acp-entry-icon @StatusIconTone(item.StatusCode)"><i class="bi bi-calendar3" aria-hidden="true"></i></span><span><strong>@item.PeriodName</strong><span>@item.PeriodCode</span></span></div></td><td>@item.StartDate.Year</td><td>@item.StartDate.ToString("MMM d, yyyy")</td><td>@item.EndDate.ToString("MMM d, yyyy")</td><td>@PeriodDays(item) days</td><td><span class="acp-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td><td><div class="acp-row-acts"><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="@(item.StatusCode == "Open" ? "Close" : "Reopen")" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, item.StatusCode == "Open" ? "Closed" : "Open")'><i class="bi @(item.StatusCode == "Open" ? "bi-lock" : "bi-unlock")" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div>
+                <div class="acp-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+            }
+        </div>
+        <aside class="acp-detail-panel" aria-label="Selected accounting period detail">
+            @if (_selected is null)
+            {
+                <div class="acp-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a period</strong><span>Choose a row to inspect date boundaries, status, and close workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="acp-detail-head"><div><span class="acp-detail-eyebrow"><i class="bi bi-calendar3" aria-hidden="true"></i> Fiscal period</span><h2>@_selected.PeriodName</h2><div class="acp-detail-meta"><span>@_selected.PeriodCode</span><span class="acp-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div>
+                <div class="acp-detail-body"><div class="acp-detail-summary"><div class="acp-meta-row"><span class="acp-meta-lbl">Start</span><span class="acp-meta-val">@_selected.StartDate.ToString("MMM d, yyyy")</span></div><div class="acp-meta-row"><span class="acp-meta-lbl">End</span><span class="acp-meta-val">@_selected.EndDate.ToString("MMM d, yyyy")</span></div><div class="acp-meta-row"><span class="acp-meta-lbl">Fiscal Year</span><span class="acp-meta-val">@_selected.StartDate.Year</span></div><div class="acp-meta-row"><span class="acp-meta-lbl">Duration</span><span class="acp-meta-val">@PeriodDays(_selected) days</span></div></div><div class="acp-note-card"><span><i class="bi bi-lock" aria-hidden="true"></i> Close readiness</span><p>@(_selected.StatusCode == "Open" ? "This period is open for finance postings and can be closed after reconciliation is complete." : "This period is closed and should be reopened only for approved adjustments.")</p></div><div class="acp-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, _selected.StatusCode == "Open" ? "Closed" : "Open")'><i class="bi @(_selected.StatusCode == "Open" ? "bi-lock" : "bi-unlock")" aria-hidden="true"></i> @(_selected.StatusCode == "Open" ? "Close" : "Reopen")</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i> Journals</button></div></div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private const int PageSize = 12;
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private List<AccountingPeriodDto> _items = [];
+    private List<AccountingPeriodDto> _filtered = [];
+    private AccountingPeriodDto? _selected;
+    private AccountingPeriodDto? _statusTarget;
+    private PeriodForm _form = new();
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _yearFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showStatusConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _statuses = ["Open", "Closed"];
+
+    private IEnumerable<AccountingPeriodDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private IEnumerable<int> Years => _items.Select(x => x.StartDate.Year).Distinct().OrderByDescending(x => x);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All accounting periods" : $"Filtered by {_kpiFilter}";
+    private string FormDurationLabel => _form.EndDate >= _form.StartDate ? $"{(_form.EndDate.Date - _form.StartDate.Date).Days + 1:N0} days" : "Invalid range";
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Periods", _items.Count.ToString("N0"), "All fiscal periods", "bi-calendar3", "acp-ki-blue"),
+        new("open", "Open", _items.Count(x => x.StatusCode == "Open").ToString("N0"), "Posting enabled", "bi-unlock", "acp-ki-green"),
+        new("closed", "Closed", _items.Count(x => x.StatusCode == "Closed").ToString("N0"), "Locked", "bi-lock", "acp-ki-purple"),
+        new("current", "Current", _items.Count(IsCurrent).ToString("N0"), "Today's period", "bi-calendar-check", "acp-ki-amber"),
+        new("future", "Future", _items.Count(x => x.StartDate > Today).ToString("N0"), "Upcoming", "bi-calendar-plus", "acp-ki-blue"),
+        new("year", "Years", _items.Select(x => x.StartDate.Year).Distinct().Count().ToString("N0"), "Fiscal years", "bi-calendar-range", "acp-ki-green")
+    ];
+
+    private DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string YearFilter { get => _yearFilter; set { _yearFilter = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home", "/"),
-            new("Finance", "/finance"),
-            new("Accounting Periods", "/finance/accounting-periods"));
-        _editContext = new(_form);
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Finance", "/finance"), new("Accounting Periods", "/finance/accounting-periods"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
-        _error = null;
-        _items = null;
+        _loadError = null;
         try
         {
-            var result = await Api.SearchAccountingPeriodsAsync(_tenantId, _searchTerm);
-            _items = result?.Items.ToList() ?? [];
-
-            if (!string.IsNullOrEmpty(_filterYear))
-                _items = _items.Where(x => x.StartDate.Year.ToString() == _filterYear).ToList();
-
-            if (!string.IsNullOrEmpty(_filterStatus))
-                _items = _items.Where(x => x.StatusCode == _filterStatus).ToList();
-
-            _stats = new Stats
-            {
-                TotalPeriods = _items.Count,
-                OpenPeriods = _items.Count(x => x.StatusCode == "Open"),
-                ClosedPeriods = _items.Count(x => x.StatusCode == "Closed")
-            };
+            var result = await Api.SearchAccountingPeriodsAsync(_tenantId, string.Empty);
+            _items = result?.Items.OrderByDescending(x => x.StartDate).ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
-            if (ex.Message.Contains("Invalid column name") || ex.Message.Contains("AccountingPeriod"))
-            {
-                _error = "Database schema mismatch. Please ensure 00_schema_migration.sql has been applied to your database. See db/README.md for setup instructions.";
-            }
+            _loadError = $"Accounting periods failed to load: {ex.Message}";
+            ShowToast(_loadError, "danger");
             _items = [];
+            _filtered = [];
         }
         finally
         {
@@ -246,27 +235,121 @@ else
         }
     }
 
-    private void OnRowSelected(RowSelectEventArgs<AccountingPeriodDto> args) => OpenEdit(args.Data);
-    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
-    private void OpenEdit(AccountingPeriodDto period) { _editingId = period.AccountingPeriodId; _form = new PeriodForm { PeriodCode = period.PeriodCode, PeriodName = period.PeriodName, StartDate = period.StartDate.ToDateTime(TimeOnly.MinValue), EndDate = period.EndDate.ToDateTime(TimeOnly.MinValue), StatusCode = period.StatusCode }; _editContext = new(_form); _formError = null; _showForm = true; }
-    private void CloseForm() => _showForm = false;
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<AccountingPeriodDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(x.PeriodCode, term) || Contains(x.PeriodName, term) || Contains(x.StatusCode, term));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_yearFilter) && int.TryParse(_yearFilter, out var year)) query = query.Where(x => x.StartDate.Year == year);
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter);
+        query = _kpiFilter switch
+        {
+            "open" => query.Where(x => x.StatusCode == "Open"),
+            "closed" => query.Where(x => x.StatusCode == "Closed"),
+            "current" => query.Where(IsCurrent),
+            "future" => query.Where(x => x.StartDate > Today),
+            "year" => query,
+            _ => query
+        };
+
+        _filtered = query.OrderByDescending(x => x.StartDate).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter) { _kpiFilter = filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _yearFilter = string.Empty; _statusFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Accounting period filters reset.", "info"); }
+    private void SelectPeriod(AccountingPeriodDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _formError = null; var start = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1); _form = new PeriodForm { PeriodCode = start.ToString("yyyy-MM"), PeriodName = start.ToString("MMMM yyyy"), StartDate = start, EndDate = start.AddMonths(1).AddDays(-1) }; _showForm = true; }
+    private void OpenEdit(AccountingPeriodDto period) { _editingId = period.AccountingPeriodId; _formError = null; _form = new PeriodForm { PeriodCode = period.PeriodCode, PeriodName = period.PeriodName, StartDate = period.StartDate.ToDateTime(TimeOnly.MinValue), EndDate = period.EndDate.ToDateTime(TimeOnly.MinValue), StatusCode = period.StatusCode }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; }
+
     private async Task SaveAsync()
     {
-        if (!_editContext.Validate()) return;
-        if (_form.EndDate < _form.StartDate) { _formError = "End Date must be on or after Start Date."; return; }
-        _saving = true;
+        if (_form.EndDate < _form.StartDate) { _formError = "End Date must be on or after Start Date."; ShowToast(_formError, "warning"); return; }
+        _busy = true;
+        _formError = null;
         try
         {
             if (_editingId == Guid.Empty)
-                await Api.CreateAccountingPeriodAsync(new CreateAccountingPeriodRequest { TenantId = _tenantId, PeriodCode = _form.PeriodCode, PeriodName = _form.PeriodName, StartDate = DateOnly.FromDateTime(_form.StartDate), EndDate = DateOnly.FromDateTime(_form.EndDate), StatusCode = _form.StatusCode });
+            {
+                await Api.CreateAccountingPeriodAsync(new CreateAccountingPeriodRequest { TenantId = _tenantId, PeriodCode = _form.PeriodCode, PeriodName = _form.PeriodName, StartDate = DateOnly.FromDateTime(_form.StartDate), EndDate = DateOnly.FromDateTime(_form.EndDate), StatusCode = _form.StatusCode, CreatedByUserId = _tenantAdminUserId });
+                ShowToast("Accounting period created.", "success");
+            }
             else
-                await Api.UpdateAccountingPeriodAsync(_editingId, new UpdateAccountingPeriodRequest { TenantId = _tenantId, AccountingPeriodId = _editingId, PeriodCode = _form.PeriodCode, PeriodName = _form.PeriodName, StartDate = DateOnly.FromDateTime(_form.StartDate), EndDate = DateOnly.FromDateTime(_form.EndDate), StatusCode = _form.StatusCode });
+            {
+                await Api.UpdateAccountingPeriodAsync(_editingId, new UpdateAccountingPeriodRequest { TenantId = _tenantId, AccountingPeriodId = _editingId, PeriodCode = _form.PeriodCode, PeriodName = _form.PeriodName, StartDate = DateOnly.FromDateTime(_form.StartDate), EndDate = DateOnly.FromDateTime(_form.EndDate), StatusCode = _form.StatusCode, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast("Accounting period updated.", "success");
+            }
+
             _showForm = false;
             await LoadAsync();
         }
-        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; }
-        finally { _saving = false; }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
+
+    private void ConfirmStatusUpdate(AccountingPeriodDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+    private async Task ExecuteStatusUpdateAsync()
+    {
+        if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return;
+        _busy = true;
+        try
+        {
+            await Api.UpdateAccountingPeriodAsync(_statusTarget.AccountingPeriodId, new UpdateAccountingPeriodRequest { TenantId = _tenantId, AccountingPeriodId = _statusTarget.AccountingPeriodId, PeriodCode = _statusTarget.PeriodCode, PeriodName = _statusTarget.PeriodName, StartDate = _statusTarget.StartDate, EndDate = _statusTarget.EndDate, StatusCode = _pendingStatus, ModifiedByUserId = _tenantAdminUserId });
+            ShowToast($"Accounting period marked {_pendingStatus.ToLowerInvariant()}.", "success");
+            _showStatusConfirm = false;
+            _statusTarget = null;
+            _pendingStatus = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving the accounting period.", "warning"); return Task.CompletedTask; }
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any()) { ShowToast("No accounting periods are available to export.", "warning"); return; }
+        var csv = new StringBuilder();
+        csv.AppendLine("PeriodCode,PeriodName,StartDate,EndDate,FiscalYear,DurationDays,Status,AccountingPeriodId");
+        foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.PeriodCode), Csv(item.PeriodName), Csv(item.StartDate.ToString("yyyy-MM-dd")), Csv(item.EndDate.ToString("yyyy-MM-dd")), item.StartDate.Year, PeriodDays(item), Csv(item.StatusCode), Csv(item.AccountingPeriodId.ToString())));
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"accounting-periods-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} accounting periods.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.AccountingPeriodId == _selected.AccountingPeriodId) ?? _filtered.FirstOrDefault();
+    private bool IsCurrent(AccountingPeriodDto item) => item.StartDate <= Today && item.EndDate >= Today;
+    private static int PeriodDays(AccountingPeriodDto item) => item.EndDate.DayNumber - item.StartDate.DayNumber + 1;
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static string StatusCss(string status) => $"acp-st-{status.ToLowerInvariant()}";
+    private static string StatusIconTone(string status) => status == "Closed" ? "acp-di-slate" : "acp-di-green";
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter periods by {Label}"; }
 
     private sealed class PeriodForm
     {
@@ -275,16 +358,5 @@ else
         [Required] public DateTime StartDate { get; set; } = DateTime.Today;
         [Required] public DateTime EndDate { get; set; } = DateTime.Today;
         [Required, StringLength(50)] public string StatusCode { get; set; } = "Open";
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
 }

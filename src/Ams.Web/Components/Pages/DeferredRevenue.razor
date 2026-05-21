@@ -1,0 +1,485 @@
+@page "/finance/deferred-revenue"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Finance
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@inject IJSRuntime Js
+
+<PageTitle>Deferred Revenue — AMS Enterprise</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="drv-toast drv-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="drv-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="drv-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="drv-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="drv-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Cancelled" ? "um-confirm-icon--danger" : null)"><i class="bi @PendingStatusIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="drv-status-title">@PendingStatusTitle</div>
+                <div class="um-confirm-body">Mark schedule for <strong>@AccountLabel(_statusTarget.AccountId)</strong> as <strong>@_pendingStatus</strong>?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Cancelled" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@PendingStatusAction</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="drv-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="drv-modal drv-action-modal" role="dialog" aria-modal="true" aria-labelledby="drv-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-hourglass-split" aria-hidden="true"></i>
+                <span id="drv-form-title">@(_editingId == Guid.Empty ? "New Deferred Revenue Schedule" : "Edit Deferred Revenue Schedule")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="drv-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Revenue recognition workflow</span><p>Track unearned revenue, recognition cadence, balances, and lifecycle status using live finance data.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Account <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.AccountId">
+                                <option value="@Guid.Empty">Select account...</option>
+                                @foreach (var account in _accountOptions)
+                                {
+                                    <option value="@account.AccountId">@account.AccountNumber - @account.AccountName</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Total Amount <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.TotalAmount" />
+                            <ValidationMessage For="() => _form.TotalAmount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Recognized Amount <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.RecognizedAmount" />
+                            <ValidationMessage For="() => _form.RecognizedAmount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Start Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_form.StartDate" />
+                            <ValidationMessage For="() => _form.StartDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>End Date</label>
+                            <InputDate class="form-control" @bind-Value="_form.EndDate" />
+                            <ValidationMessage For="() => _form.EndDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Frequency <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.FrequencyCode">
+                                @foreach (var frequency in _frequencies)
+                                {
+                                    <option value="@frequency">@frequency</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.FrequencyCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.StatusCode">
+                                @foreach (var status in _statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Revenue GL</label>
+                            <InputSelect class="form-select" @bind-Value="_form.GLAccountId">
+                                <option value="">None</option>
+                                @foreach (var account in _glAccounts)
+                                {
+                                    <option value="@account.GLAccountId">@account.AccountCode - @account.AccountName</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="um-field">
+                            <label>Deferred GL</label>
+                            <InputSelect class="form-select" @bind-Value="_form.DeferredGLAccountId">
+                                <option value="">None</option>
+                                @foreach (var account in _glAccounts)
+                                {
+                                    <option value="@account.GLAccountId">@account.AccountCode - @account.AccountName</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="um-field um-field--full drv-balance-preview"><span>Remaining balance</span><strong>@FormatMoney(FormRemainingAmount)</strong><small>@FormProgressPercent% recognized</small></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Schedule" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="drv-enterprise-page">
+    <section class="drv-header">
+        <div class="drv-header-left">
+            <div class="drv-lob-icon"><i class="bi bi-hourglass-split" aria-hidden="true"></i></div>
+            <div class="drv-header-info">
+                <div class="drv-title-row"><h1 class="drv-page-title">Deferred Revenue</h1><span class="drv-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live recognition schedules</span><span class="drv-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                <div class="drv-sub-row"><span>Manage unearned revenue balances, recognition cadence, GL routing, and lifecycle status.</span><span class="drv-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="drv-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div>
+            </div>
+        </div>
+        <div class="drv-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/deferred-revenue-recognition")'><i class="bi bi-journal-check" aria-hidden="true"></i> Recognition</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i> Journals</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat drv-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Schedule</button>
+        </div>
+    </section>
+
+    <section class="drv-kpi-strip" aria-label="Deferred revenue metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="drv-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "drv-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="drv-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="drv-kpi-copy"><span class="drv-kpi-label">@kpi.Label</span><span class="drv-kpi-value">@kpi.Value</span><span class="drv-kpi-caption">@kpi.Caption</span></span>
+            </button>
+        }
+    </section>
+
+    <section class="drv-workflow-strip" aria-label="Deferred revenue workflow shortcuts">
+        <button type="button" class="drv-workflow-card drv-wf-schedule" @onclick="OpenCreate"><span class="drv-workflow-icon"><i class="bi bi-calendar-plus" aria-hidden="true"></i></span><span class="drv-workflow-content"><strong>1</strong><span>Schedule</span><small>Capture contract value.</small></span></button>
+        <button type="button" class="drv-workflow-card drv-wf-recognize" @onclick='() => SetKpiFilter("active")'><span class="drv-workflow-icon"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></span><span class="drv-workflow-content"><strong>2</strong><span>Recognize</span><small>Process active balances.</small></span></button>
+        <button type="button" class="drv-workflow-card drv-wf-ledger" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><span class="drv-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="drv-workflow-content"><strong>3</strong><span>Post</span><small>Create ledger entries.</small></span></button>
+        <button type="button" class="drv-workflow-card drv-wf-close" @onclick='() => Nav.NavigateTo("/finance/period-close")'><span class="drv-workflow-icon"><i class="bi bi-lock" aria-hidden="true"></i></span><span class="drv-workflow-content"><strong>4</strong><span>Close</span><small>Validate period-end.</small></span></button>
+        <button type="button" class="drv-workflow-card drv-wf-report" @onclick='() => Nav.NavigateTo("/analytics/finance")'><span class="drv-workflow-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span><span class="drv-workflow-content"><strong>5</strong><span>Report</span><small>Analyze balances.</small></span></button>
+    </section>
+
+    <section class="drv-enterprise-search" aria-label="Deferred revenue filters">
+        <div class="drv-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="drv-search-body"><label for="drv-search">Search schedules</label><input id="drv-search" class="drv-search-input" type="search" placeholder="Search account, status, frequency, GL, or amount..." @bind="SearchFilter" @bind:event="oninput" /><span class="drv-search-hint">Filters apply instantly across synchronized deferred revenue schedules.</span></div>
+        <select class="drv-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select>
+        <select class="drv-filter-select" @bind="FrequencyFilter" aria-label="Frequency filter"><option value="">All frequencies</option>@foreach (var frequency in _frequencies) { <option value="@frequency">@frequency</option> }</select>
+        <div class="drv-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger drv-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="drv-content-layout">
+        <div class="drv-grid-wrap">
+            <div class="drv-grid-toolbar"><div><strong>Deferred revenue register</strong><span>@ActiveFilterText</span></div><div class="drv-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="RecognizeSelected" disabled="@(!CanRecognizeSelected)"><i class="bi bi-cash-stack" aria-hidden="true"></i> Recognize</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+            @if (_loading)
+            {
+                <div class="drv-loading"><i class="bi bi-arrow-repeat drv-spin" aria-hidden="true"></i><strong>Loading deferred revenue...</strong><span>Syncing schema, seed schedules, accounts, and GL references.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="drv-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No deferred revenue schedules found</strong><span>Adjust filters or create a new recognition schedule.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Schedule</button></div>
+            }
+            else
+            {
+                <div class="drv-table-scroll"><table class="drv-table"><thead><tr><th>Account</th><th>Total</th><th>Recognized</th><th>Remaining</th><th>Start</th><th>Frequency</th><th>Status</th><th class="drv-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="drv-table-row @(_selected?.DeferredRevenueScheduleId == item.DeferredRevenueScheduleId ? "drv-table-row--selected" : null)" @onclick="() => SelectSchedule(item)"><td><div class="drv-entry-cell"><span class="drv-entry-icon @StatusIconTone(item.StatusCode)"><i class="bi bi-hourglass-split" aria-hidden="true"></i></span><span><strong>@AccountLabel(item.AccountId)</strong><span>@GLLabel(item.DeferredGLAccountId)</span></span></div></td><td class="drv-number">@FormatMoney(item.TotalAmount)</td><td class="drv-number drv-recognized">@FormatMoney(item.RecognizedAmount)</td><td class="drv-number @RemainingCss(item)">@FormatMoney(item.RemainingAmount)</td><td>@item.StartDate.ToString("MMM d, yyyy")</td><td>@item.FrequencyCode</td><td><span class="drv-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td><td><div class="drv-row-acts"><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Recognize" @onclick:stopPropagation="true" @onclick="() => Recognize(item)" disabled="@(!CanRecognize(item))"><i class="bi bi-cash-stack" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Pause" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Paused")' disabled="@IsPaused(item)"><i class="bi bi-pause-circle" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div>
+                <div class="drv-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+            }
+        </div>
+        <aside class="drv-detail-panel" aria-label="Selected deferred revenue schedule detail">
+            @if (_selected is null)
+            {
+                <div class="drv-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a schedule</strong><span>Choose a row to inspect recognition progress, GL routing, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="drv-detail-head"><div><span class="drv-detail-eyebrow"><i class="bi bi-hourglass-split" aria-hidden="true"></i> Recognition schedule</span><h2>@AccountLabel(_selected.AccountId)</h2><div class="drv-detail-meta"><span>@_selected.FrequencyCode</span><span class="drv-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div>
+                <div class="drv-detail-body"><div class="drv-progress-card"><div><span>Recognition progress</span><strong>@ProgressPercent(_selected)%</strong></div><div class="drv-progress-track"><span style="width:@ProgressPercent(_selected)%"></span></div></div><div class="drv-detail-summary"><div class="drv-meta-row"><span class="drv-meta-lbl">Total</span><span class="drv-meta-val">@FormatMoney(_selected.TotalAmount)</span></div><div class="drv-meta-row"><span class="drv-meta-lbl">Recognized</span><span class="drv-meta-val">@FormatMoney(_selected.RecognizedAmount)</span></div><div class="drv-meta-row"><span class="drv-meta-lbl">Remaining</span><span class="drv-meta-val">@FormatMoney(_selected.RemainingAmount)</span></div><div class="drv-meta-row"><span class="drv-meta-lbl">Window</span><span class="drv-meta-val">@_selected.StartDate.ToString("MMM d") - @(_selected.EndDate?.ToString("MMM d, yyyy") ?? "Open")</span></div></div><div class="drv-note-card"><span><i class="bi bi-diagram-3" aria-hidden="true"></i> GL routing</span><p>Revenue: @GLLabel(_selected.GLAccountId)<br />Deferred: @GLLabel(_selected.DeferredGLAccountId)</p></div><div class="drv-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="RecognizeSelected" disabled="@(!CanRecognizeSelected)"><i class="bi bi-cash-stack" aria-hidden="true"></i> Recognize</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ActivateSelected" disabled="@IsSelectedActive"><i class="bi bi-play-circle" aria-hidden="true"></i> Activate</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PauseSelected" disabled="@IsSelectedPaused"><i class="bi bi-pause-circle" aria-hidden="true"></i> Pause</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/deferred-revenue-recognition")'><i class="bi bi-journal-check" aria-hidden="true"></i> Recognition</button></div></div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private const int PageSize = 12;
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private List<DeferredRevenueScheduleDto> _items = [];
+    private List<DeferredRevenueScheduleDto> _filtered = [];
+    private List<AccountDto> _accountOptions = [];
+    private List<GLAccountDto> _glAccounts = [];
+    private DeferredRevenueScheduleDto? _selected;
+    private DeferredRevenueScheduleDto? _statusTarget;
+    private DeferredRevenueForm _form = new();
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _frequencyFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showStatusConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _statuses = ["Active", "Pending", "Paused", "Completed", "Cancelled"];
+    private readonly List<string> _frequencies = ["Monthly", "Quarterly", "Annual", "One-Time"];
+
+    private IEnumerable<DeferredRevenueScheduleDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private decimal TotalDeferred => _items.Sum(x => x.RemainingAmount);
+    private decimal TotalRecognized => _items.Sum(x => x.RecognizedAmount);
+    private decimal FormRemainingAmount => Math.Max(0, _form.TotalAmount - _form.RecognizedAmount);
+    private int FormProgressPercent => _form.TotalAmount <= 0 ? 0 : Math.Clamp((int)Math.Round(_form.RecognizedAmount * 100m / _form.TotalAmount), 0, 100);
+    private bool CanRecognizeSelected => _selected is not null && CanRecognize(_selected);
+    private bool IsSelectedActive => _selected?.StatusCode == "Active";
+    private bool IsSelectedPaused => _selected?.StatusCode == "Paused";
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All deferred revenue schedules" : $"Filtered by {_kpiFilter}";
+    private string PendingStatusIcon => _pendingStatus switch { "Active" => "bi-play-circle", "Paused" => "bi-pause-circle", "Completed" => "bi-check2-circle", "Cancelled" => "bi-x-octagon-fill", _ => "bi-arrow-repeat" };
+    private string PendingStatusTitle => _pendingStatus switch { "Active" => "Activate Schedule", "Paused" => "Pause Schedule", "Completed" => "Complete Schedule", "Cancelled" => "Cancel Schedule", _ => "Update Schedule" };
+    private string PendingStatusAction => _pendingStatus switch { "Active" => "Activate", "Paused" => "Pause", "Completed" => "Complete", "Cancelled" => "Cancel", _ => "Update" };
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Schedules", _items.Count.ToString("N0"), "All schedules", "bi-hourglass-split", "drv-ki-blue"),
+        new("active", "Active", _items.Count(x => x.StatusCode == "Active").ToString("N0"), "Recognizing", "bi-play-circle", "drv-ki-green"),
+        new("pending", "Pending", _items.Count(x => x.StatusCode == "Pending").ToString("N0"), "Waiting", "bi-clock", "drv-ki-amber"),
+        new("deferred", "Deferred", FormatMoney(TotalDeferred), "Remaining", "bi-piggy-bank", "drv-ki-purple"),
+        new("recognized", "Recognized", FormatMoney(TotalRecognized), "Earned", "bi-cash-stack", "drv-ki-cyan"),
+        new("completed", "Complete", _items.Count(x => x.StatusCode == "Completed").ToString("N0"), "Fully earned", "bi-check-circle", "drv-ki-green")
+    ];
+
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string FrequencyFilter { get => _frequencyFilter; set { _frequencyFilter = value; ApplyFilters(resetPage: true); } }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Finance", "/finance"), new("Deferred Revenue", "/finance/deferred-revenue"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var accounts = await Api.SearchAccountsAsync(_tenantId, string.Empty, 1, 250);
+            _accountOptions = accounts?.Items.OrderBy(x => x.AccountName).ToList() ?? [];
+            var glAccounts = await Api.SearchGLAccountsAsync(_tenantId, string.Empty, 1, 250);
+            _glAccounts = glAccounts?.Items.OrderBy(x => x.AccountCode).ToList() ?? [];
+            var result = await Api.SearchDeferredRevenueSchedulesAsync(_tenantId, string.Empty);
+            _items = result?.Items.OrderByDescending(x => x.StartDate).ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Deferred revenue failed to load: {ex.Message}";
+            ShowToast(_loadError, "danger");
+            _items = [];
+            _filtered = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<DeferredRevenueScheduleDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(AccountLabel(x.AccountId), term) || Contains(x.StatusCode, term) || Contains(x.FrequencyCode, term) || Contains(GLLabel(x.GLAccountId), term) || Contains(GLLabel(x.DeferredGLAccountId), term) || x.TotalAmount.ToString("N2").Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_frequencyFilter)) query = query.Where(x => x.FrequencyCode == _frequencyFilter);
+        query = _kpiFilter switch
+        {
+            "active" => query.Where(x => x.StatusCode == "Active"),
+            "pending" => query.Where(x => x.StatusCode == "Pending"),
+            "deferred" => query.Where(x => x.RemainingAmount > 0),
+            "recognized" => query.Where(x => x.RecognizedAmount > 0),
+            "completed" => query.Where(x => x.StatusCode == "Completed"),
+            _ => query
+        };
+
+        _filtered = query.OrderBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.StartDate).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter) { _kpiFilter = filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _statusFilter = string.Empty; _frequencyFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Deferred revenue filters reset.", "info"); }
+    private void SelectSchedule(DeferredRevenueScheduleDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _formError = null; _form = new DeferredRevenueForm { AccountId = _accountOptions.FirstOrDefault()?.AccountId ?? Guid.Empty, StartDate = DateTime.Today, EndDate = DateTime.Today.AddMonths(12).AddDays(-1) }; _showForm = true; }
+    private void OpenEdit(DeferredRevenueScheduleDto item) { _editingId = item.DeferredRevenueScheduleId; _formError = null; _form = new DeferredRevenueForm { AccountId = item.AccountId, TotalAmount = item.TotalAmount, RecognizedAmount = item.RecognizedAmount, StartDate = item.StartDate.ToDateTime(TimeOnly.MinValue), EndDate = item.EndDate?.ToDateTime(TimeOnly.MinValue), FrequencyCode = item.FrequencyCode, StatusCode = item.StatusCode, GLAccountId = item.GLAccountId, DeferredGLAccountId = item.DeferredGLAccountId }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; }
+
+    private async Task SaveAsync()
+    {
+        if (_form.RecognizedAmount > _form.TotalAmount) { _formError = "Recognized Amount cannot exceed Total Amount."; ShowToast(_formError, "warning"); return; }
+        if (_form.EndDate.HasValue && _form.EndDate.Value < _form.StartDate) { _formError = "End Date must be on or after Start Date."; ShowToast(_formError, "warning"); return; }
+        _busy = true;
+        _formError = null;
+        try
+        {
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateDeferredRevenueScheduleAsync(new CreateDeferredRevenueScheduleRequest { TenantId = _tenantId, AccountId = _form.AccountId, TotalAmount = _form.TotalAmount, RecognizedAmount = _form.RecognizedAmount, StartDate = DateOnly.FromDateTime(_form.StartDate), EndDate = _form.EndDate.HasValue ? DateOnly.FromDateTime(_form.EndDate.Value) : null, FrequencyCode = _form.FrequencyCode, StatusCode = _form.StatusCode, GLAccountId = _form.GLAccountId, DeferredGLAccountId = _form.DeferredGLAccountId, CreatedByUserId = _tenantAdminUserId });
+                ShowToast("Deferred revenue schedule created.", "success");
+            }
+            else
+            {
+                await Api.UpdateDeferredRevenueScheduleAsync(_editingId, new UpdateDeferredRevenueScheduleRequest { TenantId = _tenantId, DeferredRevenueScheduleId = _editingId, AccountId = _form.AccountId, TotalAmount = _form.TotalAmount, RecognizedAmount = _form.RecognizedAmount, StartDate = DateOnly.FromDateTime(_form.StartDate), EndDate = _form.EndDate.HasValue ? DateOnly.FromDateTime(_form.EndDate.Value) : null, FrequencyCode = _form.FrequencyCode, StatusCode = _form.StatusCode, GLAccountId = _form.GLAccountId, DeferredGLAccountId = _form.DeferredGLAccountId, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast("Deferred revenue schedule updated.", "success");
+            }
+
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void RecognizeSelected() { if (_selected is not null) Recognize(_selected); }
+    private async void Recognize(DeferredRevenueScheduleDto item)
+    {
+        if (!CanRecognize(item)) return;
+        _busy = true;
+        try
+        {
+            var amount = NextRecognitionAmount(item);
+            var recognized = Math.Min(item.TotalAmount, item.RecognizedAmount + amount);
+            var status = recognized >= item.TotalAmount ? "Completed" : "Active";
+            await UpdateScheduleAsync(item, recognized, status);
+            ShowToast($"Recognized {FormatMoney(amount)} for {AccountLabel(item.AccountId)}.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Recognition failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ActivateSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Active"); }
+    private void PauseSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Paused"); }
+    private void ConfirmStatusUpdate(DeferredRevenueScheduleDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+
+    private async Task ExecuteStatusUpdateAsync()
+    {
+        if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return;
+        _busy = true;
+        try
+        {
+            await UpdateScheduleAsync(_statusTarget, _statusTarget.RecognizedAmount, _pendingStatus);
+            ShowToast($"Deferred revenue schedule marked {_pendingStatus.ToLowerInvariant()}.", "success");
+            _showStatusConfirm = false;
+            _statusTarget = null;
+            _pendingStatus = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task UpdateScheduleAsync(DeferredRevenueScheduleDto item, decimal recognizedAmount, string status)
+        => Api.UpdateDeferredRevenueScheduleAsync(item.DeferredRevenueScheduleId, new UpdateDeferredRevenueScheduleRequest { TenantId = _tenantId, DeferredRevenueScheduleId = item.DeferredRevenueScheduleId, AccountId = item.AccountId, InvoiceId = item.InvoiceId, AgreementId = item.AgreementId, TotalAmount = item.TotalAmount, RecognizedAmount = recognizedAmount, StartDate = item.StartDate, EndDate = item.EndDate, FrequencyCode = item.FrequencyCode, StatusCode = status, GLAccountId = item.GLAccountId, DeferredGLAccountId = item.DeferredGLAccountId, ModifiedByUserId = _tenantAdminUserId });
+
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving the deferred revenue schedule.", "warning"); return Task.CompletedTask; }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any()) { ShowToast("No deferred revenue schedules are available to export.", "warning"); return; }
+        var csv = new StringBuilder();
+        csv.AppendLine("Account,TotalAmount,RecognizedAmount,RemainingAmount,StartDate,EndDate,Frequency,Status,RevenueGL,DeferredGL,DeferredRevenueScheduleId");
+        foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(AccountLabel(item.AccountId)), item.TotalAmount, item.RecognizedAmount, item.RemainingAmount, Csv(item.StartDate.ToString("yyyy-MM-dd")), Csv(item.EndDate?.ToString("yyyy-MM-dd") ?? string.Empty), Csv(item.FrequencyCode), Csv(item.StatusCode), Csv(GLLabel(item.GLAccountId)), Csv(GLLabel(item.DeferredGLAccountId)), Csv(item.DeferredRevenueScheduleId.ToString())));
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"deferred-revenue-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} deferred revenue schedules.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.DeferredRevenueScheduleId == _selected.DeferredRevenueScheduleId) ?? _filtered.FirstOrDefault();
+    private string AccountLabel(Guid accountId) { var account = _accountOptions.FirstOrDefault(x => x.AccountId == accountId); return account is null ? accountId.ToString("N")[..8] : $"{account.AccountNumber} - {account.AccountName}"; }
+    private string GLLabel(Guid? glAccountId) { if (glAccountId is null || glAccountId == Guid.Empty) return "Not assigned"; var account = _glAccounts.FirstOrDefault(x => x.GLAccountId == glAccountId); return account is null ? glAccountId.Value.ToString("N")[..8] : $"{account.AccountCode} - {account.AccountName}"; }
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static int StatusSort(string status) => status switch { "Active" => 0, "Pending" => 1, "Paused" => 2, "Completed" => 3, "Cancelled" => 4, _ => 5 };
+    private static bool CanRecognize(DeferredRevenueScheduleDto item) => item.StatusCode is "Active" or "Pending" && item.RemainingAmount > 0;
+    private static bool IsPaused(DeferredRevenueScheduleDto item) => item.StatusCode == "Paused";
+    private static decimal NextRecognitionAmount(DeferredRevenueScheduleDto item) => Math.Min(item.RemainingAmount, item.FrequencyCode == "Quarterly" ? Math.Max(item.TotalAmount / 4, 0.01m) : item.FrequencyCode == "Annual" || item.FrequencyCode == "One-Time" ? item.RemainingAmount : Math.Max(item.TotalAmount / 12, 0.01m));
+    private static int ProgressPercent(DeferredRevenueScheduleDto item) => item.TotalAmount <= 0 ? 0 : Math.Clamp((int)Math.Round(item.RecognizedAmount * 100m / item.TotalAmount), 0, 100);
+    private static string RemainingCss(DeferredRevenueScheduleDto item) => item.RemainingAmount <= 0 ? "drv-bal-clear" : "drv-bal-due";
+    private static string StatusCss(string status) => $"drv-st-{status.ToLowerInvariant()}";
+    private static string StatusIconTone(string status) => status switch { "Completed" => "drv-di-green", "Cancelled" => "drv-di-red", "Paused" => "drv-di-amber", _ => "drv-di-blue" };
+    private static string FormatMoney(decimal value) => value.ToString("C0");
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter deferred revenue by {Label}"; }
+
+    private sealed class DeferredRevenueForm
+    {
+        [RequiredGuid(ErrorMessage = "Account is required.")] public Guid AccountId { get; set; }
+        [Range(0.01, 100000000)] public decimal TotalAmount { get; set; } = 12000;
+        [Range(0, 100000000)] public decimal RecognizedAmount { get; set; }
+        [Required] public DateTime StartDate { get; set; } = DateTime.Today;
+        public DateTime? EndDate { get; set; }
+        [Required, StringLength(50)] public string FrequencyCode { get; set; } = "Monthly";
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Active";
+        public Guid? GLAccountId { get; set; }
+        public Guid? DeferredGLAccountId { get; set; }
+    }
+}

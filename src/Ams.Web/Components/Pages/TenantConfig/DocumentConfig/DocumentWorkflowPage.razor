@@ -1,0 +1,417 @@
+@page "/tenant/documents/workflow"
+@page "/tenant/documents/workflow/templates"
+@page "/tenant/documents/workflow/instances"
+@page "/tenant/documents/workflow/approvals"
+@page "/tenant/documents/workflow/reviews"
+@page "/tenant/documents/workflow/classification"
+@page "/tenant/documents/workflow/retention"
+@page "/tenant/documents/workflow/audit"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.DocumentWorkflow
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Document Workflow — Tenant Administration</PageTitle>
+
+<AppPageHeader Title="Document Workflow"
+               Subtitle="Enterprise workflow orchestration for document approvals, reviews, classification, retention, and audit governance."
+               Icon="bi bi-diagram-3">
+    <Actions>
+        <button class="um-btn um-btn-primary" @onclick="OpenCreateTemplate"><i class="bi bi-plus-lg"></i> New Template</button>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </Actions>
+</AppPageHeader>
+
+<div class="pc-kpi-strip">
+    <div class="pc-kpi-card @ActiveKpiClass(WorkflowPanel.Overview)" @onclick="() => SetPanel(WorkflowPanel.Overview)" title="Show workflow overview" style="cursor:pointer">
+        <span class="pc-kpi-icon pc-kpi-icon--total"><i class="bi bi-speedometer2"></i></span>
+        <div><div class="pc-kpi-value">@_templates.Count</div><div class="pc-kpi-label">Templates</div></div>
+    </div>
+    <div class="pc-kpi-card @ActiveKpiClass(WorkflowPanel.Instances)" @onclick="() => SetPanel(WorkflowPanel.Instances)" title="Show active workflows" style="cursor:pointer">
+        <span class="pc-kpi-icon pc-kpi-icon--active"><i class="bi bi-arrow-repeat"></i></span>
+        <div><div class="pc-kpi-value">@_instances.Count</div><div class="pc-kpi-label">Active Workflows</div></div>
+    </div>
+    <div class="pc-kpi-card @ActiveKpiClass(WorkflowPanel.Approvals)" @onclick="() => SetPanel(WorkflowPanel.Approvals)" title="Show approval queue" style="cursor:pointer">
+        <span class="pc-kpi-icon pc-kpi-icon--warning"><i class="bi bi-check-circle"></i></span>
+        <div><div class="pc-kpi-value">@_approvals.Count</div><div class="pc-kpi-label">Approvals</div></div>
+    </div>
+    <div class="pc-kpi-card @ActiveKpiClass(WorkflowPanel.Reviews)" @onclick="() => SetPanel(WorkflowPanel.Reviews)" title="Show review queue" style="cursor:pointer">
+        <span class="pc-kpi-icon pc-kpi-icon--info"><i class="bi bi-eye"></i></span>
+        <div><div class="pc-kpi-value">@_reviews.Count</div><div class="pc-kpi-label">Reviews</div></div>
+    </div>
+    <div class="pc-kpi-card @ActiveKpiClass(WorkflowPanel.Classification)" @onclick="() => SetPanel(WorkflowPanel.Classification)" title="Show classification queue" style="cursor:pointer">
+        <span class="pc-kpi-icon pc-kpi-icon--purple"><i class="bi bi-tags"></i></span>
+        <div><div class="pc-kpi-value">@_classifications.Count</div><div class="pc-kpi-label">Classification</div></div>
+    </div>
+    <div class="pc-kpi-card @ActiveKpiClass(WorkflowPanel.Retention)" @onclick="() => SetPanel(WorkflowPanel.Retention)" title="Show retention policies" style="cursor:pointer">
+        <span class="pc-kpi-icon pc-kpi-icon--neutral"><i class="bi bi-clock-history"></i></span>
+        <div><div class="pc-kpi-value">@_retentionPolicies.Count</div><div class="pc-kpi-label">Retention</div></div>
+    </div>
+</div>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger mt-3" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i> @_loadError
+    </div>
+}
+
+<AppFilterPanel @bind-SearchValue="_search" OnSearch="LoadAsync" SearchPlaceholder="Search document workflow records..." />
+
+<div class="um-grid-card mt-3">
+    @if (_loading)
+    {
+        <div class="um-loading-overlay"><div class="um-spinner"></div><span>Loading document workflow...</span></div>
+    }
+
+    @switch (_panel)
+    {
+        case WorkflowPanel.Templates:
+        case WorkflowPanel.Overview:
+            <SfGrid TValue="DocumentWorkflowTemplateDto" DataSource="@_templates" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                <GridEvents TValue="DocumentWorkflowTemplateDto" RowSelected="OnTemplateSelected" />
+                <GridPageSettings PageSize="25" />
+                <GridColumns>
+                    <GridColumn Field="TemplateCode" HeaderText="Code" Width="160" />
+                    <GridColumn Field="TemplateName" HeaderText="Template" Width="260" />
+                    <GridColumn Field="WorkflowType" HeaderText="Type" Width="130" />
+                    <GridColumn Field="TriggerOnCategory" HeaderText="Category Trigger" Width="160" />
+                    <GridColumn Field="RequiresAllApprovals" HeaderText="All Approvals" Width="130" TextAlign="TextAlign.Center" />
+                    <GridColumn Field="IsActive" HeaderText="Status" Width="110" TextAlign="TextAlign.Center">
+                        <Template>@{ var r = (DocumentWorkflowTemplateDto)context; }<span class="um-badge @(r.IsActive ? "um-badge-success" : "um-badge-neutral")">@(r.IsActive ? "Active" : "Inactive")</span></Template>
+                    </GridColumn>
+                    <GridColumn HeaderText="" Width="100" TextAlign="TextAlign.Center">
+                        <Template>@{ var r = (DocumentWorkflowTemplateDto)context; }<button class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEditTemplate(r)"><i class="bi bi-pencil"></i></button><button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDeleteTemplate(r)"><i class="bi bi-trash"></i></button></Template>
+                    </GridColumn>
+                </GridColumns>
+            </SfGrid>
+            break;
+        case WorkflowPanel.Instances:
+            <SfGrid TValue="DocumentWorkflowInstanceDto" DataSource="@_instances" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                <GridPageSettings PageSize="25" />
+                <GridColumns>
+                    <GridColumn Field="InstanceName" HeaderText="Workflow" Width="260" />
+                    <GridColumn Field="WorkflowStatus" HeaderText="Status" Width="140" />
+                    <GridColumn Field="Priority" HeaderText="Priority" Width="120" />
+                    <GridColumn Field="CurrentStepOrder" HeaderText="Step" Width="100" TextAlign="TextAlign.Center" />
+                    <GridColumn Field="DueDateUtc" HeaderText="Due" Width="160" Format="d" />
+                    <GridColumn Field="InitiatedByName" HeaderText="Initiated By" Width="180" />
+                </GridColumns>
+            </SfGrid>
+            break;
+        case WorkflowPanel.Approvals:
+            <SfGrid TValue="DocumentApprovalDto" DataSource="@_approvals" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                <GridPageSettings PageSize="25" />
+                <GridColumns>
+                    <GridColumn Field="ApprovalName" HeaderText="Approval" Width="260" />
+                    <GridColumn Field="ApprovalStatus" HeaderText="Status" Width="140" />
+                    <GridColumn Field="AssignedToName" HeaderText="Assigned To" Width="180" />
+                    <GridColumn Field="AssignedToRoleCode" HeaderText="Role" Width="140" />
+                    <GridColumn Field="DueDateUtc" HeaderText="Due" Width="160" Format="d" />
+                    <GridColumn Field="Comments" HeaderText="Comments" Width="260" />
+                </GridColumns>
+            </SfGrid>
+            break;
+        case WorkflowPanel.Reviews:
+            <SfGrid TValue="DocumentReviewDto" DataSource="@_reviews" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                <GridPageSettings PageSize="25" />
+                <GridColumns>
+                    <GridColumn Field="ReviewName" HeaderText="Review" Width="260" />
+                    <GridColumn Field="ReviewStatus" HeaderText="Status" Width="140" />
+                    <GridColumn Field="ReviewType" HeaderText="Type" Width="140" />
+                    <GridColumn Field="AssignedToName" HeaderText="Assigned To" Width="180" />
+                    <GridColumn Field="DueDateUtc" HeaderText="Due" Width="160" Format="d" />
+                    <GridColumn Field="IssuesFound" HeaderText="Issues" Width="100" TextAlign="TextAlign.Center" />
+                </GridColumns>
+            </SfGrid>
+            break;
+        case WorkflowPanel.Classification:
+            <SfGrid TValue="DocumentClassificationQueueDto" DataSource="@_classifications" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                <GridPageSettings PageSize="25" />
+                <GridColumns>
+                    <GridColumn Field="QueueStatus" HeaderText="Status" Width="140" />
+                    <GridColumn Field="ClassificationMethod" HeaderText="Method" Width="140" />
+                    <GridColumn Field="OcrConfidence" HeaderText="Confidence" Width="130" Format="P0" TextAlign="TextAlign.Right" />
+                    <GridColumn Field="SuggestedCategory" HeaderText="Suggested Category" Width="180" />
+                    <GridColumn Field="SuggestedDocType" HeaderText="Suggested Type" Width="180" />
+                    <GridColumn Field="Priority" HeaderText="Priority" Width="120" />
+                    <GridColumn Field="DueDateUtc" HeaderText="Due" Width="160" Format="d" />
+                </GridColumns>
+            </SfGrid>
+            break;
+        case WorkflowPanel.Retention:
+            <SfGrid TValue="DocumentRetentionPolicyDto" DataSource="@_retentionPolicies" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                <GridPageSettings PageSize="25" />
+                <GridColumns>
+                    <GridColumn Field="PolicyCode" HeaderText="Code" Width="150" />
+                    <GridColumn Field="PolicyName" HeaderText="Policy" Width="260" />
+                    <GridColumn Field="ApplicableCategory" HeaderText="Category" Width="150" />
+                    <GridColumn Field="RetentionPeriodYears" HeaderText="Years" Width="100" TextAlign="TextAlign.Center" />
+                    <GridColumn Field="ActionOnExpiry" HeaderText="Expiry Action" Width="140" />
+                    <GridColumn Field="RegulatoryBasis" HeaderText="Regulatory Basis" Width="320" />
+                </GridColumns>
+            </SfGrid>
+            break;
+        case WorkflowPanel.Audit:
+            <SfGrid TValue="DocumentAuditTrailDto" DataSource="@_auditTrail" AllowPaging="true" AllowSorting="true" EnableHover="true" RowHeight="52">
+                <GridPageSettings PageSize="25" />
+                <GridColumns>
+                    <GridColumn Field="EventDateUtc" HeaderText="Date" Width="170" Format="g" />
+                    <GridColumn Field="EventType" HeaderText="Event" Width="160" />
+                    <GridColumn Field="EventCategory" HeaderText="Category" Width="140" />
+                    <GridColumn Field="PerformedByName" HeaderText="Actor" Width="180" />
+                    <GridColumn Field="EventDescription" HeaderText="Description" Width="360" />
+                    <GridColumn Field="RetentionYears" HeaderText="Retention" Width="120" TextAlign="TextAlign.Center" />
+                </GridColumns>
+            </SfGrid>
+            break;
+    }
+</div>
+
+<SfDialog @bind-Visible="_showTemplateForm" Width="720px" IsModal="true" ShowCloseIcon="false">
+    <DialogEvents Closed="ResetTemplateForm" />
+    <DialogContent>
+        <div class="um-modal-header">
+            <i class="bi bi-kanban"></i><span>@(_editTemplateId.HasValue ? "Edit Workflow Template" : "Add Workflow Template")</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showTemplateForm = false"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <EditForm Model="_templateForm" OnValidSubmit="SaveTemplateAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <div class="um-field"><label>Code <span class="text-danger">*</span></label><InputText @bind-Value="_templateForm.TemplateCode" class="um-input" disabled="@_editTemplateId.HasValue" /><ValidationMessage For="() => _templateForm.TemplateCode" class="text-danger" /></div>
+                    <div class="um-field"><label>Name <span class="text-danger">*</span></label><InputText @bind-Value="_templateForm.TemplateName" class="um-input" /><ValidationMessage For="() => _templateForm.TemplateName" class="text-danger" /></div>
+                    <div class="um-field"><label>Workflow Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_templateForm.WorkflowType" class="um-input"><option>Approval</option><option>Review</option><option>Classification</option><option>Retention</option><option>Compliance</option></InputSelect><ValidationMessage For="() => _templateForm.WorkflowType" class="text-danger" /></div>
+                    <div class="um-field"><label>Trigger Category</label><InputText @bind-Value="_templateForm.TriggerOnCategory" class="um-input" /><ValidationMessage For="() => _templateForm.TriggerOnCategory" class="text-danger" /></div>
+                    <div class="um-field um-field-full"><label>Description</label><InputTextArea @bind-Value="_templateForm.Description" class="um-input" rows="3" /><ValidationMessage For="() => _templateForm.Description" class="text-danger" /></div>
+                    <div class="um-field"><label>Sort Order</label><InputNumber @bind-Value="_templateForm.SortOrder" class="um-input" /><ValidationMessage For="() => _templateForm.SortOrder" class="text-danger" /></div>
+                    <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_templateForm.IsSequential" /> Sequential workflow</label></div>
+                    <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_templateForm.RequiresAllApprovals" /> Require all approvals</label></div>
+                    <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_templateForm.TriggerOnUpload" /> Trigger on upload</label></div>
+                    <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_templateForm.NotifyOnStart" /> Notify on start</label></div>
+                    <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_templateForm.NotifyOnComplete" /> Notify on complete</label></div>
+                    <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_templateForm.AutoArchiveOnComplete" /> Auto archive on complete</label></div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showTemplateForm = false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_editTemplateId.HasValue ? "Save Changes" : "Create")</button>
+            </div>
+        </EditForm>
+    </DialogContent>
+</SfDialog>
+
+<SfDialog @bind-Visible="_showDelete" Width="420px" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="um-confirm-dialog">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3-fill"></i></div>
+            <div class="um-confirm-title">Delete Workflow Template</div>
+            <div class="um-confirm-body">Delete <strong>@_deleteTemplate?.TemplateName</strong>?</div>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button><button class="um-btn um-btn-danger" @onclick="ExecuteDeleteTemplateAsync" disabled="@_saving">Delete</button></div>
+        </div>
+    </DialogContent>
+</SfDialog>
+
+<SfToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
+
+<style>
+@@keyframes um-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
+</style>
+
+@code {
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private WorkflowPanel _panel = WorkflowPanel.Overview;
+    private bool _loading;
+    private bool _saving;
+    private bool _showTemplateForm;
+    private bool _showDelete;
+    private string _search = string.Empty;
+    private string? _loadError;
+    private Guid? _editTemplateId;
+    private DocumentWorkflowTemplateDto? _deleteTemplate;
+    private SfToast _toast = default!;
+    private TemplateForm _templateForm = new();
+    private List<DocumentWorkflowTemplateDto> _templates = [];
+    private List<DocumentWorkflowInstanceDto> _instances = [];
+    private List<DocumentApprovalDto> _approvals = [];
+    private List<DocumentReviewDto> _reviews = [];
+    private List<DocumentClassificationQueueDto> _classifications = [];
+    private List<DocumentRetentionPolicyDto> _retentionPolicies = [];
+    private List<DocumentAuditTrailDto> _auditTrail = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        _panel = PanelFromRoute();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents & Forms", "/tenant/documents/categories2"), new("Document Workflow", null));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _templates = (await Api.SearchDocumentWorkflowTemplatesAsync(_tenantId, searchTerm: _search, pageSize: 200))?.Items.ToList() ?? [];
+            _instances = (await Api.SearchDocumentWorkflowInstancesAsync(_tenantId, pageSize: 200))?.Items.ToList() ?? [];
+            _approvals = (await Api.SearchDocumentApprovalsAsync(_tenantId, approvalStatus: "Pending", pageSize: 200))?.Items.ToList() ?? [];
+            _reviews = (await Api.SearchDocumentReviewsAsync(_tenantId, reviewStatus: "Pending", pageSize: 200))?.Items.ToList() ?? [];
+            _classifications = (await Api.SearchDocumentClassificationQueueAsync(_tenantId, pageSize: 200))?.Items.ToList() ?? [];
+            _retentionPolicies = (await Api.SearchDocumentRetentionPoliciesAsync(_tenantId, searchTerm: _search, pageSize: 200))?.Items.ToList() ?? [];
+            _auditTrail = (await Api.SearchDocumentWorkflowAuditTrailAsync(_tenantId, eventType: _search, pageSize: 200))?.Items.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private WorkflowPanel PanelFromRoute()
+    {
+        var path = Nav.ToBaseRelativePath(Nav.Uri).Trim('/').ToLowerInvariant();
+        return path switch
+        {
+            "tenant/documents/workflow/templates" => WorkflowPanel.Templates,
+            "tenant/documents/workflow/instances" => WorkflowPanel.Instances,
+            "tenant/documents/workflow/approvals" => WorkflowPanel.Approvals,
+            "tenant/documents/workflow/reviews" => WorkflowPanel.Reviews,
+            "tenant/documents/workflow/classification" => WorkflowPanel.Classification,
+            "tenant/documents/workflow/retention" => WorkflowPanel.Retention,
+            "tenant/documents/workflow/audit" => WorkflowPanel.Audit,
+            _ => WorkflowPanel.Overview
+        };
+    }
+
+    private void SetPanel(WorkflowPanel panel) => _panel = panel;
+    private string ActiveKpiClass(WorkflowPanel panel) => _panel == panel ? "pc-kpi-card--active" : string.Empty;
+    private void OnTemplateSelected(RowSelectEventArgs<DocumentWorkflowTemplateDto> args) => OpenEditTemplate(args.Data);
+
+    private void OpenCreateTemplate()
+    {
+        _editTemplateId = null;
+        _templateForm = new();
+        _showTemplateForm = true;
+    }
+
+    private void OpenEditTemplate(DocumentWorkflowTemplateDto item)
+    {
+        _editTemplateId = item.WorkflowTemplateId;
+        _templateForm = new()
+        {
+            TemplateCode = item.TemplateCode,
+            TemplateName = item.TemplateName,
+            WorkflowType = item.WorkflowType,
+            Description = item.Description,
+            IsSequential = item.IsSequential,
+            RequiresAllApprovals = item.RequiresAllApprovals,
+            AutoArchiveOnComplete = item.AutoArchiveOnComplete,
+            NotifyOnStart = item.NotifyOnStart,
+            NotifyOnComplete = item.NotifyOnComplete,
+            TriggerOnUpload = item.TriggerOnUpload,
+            TriggerOnCategory = item.TriggerOnCategory,
+            TriggerOnDocType = item.TriggerOnDocType,
+            SortOrder = item.SortOrder
+        };
+        _showTemplateForm = true;
+    }
+
+    private async Task SaveTemplateAsync()
+    {
+        _saving = true;
+        try
+        {
+            if (_editTemplateId.HasValue)
+            {
+                await Api.UpdateDocumentWorkflowTemplateAsync(_editTemplateId.Value, new UpdateWorkflowTemplateRequest(_editTemplateId.Value, _templateForm.TemplateName, _templateForm.Description, _templateForm.IsSequential, _templateForm.RequiresAllApprovals, _templateForm.AutoArchiveOnComplete, _templateForm.NotifyOnStart, _templateForm.NotifyOnComplete, _templateForm.TriggerOnUpload, _templateForm.TriggerOnCategory, _templateForm.TriggerOnDocType, _templateForm.SortOrder, _tenantAdminUserId));
+            }
+            else
+            {
+                await Api.CreateDocumentWorkflowTemplateAsync(new CreateWorkflowTemplateRequest(_tenantId, _templateForm.TemplateName, _templateForm.TemplateCode, _templateForm.WorkflowType, _templateForm.Description, _templateForm.IsSequential, _templateForm.RequiresAllApprovals, _templateForm.AutoArchiveOnComplete, _templateForm.NotifyOnStart, _templateForm.NotifyOnComplete, _templateForm.TriggerOnUpload, _templateForm.TriggerOnCategory, _templateForm.TriggerOnDocType, _templateForm.SortOrder, _tenantAdminUserId));
+            }
+
+            _showTemplateForm = false;
+            await _toast.ShowAsync(new() { Content = "Workflow template saved successfully", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new() { Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDeleteTemplate(DocumentWorkflowTemplateDto item)
+    {
+        _deleteTemplate = item;
+        _showDelete = true;
+    }
+
+    private async Task ExecuteDeleteTemplateAsync()
+    {
+        if (_deleteTemplate is null) return;
+        _saving = true;
+        try
+        {
+            await Api.DeleteDocumentWorkflowTemplateAsync(_deleteTemplate.WorkflowTemplateId, _tenantAdminUserId);
+            _showDelete = false;
+            await _toast.ShowAsync(new() { Content = "Workflow template deleted successfully", CssClass = "e-toast-success" });
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new() { Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ResetTemplateForm()
+    {
+        _templateForm = new();
+        _editTemplateId = null;
+    }
+
+    private enum WorkflowPanel
+    {
+        Overview,
+        Templates,
+        Instances,
+        Approvals,
+        Reviews,
+        Classification,
+        Retention,
+        Audit
+    }
+
+    private sealed class TemplateForm
+    {
+        [Required, StringLength(120)] public string TemplateName { get; set; } = string.Empty;
+        [Required, StringLength(60)] public string TemplateCode { get; set; } = string.Empty;
+        [Required, StringLength(40)] public string WorkflowType { get; set; } = "Approval";
+        [StringLength(500)] public string? Description { get; set; }
+        public bool IsSequential { get; set; } = true;
+        public bool RequiresAllApprovals { get; set; } = true;
+        public bool AutoArchiveOnComplete { get; set; }
+        public bool NotifyOnStart { get; set; } = true;
+        public bool NotifyOnComplete { get; set; } = true;
+        public bool TriggerOnUpload { get; set; }
+        [StringLength(80)] public string? TriggerOnCategory { get; set; }
+        [StringLength(80)] public string? TriggerOnDocType { get; set; }
+        [Range(0, 9999)] public int SortOrder { get; set; }
+    }
+}

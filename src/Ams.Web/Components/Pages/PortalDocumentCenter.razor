@@ -1,300 +1,876 @@
 @page "/portal/documents"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Microsoft.AspNetCore.Components.Forms
+@using Ams.Application.Common.Dtos
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
-@inject ConfirmationDialogService Confirmations
 
-<PageTitle>Portal Document Center — AMS</PageTitle>
+<PageTitle>Portal Document Center — AMS Enterprise</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Portal Document Center"
-               Subtitle="Manage documents shared with insured clients through the self-service portal"
-               Icon="bi-folder2-open">
-    <Actions>
-        <button class="um-btn um-btn-primary" @onclick="() => _showUpload = true">
-            <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Share Document
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- KPI strip -->
-<div class="pd-kpi-strip">
-    <div class="pd-kpi-card">
-        <div class="pd-kpi-icon pd-ki-blue"><i class="bi bi-file-earmark" aria-hidden="true"></i></div>
-        <div><div class="pd-kv">@_docs.Count</div><div class="pd-kl">Total Documents</div></div>
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="pd-toast pd-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @_toastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pd-toast-close" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
-    <div class="pd-kpi-card">
-        <div class="pd-kpi-icon pd-ki-green"><i class="bi bi-eye" aria-hidden="true"></i></div>
-        <div><div class="pd-kv">@_docs.Sum(d => d.ViewCount)</div><div class="pd-kl">Total Views</div></div>
-    </div>
-    <div class="pd-kpi-card">
-        <div class="pd-kpi-icon pd-ki-amber"><i class="bi bi-download" aria-hidden="true"></i></div>
-        <div><div class="pd-kv">@_docs.Sum(d => d.DownloadCount)</div><div class="pd-kl">Downloads</div></div>
-    </div>
-    <div class="pd-kpi-card">
-        <div class="pd-kpi-icon pd-ki-green"><i class="bi bi-people" aria-hidden="true"></i></div>
-        <div><div class="pd-kv">@_docs.Select(d => d.AccountName).Distinct().Count()</div><div class="pd-kl">Accounts with Docs</div></div>
-    </div>
-</div>
+}
 
-<!-- Filter bar -->
-<div class="pd-filter-bar">
-    <div class="pd-search-wrap">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        <input class="pd-search" placeholder="Search documents or accounts…" @bind="_search" @bind:event="oninput" />
-    </div>
-    <select class="pd-sel" @bind="_catFilter">
-        <option value="">All Categories</option>
-        <option value="Policy">Policy</option>
-        <option value="Certificate">Certificate</option>
-        <option value="ID Card">ID Card</option>
-        <option value="Invoice">Invoice</option>
-        <option value="Form">Form</option>
-        <option value="Claims">Claims</option>
-    </select>
-    <select class="pd-sel" @bind="_visFilter">
-        <option value="">All Visibility</option>
-        <option value="Shared">Shared</option>
-        <option value="Agency Only">Agency Only</option>
-    </select>
-</div>
-
-<!-- Grid -->
-<div class="pd-grid-wrap">
-    <SfGrid TValue="PortalDoc" DataSource="Filtered" AllowSorting="true" AllowFiltering="true"
-            EnableHover="true" RowHeight="56">
-        <GridFilterSettings Type="Syncfusion.Blazor.Grids.FilterType.Menu" />
-        <GridColumns>
-            <GridColumn HeaderText="Document" MinWidth="220" Field="@nameof(PortalDoc.Name)">
-                <Template>
-                    @{ var d = (PortalDoc)context; }
-                    <div class="pd-doc-cell">
-                        <div class="pd-doc-icon @DocIconCss(d.Category)"><i class="bi @DocIcon(d.Category)" aria-hidden="true"></i></div>
-                        <div>
-                            <div class="pd-doc-name">@d.Name</div>
-                            <div class="pd-doc-size">@d.FileType · @d.FileSizeKb KB</div>
-                        </div>
-                    </div>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PortalDoc.AccountName)" HeaderText="Account" MinWidth="160" />
-            <GridColumn Field="@nameof(PortalDoc.Category)" HeaderText="Category" Width="130">
-                <Template>@{ var d = (PortalDoc)context; }<span class="@CatBadge(d.Category)">@d.Category</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PortalDoc.Visibility)" HeaderText="Visibility" Width="120">
-                <Template>@{ var d = (PortalDoc)context; }<span class="@VisBadge(d.Visibility)">@d.Visibility</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PortalDoc.SharedAt)" HeaderText="Shared" Width="130" Type="ColumnType.DateTime" Format="MMM d, yyyy" />
-            <GridColumn Field="@nameof(PortalDoc.ViewCount)" HeaderText="Views" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-            <GridColumn Field="@nameof(PortalDoc.DownloadCount)" HeaderText="Downloads" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right" />
-            <GridColumn HeaderText="" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var d = (PortalDoc)context; }
-                    <div class="pd-row-actions">
-                        <button class="um-btn um-btn-ghost um-btn-xs" title="Toggle visibility"
-                                @onclick="() => ToggleVisibility(d)">
-                            <i class="bi @(d.Visibility=="Shared" ? "bi-eye-slash" : "bi-eye")" aria-hidden="true"></i>
-                        </button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" title="Remove" @onclick="() => RemoveDoc(d)">
-                            <i class="bi bi-trash" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<!-- Share document dialog -->
-<SfDialog @bind-Visible="_showUpload" Width="680px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
+@if (_showShare)
+{
+    <div class="pd-modal-backdrop" role="presentation" @onclick="CloseShare">
+        <div class="pd-modal pd-action-modal" role="dialog" aria-modal="true" aria-labelledby="pd-share-title" @onclick:stopPropagation="true">
             <div class="um-modal-header">
                 <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
-                <span>Share Document</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseUpload"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                <span id="pd-share-title">Share Portal Document</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseShare" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
-            <div class="um-modal-body">
-                <div class="um-form-grid">
-                    <div class="um-field">
-                        <label>Document Name <span class="um-required">*</span></label>
-                        <SfTextBox Placeholder="Document name" @bind-Value="_newDoc.Name" />
+            <EditForm Model="_shareForm" OnValidSubmit="ShareDocumentAsync" OnInvalidSubmit="ShowValidationToast">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro">
+                        <span><i class="bi bi-shield-lock" aria-hidden="true"></i> Client portal distribution</span>
+                        <p>Publish a document to the insured portal and track access from this administration workspace.</p>
                     </div>
-                    <div class="um-field">
-                        <label>Category</label>
-                        <SfDropDownList TValue="string" TItem="Lv" DataSource="_catOpts" Placeholder="Category" Width="100%" @bind-Value="_newDoc.Category">
-                            <DropDownListFieldSettings Value="V" Text="L" />
-                        </SfDropDownList>
-                    </div>
-                    <div class="um-field">
-                        <label>Account Name</label>
-                        <SfTextBox Placeholder="Account name" @bind-Value="_newDoc.AccountName" />
-                    </div>
-                    <div class="um-field">
-                        <label>Visibility</label>
-                        <SfDropDownList TValue="string" TItem="Lv" DataSource="_visOpts" Placeholder="Visibility" Width="100%" @bind-Value="_newDoc.Visibility">
-                            <DropDownListFieldSettings Value="V" Text="L" />
-                        </SfDropDownList>
-                    </div>
-                    <div class="um-field um-field--full">
-                        <label>File</label>
-                        <div class="pd-drop-zone">
-                            <i class="bi bi-cloud-arrow-up pd-drop-icon" aria-hidden="true"></i>
-                            <span>Drag &amp; drop file here or <strong>browse</strong></span>
-                            <span class="pd-drop-hint">PDF, DOCX, XLSX — max 25 MB</span>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Document Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_shareForm.Name" placeholder="Riverside BOP policy" />
+                            <ValidationMessage For="() => _shareForm.Name" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Account Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_shareForm.AccountName" placeholder="Riverside Construction LLC" />
+                            <ValidationMessage For="() => _shareForm.AccountName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Category <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_shareForm.Category">
+                                @foreach (var option in CategoryOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _shareForm.Category" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>File Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_shareForm.FileType">
+                                @foreach (var option in FileTypeOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _shareForm.FileType" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>File Size (KB) <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_shareForm.FileSizeKb" />
+                            <ValidationMessage For="() => _shareForm.FileSizeKb" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Visibility <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_shareForm.Visibility">
+                                @foreach (var option in VisibilityOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _shareForm.Visibility" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Shared Date</label>
+                            <InputDate class="form-control" @bind-Value="_shareForm.SharedAt" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Portal File</label>
+                            <InputFile OnChange="OnFileSelected" />
+                            @if (!string.IsNullOrWhiteSpace(_selectedFileName))
+                            {
+                                <div class="pd-file-note"><i class="bi bi-paperclip" aria-hidden="true"></i> @_selectedFileName</div>
+                            }
+                            else
+                            {
+                                <div class="pd-drop-zone">
+                                    <i class="bi bi-cloud-arrow-up pd-drop-icon" aria-hidden="true"></i>
+                                    <span>Select a PDF, DOCX, XLSX, or image up to 25 MB.</span>
+                                </div>
+                            }
                         </div>
                     </div>
                 </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseShare" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        Share Document
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showEdit && _selected is not null)
+{
+    <div class="pd-modal-backdrop" role="presentation" @onclick="CloseEdit">
+        <div class="pd-modal pd-action-modal" role="dialog" aria-modal="true" aria-labelledby="pd-edit-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                <span id="pd-edit-title">Edit Portal Document</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEdit" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
-            <div class="um-modal-footer">
-                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseUpload">Cancel</button>
-                <button type="button" class="um-btn um-btn-primary"
-                        disabled="@(string.IsNullOrEmpty(_newDoc.Name))"
-                        @onclick="CommitShare">
-                    <i class="bi bi-check-lg" aria-hidden="true"></i> Share
-                </button>
+            <EditForm Model="_editForm" OnValidSubmit="SaveEditAsync" OnInvalidSubmit="ShowValidationToast">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Document Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_editForm.Name" />
+                            <ValidationMessage For="() => _editForm.Name" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Account Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_editForm.AccountName" />
+                            <ValidationMessage For="() => _editForm.AccountName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Category <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_editForm.Category">
+                                @foreach (var option in CategoryOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _editForm.Category" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>File Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_editForm.FileType">
+                                @foreach (var option in FileTypeOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _editForm.FileType" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>File Size (KB) <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_editForm.FileSizeKb" />
+                            <ValidationMessage For="() => _editForm.FileSizeKb" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Visibility <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_editForm.Visibility">
+                                @foreach (var option in VisibilityOptions)
+                                {
+                                    <option value="@option">@option</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _editForm.Visibility" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Shared Date</label>
+                            <InputDate class="form-control" @bind-Value="_editForm.SharedAt" />
+                        </div>
+                        <div class="um-field">
+                            <label>Views <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_editForm.ViewCount" />
+                            <ValidationMessage For="() => _editForm.ViewCount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Downloads <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_editForm.DownloadCount" />
+                            <ValidationMessage For="() => _editForm.DownloadCount" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseEdit" disabled="@_saving">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save Changes</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_confirmAction is not null)
+{
+    <div class="pd-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="pd-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="pd-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></div>
+                <div class="um-confirm-content">
+                    <h3 id="pd-confirm-title">@_confirmAction.Title</h3>
+                    <p>@_confirmAction.Message</p>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_saving">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteConfirmAsync" disabled="@_saving">
+                        @if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @_confirmAction.ConfirmLabel
+                    </button>
+                </div>
             </div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
+
+<div class="pd-enterprise-page">
+    <section class="pd-header">
+        <div class="pd-header-left">
+            <div class="pd-lob-icon"><i class="bi bi-folder2-open" aria-hidden="true"></i></div>
+            <div class="pd-header-info">
+                <div class="pd-title-row">
+                    <h1 class="pd-page-title">Portal Document Center</h1>
+                    <span class="pd-status-pill"><i class="bi bi-shield-check" aria-hidden="true"></i> Client portal governed</span>
+                    @if (!string.IsNullOrWhiteSpace(_activeFilter))
+                    {
+                        <span class="pd-filter-note"><i class="bi bi-funnel" aria-hidden="true"></i> @FilterLabel(_activeFilter)</span>
+                    }
+                </div>
+                <div class="pd-sub-row">
+                    <span class="pd-sub-chip"><i class="bi bi-people" aria-hidden="true"></i> @AccountCount accounts</span>
+                    <span class="pd-sub-chip"><i class="bi bi-eye" aria-hidden="true"></i> @TotalViews views</span>
+                    <span class="pd-sub-chip"><i class="bi bi-download" aria-hidden="true"></i> @TotalDownloads downloads</span>
+                </div>
+            </div>
+        </div>
+        <div class="pd-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi @(_loading ? "bi-arrow-repeat pd-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenShare">
+                <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Share Document
+            </button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pd-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_loadError
+        </div>
+    }
+
+    <section class="pd-kpi-strip" aria-label="Portal document metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="pd-kpi-card @kpi.Tone @(_activeFilter == kpi.Filter ? "pd-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetFilter(kpi.Filter)">
+                <span class="pd-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="pd-kpi-copy">
+                    <span class="pd-kpi-label">@kpi.Label</span>
+                    <span class="pd-kpi-value">@kpi.Value</span>
+                    <span class="pd-kpi-caption">@kpi.Caption</span>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="pd-enterprise-search" aria-label="Portal document filters">
+        <div class="pd-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="pd-search-body">
+            <label for="portal-doc-search">Search portal documents</label>
+            <input id="portal-doc-search" class="pd-search-input" placeholder="Search by document, account, category, or file type..." @bind="_search" @bind:event="oninput" />
+            <span class="pd-search-hint">Client-facing document inventory, visibility, and engagement tracking.</span>
+        </div>
+        <select class="pd-filter-select" title="Category filter" @bind="_categoryFilter">
+            <option value="">All Categories</option>
+            @foreach (var option in CategoryOptions)
+            {
+                <option value="@option">@option</option>
+            }
+        </select>
+        <select class="pd-filter-select" title="Visibility filter" @bind="_visibilityFilter">
+            <option value="">All Visibility</option>
+            @foreach (var option in VisibilityOptions)
+            {
+                <option value="@option">@option</option>
+            }
+        </select>
+        <div class="pd-search-result"><strong>@Filtered.Count()</strong><span>shown</span></div>
+    </section>
+
+    <section class="pd-workflow-strip pd-workflow-strip--polished" aria-label="Portal document workflow">
+        @foreach (var workflow in WorkflowCards)
+        {
+            <button type="button" class="pd-workflow-card @workflow.Tone @(_activeFilter == workflow.Filter ? "pd-workflow-card--active" : null)" @onclick="() => SetFilter(workflow.Filter)">
+                <span class="pd-workflow-icon"><i class="bi @workflow.Icon" aria-hidden="true"></i></span>
+                <span class="pd-workflow-content">
+                    <strong>@WorkflowCount(workflow.Filter)</strong>
+                    <span>@workflow.Title</span>
+                    <small>@workflow.Status — @workflow.Detail</small>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="pd-grid-wrap">
+        <div class="pd-grid-toolbar">
+            <div>
+                <strong>Portal documents</strong>
+                <span>@Filtered.Count() of @_docs.Count documents match the current filters</span>
+            </div>
+            <div class="pd-toolbar-actions">
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear filters</button>
+                <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenShare"><i class="bi bi-plus-lg" aria-hidden="true"></i> Share</button>
+            </div>
+        </div>
+
+        @if (_loading)
+        {
+            <div class="pd-loading"><i class="bi bi-arrow-repeat pd-spin" aria-hidden="true"></i><span>Loading portal documents...</span></div>
+        }
+        else if (!Filtered.Any())
+        {
+            <div class="pd-empty-state"><i class="bi bi-folder-x" aria-hidden="true"></i><strong>No portal documents found</strong><span>Adjust filters or share a new document with client portal users.</span></div>
+        }
+        else
+        {
+            <div class="pd-table-scroll">
+                <table class="pd-table">
+                    <thead>
+                        <tr>
+                            <th>Document</th>
+                            <th>Account</th>
+                            <th>Category</th>
+                            <th>Visibility</th>
+                            <th>Shared</th>
+                            <th>Views</th>
+                            <th>Downloads</th>
+                            <th class="pd-actions-col">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var doc in Filtered)
+                        {
+                            <tr class="pd-table-row @(_selected?.Id == doc.Id ? "pd-table-row--selected" : null)" @onclick="() => SelectDoc(doc)">
+                                <td>
+                                    <div class="pd-doc-cell">
+                                        <div class="pd-doc-icon @DocIconCss(doc.Category)"><i class="bi @DocIcon(doc.Category)" aria-hidden="true"></i></div>
+                                        <div>
+                                            <strong>@doc.Name</strong>
+                                            <span>@doc.FileType · @doc.FileSizeKb.ToString("N0") KB</span>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>@doc.AccountName</td>
+                                <td><span class="pd-cat @CatCss(doc.Category)">@doc.Category</span></td>
+                                <td><span class="pd-vis @VisCss(doc.Visibility)">@doc.Visibility</span></td>
+                                <td>@doc.SharedAt.ToString("MMM d, yyyy")</td>
+                                <td class="pd-number">@doc.ViewCount.ToString("N0")</td>
+                                <td class="pd-number">@doc.DownloadCount.ToString("N0")</td>
+                                <td class="pd-actions-col">
+                                    <div class="pd-row-actions">
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Preview" @onclick="() => SelectDoc(doc)" @onclick:stopPropagation="true"><i class="bi bi-layout-sidebar-inset-reverse" aria-hidden="true"></i></button>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="@(doc.Visibility == "Shared" ? "Hide from portal" : "Share to portal")" @onclick="() => ConfirmToggleVisibility(doc)" @onclick:stopPropagation="true"><i class="bi @(doc.Visibility == "Shared" ? "bi-eye-slash" : "bi-eye")" aria-hidden="true"></i></button>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick="() => OpenEdit(doc)" @onclick:stopPropagation="true"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs text-danger" title="Remove" @onclick="() => ConfirmRemove(doc)" @onclick:stopPropagation="true"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    @if (_selected is not null)
+    {
+        <aside class="pd-detail-panel" aria-label="Selected portal document detail">
+            <div class="pd-detail-head">
+                <div class="pd-detail-title-block">
+                    <span class="pd-detail-eyebrow"><i class="bi bi-file-earmark-check" aria-hidden="true"></i> Portal document</span>
+                    <h2>@_selected.Name</h2>
+                    <div class="pd-detail-meta">
+                        <span><i class="bi bi-building" aria-hidden="true"></i> @_selected.AccountName</span>
+                        <span><i class="bi bi-calendar2-check" aria-hidden="true"></i> Shared @_selected.SharedAt.ToString("MMM d, yyyy")</span>
+                        <span><i class="bi bi-hdd" aria-hidden="true"></i> @_selected.FileType · @_selected.FileSizeKb.ToString("N0") KB</span>
+                    </div>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selected = null"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="pd-detail-body">
+                <div class="pd-detail-summary">
+                    @Meta("Visibility", _selected.Visibility)
+                    @Meta("Category", _selected.Category)
+                    @Meta("Views", _selected.ViewCount.ToString("N0"))
+                    @Meta("Downloads", _selected.DownloadCount.ToString("N0"))
+                </div>
+                <div class="pd-detail-actions">
+                    <button type="button" class="um-btn um-btn-primary" @onclick="() => ConfirmDownload(_selected)"><i class="bi bi-download" aria-hidden="true"></i> Download</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmToggleVisibility(_selected)"><i class="bi @(_selected.Visibility == "Shared" ? "bi-eye-slash" : "bi-eye")" aria-hidden="true"></i> @(_selected.Visibility == "Shared" ? "Hide" : "Share")</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="() => ConfirmRemove(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Remove</button>
+                </div>
+            </div>
+        </aside>
+    }
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly string[] CategoryOptions = ["Policy", "Certificate", "ID Card", "Invoice", "Form", "Claims"];
+    private static readonly string[] VisibilityOptions = ["Shared", "Agency Only"];
+    private static readonly string[] FileTypeOptions = ["PDF", "DOCX", "XLSX", "PNG", "JPG"];
+
     private Guid _tenantId;
-    private SfToast? _toast;
+    private Guid _tenantAdminUserId;
+    private List<PortalAdminDocumentDto> _docs = [];
+    private PortalAdminDocumentDto? _selected;
     private string _search = string.Empty;
-    private string _catFilter = string.Empty;
-    private string _visFilter = string.Empty;
-    private bool _showUpload;
-    private PortalDoc _newDoc = new();
+    private string _categoryFilter = string.Empty;
+    private string _visibilityFilter = string.Empty;
+    private string _activeFilter = string.Empty;
+    private string? _loadError;
+    private bool _loading;
+    private bool _saving;
+    private bool _showShare;
+    private bool _showEdit;
+    private string? _selectedFileName;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private string _toastIcon = "bi-check-circle-fill";
+    private ConfirmAction? _confirmAction;
+    private DocumentFormModel _shareForm = new();
+    private DocumentFormModel _editForm = new();
 
-    private List<PortalDoc> _docs = [];
+    private IEnumerable<PortalAdminDocumentDto> Filtered => _docs
+        .Where(MatchesSearch)
+        .Where(d => string.IsNullOrWhiteSpace(_categoryFilter) || d.Category == _categoryFilter)
+        .Where(d => string.IsNullOrWhiteSpace(_visibilityFilter) || d.Visibility == _visibilityFilter)
+        .Where(MatchesActiveFilter)
+        .OrderByDescending(d => d.SharedAt)
+        .ThenBy(d => d.AccountName)
+        .ThenBy(d => d.Name);
 
-    private static readonly List<Lv> _catOpts =
+    private int TotalViews => _docs.Sum(d => d.ViewCount);
+    private int TotalDownloads => _docs.Sum(d => d.DownloadCount);
+    private int AccountCount => _docs.Select(d => d.AccountName).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    private KpiCard[] Kpis =>
     [
-        new("Policy","Policy"), new("Certificate","Certificate"), new("ID Card","ID Card"),
-        new("Invoice","Invoice"), new("Form","Form"), new("Claims","Claims"),
+        new("Total Documents", _docs.Count.ToString("N0"), "All portal documents", "Full portal inventory", "bi-folder2-open", "pd-ki-blue", string.Empty),
+        new("Shared", _docs.Count(d => d.Visibility == "Shared").ToString("N0"), "Documents visible to clients", "Published to portal", "bi-cloud-check", "pd-ki-green", "Shared"),
+        new("Agency Only", _docs.Count(d => d.Visibility == "Agency Only").ToString("N0"), "Documents hidden from clients", "Internal control", "bi-lock", "pd-ki-amber", "Agency Only"),
+        new("Certificates", _docs.Count(d => d.Category == "Certificate").ToString("N0"), "Certificate documents", "Proof of insurance", "bi-file-earmark-text", "pd-ki-purple", "Certificate"),
+        new("Viewed", _docs.Count(d => d.ViewCount > 0).ToString("N0"), "Documents viewed by clients", $"{TotalViews:N0} total views", "bi-eye", "pd-ki-cyan", "viewed"),
+        new("Downloaded", _docs.Count(d => d.DownloadCount > 0).ToString("N0"), "Documents downloaded by clients", $"{TotalDownloads:N0} downloads", "bi-download", "pd-ki-red", "downloaded")
     ];
-    private static readonly List<Lv> _visOpts =
+    private static WorkflowCardModel[] WorkflowCards =>
     [
-        new("Shared","Shared"), new("Agency Only","Agency Only"),
+        new("Publish", "Shared", "Visible in client portal", "bi-cloud-check", "Shared", "pd-wf-shared"),
+        new("Control", "Agency Only", "Hidden until ready", "bi-lock", "Agency Only", "pd-wf-control"),
+        new("Certify", "Certificates", "Client proof documents", "bi-file-earmark-text", "Certificate", "pd-wf-certify"),
+        new("Engage", "Viewed", "Client opened", "bi-eye", "viewed", "pd-wf-engage"),
+        new("Deliver", "Downloaded", "Client downloaded", "bi-download", "downloaded", "pd-wf-deliver")
     ];
-
-    private IEnumerable<PortalDoc> Filtered => _docs.Where(d =>
-        (string.IsNullOrEmpty(_search) || d.Name.Contains(_search, StringComparison.OrdinalIgnoreCase) || d.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
-        (string.IsNullOrEmpty(_catFilter) || d.Category == _catFilter) &&
-        (string.IsNullOrEmpty(_visFilter) || d.Visibility == _visFilter));
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Portal","/portal/users"), new("Documents",""));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Portal", "/portal/users"), new("Documents", ""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        var result = await Api.SearchPortalAdminDocumentsAsync(_tenantId, _search);
-        _docs = result?.Items.Select(d => new PortalDoc { Id = d.Id, Name = d.Name, AccountName = d.AccountName, Category = d.Category, FileType = d.FileType, FileSizeKb = d.FileSizeKb, Visibility = d.Visibility, SharedAt = d.SharedAt, ViewCount = d.ViewCount, DownloadCount = d.DownloadCount }).ToList() ?? [];
+        try
+        {
+            _loading = true;
+            _loadError = null;
+            var result = await Api.SearchPortalAdminDocumentsAsync(_tenantId, _search);
+            _docs = result?.Items.ToList() ?? [];
+            if (_selected is not null)
+            {
+                _selected = _docs.FirstOrDefault(d => d.Id == _selected.Id);
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private async Task ToggleVisibility(PortalDoc d)
+    private void OpenShare()
     {
-        d.Visibility = d.Visibility == "Shared" ? "Agency Only" : "Shared";
-        await Api.SetPortalAdminRecordStatusAsync(d.Id, d.Visibility);
-        await LoadAsync();
+        _shareForm = new DocumentFormModel { SharedAt = DateTime.Today };
+        _selectedFileName = null;
+        _showShare = true;
     }
 
-    private async Task CommitShare()
+    private void CloseShare()
     {
-        _newDoc.Id = Guid.NewGuid();
-        _newDoc.SharedAt = DateTime.Today;
-        _newDoc.FileType = "PDF";
-        _newDoc.FileSizeKb = 120;
-        var json = System.Text.Json.JsonSerializer.Serialize(new { name = _newDoc.Name, accountName = _newDoc.AccountName, category = _newDoc.Category, fileType = _newDoc.FileType, fileSizeKb = _newDoc.FileSizeKb, visibility = _newDoc.Visibility, sharedAt = _newDoc.SharedAt, viewCount = 0, downloadCount = 0 });
-        await Api.CreatePortalAdminRecordAsync(new UpsertPortalAdminRecordRequest(_tenantId, "PortalDocument", _newDoc.Name, _newDoc.Name, _newDoc.Visibility, json));
-        CloseUpload();
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = $"Document '{_newDoc.Name}' shared to portal.", CssClass = "e-toast-success" });
-        _newDoc = new();
-        await LoadAsync();
+        if (_saving) return;
+        _showShare = false;
+        _selectedFileName = null;
+        _shareForm = new DocumentFormModel { SharedAt = DateTime.Today };
     }
 
-    private async Task RemoveDoc(PortalDoc d)
+    private void OpenEdit(PortalAdminDocumentDto doc)
     {
-        if (!await Confirmations.ConfirmAsync("Remove document", $"Remove {d.Name} from the portal document center?", "Remove")) return;
-        await Api.DeletePortalAdminRecordAsync(d.Id);
-        if (_toast is not null)
-            await _toast.ShowAsync(new ToastModel { Content = "Document removed from portal.", CssClass = "e-toast-success" });
-        await LoadAsync();
+        _selected = doc;
+        _editForm = DocumentFormModel.FromDto(doc);
+        _showEdit = true;
     }
 
-    private void CloseUpload() { _showUpload = false; _newDoc = new(); }
+    private void CloseEdit()
+    {
+        if (_saving) return;
+        _showEdit = false;
+    }
 
-    private static string DocIcon(string cat) => cat switch
+    private void SelectDoc(PortalAdminDocumentDto doc) => _selected = doc;
+
+    private void ClearFilters()
+    {
+        _search = string.Empty;
+        _categoryFilter = string.Empty;
+        _visibilityFilter = string.Empty;
+        _activeFilter = string.Empty;
+    }
+
+    private void SetFilter(string filter)
+    {
+        _activeFilter = _activeFilter == filter ? string.Empty : filter;
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        _selectedFileName = file.Name;
+        _shareForm.FileType = ResolveFileType(file.Name);
+        _shareForm.FileSizeKb = Math.Max(1, (int)Math.Ceiling(file.Size / 1024d));
+        if (string.IsNullOrWhiteSpace(_shareForm.Name))
+        {
+            _shareForm.Name = Path.GetFileNameWithoutExtension(file.Name);
+        }
+    }
+
+    private async Task ShareDocumentAsync()
+    {
+        try
+        {
+            _saving = true;
+            var dto = _shareForm.ToDto(Guid.NewGuid());
+            await Api.CreatePortalAdminRecordAsync(ToRequest(dto));
+            _showShare = false;
+            _selectedFileName = null;
+            ShowToast($"Document '{dto.Name}' shared to portal.");
+            await LoadAsync();
+            _selected = _docs.FirstOrDefault(d => d.Name == dto.Name && d.AccountName == dto.AccountName);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Share failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (_selected is null) return;
+        try
+        {
+            _saving = true;
+            var dto = _editForm.ToDto(_selected.Id);
+            await Api.UpdatePortalAdminRecordAsync(_selected.Id, ToRequest(dto));
+            _showEdit = false;
+            ShowToast($"Document '{dto.Name}' updated.");
+            await LoadAsync();
+            _selected = _docs.FirstOrDefault(d => d.Id == dto.Id);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmToggleVisibility(PortalAdminDocumentDto doc)
+    {
+        var newVisibility = doc.Visibility == "Shared" ? "Agency Only" : "Shared";
+        _confirmAction = new ConfirmAction(
+            newVisibility == "Shared" ? "Share document" : "Hide document",
+            $"Change '{doc.Name}' visibility to {newVisibility}?",
+            newVisibility == "Shared" ? "Share" : "Hide",
+            newVisibility == "Shared" ? "bi-eye" : "bi-eye-slash",
+            () => ToggleVisibilityAsync(doc, newVisibility));
+    }
+
+    private async Task ToggleVisibilityAsync(PortalAdminDocumentDto doc, string visibility)
+    {
+        var updated = Clone(doc);
+        updated.Visibility = visibility;
+        await Api.UpdatePortalAdminRecordAsync(doc.Id, ToRequest(updated));
+        ShowToast($"Document visibility changed to {visibility}.");
+        await LoadAsync();
+        _selected = _docs.FirstOrDefault(d => d.Id == doc.Id);
+    }
+
+    private void ConfirmDownload(PortalAdminDocumentDto doc)
+    {
+        _confirmAction = new ConfirmAction(
+            "Track download",
+            $"Record an administrative download for '{doc.Name}'?",
+            "Download",
+            "bi-download",
+            () => DownloadAsync(doc));
+    }
+
+    private async Task DownloadAsync(PortalAdminDocumentDto doc)
+    {
+        var updated = Clone(doc);
+        updated.DownloadCount++;
+        await Api.UpdatePortalAdminRecordAsync(doc.Id, ToRequest(updated));
+        ShowToast($"Download recorded for '{doc.Name}'.");
+        await LoadAsync();
+        _selected = _docs.FirstOrDefault(d => d.Id == doc.Id);
+    }
+
+    private void ConfirmRemove(PortalAdminDocumentDto doc)
+    {
+        _confirmAction = new ConfirmAction(
+            "Remove portal document",
+            $"Remove '{doc.Name}' from the client portal document center? This will hide it from future portal results.",
+            "Remove",
+            "bi-trash",
+            () => RemoveAsync(doc));
+    }
+
+    private async Task RemoveAsync(PortalAdminDocumentDto doc)
+    {
+        await Api.DeletePortalAdminRecordAsync(doc.Id);
+        ShowToast("Document removed from portal.", "warning");
+        await LoadAsync();
+        if (_selected?.Id == doc.Id)
+        {
+            _selected = null;
+        }
+    }
+
+    private async Task ExecuteConfirmAsync()
+    {
+        if (_confirmAction is null) return;
+        try
+        {
+            _saving = true;
+            var action = _confirmAction;
+            _confirmAction = null;
+            await action.Execute();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void CancelConfirm()
+    {
+        if (_saving) return;
+        _confirmAction = null;
+    }
+
+    private bool MatchesSearch(PortalAdminDocumentDto doc)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        return doc.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || doc.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || doc.Category.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || doc.FileType.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || doc.Visibility.Contains(_search, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool MatchesActiveFilter(PortalAdminDocumentDto doc) => _activeFilter switch
+    {
+        "" => true,
+        "Shared" => doc.Visibility == "Shared",
+        "Agency Only" => doc.Visibility == "Agency Only",
+        "Certificate" => doc.Category == "Certificate",
+        "viewed" => doc.ViewCount > 0,
+        "downloaded" => doc.DownloadCount > 0,
+        _ => doc.Category == _activeFilter || doc.Visibility == _activeFilter
+    };
+
+    private UpsertPortalAdminRecordRequest ToRequest(PortalAdminDocumentDto doc) =>
+        new(_tenantId, "PortalDocument", BuildCode(doc), doc.Name, doc.Visibility, JsonSerializer.Serialize(doc, JsonOptions));
+
+    private static PortalAdminDocumentDto Clone(PortalAdminDocumentDto doc) => new()
+    {
+        Id = doc.Id,
+        Name = doc.Name,
+        AccountName = doc.AccountName,
+        Category = doc.Category,
+        FileType = doc.FileType,
+        FileSizeKb = doc.FileSizeKb,
+        Visibility = doc.Visibility,
+        SharedAt = doc.SharedAt,
+        ViewCount = doc.ViewCount,
+        DownloadCount = doc.DownloadCount
+    };
+
+    private static string BuildCode(PortalAdminDocumentDto doc)
+    {
+        var source = $"{doc.AccountName}-{doc.Name}".ToLowerInvariant();
+        var chars = source.Select(ch => char.IsLetterOrDigit(ch) ? ch : '-').ToArray();
+        var code = new string(chars).Trim('-');
+        while (code.Contains("--", StringComparison.Ordinal)) code = code.Replace("--", "-", StringComparison.Ordinal);
+        return string.IsNullOrWhiteSpace(code) ? $"portal-doc-{doc.Id:N}" : code[..Math.Min(code.Length, 180)];
+    }
+
+    private static string ResolveFileType(string fileName)
+    {
+        var ext = Path.GetExtension(fileName).TrimStart('.').ToUpperInvariant();
+        return string.IsNullOrWhiteSpace(ext) ? "PDF" : ext;
+    }
+
+    private void ShowValidationToast(EditContext _) => ShowToast("Please fix validation errors before saving.", "danger");
+
+    private void ShowToast(string message, string kind = "success")
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastIcon = kind == "danger" ? "bi-exclamation-triangle-fill" : kind == "warning" ? "bi-exclamation-circle-fill" : "bi-check-circle-fill";
+    }
+
+    private void ClearToast() => _toastMessage = null;
+
+    private static string FilterLabel(string filter) => filter switch
+    {
+        "" => "All documents",
+        "viewed" => "Viewed",
+        "downloaded" => "Downloaded",
+        _ => filter
+    };
+
+    private static string DocIcon(string category) => category switch
     {
         "Certificate" => "bi-file-earmark-text",
-        "ID Card"     => "bi-person-vcard",
-        "Invoice"     => "bi-receipt",
-        "Form"        => "bi-clipboard",
-        "Claims"      => "bi-exclamation-circle",
-        _             => "bi-file-earmark-pdf",
+        "ID Card" => "bi-person-vcard",
+        "Invoice" => "bi-receipt",
+        "Form" => "bi-clipboard-check",
+        "Claims" => "bi-exclamation-circle",
+        _ => "bi-file-earmark-pdf"
     };
 
-    private static string DocIconCss(string cat) => cat switch
+    private static string DocIconCss(string category) => category switch
     {
         "Certificate" => "pd-di-green",
-        "ID Card"     => "pd-di-blue",
-        "Invoice"     => "pd-di-amber",
-        "Claims"      => "pd-di-red",
-        _             => "pd-di-blue",
+        "ID Card" => "pd-di-purple",
+        "Invoice" => "pd-di-amber",
+        "Claims" => "pd-di-red",
+        "Form" => "pd-di-cyan",
+        _ => "pd-di-blue"
     };
 
-    private static string CatBadge(string c) => c switch
+    private static string CatCss(string category) => category switch
     {
-        "Policy"      => "pd-cat pd-cat--policy",
-        "Certificate" => "pd-cat pd-cat--cert",
-        "ID Card"     => "pd-cat pd-cat--id",
-        "Invoice"     => "pd-cat pd-cat--inv",
-        "Claims"      => "pd-cat pd-cat--claims",
-        _             => "pd-cat",
+        "Policy" => "pd-cat--policy",
+        "Certificate" => "pd-cat--cert",
+        "ID Card" => "pd-cat--id",
+        "Invoice" => "pd-cat--inv",
+        "Claims" => "pd-cat--claims",
+        "Form" => "pd-cat--form",
+        _ => string.Empty
     };
 
-    private static string VisBadge(string v) =>
-        v == "Shared" ? "pd-vis pd-vis--shared" : "pd-vis pd-vis--agency";
+    private static string VisCss(string visibility) => visibility == "Shared" ? "pd-vis--shared" : "pd-vis--agency";
 
-    private sealed class PortalDoc
+    private static RenderFragment Meta(string label, string value) => builder =>
     {
-        public Guid     Id            { get; set; }
-        public string   Name          { get; set; } = string.Empty;
-        public string   AccountName   { get; set; } = string.Empty;
-        public string   Category      { get; set; } = "Policy";
-        public string   FileType      { get; set; } = "PDF";
-        public int      FileSizeKb    { get; set; }
-        public string   Visibility    { get; set; } = "Shared";
-        public DateTime SharedAt      { get; set; }
-        public int      ViewCount     { get; set; }
-        public int      DownloadCount { get; set; }
-    }
+        var sequence = 0;
+        builder.OpenElement(sequence++, "div");
+        builder.AddAttribute(sequence++, "class", "pd-meta-row");
+        builder.OpenElement(sequence++, "span");
+        builder.AddAttribute(sequence++, "class", "pd-meta-lbl");
+        builder.AddContent(sequence++, label);
+        builder.CloseElement();
+        builder.OpenElement(sequence++, "span");
+        builder.AddAttribute(sequence++, "class", "pd-meta-val");
+        builder.AddContent(sequence++, value);
+        builder.CloseElement();
+        builder.CloseElement();
+    };
 
-    private sealed record Lv(string V, string L);
+    private static bool MatchesWorkflow(PortalAdminDocumentDto doc, string filter) => filter switch
+    {
+        "Shared" => doc.Visibility == "Shared",
+        "Agency Only" => doc.Visibility == "Agency Only",
+        "Certificate" => doc.Category == "Certificate",
+        "viewed" => doc.ViewCount > 0,
+        "downloaded" => doc.DownloadCount > 0,
+        _ => true
+    };
 
-    async Task ResolveCurrentUserContextAsync()
+    private int WorkflowCount(string filter) => Filtered.Count(d => MatchesWorkflow(d, filter));
+
+    private sealed record KpiCard(string Label, string Value, string Title, string Caption, string Icon, string Tone, string Filter);
+    private sealed record WorkflowCardModel(string Title, string Status, string Detail, string Icon, string Filter, string Tone);
+
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+    }
+
+    private sealed record ConfirmAction(string Title, string Message, string ConfirmLabel, string Icon, Func<Task> Execute);
+
+    private sealed class DocumentFormModel
+    {
+        [Required, StringLength(250)] public string Name { get; set; } = string.Empty;
+        [Required, StringLength(250)] public string AccountName { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string Category { get; set; } = "Policy";
+        [Required, StringLength(20)] public string FileType { get; set; } = "PDF";
+        [Range(1, 25600)] public int FileSizeKb { get; set; } = 120;
+        [Required, StringLength(80)] public string Visibility { get; set; } = "Shared";
+        public DateTime SharedAt { get; set; } = DateTime.Today;
+        [Range(0, int.MaxValue)] public int ViewCount { get; set; }
+        [Range(0, int.MaxValue)] public int DownloadCount { get; set; }
+
+        public PortalAdminDocumentDto ToDto(Guid id) => new()
+        {
+            Id = id,
+            Name = Name.Trim(),
+            AccountName = AccountName.Trim(),
+            Category = Category,
+            FileType = FileType,
+            FileSizeKb = FileSizeKb,
+            Visibility = Visibility,
+            SharedAt = SharedAt,
+            ViewCount = ViewCount,
+            DownloadCount = DownloadCount
+        };
+
+        public static DocumentFormModel FromDto(PortalAdminDocumentDto doc) => new()
+        {
+            Name = doc.Name,
+            AccountName = doc.AccountName,
+            Category = doc.Category,
+            FileType = doc.FileType,
+            FileSizeKb = doc.FileSizeKb,
+            Visibility = doc.Visibility,
+            SharedAt = doc.SharedAt,
+            ViewCount = doc.ViewCount,
+            DownloadCount = doc.DownloadCount
+        };
     }
 }

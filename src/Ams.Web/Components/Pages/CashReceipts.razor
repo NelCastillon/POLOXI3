@@ -1,124 +1,465 @@
 @page "/finance/cash-receipts"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Finance
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
+@inject IJSRuntime Js
 
-<PageTitle>Cash Receipts — AMS</PageTitle>
+<PageTitle>Cash Receipts — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Cash Receipts"
-               Subtitle="Tenant Admin cash receipt register for posted and pending receipt entries"
-               Icon="bi-currency-dollar">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/payments")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Billing Payments</button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Receipt</button>
-    </Actions>
-</AppPageHeader>
-
-<div class="fin-kpi-strip">
-    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-currency-dollar"></i></div><div><div class="fin-kpi-value">@Fmt(_items.Sum(x => x.Amount))</div><div class="fin-kpi-label">Total Receipts</div></div></div>
-    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-check-circle"></i></div><div><div class="fin-kpi-value">@_items.Count(x => x.StatusCode == "Posted")</div><div class="fin-kpi-label">Posted</div></div></div>
-    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-hourglass"></i></div><div><div class="fin-kpi-value">@_items.Count(x => x.StatusCode != "Posted")</div><div class="fin-kpi-label">Pending</div></div></div>
-    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-credit-card"></i></div><div><div class="fin-kpi-value">@_items.Select(x => x.PaymentMethodCode).Distinct().Count()</div><div class="fin-kpi-label">Methods</div></div></div>
-</div>
-
-<div class="fin-toolbar">
-    <div class="fin-search-box"><i class="bi bi-search fin-search-icon" aria-hidden="true"></i><input class="e-input fin-search-input" placeholder="Search reference, method, account…" @bind="_searchTerm" @bind:event="oninput" @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" /></div>
-    <select class="um-input" @bind="_statusFilter"><option value="">All Statuses</option><option value="Posted">Posted</option><option value="Pending">Pending</option><option value="Void">Void</option></select>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_error))
+@if (_toastVisible)
 {
-    <div class="fin-alert"><div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill"></i></div><div><div class="fin-alert-title">Cash receipts failed to load</div><div>@_error</div></div></div>
-}
-else if (_loading)
-{
-    <div class="fin-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading cash receipts…</span></div>
-}
-else
-{
-    <div class="fin-grid-container">
-        <SfGrid TValue="CashReceiptEntryDto" DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="600px">
-            <GridEvents TValue="CashReceiptEntryDto" RowSelected="OnRowSelected" />
-            <GridPageSettings PageSize="15" />
-            <GridColumns>
-                <GridColumn Field="@nameof(CashReceiptEntryDto.ReceiptDate)" HeaderText="Receipt Date" Type="ColumnType.Date" Format="d" Width="130" />
-                <GridColumn Field="@nameof(CashReceiptEntryDto.AccountId)" HeaderText="Account" Width="220" />
-                <GridColumn Field="@nameof(CashReceiptEntryDto.Amount)" HeaderText="Amount" Format="C2" Width="130" TextAlign="TextAlign.Right" />
-                <GridColumn Field="@nameof(CashReceiptEntryDto.PaymentMethodCode)" HeaderText="Method" Width="140"><Template>@{ var item = (CashReceiptEntryDto)context; }<span class="fin-chip fin-chip-info">@item.PaymentMethodCode</span></Template></GridColumn>
-                <GridColumn Field="@nameof(CashReceiptEntryDto.ReferenceNumber)" HeaderText="Reference #" Width="150" />
-                <GridColumn Field="@nameof(CashReceiptEntryDto.StatusCode)" HeaderText="Status" Width="120"><Template>@{ var item = (CashReceiptEntryDto)context; }<span class="fin-chip @StatusClass(item.StatusCode)">@item.StatusCode</span></Template></GridColumn>
-                <GridColumn Field="@nameof(CashReceiptEntryDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="130" />
-                <GridColumn HeaderText="Actions" Width="90"><Template>@{ var item = (CashReceiptEntryDto)context; }<button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button></Template></GridColumn>
-            </GridColumns>
-        </SfGrid>
+    <div class="cr-toast cr-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="cr-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<SfDialog @bind-Visible="_showForm" Width="720px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-currency-dollar" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Cash Receipt" : "Edit Cash Receipt")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_editContext">
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="cr-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="cr-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="cr-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Void" ? "um-confirm-icon--danger" : null)"><i class="bi @PendingStatusIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="cr-status-title">@PendingStatusTitle</div>
+                <div class="um-confirm-body">Mark receipt <strong>@ReceiptReference(_statusTarget)</strong> for <strong>@FormatMoney(_statusTarget.Amount)</strong> as <strong>@_pendingStatus</strong>?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Void" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@PendingStatusAction</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="cr-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="cr-modal cr-action-modal" role="dialog" aria-modal="true" aria-labelledby="cr-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-cash-coin" aria-hidden="true"></i>
+                <span id="cr-form-title">@(_editingId == Guid.Empty ? "New Cash Receipt" : "Edit Cash Receipt")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
                 <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountId" class="um-input"><option value="@Guid.Empty">Select account…</option>@foreach (var account in _accounts) { <option value="@account.AccountId">@account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.AccountId" class="text-danger" /></div>
-                    <div class="um-field"><label>Invoice</label><InputSelect @bind-Value="_form.InvoiceId" class="um-input"><option value="">None</option>@foreach (var invoice in _invoices) { <option value="@invoice.InvoiceId">@invoice.InvoiceNumber</option> }</InputSelect><ValidationMessage For="() => _form.InvoiceId" class="text-danger" /></div>
-                    <div class="um-field"><label>Receipt Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.ReceiptDate" class="um-input" /><ValidationMessage For="() => _form.ReceiptDate" class="text-danger" /></div>
-                    <div class="um-field"><label>Amount <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.Amount" class="um-input" /><ValidationMessage For="() => _form.Amount" class="text-danger" /></div>
-                    <div class="um-field"><label>Payment Method <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.PaymentMethodCode" class="um-input"><option value="ACH">ACH</option><option value="Check">Check</option><option value="Wire">Wire</option><option value="Credit Card">Credit Card</option><option value="Cash">Cash</option></InputSelect><ValidationMessage For="() => _form.PaymentMethodCode" class="text-danger" /></div>
-                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option value="Pending">Pending</option><option value="Posted">Posted</option><option value="Void">Void</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
-                    <div class="um-field"><label>Reference #</label><InputText @bind-Value="_form.ReferenceNumber" class="um-input" /><ValidationMessage For="() => _form.ReferenceNumber" class="text-danger" /></div>
-                    <div class="um-field"><label>Bank Account Code</label><InputText @bind-Value="_form.BankAccountCode" class="um-input" /><ValidationMessage For="() => _form.BankAccountCode" class="text-danger" /></div>
-                    <div class="um-field"><label>GL Account</label><InputSelect @bind-Value="_form.GLAccountId" class="um-input"><option value="">None</option>@foreach (var account in _glAccounts) { <option value="@account.GLAccountId">@account.AccountCode - @account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.GLAccountId" class="text-danger" /></div>
-                    <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_form.Notes" class="um-input" rows="3" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div>
-                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-                </div></div>
+                <div class="um-modal-body">
+                    <div class="cr-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Cash receipt workflow</span><p>Capture receipts, connect invoices, route cash to GL, and control posting status from live finance data.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Account <span class="text-danger">*</span></label>
+                            <InputSelect @bind-Value="_form.AccountId" class="form-select">
+                                <option value="@Guid.Empty">Select account...</option>
+                                @foreach (var account in _accounts)
+                                {
+                                    <option value="@account.AccountId">@account.AccountNumber - @account.AccountName</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Invoice</label>
+                            <InputSelect @bind-Value="_form.InvoiceId" class="form-select">
+                                <option value="">None</option>
+                                @foreach (var invoice in _invoices)
+                                {
+                                    <option value="@invoice.InvoiceId">@invoice.InvoiceNumber - @FormatMoney(invoice.BalanceAmount)</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.InvoiceId" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Receipt Date <span class="text-danger">*</span></label>
+                            <InputDate @bind-Value="_form.ReceiptDate" class="form-control" />
+                            <ValidationMessage For="() => _form.ReceiptDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Amount <span class="text-danger">*</span></label>
+                            <InputNumber @bind-Value="_form.Amount" class="form-control" />
+                            <ValidationMessage For="() => _form.Amount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Payment Method <span class="text-danger">*</span></label>
+                            <InputSelect @bind-Value="_form.PaymentMethodCode" class="form-select">
+                                @foreach (var method in _methods)
+                                {
+                                    <option value="@method">@method</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.PaymentMethodCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect @bind-Value="_form.StatusCode" class="form-select">
+                                @foreach (var status in _statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Reference #</label>
+                            <InputText @bind-Value="_form.ReferenceNumber" class="form-control" />
+                            <ValidationMessage For="() => _form.ReferenceNumber" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Bank Account Code</label>
+                            <InputText @bind-Value="_form.BankAccountCode" class="form-control" />
+                            <ValidationMessage For="() => _form.BankAccountCode" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>GL Account</label>
+                            <InputSelect @bind-Value="_form.GLAccountId" class="form-select">
+                                <option value="">None</option>
+                                @foreach (var account in _glAccounts)
+                                {
+                                    <option value="@account.GLAccountId">@account.AccountCode - @account.AccountName</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea @bind-Value="_form.Notes" class="form-control" rows="3" />
+                            <ValidationMessage For="() => _form.Notes" class="text-danger" />
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Receipt" : "Save Changes")</button>
+                </div>
             </EditForm>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Receipt")</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
+
+<div class="cr-enterprise-page">
+    <section class="cr-header">
+        <div class="cr-header-left">
+            <div class="cr-lob-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
+            <div class="cr-header-info">
+                <div class="cr-title-row"><h1 class="cr-page-title">Cash Receipts</h1><span class="cr-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live receipt register</span><span class="cr-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                <div class="cr-sub-row"><span>Track received cash, payment methods, references, invoice links, and posting workflow.</span><span class="cr-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="cr-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div>
+            </div>
+        </div>
+        <div class="cr-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/payments")'><i class="bi bi-credit-card" aria-hidden="true"></i> Billing Payments</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/bank-reconciliation")'><i class="bi bi-bank" aria-hidden="true"></i> Reconcile</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat cr-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Receipt</button>
+        </div>
+    </section>
+
+    <section class="cr-kpi-strip" aria-label="Cash receipt metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="cr-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "cr-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="cr-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="cr-kpi-copy"><span class="cr-kpi-label">@kpi.Label</span><span class="cr-kpi-value">@kpi.Value</span><span class="cr-kpi-caption">@kpi.Caption</span></span>
+            </button>
+        }
+    </section>
+
+    <section class="cr-workflow-strip" aria-label="Cash receipt workflow shortcuts">
+        <button type="button" class="cr-workflow-card cr-wf-capture" @onclick="OpenCreate"><span class="cr-workflow-icon"><i class="bi bi-plus-circle" aria-hidden="true"></i></span><span class="cr-workflow-content"><strong>1</strong><span>Capture</span><small>Record receipt.</small></span></button>
+        <button type="button" class="cr-workflow-card cr-wf-apply" @onclick='() => SetKpiFilter("pending")'><span class="cr-workflow-icon"><i class="bi bi-check2-circle" aria-hidden="true"></i></span><span class="cr-workflow-content"><strong>2</strong><span>Apply</span><small>Post pending cash.</small></span></button>
+        <button type="button" class="cr-workflow-card cr-wf-ledger" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><span class="cr-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="cr-workflow-content"><strong>3</strong><span>Post</span><small>Create ledger entries.</small></span></button>
+        <button type="button" class="cr-workflow-card cr-wf-recon" @onclick='() => Nav.NavigateTo("/finance/bank-reconciliation")'><span class="cr-workflow-icon"><i class="bi bi-bank" aria-hidden="true"></i></span><span class="cr-workflow-content"><strong>4</strong><span>Reconcile</span><small>Match deposits.</small></span></button>
+        <button type="button" class="cr-workflow-card cr-wf-report" @onclick='() => Nav.NavigateTo("/analytics/finance")'><span class="cr-workflow-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span><span class="cr-workflow-content"><strong>5</strong><span>Report</span><small>Analyze cash.</small></span></button>
+    </section>
+
+    <section class="cr-enterprise-search" aria-label="Cash receipt filters">
+        <div class="cr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="cr-search-body"><label for="cr-search">Search cash receipts</label><input id="cr-search" class="cr-search-input" type="search" placeholder="Search reference, method, status, account, notes..." @bind="SearchFilter" @bind:event="oninput" /><span class="cr-search-hint">Filters apply instantly across synchronized cash receipts.</span></div>
+        <select class="cr-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select>
+        <select class="cr-filter-select" @bind="MethodFilter" aria-label="Payment method filter"><option value="">All methods</option>@foreach (var method in Methods) { <option value="@method">@method</option> }</select>
+        <div class="cr-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger cr-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="cr-content-layout">
+        <div class="cr-grid-wrap">
+            <div class="cr-grid-toolbar"><div><strong>Cash receipt register</strong><span>@ActiveFilterText</span></div><div class="cr-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PostSelected" disabled="@(!CanPostSelected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Post</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+            @if (_loading)
+            {
+                <div class="cr-loading"><i class="bi bi-arrow-repeat cr-spin" aria-hidden="true"></i><strong>Loading cash receipts...</strong><span>Syncing schema, seed data, accounts, invoices, and GL references.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="cr-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No cash receipts found</strong><span>Adjust filters or create a new receipt.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Receipt</button></div>
+            }
+            else
+            {
+                <div class="cr-table-scroll"><table class="cr-table"><thead><tr><th>Receipt</th><th>Account</th><th>Date</th><th>Amount</th><th>Method</th><th>Status</th><th class="cr-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="cr-table-row @(_selected?.CashReceiptEntryId == item.CashReceiptEntryId ? "cr-table-row--selected" : null)" @onclick="() => SelectReceipt(item)"><td><div class="cr-entry-cell"><span class="cr-entry-icon @StatusIconTone(item.StatusCode)"><i class="bi bi-cash-coin" aria-hidden="true"></i></span><span><strong>@ReceiptReference(item)</strong><span>@(item.BankAccountCode ?? "No bank code")</span></span></div></td><td>@AccountLabel(item.AccountId)</td><td>@item.ReceiptDate.ToString("MMM d, yyyy")</td><td class="cr-number">@FormatMoney(item.Amount)</td><td><span class="cr-method-chip">@item.PaymentMethodCode</span></td><td><span class="cr-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td><td><div class="cr-row-acts"><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Post" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Posted")' disabled="@IsPosted(item)"><i class="bi bi-check2" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Void" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Void")' disabled="@IsVoid(item)"><i class="bi bi-x-circle" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div>
+                <div class="cr-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+            }
+        </div>
+        <aside class="cr-detail-panel" aria-label="Selected cash receipt detail">
+            @if (_selected is null)
+            {
+                <div class="cr-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a receipt</strong><span>Choose a row to inspect account, invoice, GL routing, and posting workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="cr-detail-head"><div><span class="cr-detail-eyebrow"><i class="bi bi-cash-coin" aria-hidden="true"></i> Cash receipt</span><h2>@ReceiptReference(_selected)</h2><div class="cr-detail-meta"><span>@FormatMoney(_selected.Amount)</span><span class="cr-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div>
+                <div class="cr-detail-body"><div class="cr-detail-summary"><div class="cr-meta-row"><span class="cr-meta-lbl">Account</span><span class="cr-meta-val">@AccountLabel(_selected.AccountId)</span></div><div class="cr-meta-row"><span class="cr-meta-lbl">Invoice</span><span class="cr-meta-val">@InvoiceLabel(_selected.InvoiceId)</span></div><div class="cr-meta-row"><span class="cr-meta-lbl">Receipt Date</span><span class="cr-meta-val">@_selected.ReceiptDate.ToString("MMM d, yyyy")</span></div><div class="cr-meta-row"><span class="cr-meta-lbl">GL Account</span><span class="cr-meta-val">@GLLabel(_selected.GLAccountId)</span></div></div><div class="cr-note-card"><span><i class="bi bi-clipboard-check" aria-hidden="true"></i> Receipt notes</span><p>@(!string.IsNullOrWhiteSpace(_selected.Notes) ? _selected.Notes : "No notes recorded for this receipt.")</p></div><div class="cr-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="PostSelected" disabled="@(!CanPostSelected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Post</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="VoidSelected" disabled="@IsSelectedVoid"><i class="bi bi-x-circle" aria-hidden="true"></i> Void</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/bank-reconciliation")'><i class="bi bi-bank" aria-hidden="true"></i> Reconcile</button></div></div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
+    private const int PageSize = 12;
+    private Guid _tenantId;
     private Guid _tenantAdminUserId;
     private List<CashReceiptEntryDto> _items = [];
+    private List<CashReceiptEntryDto> _filtered = [];
     private List<BillingAccountDto> _accounts = [];
     private List<InvoiceDto> _invoices = [];
     private List<GLAccountDto> _glAccounts = [];
-    private string? _searchTerm, _error;
-    private string? _formError;
-    private string _statusFilter = string.Empty;
-    private bool _loading, _showForm, _saving;
-    private Guid _editingId = Guid.Empty;
+    private CashReceiptEntryDto? _selected;
+    private CashReceiptEntryDto? _statusTarget;
     private CashReceiptForm _form = new();
-    private EditContext _editContext = default!;
-    private Guid _tenantId;
-    private IEnumerable<CashReceiptEntryDto> FilteredItems => _items.Where(x => string.IsNullOrWhiteSpace(_statusFilter) || x.StatusCode == _statusFilter);
-    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); _editContext = new(_form); await LoadAsync(); }
-    private async Task LoadAsync() { _loading = true; _error = null; try { var result = await Api.SearchCashReceiptEntriesAsync(_tenantId, _searchTerm); var accounts = await Api.SearchBillingAccountsAsync(_tenantId); var invoices = await Api.SearchInvoicesAsync(_tenantId); var gl = await Api.SearchGLAccountsAsync(_tenantId, pageSize: 500); _items = result?.Items.ToList() ?? []; _accounts = accounts?.Items.ToList() ?? []; _invoices = invoices?.Items.ToList() ?? []; _glAccounts = gl?.Items.ToList() ?? []; } catch (Exception ex) { _error = ex.Message; _items = []; } finally { _loading = false; } }
-    private void OnRowSelected(RowSelectEventArgs<CashReceiptEntryDto> args) => OpenEdit(args.Data);
-    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
-    private void OpenEdit(CashReceiptEntryDto item) { _editingId = item.CashReceiptEntryId; _form = new CashReceiptForm { AccountId = item.AccountId, InvoiceId = item.InvoiceId, ReceiptDate = item.ReceiptDate.ToDateTime(TimeOnly.MinValue), Amount = item.Amount, PaymentMethodCode = item.PaymentMethodCode, ReferenceNumber = item.ReferenceNumber, GLAccountId = item.GLAccountId, BankAccountCode = item.BankAccountCode, Notes = item.Notes, StatusCode = item.StatusCode }; _editContext = new(_form); _formError = null; _showForm = true; }
-    private void CloseForm() => _showForm = false;
-    private async Task SaveAsync() { if (!_editContext.Validate()) return; _saving = true; try { if (_editingId == Guid.Empty) await Api.CreateCashReceiptEntryAsync(new CreateCashReceiptEntryRequest { TenantId = _tenantId, AccountId = _form.AccountId, InvoiceId = _form.InvoiceId, ReceiptDate = DateOnly.FromDateTime(_form.ReceiptDate), Amount = _form.Amount, PaymentMethodCode = _form.PaymentMethodCode, ReferenceNumber = _form.ReferenceNumber, GLAccountId = _form.GLAccountId, BankAccountCode = _form.BankAccountCode, Notes = _form.Notes, StatusCode = _form.StatusCode }); else await Api.UpdateCashReceiptEntryAsync(_editingId, new UpdateCashReceiptEntryRequest { TenantId = _tenantId, CashReceiptEntryId = _editingId, AccountId = _form.AccountId, InvoiceId = _form.InvoiceId, ReceiptDate = DateOnly.FromDateTime(_form.ReceiptDate), Amount = _form.Amount, PaymentMethodCode = _form.PaymentMethodCode, ReferenceNumber = _form.ReferenceNumber, GLAccountId = _form.GLAccountId, BankAccountCode = _form.BankAccountCode, Notes = _form.Notes, StatusCode = _form.StatusCode }); _showForm = false; await LoadAsync(); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; } finally { _saving = false; } }
-    private static string Fmt(decimal value) => value.ToString("C0");
-    private static string StatusClass(string status) => status switch { "Posted" => "fin-chip-success", "Pending" => "fin-chip-warning", "Void" => "fin-chip-neutral", _ => "fin-chip-info" };
-    private sealed class CashReceiptForm { [RequiredGuid(ErrorMessage = "Account is required.")] public Guid AccountId { get; set; } public Guid? InvoiceId { get; set; } [Required] public DateTime ReceiptDate { get; set; } = DateTime.Today; [Range(0.01, 100000000)] public decimal Amount { get; set; } [Required, StringLength(50)] public string PaymentMethodCode { get; set; } = "ACH"; [StringLength(100)] public string? ReferenceNumber { get; set; } public Guid? GLAccountId { get; set; } [StringLength(80)] public string? BankAccountCode { get; set; } [StringLength(1000)] public string? Notes { get; set; } [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending"; }
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _methodFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showStatusConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _statuses = ["Pending", "Posted", "Void"];
+    private readonly List<string> _methods = ["ACH", "Check", "Wire", "Credit Card", "Cash"];
 
-    async Task ResolveCurrentUserContextAsync()
+    private IEnumerable<CashReceiptEntryDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private decimal TotalReceipts => _items.Sum(x => x.Amount);
+    private decimal PostedReceipts => _items.Where(x => x.StatusCode == "Posted").Sum(x => x.Amount);
+    private bool CanPostSelected => _selected is not null && _selected.StatusCode != "Posted" && _selected.StatusCode != "Void";
+    private bool IsSelectedVoid => _selected?.StatusCode == "Void";
+    private IEnumerable<string> Methods => _items.Select(x => x.PaymentMethodCode).Where(x => !string.IsNullOrWhiteSpace(x)).Concat(_methods).Distinct().OrderBy(x => x);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All cash receipts" : $"Filtered by {_kpiFilter}";
+    private string PendingStatusIcon => _pendingStatus switch { "Posted" => "bi-check2-circle", "Void" => "bi-x-octagon-fill", _ => "bi-hourglass-split" };
+    private string PendingStatusTitle => _pendingStatus == "Posted" ? "Post Cash Receipt" : "Void Cash Receipt";
+    private string PendingStatusAction => _pendingStatus == "Posted" ? "Post Receipt" : "Void Receipt";
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Receipts", FormatMoney(TotalReceipts), "Total captured", "bi-cash-coin", "cr-ki-blue"),
+        new("posted", "Posted", FormatMoney(PostedReceipts), "Applied cash", "bi-check-circle", "cr-ki-green"),
+        new("pending", "Pending", _items.Count(x => x.StatusCode == "Pending").ToString("N0"), "Needs posting", "bi-hourglass-split", "cr-ki-amber"),
+        new("void", "Void", _items.Count(x => x.StatusCode == "Void").ToString("N0"), "Reversed", "bi-x-circle", "cr-ki-red"),
+        new("methods", "Methods", _items.Select(x => x.PaymentMethodCode).Distinct().Count().ToString("N0"), "Payment rails", "bi-credit-card", "cr-ki-purple"),
+        new("today", "Today", FormatMoney(_items.Where(x => x.ReceiptDate == DateOnly.FromDateTime(DateTime.Today)).Sum(x => x.Amount)), "Current day", "bi-calendar-check", "cr-ki-cyan")
+    ];
+
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string MethodFilter { get => _methodFilter; set { _methodFilter = value; ApplyFilters(resetPage: true); } }
+
+    protected override async Task OnInitializedAsync()
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Finance", "/finance"), new("Cash Receipts", "/finance/cash-receipts"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchCashReceiptEntriesAsync(_tenantId, string.Empty);
+            var accounts = await Api.SearchBillingAccountsAsync(_tenantId);
+            var invoices = await Api.SearchInvoicesAsync(_tenantId);
+            var gl = await Api.SearchGLAccountsAsync(_tenantId, pageSize: 500);
+            _items = result?.Items.OrderByDescending(x => x.ReceiptDate).ToList() ?? [];
+            _accounts = accounts?.Items.OrderBy(x => x.AccountName).ToList() ?? [];
+            _invoices = invoices?.Items.OrderByDescending(x => x.CreatedDateUtc).ToList() ?? [];
+            _glAccounts = gl?.Items.OrderBy(x => x.AccountCode).ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Cash receipts failed to load: {ex.Message}";
+            ShowToast(_loadError, "danger");
+            _items = [];
+            _filtered = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<CashReceiptEntryDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(ReceiptReference(x), term) || Contains(x.PaymentMethodCode, term) || Contains(x.StatusCode, term) || Contains(x.BankAccountCode, term) || Contains(x.Notes, term) || Contains(AccountLabel(x.AccountId), term));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_methodFilter)) query = query.Where(x => x.PaymentMethodCode == _methodFilter);
+        query = _kpiFilter switch
+        {
+            "posted" => query.Where(x => x.StatusCode == "Posted"),
+            "pending" => query.Where(x => x.StatusCode == "Pending"),
+            "void" => query.Where(x => x.StatusCode == "Void"),
+            "methods" => query,
+            "today" => query.Where(x => x.ReceiptDate == DateOnly.FromDateTime(DateTime.Today)),
+            _ => query
+        };
+
+        _filtered = query.OrderBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.ReceiptDate).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter) { _kpiFilter = filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _statusFilter = string.Empty; _methodFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Cash receipt filters reset.", "info"); }
+    private void SelectReceipt(CashReceiptEntryDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _formError = null; _form = new CashReceiptForm { AccountId = _accounts.FirstOrDefault()?.AccountId ?? Guid.Empty, GLAccountId = _glAccounts.FirstOrDefault(x => x.AccountCode == "1000")?.GLAccountId ?? _glAccounts.FirstOrDefault()?.GLAccountId, ReferenceNumber = $"CR-{DateTime.UtcNow:yyyyMMddHHmm}" }; _showForm = true; }
+    private void OpenEdit(CashReceiptEntryDto item) { _editingId = item.CashReceiptEntryId; _formError = null; _form = new CashReceiptForm { AccountId = item.AccountId, InvoiceId = item.InvoiceId, ReceiptDate = item.ReceiptDate.ToDateTime(TimeOnly.MinValue), Amount = item.Amount, PaymentMethodCode = item.PaymentMethodCode, ReferenceNumber = item.ReferenceNumber, GLAccountId = item.GLAccountId, BankAccountCode = item.BankAccountCode, Notes = item.Notes, StatusCode = item.StatusCode }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; }
+
+    private async Task SaveAsync()
+    {
+        _busy = true;
+        _formError = null;
+        try
+        {
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateCashReceiptEntryAsync(new CreateCashReceiptEntryRequest { TenantId = _tenantId, AccountId = _form.AccountId, InvoiceId = _form.InvoiceId, ReceiptDate = DateOnly.FromDateTime(_form.ReceiptDate), Amount = _form.Amount, PaymentMethodCode = _form.PaymentMethodCode, ReferenceNumber = _form.ReferenceNumber, GLAccountId = _form.GLAccountId, BankAccountCode = _form.BankAccountCode, Notes = _form.Notes, StatusCode = _form.StatusCode, CreatedByUserId = _tenantAdminUserId });
+                ShowToast("Cash receipt created.", "success");
+            }
+            else
+            {
+                await Api.UpdateCashReceiptEntryAsync(_editingId, new UpdateCashReceiptEntryRequest { TenantId = _tenantId, CashReceiptEntryId = _editingId, AccountId = _form.AccountId, InvoiceId = _form.InvoiceId, ReceiptDate = DateOnly.FromDateTime(_form.ReceiptDate), Amount = _form.Amount, PaymentMethodCode = _form.PaymentMethodCode, ReferenceNumber = _form.ReferenceNumber, GLAccountId = _form.GLAccountId, BankAccountCode = _form.BankAccountCode, Notes = _form.Notes, StatusCode = _form.StatusCode, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast("Cash receipt updated.", "success");
+            }
+
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void PostSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Posted"); }
+    private void VoidSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Void"); }
+    private void ConfirmStatusUpdate(CashReceiptEntryDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+
+    private async Task ExecuteStatusUpdateAsync()
+    {
+        if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return;
+        _busy = true;
+        try
+        {
+            await UpdateReceiptStatusAsync(_statusTarget, _pendingStatus);
+            ShowToast($"Cash receipt marked {_pendingStatus.ToLowerInvariant()}.", "success");
+            _showStatusConfirm = false;
+            _statusTarget = null;
+            _pendingStatus = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task UpdateReceiptStatusAsync(CashReceiptEntryDto item, string status)
+        => Api.UpdateCashReceiptEntryAsync(item.CashReceiptEntryId, new UpdateCashReceiptEntryRequest { TenantId = _tenantId, CashReceiptEntryId = item.CashReceiptEntryId, AccountId = item.AccountId, InvoiceId = item.InvoiceId, ReceiptDate = item.ReceiptDate, Amount = item.Amount, PaymentMethodCode = item.PaymentMethodCode, ReferenceNumber = item.ReferenceNumber, GLAccountId = item.GLAccountId, BankAccountCode = item.BankAccountCode, Notes = item.Notes, StatusCode = status, ModifiedByUserId = _tenantAdminUserId });
+
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving the cash receipt.", "warning"); return Task.CompletedTask; }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any()) { ShowToast("No cash receipts are available to export.", "warning"); return; }
+        var csv = new StringBuilder();
+        csv.AppendLine("ReceiptDate,ReferenceNumber,Account,Invoice,Amount,PaymentMethod,BankAccountCode,Status,GLAccount,Notes,CashReceiptEntryId");
+        foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.ReceiptDate.ToString("yyyy-MM-dd")), Csv(ReceiptReference(item)), Csv(AccountLabel(item.AccountId)), Csv(InvoiceLabel(item.InvoiceId)), item.Amount, Csv(item.PaymentMethodCode), Csv(item.BankAccountCode ?? string.Empty), Csv(item.StatusCode), Csv(GLLabel(item.GLAccountId)), Csv(item.Notes ?? string.Empty), Csv(item.CashReceiptEntryId.ToString())));
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"cash-receipts-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} cash receipts.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.CashReceiptEntryId == _selected.CashReceiptEntryId) ?? _filtered.FirstOrDefault();
+    private string AccountLabel(Guid accountId) { var account = _accounts.FirstOrDefault(x => x.AccountId == accountId); return account is null ? accountId.ToString("N")[..8] : account.AccountName; }
+    private string InvoiceLabel(Guid? invoiceId) { if (invoiceId is null || invoiceId == Guid.Empty) return "Not applied"; var invoice = _invoices.FirstOrDefault(x => x.InvoiceId == invoiceId); return invoice is null ? invoiceId.Value.ToString("N")[..8] : invoice.InvoiceNumber; }
+    private string GLLabel(Guid? glAccountId) { if (glAccountId is null || glAccountId == Guid.Empty) return "Not assigned"; var account = _glAccounts.FirstOrDefault(x => x.GLAccountId == glAccountId); return account is null ? glAccountId.Value.ToString("N")[..8] : $"{account.AccountCode} - {account.AccountName}"; }
+    private static string ReceiptReference(CashReceiptEntryDto item) => !string.IsNullOrWhiteSpace(item.ReferenceNumber) ? item.ReferenceNumber : item.CashReceiptEntryId.ToString("N")[..8];
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static int StatusSort(string status) => status switch { "Pending" => 0, "Posted" => 1, "Void" => 2, _ => 3 };
+    private static bool IsPosted(CashReceiptEntryDto item) => item.StatusCode == "Posted";
+    private static bool IsVoid(CashReceiptEntryDto item) => item.StatusCode == "Void";
+    private static string StatusCss(string status) => $"cr-st-{status.ToLowerInvariant()}";
+    private static string StatusIconTone(string status) => status switch { "Posted" => "cr-di-green", "Void" => "cr-di-red", _ => "cr-di-amber" };
+    private static string FormatMoney(decimal value) => value.ToString("C0");
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter cash receipts by {Label}"; }
+
+    private sealed class CashReceiptForm
+    {
+        [RequiredGuid(ErrorMessage = "Account is required.")] public Guid AccountId { get; set; }
+        public Guid? InvoiceId { get; set; }
+        [Required] public DateTime ReceiptDate { get; set; } = DateTime.Today;
+        [Range(0.01, 100000000)] public decimal Amount { get; set; } = 1000;
+        [Required, StringLength(50)] public string PaymentMethodCode { get; set; } = "ACH";
+        [StringLength(100)] public string? ReferenceNumber { get; set; }
+        public Guid? GLAccountId { get; set; }
+        [StringLength(80)] public string? BankAccountCode { get; set; } = "OPERATING";
+        [StringLength(1000)] public string? Notes { get; set; }
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending";
     }
 }

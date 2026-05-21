@@ -3,6 +3,7 @@ namespace Ams.Application.Common.Dtos;
 public sealed class PaymentDto
 {
     public Guid PaymentId { get; set; }
+    public string? PaymentNumber { get; set; }
     public Guid TenantId { get; set; }
     public Guid AccountId { get; set; }
     public Guid? InvoiceId { get; set; }

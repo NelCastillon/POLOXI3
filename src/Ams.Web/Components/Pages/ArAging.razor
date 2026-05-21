@@ -1,126 +1,751 @@
 @page "/billing/ar-aging"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Billing
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>AR Aging — AMS</PageTitle>
+<PageTitle>AR Aging — AMS Enterprise</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true"><ToastPosition X="Right" Y="Bottom" /></SfToast>
-
-<AppPageHeader Title="AR Aging"
-               Subtitle="Tenant Admin receivables aging synchronized from Billing invoices and Accounting balances"
-               Icon="bi-hourglass">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
-        <button class="um-btn um-btn-ghost" @onclick="SyncAsync" disabled="@_syncing"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> @(_syncing ? "Syncing…" : "Sync From Billing")</button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Snapshot</button>
-    </Actions>
-</AppPageHeader>
-
-<div class="bill-kpi-strip">
-    <button type="button" class="bill-kpi-card @KpiClass("")" @onclick='() => SetFilter("")'><i class="bi bi-wallet2 bill-kpi-icon blue"></i><div><div class="bill-kpi-value">@Fmt(_items.Sum(x => x.TotalOutstanding))</div><div class="bill-kpi-label">Outstanding AR</div></div></button>
-    <button type="button" class="bill-kpi-card @KpiClass("Current")" @onclick='() => SetFilter("Current")'><i class="bi bi-check-circle bill-kpi-icon green"></i><div><div class="bill-kpi-value">@Fmt(_items.Sum(x => x.CurrentAmount))</div><div class="bill-kpi-label">Current</div></div></button>
-    <button type="button" class="bill-kpi-card @KpiClass("30")" @onclick='() => SetFilter("30")'><i class="bi bi-calendar2-week bill-kpi-icon amber"></i><div><div class="bill-kpi-value">@Fmt(_items.Sum(x => x.Days30Amount))</div><div class="bill-kpi-label">1–30 Days</div></div></button>
-    <button type="button" class="bill-kpi-card @KpiClass("60")" @onclick='() => SetFilter("60")'><i class="bi bi-calendar2-minus bill-kpi-icon amber"></i><div><div class="bill-kpi-value">@Fmt(_items.Sum(x => x.Days60Amount))</div><div class="bill-kpi-label">31–60 Days</div></div></button>
-    <button type="button" class="bill-kpi-card @KpiClass("90")" @onclick='() => SetFilter("90")'><i class="bi bi-exclamation-circle bill-kpi-icon red"></i><div><div class="bill-kpi-value">@Fmt(_items.Sum(x => x.Days90Amount))</div><div class="bill-kpi-label">61–90 Days</div></div></button>
-    <button type="button" class="bill-kpi-card @KpiClass("90+")" @onclick='() => SetFilter("90+")'><i class="bi bi-exclamation-triangle bill-kpi-icon red"></i><div><div class="bill-kpi-value">@Fmt(_items.Sum(x => x.Days90PlusAmount))</div><div class="bill-kpi-label">90+ Days</div></div></button>
-</div>
-
-<div class="bill-toolbar">
-    <SfTextBox Placeholder="Search account id…" @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <SfDatePicker TValue="DateTime" @bind-Value="_snapshotDate" Width="160px"></SfDatePicker>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    <div class="ar-toast ar-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="ar-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<div class="bill-grid-wrap">
-    @if (_loading) { <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading AR aging…</span></div> }
-    <SfGrid TValue="ArAgingSnapshotDto" DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridEvents TValue="ArAgingSnapshotDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="15"></GridPageSettings>
-        <GridColumns>
-            <GridColumn Field="@nameof(ArAgingSnapshotDto.SnapshotDate)" HeaderText="Snapshot" Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
-            <GridColumn Field="@nameof(ArAgingSnapshotDto.AccountId)" HeaderText="Account" Width="230"></GridColumn>
-            <GridColumn Field="@nameof(ArAgingSnapshotDto.CurrentAmount)" HeaderText="Current" Width="120" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(ArAgingSnapshotDto.Days30Amount)" HeaderText="1–30" Width="120" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(ArAgingSnapshotDto.Days60Amount)" HeaderText="31–60" Width="120" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(ArAgingSnapshotDto.Days90Amount)" HeaderText="61–90" Width="120" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(ArAgingSnapshotDto.Days90PlusAmount)" HeaderText="90+" Width="120" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(ArAgingSnapshotDto.TotalOutstanding)" HeaderText="Total" Width="130" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
-            <GridColumn HeaderText="Risk" Width="110"><Template>@{ var item = (ArAgingSnapshotDto)context; }<span class="bill-chip @RiskClass(item)">@RiskLabel(item)</span></Template></GridColumn>
-        </GridColumns>
-    </SfGrid>
+@if (_showDeleteConfirm && _deleteTarget is not null)
+{
+    <div class="ar-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="ar-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="ar-delete-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash-fill"></i></div>
+                <div class="um-confirm-title" id="ar-delete-title">Remove AR Snapshot</div>
+                <div class="um-confirm-body">Remove the <strong>@_deleteTarget.SnapshotDate.ToString("MMM d, yyyy")</strong> AR aging snapshot for <strong>@AccountName(_deleteTarget.AccountId)</strong>? This snapshot will be soft-deleted from active aging views.</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_busy">Remove Snapshot</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="ar-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="ar-modal ar-action-modal" role="dialog" aria-modal="true" aria-labelledby="ar-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-hourglass-split" aria-hidden="true"></i>
+                <span id="ar-form-title">@(_editingId == Guid.Empty ? "New AR Aging Snapshot" : "Edit AR Aging Snapshot")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="ar-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Receivables workflow</span>
+                        <p>Create or adjust tenant-scoped AR aging snapshots using the existing Billing.ArAgingSnapshot workflow.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Billing Account <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.AccountId">
+                                <option value="@Guid.Empty">Select account...</option>
+                                @foreach (var account in _accountOptions)
+                                {
+                                    <option value="@account.Id">@account.Display</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
+                            @if (_form.AccountId == Guid.Empty && _saveAttempted)
+                            {
+                                <div class="text-danger">Billing account is required.</div>
+                            }
+                        </div>
+                        <div class="um-field">
+                            <label>Snapshot Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_form.SnapshotDate" />
+                            <ValidationMessage For="() => _form.SnapshotDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Current</label>
+                            <InputNumber class="form-control" @bind-Value="_form.CurrentAmount" />
+                            <ValidationMessage For="() => _form.CurrentAmount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>1–30 Days</label>
+                            <InputNumber class="form-control" @bind-Value="_form.Days30Amount" />
+                            <ValidationMessage For="() => _form.Days30Amount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>31–60 Days</label>
+                            <InputNumber class="form-control" @bind-Value="_form.Days60Amount" />
+                            <ValidationMessage For="() => _form.Days60Amount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>61–90 Days</label>
+                            <InputNumber class="form-control" @bind-Value="_form.Days90Amount" />
+                            <ValidationMessage For="() => _form.Days90Amount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>90+ Days</label>
+                            <InputNumber class="form-control" @bind-Value="_form.Days90PlusAmount" />
+                            <ValidationMessage For="() => _form.Days90PlusAmount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Total</label>
+                            <input class="form-control" value="@Fmt(_form.Total)" disabled />
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @(_editingId == Guid.Empty ? "Create Snapshot" : "Save Changes")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="ar-enterprise-page">
+    <section class="ar-header">
+        <div class="ar-header-left">
+            <div class="ar-lob-icon"><i class="bi bi-hourglass-split" aria-hidden="true"></i></div>
+            <div class="ar-header-info">
+                <div class="ar-title-row">
+                    <h1 class="ar-page-title">AR Aging</h1>
+                    <span class="ar-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live receivables data</span>
+                    <span class="ar-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <div class="ar-sub-row">
+                    <span>Track receivables exposure by aging bucket, account risk, and invoice-synced snapshots.</span>
+                    <span class="ar-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Invoice sync enabled</span>
+                    <span class="ar-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span>
+                </div>
+            </div>
+        </div>
+        <div class="ar-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="SyncAsync" disabled="@_syncing">
+                <i class="bi @(_syncing ? "bi-arrow-repeat ar-spin" : "bi-arrow-repeat")" aria-hidden="true"></i> @(_syncing ? "Syncing" : "Sync From Billing")
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi @(_loading ? "bi-arrow-repeat ar-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> New Snapshot
+            </button>
+        </div>
+    </section>
+
+    <section class="ar-kpi-strip" aria-label="AR aging metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="ar-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "ar-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="ar-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="ar-kpi-copy">
+                    <span class="ar-kpi-label">@kpi.Label</span>
+                    <span class="ar-kpi-value">@kpi.Value</span>
+                    <span class="ar-kpi-caption">@kpi.Caption</span>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="ar-workflow-strip" aria-label="AR aging workflow shortcuts">
+        <button type="button" class="ar-workflow-card ar-wf-invoice" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+            <span class="ar-workflow-icon"><i class="bi bi-receipt" aria-hidden="true"></i></span>
+            <span class="ar-workflow-content"><strong>1</strong><span>Invoice</span><small>Review receivables.</small></span>
+        </button>
+        <button type="button" class="ar-workflow-card ar-wf-pay" @onclick='() => Nav.NavigateTo("/billing/payments")'>
+            <span class="ar-workflow-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+            <span class="ar-workflow-content"><strong>2</strong><span>Collect</span><small>Apply payments.</small></span>
+        </button>
+        <button type="button" class="ar-workflow-card ar-wf-aging" @onclick="SyncAsync">
+            <span class="ar-workflow-icon"><i class="bi bi-hourglass" aria-hidden="true"></i></span>
+            <span class="ar-workflow-content"><strong>3</strong><span>Age</span><small>Sync from billing invoices.</small></span>
+        </button>
+        <button type="button" class="ar-workflow-card ar-wf-exp" @onclick='() => Nav.NavigateTo("/billing/payment-experience")'>
+            <span class="ar-workflow-icon"><i class="bi bi-graph-up" aria-hidden="true"></i></span>
+            <span class="ar-workflow-content"><strong>4</strong><span>Experience</span><small>Monitor payment behavior.</small></span>
+        </button>
+        <button type="button" class="ar-workflow-card ar-wf-collect" @onclick='() => Nav.NavigateTo("/billing/collections")'>
+            <span class="ar-workflow-icon"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>
+            <span class="ar-workflow-content"><strong>5</strong><span>Recover</span><small>Escalate aged balances.</small></span>
+        </button>
+    </section>
+
+    <section class="ar-enterprise-search" aria-label="AR aging filters">
+        <div class="ar-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="ar-search-body">
+            <label for="ar-search">Search AR aging</label>
+            <input id="ar-search" class="ar-search-input" type="search" placeholder="Search account, risk, bucket, snapshot date..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="ar-search-hint">Filters apply instantly across synchronized AR aging snapshots.</span>
+        </div>
+        <input class="ar-filter-select" type="date" @bind="SnapshotDateFilter" aria-label="Snapshot date filter" />
+        <select class="ar-filter-select" @bind="RiskFilter" aria-label="Risk filter">
+            <option value="">All risk</option>
+            @foreach (var risk in _riskOptions)
+            {
+                <option value="@risk">@risk</option>
+            }
+        </select>
+        <div class="ar-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger ar-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="ar-content-layout">
+        <div class="ar-grid-wrap">
+            <div class="ar-grid-toolbar">
+                <div>
+                    <strong>AR aging register</strong>
+                    <span>@ActiveFilterText</span>
+                </div>
+                <div class="ar-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/collections")'><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Collections</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="ar-loading"><i class="bi bi-arrow-repeat ar-spin" aria-hidden="true"></i><strong>Loading AR aging...</strong><span>Syncing schema, seed data, billing accounts, and invoice balances.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="ar-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No AR aging snapshots found</strong><span>Sync from Billing invoices or create a manual snapshot.</span><button type="button" class="um-btn um-btn-primary" @onclick="SyncAsync">Sync From Billing</button></div>
+            }
+            else
+            {
+                <div class="ar-table-scroll">
+                    <table class="ar-table">
+                        <thead>
+                            <tr>
+                                <th>Account / Snapshot</th>
+                                <th>Risk</th>
+                                <th class="ar-number">Current</th>
+                                <th class="ar-number">1–30</th>
+                                <th class="ar-number">31–60</th>
+                                <th class="ar-number">61–90</th>
+                                <th class="ar-number">90+</th>
+                                <th class="ar-number">Total</th>
+                                <th class="ar-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in PagedItems)
+                            {
+                                <tr class="ar-table-row @(_selected?.SnapshotId == item.SnapshotId ? "ar-table-row--selected" : null)" @onclick="() => SelectSnapshot(item)">
+                                    <td>
+                                        <div class="ar-acct-cell">
+                                            <span class="ar-acct-icon @RiskIconTone(item)"><i class="bi @RiskIcon(item)" aria-hidden="true"></i></span>
+                                            <span>
+                                                <strong>@AccountName(item.AccountId)</strong>
+                                                <span>@item.SnapshotDate.ToString("MMM d, yyyy") · @SnapshotAge(item)</span>
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td><span class="ar-risk-chip @RiskClass(item)">@RiskLabel(item)</span></td>
+                                    <td class="ar-number">@Fmt(item.CurrentAmount)</td>
+                                    <td class="ar-number">@Fmt(item.Days30Amount)</td>
+                                    <td class="ar-number">@Fmt(item.Days60Amount)</td>
+                                    <td class="ar-number ar-warn">@Fmt(item.Days90Amount)</td>
+                                    <td class="ar-number ar-danger">@Fmt(item.Days90PlusAmount)</td>
+                                    <td class="ar-number">@Fmt(item.TotalOutstanding)</td>
+                                    <td>
+                                        <div class="ar-row-acts">
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Inspect" @onclick:stopPropagation="true" @onclick="() => SelectSnapshot(item)"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Remove" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="ar-pager">
+                    <span>Showing @PageStart-@PageEnd of @_filtered.Count</span>
+                    <div>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button>
+                        <span>Page @_page of @TotalPages</span>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <aside class="ar-detail-panel" aria-label="Selected AR aging snapshot detail">
+            @if (_selected is null)
+            {
+                <div class="ar-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a snapshot</strong><span>Choose a row to inspect account exposure, aging mix, and collection actions.</span></div>
+            }
+            else
+            {
+                <div class="ar-detail-head">
+                    <div>
+                        <span class="ar-detail-eyebrow"><i class="bi bi-hourglass-split" aria-hidden="true"></i> Aging snapshot</span>
+                        <h2>@AccountName(_selected.AccountId)</h2>
+                        <div class="ar-detail-meta">
+                            <span>@_selected.SnapshotDate.ToString("MMM d, yyyy")</span>
+                            <span class="ar-risk-chip @RiskClass(_selected)">@RiskLabel(_selected)</span>
+                        </div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                </div>
+                <div class="ar-detail-body">
+                    <div class="ar-detail-summary">
+                        <div class="ar-meta-row"><span class="ar-meta-lbl">Total AR</span><span class="ar-meta-val">@Fmt(_selected.TotalOutstanding)</span></div>
+                        <div class="ar-meta-row"><span class="ar-meta-lbl">Past Due</span><span class="ar-meta-val">@Fmt(PastDue(_selected))</span></div>
+                        <div class="ar-meta-row"><span class="ar-meta-lbl">90+ Exposure</span><span class="ar-meta-val">@Fmt(_selected.Days90PlusAmount)</span></div>
+                        <div class="ar-meta-row"><span class="ar-meta-lbl">Created</span><span class="ar-meta-val">@_selected.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</span></div>
+                    </div>
+                    <div class="ar-bucket-card">
+                        <span><i class="bi bi-bar-chart" aria-hidden="true"></i> Aging bucket mix</span>
+                        @foreach (var bucket in Buckets(_selected))
+                        {
+                            <div class="ar-bucket-row">
+                                <span>@bucket.Label</span>
+                                <div class="ar-bucket-bar-wrap"><div class="ar-bucket-bar @bucket.Tone" style="width:@bucket.Width%"></div></div>
+                                <strong>@Fmt(bucket.Amount)</strong>
+                            </div>
+                        }
+                    </div>
+                    <div class="ar-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/collections")'><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Collections</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Remove</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
 </div>
 
-<SfDialog @bind-Visible="_showForm" Width="680px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates><Content>
-        <div class="um-modal-header"><i class="bi bi-hourglass" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New AR Snapshot" : "Edit AR Snapshot")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-        <EditForm EditContext="_editContext"><DataAnnotationsValidator />
-            <div class="um-modal-body"><div class="um-form-grid">
-                <div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountId" class="um-input"><option value="@Guid.Empty">Select account…</option>@foreach (var account in _accounts) { <option value="@account.AccountId">@account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.AccountId" class="text-danger" /></div>
-                <div class="um-field"><label>Snapshot Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.SnapshotDate" class="um-input" /><ValidationMessage For="() => _form.SnapshotDate" class="text-danger" /></div>
-                <div class="um-field"><label>Current</label><InputNumber @bind-Value="_form.CurrentAmount" class="um-input" /><ValidationMessage For="() => _form.CurrentAmount" class="text-danger" /></div>
-                <div class="um-field"><label>1–30 Days</label><InputNumber @bind-Value="_form.Days30Amount" class="um-input" /><ValidationMessage For="() => _form.Days30Amount" class="text-danger" /></div>
-                <div class="um-field"><label>31–60 Days</label><InputNumber @bind-Value="_form.Days60Amount" class="um-input" /><ValidationMessage For="() => _form.Days60Amount" class="text-danger" /></div>
-                <div class="um-field"><label>61–90 Days</label><InputNumber @bind-Value="_form.Days90Amount" class="um-input" /><ValidationMessage For="() => _form.Days90Amount" class="text-danger" /></div>
-                <div class="um-field"><label>90+ Days</label><InputNumber @bind-Value="_form.Days90PlusAmount" class="um-input" /><ValidationMessage For="() => _form.Days90PlusAmount" class="text-danger" /></div>
-                <div class="um-field"><label>Total</label><input class="um-input" value="@Fmt(_form.Total)" disabled /></div>
-                @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-            </div></div>
-        </EditForm>
-        <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Snapshot")</button></div>
-    </Content></DialogTemplates>
-</SfDialog>
-
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private const int PageSize = 12;
     private Guid _tenantId;
-    private SfToast _toast = default!;
+    private Guid _tenantAdminUserId;
     private List<ArAgingSnapshotDto> _items = [];
+    private List<ArAgingSnapshotDto> _filtered = [];
     private List<BillingAccountDto> _accounts = [];
-    private string? _searchTerm, _loadError, _formError;
-    private string _activeFilter = string.Empty;
-    private DateTime _snapshotDate = DateTime.Today;
-    private bool _loading, _syncing, _showForm, _saving;
-    private Guid _editingId = Guid.Empty;
+    private List<AccountOption> _accountOptions = [];
+    private ArAgingSnapshotDto? _selected;
+    private ArAgingSnapshotDto? _deleteTarget;
     private ArForm _form = new();
-    private EditContext _editContext = default!;
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _riskFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private DateTime _snapshotDate = DateTime.Today;
+    private int _page = 1;
+    private bool _loading;
+    private bool _syncing;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showDeleteConfirm;
+    private bool _saveAttempted;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _riskOptions = ["Healthy", "Medium", "High", "Critical"];
 
-    private IEnumerable<ArAgingSnapshotDto> FilteredItems => _items.Where(x => _activeFilter switch { "Current" => x.CurrentAmount > 0, "30" => x.Days30Amount > 0, "60" => x.Days60Amount > 0, "90" => x.Days90Amount > 0, "90+" => x.Days90PlusAmount > 0, _ => true });
-    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); _editContext = new(_form); await LoadAsync(); }
-    private async Task LoadAsync() { _loading = true; _loadError = null; try { var ar = await Api.SearchArAgingSnapshotsAsync(_tenantId, _searchTerm); var accounts = await Api.SearchBillingAccountsAsync(_tenantId, pageSize: 500); _items = ar?.Items.ToList() ?? []; _accounts = accounts?.Items.ToList() ?? []; } catch (Exception ex) { _loadError = $"AR Aging failed to load: {ex.Message}"; await ToastAsync(_loadError, true); } finally { _loading = false; } }
-    private async Task SyncAsync() { _syncing = true; try { await Api.SyncArAgingFromInvoicesAsync(_tenantId, DateOnly.FromDateTime(_snapshotDate)); await ToastAsync("AR aging synchronized from Billing invoices."); await LoadAsync(); } catch (Exception ex) { await ToastAsync($"Sync failed: {ex.Message}", true); } finally { _syncing = false; } }
-    private void SetFilter(string filter) => _activeFilter = filter;
-    private string KpiClass(string filter) => _activeFilter == filter ? "bill-kpi-active" : string.Empty;
-    private void OnRowSelected(RowSelectEventArgs<ArAgingSnapshotDto> args) => OpenEdit(args.Data);
-    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
-    private void OpenEdit(ArAgingSnapshotDto item) { _editingId = item.SnapshotId; _form = new ArForm { AccountId = item.AccountId, SnapshotDate = item.SnapshotDate.ToDateTime(TimeOnly.MinValue), CurrentAmount = item.CurrentAmount, Days30Amount = item.Days30Amount, Days60Amount = item.Days60Amount, Days90Amount = item.Days90Amount, Days90PlusAmount = item.Days90PlusAmount }; _editContext = new(_form); _formError = null; _showForm = true; }
-    private void CloseForm() => _showForm = false;
-    private async Task SaveAsync() { if (!_editContext.Validate()) return; _saving = true; try { if (_editingId == Guid.Empty) await Api.CreateArAgingSnapshotAsync(new CreateArAgingSnapshotRequest { TenantId = _tenantId, AccountId = _form.AccountId, SnapshotDate = DateOnly.FromDateTime(_form.SnapshotDate), CurrentAmount = _form.CurrentAmount, Days30Amount = _form.Days30Amount, Days60Amount = _form.Days60Amount, Days90Amount = _form.Days90Amount, Days90PlusAmount = _form.Days90PlusAmount }); else await Api.UpdateArAgingSnapshotAsync(_editingId, new UpdateArAgingSnapshotRequest { SnapshotId = _editingId, AccountId = _form.AccountId, SnapshotDate = DateOnly.FromDateTime(_form.SnapshotDate), CurrentAmount = _form.CurrentAmount, Days30Amount = _form.Days30Amount, Days60Amount = _form.Days60Amount, Days90Amount = _form.Days90Amount, Days90PlusAmount = _form.Days90PlusAmount }); await ToastAsync("AR snapshot saved."); _showForm = false; await LoadAsync(); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; await ToastAsync(_formError, true); } finally { _saving = false; } }
-    private async Task ToastAsync(string message, bool error = false) => await _toast.ShowAsync(new ToastModel { Content = message, CssClass = error ? "e-toast-danger" : "e-toast-success" });
-    private static string Fmt(decimal value) => value.ToString("C0");
+    private IEnumerable<ArAgingSnapshotDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All AR aging snapshots" : $"Filtered by {_kpiFilter}";
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Outstanding AR", Fmt(_items.Sum(x => x.TotalOutstanding)), "All receivables", "bi-wallet2", "ar-ki-blue"),
+        new("current", "Current", Fmt(_items.Sum(x => x.CurrentAmount)), "Not yet overdue", "bi-check-circle", "ar-ki-green"),
+        new("30", "1–30", Fmt(_items.Sum(x => x.Days30Amount)), "Early past due", "bi-calendar2-week", "ar-ki-amber"),
+        new("60", "31–60", Fmt(_items.Sum(x => x.Days60Amount)), "Escalating AR", "bi-calendar2-minus", "ar-ki-amber"),
+        new("90", "61–90", Fmt(_items.Sum(x => x.Days90Amount)), "High risk", "bi-exclamation-circle", "ar-ki-red"),
+        new("90+", "90+", Fmt(_items.Sum(x => x.Days90PlusAmount)), "Critical exposure", "bi-exclamation-triangle", "ar-ki-red")
+    ];
+
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string RiskFilter { get => _riskFilter; set { _riskFilter = value; ApplyFilters(resetPage: true); } }
+    private DateTime SnapshotDateFilter { get => _snapshotDate; set { _snapshotDate = value; ApplyFilters(resetPage: true); } }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Billing", "/billing/accounts"), new("AR Aging", ""));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            await Api.EnsureBillingAccountsSeedAsync(_tenantId);
+            var ar = await Api.SearchArAgingSnapshotsAsync(_tenantId, string.Empty);
+            var accounts = await Api.SearchBillingAccountsAsync(_tenantId, pageSize: 500);
+            _items = ar?.Items.OrderByDescending(x => x.SnapshotDate).ThenByDescending(x => x.TotalOutstanding).ToList() ?? [];
+            _accounts = accounts?.Items.ToList() ?? [];
+            _accountOptions = _accounts.OrderBy(x => x.AccountName).Select(x => new AccountOption(x.AccountId, $"{x.AccountName} · {x.AccountNumber}")).ToList();
+            if (_items.Any()) _snapshotDate = _items.Max(x => x.SnapshotDate).ToDateTime(TimeOnly.MinValue);
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"AR Aging failed to load: {ex.Message}";
+            ShowToast(_loadError, "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<ArAgingSnapshotDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(AccountName(x.AccountId), term) || Contains(RiskLabel(x), term) || Contains(x.SnapshotDate.ToString("yyyy-MM-dd"), term));
+        }
+        if (!string.IsNullOrWhiteSpace(_riskFilter)) query = query.Where(x => RiskLabel(x) == _riskFilter);
+        if (_snapshotDate != default) query = query.Where(x => x.SnapshotDate == DateOnly.FromDateTime(_snapshotDate));
+        query = _kpiFilter switch
+        {
+            "current" => query.Where(x => x.CurrentAmount > 0),
+            "30" => query.Where(x => x.Days30Amount > 0),
+            "60" => query.Where(x => x.Days60Amount > 0),
+            "90" => query.Where(x => x.Days90Amount > 0),
+            "90+" => query.Where(x => x.Days90PlusAmount > 0),
+            _ => query
+        };
+        _filtered = query.OrderByDescending(x => x.TotalOutstanding).ThenByDescending(x => x.SnapshotDate).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter)
+    {
+        _kpiFilter = filter;
+        ApplyFilters(resetPage: true);
+    }
+
+    private void ResetFilters()
+    {
+        _searchTerm = string.Empty;
+        _riskFilter = string.Empty;
+        _kpiFilter = "all";
+        if (_items.Any()) _snapshotDate = _items.Max(x => x.SnapshotDate).ToDateTime(TimeOnly.MinValue);
+        ApplyFilters(resetPage: true);
+        ShowToast("AR aging filters reset.", "info");
+    }
+
+    private async Task SyncAsync()
+    {
+        _syncing = true;
+        try
+        {
+            var count = await Api.SyncArAgingFromInvoicesAsync(_tenantId, DateOnly.FromDateTime(_snapshotDate), _tenantAdminUserId);
+            ShowToast($"AR aging synchronized from Billing invoices ({count:N0} rows affected).", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Sync failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _syncing = false;
+        }
+    }
+
+    private void SelectSnapshot(ArAgingSnapshotDto item) => _selected = item;
+
+    private void OpenCreate()
+    {
+        _editingId = Guid.Empty;
+        _saveAttempted = false;
+        _formError = null;
+        _form = new ArForm { SnapshotDate = _snapshotDate };
+        _showForm = true;
+    }
+
+    private void OpenEdit(ArAgingSnapshotDto item)
+    {
+        _editingId = item.SnapshotId;
+        _saveAttempted = false;
+        _formError = null;
+        _form = new ArForm
+        {
+            AccountId = item.AccountId,
+            SnapshotDate = item.SnapshotDate.ToDateTime(TimeOnly.MinValue),
+            CurrentAmount = item.CurrentAmount,
+            Days30Amount = item.Days30Amount,
+            Days60Amount = item.Days60Amount,
+            Days90Amount = item.Days90Amount,
+            Days90PlusAmount = item.Days90PlusAmount
+        };
+        _showForm = true;
+    }
+
+    private void CloseForm()
+    {
+        if (_busy) return;
+        _showForm = false;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saveAttempted = true;
+        if (_form.AccountId == Guid.Empty)
+        {
+            _formError = "Billing account is required.";
+            ShowToast(_formError, "warning");
+            return;
+        }
+
+        _busy = true;
+        _formError = null;
+        try
+        {
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateArAgingSnapshotAsync(new CreateArAgingSnapshotRequest
+                {
+                    TenantId = _tenantId,
+                    AccountId = _form.AccountId,
+                    SnapshotDate = DateOnly.FromDateTime(_form.SnapshotDate),
+                    CurrentAmount = _form.CurrentAmount,
+                    Days30Amount = _form.Days30Amount,
+                    Days60Amount = _form.Days60Amount,
+                    Days90Amount = _form.Days90Amount,
+                    Days90PlusAmount = _form.Days90PlusAmount,
+                    CreatedByUserId = _tenantAdminUserId
+                });
+                ShowToast("AR aging snapshot created.", "success");
+            }
+            else
+            {
+                await Api.UpdateArAgingSnapshotAsync(_editingId, new UpdateArAgingSnapshotRequest
+                {
+                    SnapshotId = _editingId,
+                    AccountId = _form.AccountId,
+                    SnapshotDate = DateOnly.FromDateTime(_form.SnapshotDate),
+                    CurrentAmount = _form.CurrentAmount,
+                    Days30Amount = _form.Days30Amount,
+                    Days60Amount = _form.Days60Amount,
+                    Days90Amount = _form.Days90Amount,
+                    Days90PlusAmount = _form.Days90PlusAmount,
+                    ModifiedByUserId = _tenantAdminUserId
+                });
+                ShowToast("AR aging snapshot updated.", "success");
+            }
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ConfirmDelete(ArAgingSnapshotDto item)
+    {
+        _deleteTarget = item;
+        _showDeleteConfirm = true;
+    }
+
+    private void CancelDelete()
+    {
+        if (_busy) return;
+        _showDeleteConfirm = false;
+        _deleteTarget = null;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _busy = true;
+        try
+        {
+            await Api.DeleteArAgingSnapshotAsync(_deleteTarget.SnapshotId, _tenantAdminUserId);
+            ShowToast("AR aging snapshot removed.", "success");
+            _showDeleteConfirm = false;
+            _deleteTarget = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Remove failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task NotifyValidationAsync(EditContext _)
+    {
+        _saveAttempted = true;
+        ShowToast("Please correct validation errors before saving the AR snapshot.", "warning");
+        return Task.CompletedTask;
+    }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any())
+        {
+            ShowToast("No AR aging snapshots are available to export.", "warning");
+            return;
+        }
+
+        var csv = new StringBuilder();
+        csv.AppendLine("Account,SnapshotDate,Current,Days30,Days60,Days90,Days90Plus,Total,Risk,SnapshotId");
+        foreach (var item in _filtered)
+        {
+            csv.AppendLine(string.Join(',',
+                Csv(AccountName(item.AccountId)),
+                Csv(item.SnapshotDate.ToString("yyyy-MM-dd")),
+                item.CurrentAmount.ToString("0.00"),
+                item.Days30Amount.ToString("0.00"),
+                item.Days60Amount.ToString("0.00"),
+                item.Days90Amount.ToString("0.00"),
+                item.Days90PlusAmount.ToString("0.00"),
+                item.TotalOutstanding.ToString("0.00"),
+                Csv(RiskLabel(item)),
+                Csv(item.SnapshotId.ToString())));
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"billing-ar-aging-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} AR aging snapshots.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    private void EnsureSelectedStillVisible()
+    {
+        if (_selected is null)
+        {
+            _selected = _filtered.FirstOrDefault();
+            return;
+        }
+        _selected = _items.FirstOrDefault(x => x.SnapshotId == _selected.SnapshotId) ?? _filtered.FirstOrDefault();
+    }
+
+    private string AccountName(Guid accountId) => _accountOptions.FirstOrDefault(x => x.Id == accountId)?.Display ?? _accounts.FirstOrDefault(x => x.AccountId == accountId)?.AccountName ?? accountId.ToString()[..8];
+    private static decimal PastDue(ArAgingSnapshotDto item) => item.Days30Amount + item.Days60Amount + item.Days90Amount + item.Days90PlusAmount;
+    private static string SnapshotAge(ArAgingSnapshotDto item)
+    {
+        var days = (DateTime.Today - item.SnapshotDate.ToDateTime(TimeOnly.MinValue)).Days;
+        return days == 0 ? "today" : $"{days:N0} days old";
+    }
     private static string RiskLabel(ArAgingSnapshotDto item) => item.Days90PlusAmount > 0 ? "Critical" : item.Days90Amount > 0 ? "High" : item.Days60Amount > 0 ? "Medium" : "Healthy";
-    private static string RiskClass(ArAgingSnapshotDto item) => item.Days90PlusAmount > 0 ? "bill-chip-danger" : item.Days90Amount > 0 ? "bill-chip-danger" : item.Days60Amount > 0 ? "bill-chip-warning" : "bill-chip-success";
+    private static string RiskClass(ArAgingSnapshotDto item) => item.Days90PlusAmount > 0 ? "ar-risk-critical" : item.Days90Amount > 0 ? "ar-risk-high" : item.Days60Amount > 0 ? "ar-risk-medium" : "ar-risk-healthy";
+    private static string RiskIcon(ArAgingSnapshotDto item) => RiskLabel(item) switch { "Critical" => "bi-exclamation-triangle", "High" => "bi-exclamation-circle", "Medium" => "bi-calendar2-minus", _ => "bi-check-circle" };
+    private static string RiskIconTone(ArAgingSnapshotDto item) => RiskLabel(item) switch { "Critical" or "High" => "ar-di-red", "Medium" => "ar-di-amber", _ => "ar-di-green" };
+    private static string Fmt(decimal value) => value.ToString("C0");
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static IEnumerable<BucketModel> Buckets(ArAgingSnapshotDto item)
+    {
+        var total = Math.Max(item.TotalOutstanding, 1);
+        yield return new("Current", item.CurrentAmount, (double)(item.CurrentAmount / total * 100), "ar-bkt-green");
+        yield return new("1–30", item.Days30Amount, (double)(item.Days30Amount / total * 100), "ar-bkt-blue");
+        yield return new("31–60", item.Days60Amount, (double)(item.Days60Amount / total * 100), "ar-bkt-amber");
+        yield return new("61–90", item.Days90Amount, (double)(item.Days90Amount / total * 100), "ar-bkt-orange");
+        yield return new("90+", item.Days90PlusAmount, (double)(item.Days90PlusAmount / total * 100), "ar-bkt-red");
+    }
+    private static string Csv(string value)
+    {
+        var quote = Convert.ToChar(34).ToString();
+        return string.Concat(quote, value.Replace(quote, quote + quote), quote);
+    }
 
-    private sealed class ArForm { [RequiredGuid(ErrorMessage = "Account is required.")] public Guid AccountId { get; set; } [Required] public DateTime SnapshotDate { get; set; } = DateTime.Today; [Range(0, 100000000)] public decimal CurrentAmount { get; set; } [Range(0, 100000000)] public decimal Days30Amount { get; set; } [Range(0, 100000000)] public decimal Days60Amount { get; set; } [Range(0, 100000000)] public decimal Days90Amount { get; set; } [Range(0, 100000000)] public decimal Days90PlusAmount { get; set; } public decimal Total => CurrentAmount + Days30Amount + Days60Amount + Days90Amount + Days90PlusAmount; }
-    private sealed class RequiredGuidAttribute : ValidationAttribute { public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty; }
-
-    async Task ResolveCurrentUserContextAsync()
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
         _tenantId = context.TenantId;
         _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+    }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone)
+    {
+        public string Title => $"Filter AR aging by {Label}";
+    }
+    private sealed record AccountOption(Guid Id, string Display);
+    private sealed record BucketModel(string Label, decimal Amount, double Width, string Tone);
+
+    private sealed class ArForm
+    {
+        [RequiredGuid(ErrorMessage = "Billing account is required.")]
+        public Guid AccountId { get; set; }
+
+        [Required]
+        public DateTime SnapshotDate { get; set; } = DateTime.Today;
+
+        [Range(0, 100000000)]
+        public decimal CurrentAmount { get; set; }
+
+        [Range(0, 100000000)]
+        public decimal Days30Amount { get; set; }
+
+        [Range(0, 100000000)]
+        public decimal Days60Amount { get; set; }
+
+        [Range(0, 100000000)]
+        public decimal Days90Amount { get; set; }
+
+        [Range(0, 100000000)]
+        public decimal Days90PlusAmount { get; set; }
+
+        public decimal Total => CurrentAmount + Days30Amount + Days60Amount + Days90Amount + Days90PlusAmount;
+    }
+
+    private sealed class RequiredGuidAttribute : ValidationAttribute
+    {
+        public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty;
     }
 }

@@ -1,134 +1,459 @@
 @page "/timeentries"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Billing
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Time Entries — AMS</PageTitle>
+<PageTitle>Time Entries — AMS Enterprise</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Time Entries"
-               Subtitle="Tenant Admin view of billable time synchronized with Billing and Accounting"
-               Icon="bi-clock">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Time Entry</button>
-    </Actions>
-</AppPageHeader>
-
-<div class="pc-kpi-strip">
-    <button type="button" class="pc-kpi-card @KpiClass("")" @onclick='() => SetFilter("")' title="Show all time entries"><div class="pc-kpi-value">@_items.Count</div><div class="pc-kpi-label"><i class="bi bi-clock" aria-hidden="true"></i> Entries</div></button>
-    <button type="button" class="pc-kpi-card @KpiClass("Draft")" @onclick='() => SetFilter("Draft")' title="Show draft entries"><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Draft")</div><div class="pc-kpi-label"><i class="bi bi-pencil" aria-hidden="true"></i> Draft</div></button>
-    <button type="button" class="pc-kpi-card @KpiClass("Submitted")" @onclick='() => SetFilter("Submitted")' title="Show submitted entries"><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Submitted")</div><div class="pc-kpi-label"><i class="bi bi-send" aria-hidden="true"></i> Submitted</div></button>
-    <button type="button" class="pc-kpi-card @KpiClass("Approved")" @onclick='() => SetFilter("Approved")' title="Show approved entries"><div class="pc-kpi-value">@_items.Count(x => x.StatusCode == "Approved")</div><div class="pc-kpi-label"><i class="bi bi-check-circle" aria-hidden="true"></i> Approved</div></button>
-    <button type="button" class="pc-kpi-card" title="Total hours"><div class="pc-kpi-value">@_items.Sum(x => x.Hours).ToString("N1")</div><div class="pc-kpi-label"><i class="bi bi-hourglass" aria-hidden="true"></i> Hours</div></button>
-    <button type="button" class="pc-kpi-card" title="Billable amount"><div class="pc-kpi-value">@Fmt(_items.Sum(x => x.BillableHours * x.RateAmount))</div><div class="pc-kpi-label"><i class="bi bi-currency-dollar" aria-hidden="true"></i> Billable</div></button>
-</div>
-
-<div class="toolbar">
-    <SfTextBox Placeholder="Search descriptions…" @bind-Value="_searchTerm" Width="320px"></SfTextBox>
-    <select class="um-input" @bind="_statusFilter">
-        <option value="">All Statuses</option>
-        @foreach (var status in _statuses)
-        {
-            <option value="@status">@status</option>
-        }
-    </select>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    <div class="te-toast te-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="te-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<div class="um-grid-card">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading time entries…</span></div>
-    }
-    <SfGrid TValue="TimeEntryDto" DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridEvents TValue="TimeEntryDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="15"></GridPageSettings>
-        <GridColumns>
-            <GridColumn Field="@nameof(TimeEntryDto.EntryDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="120"></GridColumn>
-            <GridColumn Field="@nameof(TimeEntryDto.Hours)" HeaderText="Hours" Width="100" Format="N2" TextAlign="TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(TimeEntryDto.BillableHours)" HeaderText="Billable Hrs" Width="120" Format="N2" TextAlign="TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(TimeEntryDto.RateAmount)" HeaderText="Rate" Width="110" Format="C2" TextAlign="TextAlign.Right"></GridColumn>
-            <GridColumn HeaderText="Amount" Width="130" TextAlign="TextAlign.Right"><Template>@{ var item = (TimeEntryDto)context; }@(item.BillableHours * item.RateAmount).ToString("C2")</Template></GridColumn>
-            <GridColumn Field="@nameof(TimeEntryDto.Description)" HeaderText="Description" Width="320"></GridColumn>
-            <GridColumn Field="@nameof(TimeEntryDto.StatusCode)" HeaderText="Status" Width="120"><Template>@{ var item = (TimeEntryDto)context; }<span class="badge @StatusClass(item.StatusCode)">@item.StatusCode</span></Template></GridColumn>
-            <GridColumn HeaderText="Actions" Width="130">
-                <Template>
-                    @{ var item = (TimeEntryDto)context; }
-                    <div style="display:flex;gap:.25rem">
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick='() => UpdateStatusAsync(item, "Submitted")' title="Submit"><i class="bi bi-send" aria-hidden="true"></i></button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick='() => UpdateStatusAsync(item, "Approved")' title="Approve"><i class="bi bi-check-circle" aria-hidden="true"></i></button>
+@if (_showDeleteConfirm && _deleteTarget is not null)
+{
+    <div class="te-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="te-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="te-delete-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash-fill"></i></div>
+                <div class="um-confirm-title" id="te-delete-title">Remove Time Entry</div>
+                <div class="um-confirm-body">Remove the <strong>@_deleteTarget.Hours.ToString("N2") hour</strong> time entry for <strong>@AccountName(_deleteTarget.AccountId)</strong>? This entry will be soft-deleted from active time views.</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_busy">Remove Time Entry</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="te-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="te-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="te-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon"><i class="bi @StatusConfirmIcon(_pendingStatus)"></i></div>
+                <div class="um-confirm-title" id="te-status-title">@StatusConfirmTitle(_pendingStatus)</div>
+                <div class="um-confirm-body">@StatusConfirmMessage(_statusTarget, _pendingStatus)</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-primary" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@StatusConfirmButton(_pendingStatus)</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="te-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="te-modal te-action-modal" role="dialog" aria-modal="true" aria-labelledby="te-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-clock" aria-hidden="true"></i>
+                <span id="te-form-title">@(_editingId == Guid.Empty ? "New Time Entry" : "Edit Time Entry")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="te-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Time billing workflow</span>
+                        <p>Capture tenant-scoped service time, billable hours, approval status, and invoice links using the existing Billing.TimeEntry workflow.</p>
                     </div>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Billing Account <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.AccountId">
+                                <option value="@Guid.Empty">Select account...</option>
+                                @foreach (var account in _accountOptions)
+                                {
+                                    <option value="@account.Id">@account.Display</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
+                            @if (_form.AccountId == Guid.Empty && _saveAttempted)
+                            {
+                                <div class="text-danger">Billing account is required.</div>
+                            }
+                        </div>
+                        <div class="um-field">
+                            <label>User <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.UserId">
+                                <option value="@Guid.Empty">Select user...</option>
+                                @foreach (var user in _userOptions)
+                                {
+                                    <option value="@user.Id">@user.Display</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.UserId" class="text-danger" />
+                            @if (_form.UserId == Guid.Empty && _saveAttempted)
+                            {
+                                <div class="text-danger">User is required.</div>
+                            }
+                        </div>
+                        <div class="um-field">
+                            <label>Entry Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_form.EntryDate" />
+                            <ValidationMessage For="() => _form.EntryDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Hours <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.Hours" />
+                            <ValidationMessage For="() => _form.Hours" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Billable Hours <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.BillableHours" />
+                            <ValidationMessage For="() => _form.BillableHours" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Rate <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.RateAmount" />
+                            <ValidationMessage For="() => _form.RateAmount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.StatusCode">
+                                @foreach (var status in _statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Invoice</label>
+                            <InputSelect class="form-select" @bind-Value="_form.InvoiceId">
+                                <option value="">None</option>
+                                @foreach (var invoice in InvoiceOptionsForForm)
+                                {
+                                    <option value="@invoice.Id">@invoice.Display</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.InvoiceId" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description</label>
+                            <InputTextArea class="form-control" @bind-Value="_form.Description" rows="3" />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @(_editingId == Guid.Empty ? "Create Time Entry" : "Save Changes")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="te-enterprise-page">
+    <section class="te-header">
+        <div class="te-header-left">
+            <div class="te-lob-icon"><i class="bi bi-clock" aria-hidden="true"></i></div>
+            <div class="te-header-info">
+                <div class="te-title-row">
+                    <h1 class="te-page-title">Time Entries</h1>
+                    <span class="te-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live time data</span>
+                    <span class="te-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <div class="te-sub-row">
+                    <span>Track service time, billable hours, approvals, and invoice recovery across billing accounts.</span>
+                    <span class="te-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span>
+                    <span class="te-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span>
+                </div>
+            </div>
+        </div>
+        <div class="te-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/expenses")'>
+                <i class="bi bi-credit-card" aria-hidden="true"></i> Expenses
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+                <i class="bi bi-receipt" aria-hidden="true"></i> Invoices
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi @(_loading ? "bi-arrow-repeat te-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> New Time Entry
+            </button>
+        </div>
+    </section>
+
+    <section class="te-kpi-strip" aria-label="Time entry metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="te-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "te-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="te-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="te-kpi-copy">
+                    <span class="te-kpi-label">@kpi.Label</span>
+                    <span class="te-kpi-value">@kpi.Value</span>
+                    <span class="te-kpi-caption">@kpi.Caption</span>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="te-workflow-strip" aria-label="Time billing workflow shortcuts">
+        <button type="button" class="te-workflow-card te-wf-time" @onclick="OpenCreate">
+            <span class="te-workflow-icon"><i class="bi bi-clock" aria-hidden="true"></i></span>
+            <span class="te-workflow-content"><strong>1</strong><span>Time</span><small>Capture service hours.</small></span>
+        </button>
+        <button type="button" class="te-workflow-card te-wf-exp" @onclick='() => Nav.NavigateTo("/expenses")'>
+            <span class="te-workflow-icon"><i class="bi bi-credit-card" aria-hidden="true"></i></span>
+            <span class="te-workflow-content"><strong>2</strong><span>Expense</span><small>Review reimbursables.</small></span>
+        </button>
+        <button type="button" class="te-workflow-card te-wf-approve" @onclick='() => SetKpiFilter("submitted")'>
+            <span class="te-workflow-icon"><i class="bi bi-check2-square" aria-hidden="true"></i></span>
+            <span class="te-workflow-content"><strong>3</strong><span>Approve</span><small>Approve submitted time.</small></span>
+        </button>
+        <button type="button" class="te-workflow-card te-wf-invoice" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+            <span class="te-workflow-icon"><i class="bi bi-receipt" aria-hidden="true"></i></span>
+            <span class="te-workflow-content"><strong>4</strong><span>Invoice</span><small>Bill approved hours.</small></span>
+        </button>
+        <button type="button" class="te-workflow-card te-wf-recon" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'>
+            <span class="te-workflow-icon"><i class="bi bi-ui-checks-grid" aria-hidden="true"></i></span>
+            <span class="te-workflow-content"><strong>5</strong><span>Reconcile</span><small>Validate recovery.</small></span>
+        </button>
+    </section>
+
+    <section class="te-enterprise-search" aria-label="Time entry filters">
+        <div class="te-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="te-search-body">
+            <label for="te-search">Search time entries</label>
+            <input id="te-search" class="te-search-input" type="search" placeholder="Search account, user, description, status, invoice..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="te-search-hint">Filters apply instantly across synchronized time entries.</span>
+        </div>
+        <select class="te-filter-select" @bind="StatusFilter" aria-label="Status filter">
+            <option value="">All statuses</option>
+            @foreach (var status in _statuses)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <select class="te-filter-select" @bind="BillableFilter" aria-label="Billable filter">
+            <option value="">Billable: all</option>
+            <option value="yes">Billable only</option>
+            <option value="no">Non-billable only</option>
+        </select>
+        <div class="te-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger te-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="te-content-layout">
+        <div class="te-grid-wrap">
+            <div class="te-grid-toolbar">
+                <div>
+                    <strong>Time register</strong>
+                    <span>@ActiveFilterText</span>
+                </div>
+                <div class="te-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/expenses")'><i class="bi bi-credit-card" aria-hidden="true"></i> Expenses</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="te-loading"><i class="bi bi-arrow-repeat te-spin" aria-hidden="true"></i><strong>Loading time entries...</strong><span>Syncing schema, seed data, billing accounts, users, invoices, and time entries.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="te-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No time entries found</strong><span>Adjust filters or create a new time entry.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Time Entry</button></div>
+            }
+            else
+            {
+                <div class="te-table-scroll">
+                    <table class="te-table">
+                        <thead>
+                            <tr>
+                                <th>Account / Work</th>
+                                <th>Status</th>
+                                <th>User</th>
+                                <th>Date</th>
+                                <th class="te-number">Hours</th>
+                                <th class="te-number">Billable</th>
+                                <th class="te-number">Rate</th>
+                                <th class="te-number">Amount</th>
+                                <th class="te-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in PagedItems)
+                            {
+                                <tr class="te-table-row @(_selected?.TimeEntryId == item.TimeEntryId ? "te-table-row--selected" : null)" @onclick="() => SelectTimeEntry(item)">
+                                    <td>
+                                        <div class="te-entry-cell">
+                                            <span class="te-entry-icon @StatusIconTone(item.StatusCode)"><i class="bi bi-clock-history" aria-hidden="true"></i></span>
+                                            <span>
+                                                <strong>@AccountName(item.AccountId)</strong>
+                                                <span>@Truncate(item.Description ?? "No description", 92)</span>
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td><span class="te-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td>
+                                    <td>@UserName(item.UserId)</td>
+                                    <td>@item.EntryDate.ToString("MMM d, yyyy")</td>
+                                    <td class="te-number">@item.Hours.ToString("N2")</td>
+                                    <td class="te-number"><span class="@(item.BillableHours > 0 ? "te-billable-on" : "te-billable-off")">@item.BillableHours.ToString("N2")</span></td>
+                                    <td class="te-number">@Fmt(item.RateAmount)</td>
+                                    <td class="te-number">@Fmt(Amount(item))</td>
+                                    <td>
+                                        <div class="te-row-acts">
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Submit" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Submitted")'><i class="bi bi-send" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Approve" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Approved")'><i class="bi bi-check-circle" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Remove" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="te-pager">
+                    <span>Showing @PageStart-@PageEnd of @_filtered.Count</span>
+                    <div>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button>
+                        <span>Page @_page of @TotalPages</span>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <aside class="te-detail-panel" aria-label="Selected time entry detail">
+            @if (_selected is null)
+            {
+                <div class="te-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a time entry</strong><span>Choose a row to inspect billing linkage, approval status, and recovery actions.</span></div>
+            }
+            else
+            {
+                <div class="te-detail-head">
+                    <div>
+                        <span class="te-detail-eyebrow"><i class="bi bi-clock" aria-hidden="true"></i> Time entry</span>
+                        <h2>@AccountName(_selected.AccountId)</h2>
+                        <div class="te-detail-meta">
+                            <span>@_selected.EntryDate.ToString("MMM d, yyyy")</span>
+                            <span>@UserName(_selected.UserId)</span>
+                            <span class="te-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span>
+                        </div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                </div>
+                <div class="te-detail-body">
+                    <div class="te-detail-summary">
+                        <div class="te-meta-row"><span class="te-meta-lbl">Hours</span><span class="te-meta-val">@_selected.Hours.ToString("N2")</span></div>
+                        <div class="te-meta-row"><span class="te-meta-lbl">Billable</span><span class="te-meta-val">@_selected.BillableHours.ToString("N2")</span></div>
+                        <div class="te-meta-row"><span class="te-meta-lbl">Amount</span><span class="te-meta-val">@Fmt(Amount(_selected))</span></div>
+                        <div class="te-meta-row"><span class="te-meta-lbl">Invoice</span><span class="te-meta-val">@InvoiceNumber(_selected.InvoiceId)</span></div>
+                    </div>
+                    <div class="te-note-card">
+                        <span><i class="bi bi-journal-text" aria-hidden="true"></i> Work description</span>
+                        <p>@(_selected.Description ?? "No description provided.")</p>
+                    </div>
+                    <div class="te-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Submitted")'><i class="bi bi-send" aria-hidden="true"></i> Submit</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Approved")'><i class="bi bi-check-circle" aria-hidden="true"></i> Approve</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Invoiced")'><i class="bi bi-receipt" aria-hidden="true"></i> Mark Invoiced</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Remove</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
 </div>
 
-<SfDialog @bind-Visible="_showForm" Width="680px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-clock" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Time Entry" : "Edit Time Entry")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_editContext">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountId" class="um-input"><option value="@Guid.Empty">Select account…</option>@foreach (var account in _accounts) { <option value="@account.AccountId">@account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.AccountId" class="text-danger" /></div>
-                    <div class="um-field"><label>User <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.UserId" class="um-input"><option value="@Guid.Empty">Select user…</option>@foreach (var user in _users) { <option value="@user.UserId">@user.FullName</option> }</InputSelect><ValidationMessage For="() => _form.UserId" class="text-danger" /></div>
-                    <div class="um-field"><label>Entry Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.EntryDate" class="um-input" /><ValidationMessage For="() => _form.EntryDate" class="text-danger" /></div>
-                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
-                    <div class="um-field"><label>Hours <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.Hours" class="um-input" /><ValidationMessage For="() => _form.Hours" class="text-danger" /></div>
-                    <div class="um-field"><label>Billable Hours <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.BillableHours" class="um-input" /><ValidationMessage For="() => _form.BillableHours" class="text-danger" /></div>
-                    <div class="um-field"><label>Rate <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.RateAmount" class="um-input" /><ValidationMessage For="() => _form.RateAmount" class="text-danger" /></div>
-                    <div class="um-field"><label>Invoice</label><InputSelect @bind-Value="_form.InvoiceId" class="um-input"><option value="">None</option>@foreach (var invoice in _invoices) { <option value="@invoice.InvoiceId">@invoice.InvoiceNumber</option> }</InputSelect><ValidationMessage For="() => _form.InvoiceId" class="text-danger" /></div>
-                    <div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="3" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
-                    @if (!string.IsNullOrWhiteSpace(_formError))
-                    {
-                        <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
-                    }
-                </div></div>
-            </EditForm>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Time Entry")</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private const int PageSize = 12;
     private Guid _tenantId;
-    private SfToast _toast = default!;
-    private string? _searchTerm;
-    private string _statusFilter = string.Empty;
-    private bool _loading, _showForm, _saving;
-    private string? _loadError, _formError;
+    private Guid _tenantAdminUserId;
     private List<TimeEntryDto> _items = [];
+    private List<TimeEntryDto> _filtered = [];
     private List<BillingAccountDto> _accounts = [];
     private List<UserDto> _users = [];
     private List<InvoiceDto> _invoices = [];
-    private Guid _editingId = Guid.Empty;
+    private List<AccountOption> _accountOptions = [];
+    private List<UserOption> _userOptions = [];
+    private List<InvoiceOption> _invoiceOptions = [];
+    private TimeEntryDto? _selected;
+    private TimeEntryDto? _deleteTarget;
+    private TimeEntryDto? _statusTarget;
     private TimeForm _form = new();
-    private EditContext _editContext = default!;
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _billableFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showDeleteConfirm;
+    private bool _showStatusConfirm;
+    private bool _saveAttempted;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
     private readonly List<string> _statuses = ["Draft", "Submitted", "Approved", "Invoiced"];
 
-    private IEnumerable<TimeEntryDto> FilteredItems => _items.Where(x => string.IsNullOrWhiteSpace(_statusFilter) || x.StatusCode == _statusFilter);
+    private IEnumerable<TimeEntryDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private IEnumerable<InvoiceOption> InvoiceOptionsForForm => _form.AccountId == Guid.Empty ? _invoiceOptions : _invoiceOptions.Where(x => x.AccountId == _form.AccountId);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All time entries" : $"Filtered by {_kpiFilter}";
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Entries", _items.Count.ToString("N0"), "All entries", "bi-clock", "te-ki-blue"),
+        new("draft", "Draft", _items.Count(x => x.StatusCode == "Draft").ToString("N0"), "Needs submission", "bi-pencil", "te-ki-amber"),
+        new("submitted", "Submitted", _items.Count(x => x.StatusCode == "Submitted").ToString("N0"), "Awaiting approval", "bi-send", "te-ki-blue"),
+        new("approved", "Approved", _items.Count(x => x.StatusCode == "Approved").ToString("N0"), "Ready to bill", "bi-check-circle", "te-ki-green"),
+        new("hours", "Hours", _items.Sum(x => x.Hours).ToString("N1"), "Total time", "bi-hourglass", "te-ki-amber"),
+        new("billable", "Billable", Fmt(_items.Sum(Amount)), "Client recoverable", "bi-currency-dollar", "te-ki-green")
+    ];
+
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string BillableFilter { get => _billableFilter; set { _billableFilter = value; ApplyFilters(resetPage: true); } }
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        _editContext = new(_form);
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Time Entries", ""));
         await LoadAsync();
     }
 
@@ -138,53 +463,175 @@
         _loadError = null;
         try
         {
-            var time = await Api.SearchTimeEntriesAsync(_tenantId, _searchTerm);
+            await Api.EnsureBillingAccountsSeedAsync(_tenantId);
+            var time = await Api.SearchTimeEntriesAsync(_tenantId, string.Empty);
             var accounts = await Api.SearchBillingAccountsAsync(_tenantId, pageSize: 500);
             var users = await Api.SearchUsersAsync(_tenantId, pageSize: 500);
             var invoices = await Api.SearchInvoicesAsync(_tenantId);
-            _items = time?.Items.ToList() ?? [];
+            _items = time?.Items.OrderByDescending(x => x.EntryDate).ThenByDescending(x => x.CreatedDateUtc).ToList() ?? [];
             _accounts = accounts?.Items.ToList() ?? [];
             _users = users?.Items.ToList() ?? [];
             _invoices = invoices?.Items.ToList() ?? [];
+            _accountOptions = _accounts.OrderBy(x => x.AccountName).Select(x => new AccountOption(x.AccountId, $"{x.AccountName} · {x.AccountNumber}")).ToList();
+            _userOptions = _users.OrderBy(x => x.FullName).Select(x => new UserOption(x.UserId, !string.IsNullOrWhiteSpace(x.FullName) ? x.FullName : x.Email)).ToList();
+            _invoiceOptions = _invoices.OrderByDescending(x => x.CreatedDateUtc).Select(x => new InvoiceOption(x.InvoiceId, x.AccountId, $"{x.InvoiceNumber} · {Fmt(x.BalanceAmount)} balance")).ToList();
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
         }
         catch (Exception ex)
         {
             _loadError = $"Time entries failed to load: {ex.Message}";
-            await ToastAsync(_loadError, true);
+            ShowToast(_loadError, "danger");
         }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private void SetFilter(string status) => _statusFilter = status;
-    private string KpiClass(string status) => _statusFilter == status ? "pc-kpi-card--active" : string.Empty;
-    private void OnRowSelected(RowSelectEventArgs<TimeEntryDto> args) => OpenEdit(args.Data);
-    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<TimeEntryDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(AccountName(x.AccountId), term) || Contains(UserName(x.UserId), term) || Contains(x.StatusCode, term) || Contains(x.Description, term) || Contains(InvoiceNumber(x.InvoiceId), term));
+        }
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter);
+        query = _billableFilter switch
+        {
+            "yes" => query.Where(x => x.BillableHours > 0),
+            "no" => query.Where(x => x.BillableHours <= 0),
+            _ => query
+        };
+        query = _kpiFilter switch
+        {
+            "draft" => query.Where(x => x.StatusCode == "Draft"),
+            "submitted" => query.Where(x => x.StatusCode == "Submitted"),
+            "approved" => query.Where(x => x.StatusCode == "Approved"),
+            "hours" => query.Where(x => x.Hours > 0),
+            "billable" => query.Where(x => x.BillableHours > 0),
+            _ => query
+        };
+        _filtered = query.OrderByDescending(x => x.EntryDate).ThenByDescending(x => x.CreatedDateUtc).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter)
+    {
+        _kpiFilter = filter;
+        ApplyFilters(resetPage: true);
+    }
+
+    private void ResetFilters()
+    {
+        _searchTerm = string.Empty;
+        _statusFilter = string.Empty;
+        _billableFilter = string.Empty;
+        _kpiFilter = "all";
+        ApplyFilters(resetPage: true);
+        ShowToast("Time entry filters reset.", "info");
+    }
+
+    private void SelectTimeEntry(TimeEntryDto item) => _selected = item;
+
+    private void OpenCreate()
+    {
+        _editingId = Guid.Empty;
+        _saveAttempted = false;
+        _formError = null;
+        _form = new TimeForm { UserId = _tenantAdminUserId };
+        _showForm = true;
+    }
+
     private void OpenEdit(TimeEntryDto item)
     {
         _editingId = item.TimeEntryId;
-        _form = new TimeForm { AccountId = item.AccountId, UserId = item.UserId, EntryDate = item.EntryDate.ToDateTime(TimeOnly.MinValue), Hours = item.Hours, BillableHours = item.BillableHours, RateAmount = item.RateAmount, Description = item.Description, StatusCode = item.StatusCode, InvoiceId = item.InvoiceId };
-        _editContext = new(_form);
+        _saveAttempted = false;
         _formError = null;
+        _form = new TimeForm
+        {
+            AccountId = item.AccountId,
+            UserId = item.UserId,
+            EntryDate = item.EntryDate.ToDateTime(TimeOnly.MinValue),
+            Hours = item.Hours,
+            BillableHours = item.BillableHours,
+            RateAmount = item.RateAmount,
+            Description = item.Description,
+            StatusCode = item.StatusCode,
+            InvoiceId = item.InvoiceId
+        };
         _showForm = true;
     }
-    private void CloseForm() => _showForm = false;
+
+    private void CloseForm()
+    {
+        if (_busy) return;
+        _showForm = false;
+    }
 
     private async Task SaveAsync()
     {
-        if (!_editContext.Validate()) return;
-        if (_form.BillableHours > _form.Hours) { _formError = "Billable Hours cannot exceed Hours."; return; }
-        _saving = true;
+        _saveAttempted = true;
+        if (_form.AccountId == Guid.Empty)
+        {
+            _formError = "Billing account is required.";
+            ShowToast(_formError, "warning");
+            return;
+        }
+        if (_form.UserId == Guid.Empty)
+        {
+            _formError = "User is required.";
+            ShowToast(_formError, "warning");
+            return;
+        }
+        if (_form.BillableHours > _form.Hours)
+        {
+            _formError = "Billable hours cannot exceed total hours.";
+            ShowToast(_formError, "warning");
+            return;
+        }
+
+        _busy = true;
+        _formError = null;
         try
         {
             if (_editingId == Guid.Empty)
             {
-                await Api.CreateTimeEntryAsync(new CreateTimeEntryRequest { TenantId = _tenantId, AccountId = _form.AccountId, UserId = _form.UserId, EntryDate = DateOnly.FromDateTime(_form.EntryDate), Hours = _form.Hours, BillableHours = _form.BillableHours, RateAmount = _form.RateAmount, Description = _form.Description, StatusCode = _form.StatusCode, InvoiceId = _form.InvoiceId });
-                await ToastAsync("Time entry created.");
+                await Api.CreateTimeEntryAsync(new CreateTimeEntryRequest
+                {
+                    TenantId = _tenantId,
+                    AccountId = _form.AccountId,
+                    UserId = _form.UserId,
+                    EntryDate = DateOnly.FromDateTime(_form.EntryDate),
+                    Hours = _form.Hours,
+                    BillableHours = _form.BillableHours,
+                    RateAmount = _form.RateAmount,
+                    Description = _form.Description,
+                    StatusCode = _form.StatusCode,
+                    InvoiceId = _form.InvoiceId,
+                    CreatedByUserId = _tenantAdminUserId
+                });
+                ShowToast("Time entry created.", "success");
             }
             else
             {
-                await Api.UpdateTimeEntryAsync(_editingId, new UpdateTimeEntryRequest { TimeEntryId = _editingId, AccountId = _form.AccountId, UserId = _form.UserId, EntryDate = DateOnly.FromDateTime(_form.EntryDate), Hours = _form.Hours, BillableHours = _form.BillableHours, RateAmount = _form.RateAmount, Description = _form.Description, StatusCode = _form.StatusCode, InvoiceId = _form.InvoiceId });
-                await ToastAsync("Time entry updated.");
+                await Api.UpdateTimeEntryAsync(_editingId, new UpdateTimeEntryRequest
+                {
+                    TimeEntryId = _editingId,
+                    AccountId = _form.AccountId,
+                    UserId = _form.UserId,
+                    EntryDate = DateOnly.FromDateTime(_form.EntryDate),
+                    Hours = _form.Hours,
+                    BillableHours = _form.BillableHours,
+                    RateAmount = _form.RateAmount,
+                    Description = _form.Description,
+                    StatusCode = _form.StatusCode,
+                    InvoiceId = _form.InvoiceId,
+                    ModifiedByUserId = _tenantAdminUserId
+                });
+                ShowToast("Time entry updated.", "success");
             }
             _showForm = false;
             await LoadAsync();
@@ -192,60 +639,236 @@
         catch (Exception ex)
         {
             _formError = $"Save failed: {ex.Message}";
-            await ToastAsync(_formError, true);
+            ShowToast(_formError, "danger");
         }
-        finally { _saving = false; }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ConfirmStatusUpdate(TimeEntryDto item, string status)
+    {
+        _statusTarget = item;
+        _pendingStatus = status;
+        _showStatusConfirm = true;
+    }
+
+    private void CancelStatusUpdate()
+    {
+        if (_busy) return;
+        _showStatusConfirm = false;
+        _statusTarget = null;
+        _pendingStatus = null;
+    }
+
+    private async Task ExecuteStatusUpdateAsync()
+    {
+        if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return;
+        await UpdateStatusAsync(_statusTarget, _pendingStatus);
+        _showStatusConfirm = false;
+        _statusTarget = null;
+        _pendingStatus = null;
     }
 
     private async Task UpdateStatusAsync(TimeEntryDto item, string status)
     {
+        _busy = true;
         try
         {
-            await Api.UpdateTimeEntryAsync(item.TimeEntryId, new UpdateTimeEntryRequest { TimeEntryId = item.TimeEntryId, AccountId = item.AccountId, UserId = item.UserId, EntryDate = item.EntryDate, Hours = item.Hours, BillableHours = item.BillableHours, RateAmount = item.RateAmount, Description = item.Description, StatusCode = status, InvoiceId = item.InvoiceId });
-            await ToastAsync($"Time entry marked {status.ToLowerInvariant()}.");
+            await Api.UpdateTimeEntryAsync(item.TimeEntryId, new UpdateTimeEntryRequest
+            {
+                TimeEntryId = item.TimeEntryId,
+                AccountId = item.AccountId,
+                UserId = item.UserId,
+                EntryDate = item.EntryDate,
+                Hours = item.Hours,
+                BillableHours = item.BillableHours,
+                RateAmount = item.RateAmount,
+                Description = item.Description,
+                StatusCode = status,
+                InvoiceId = item.InvoiceId,
+                ModifiedByUserId = _tenantAdminUserId
+            });
+            ShowToast($"Time entry marked {status.ToLowerInvariant()}.", "success");
             await LoadAsync();
         }
-        catch (Exception ex) { await ToastAsync($"Update failed: {ex.Message}", true); }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
-    private async Task ToastAsync(string message, bool isError = false) => await _toast.ShowAsync(new ToastModel { Content = message, CssClass = isError ? "e-toast-danger" : "e-toast-success" });
+    private void ConfirmDelete(TimeEntryDto item)
+    {
+        _deleteTarget = item;
+        _showDeleteConfirm = true;
+    }
+
+    private void CancelDelete()
+    {
+        if (_busy) return;
+        _showDeleteConfirm = false;
+        _deleteTarget = null;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _busy = true;
+        try
+        {
+            await Api.DeleteTimeEntryAsync(_deleteTarget.TimeEntryId, _tenantAdminUserId);
+            ShowToast("Time entry removed.", "success");
+            _showDeleteConfirm = false;
+            _deleteTarget = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Remove failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task NotifyValidationAsync(EditContext _)
+    {
+        _saveAttempted = true;
+        ShowToast("Please correct validation errors before saving the time entry.", "warning");
+        return Task.CompletedTask;
+    }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any())
+        {
+            ShowToast("No time entries are available to export.", "warning");
+            return;
+        }
+
+        var csv = new StringBuilder();
+        csv.AppendLine("Account,User,EntryDate,Hours,BillableHours,Rate,Amount,Status,Invoice,Description,TimeEntryId");
+        foreach (var item in _filtered)
+        {
+            csv.AppendLine(string.Join(',',
+                Csv(AccountName(item.AccountId)),
+                Csv(UserName(item.UserId)),
+                Csv(item.EntryDate.ToString("yyyy-MM-dd")),
+                item.Hours.ToString("0.00"),
+                item.BillableHours.ToString("0.00"),
+                item.RateAmount.ToString("0.00"),
+                Amount(item).ToString("0.00"),
+                Csv(item.StatusCode),
+                Csv(InvoiceNumber(item.InvoiceId)),
+                Csv(item.Description ?? string.Empty),
+                Csv(item.TimeEntryId.ToString())));
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"timeentries-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} time entries.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    private void EnsureSelectedStillVisible()
+    {
+        if (_selected is null)
+        {
+            _selected = _filtered.FirstOrDefault();
+            return;
+        }
+        _selected = _items.FirstOrDefault(x => x.TimeEntryId == _selected.TimeEntryId) ?? _filtered.FirstOrDefault();
+    }
+
+    private string AccountName(Guid accountId) => _accountOptions.FirstOrDefault(x => x.Id == accountId)?.Display ?? _accounts.FirstOrDefault(x => x.AccountId == accountId)?.AccountName ?? accountId.ToString()[..8];
+    private string UserName(Guid userId) => _userOptions.FirstOrDefault(x => x.Id == userId)?.Display ?? _users.FirstOrDefault(x => x.UserId == userId)?.FullName ?? userId.ToString()[..8];
+    private string InvoiceNumber(Guid? invoiceId) => invoiceId is Guid id ? _invoiceOptions.FirstOrDefault(x => x.Id == id)?.Display ?? _invoices.FirstOrDefault(x => x.InvoiceId == id)?.InvoiceNumber ?? id.ToString()[..8] : "No invoice";
+    private static decimal Amount(TimeEntryDto item) => item.BillableHours * item.RateAmount;
     private static string Fmt(decimal value) => value.ToString("C0");
-    private static string StatusClass(string status) => status switch { "Approved" => "badge-green", "Submitted" => "badge-blue", "Invoiced" => "badge-purple", _ => "badge-neutral" };
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max] + "…";
+    private static string StatusCss(string status) => $"te-st-{CssKey(status)}";
+    private static string StatusConfirmTitle(string status) => status switch { "Submitted" => "Submit Time Entry", "Approved" => "Approve Time Entry", "Invoiced" => "Mark Time Entry Invoiced", _ => "Update Time Status" };
+    private static string StatusConfirmButton(string status) => status switch { "Submitted" => "Submit", "Approved" => "Approve", "Invoiced" => "Mark Invoiced", _ => "Update Status" };
+    private static string StatusConfirmIcon(string status) => status switch { "Submitted" => "bi-send", "Approved" => "bi-check-circle", "Invoiced" => "bi-receipt", _ => "bi-arrow-repeat" };
+    private string StatusConfirmMessage(TimeEntryDto item, string status) => status switch
+    {
+        "Submitted" => $"Submit the {item.Hours:N2} hour time entry for {AccountName(item.AccountId)} for approval?",
+        "Approved" => $"Approve the {item.Hours:N2} hour time entry for {AccountName(item.AccountId)}? This makes it ready for billing workflow review.",
+        "Invoiced" => $"Mark the {item.Hours:N2} hour time entry for {AccountName(item.AccountId)} as invoiced?",
+        _ => $"Update the {item.Hours:N2} hour time entry for {AccountName(item.AccountId)} to {status}?"
+    };
+    private static string CssKey(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+    private static string StatusIconTone(string status) => status switch { "Approved" or "Invoiced" => "te-di-green", "Submitted" => "te-di-blue", _ => "te-di-amber" };
+    private static string Csv(string value)
+    {
+        var quote = Convert.ToChar(34).ToString();
+        return string.Concat(quote, value.Replace(quote, quote + quote), quote);
+    }
+
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone)
+    {
+        public string Title => $"Filter time entries by {Label}";
+    }
+    private sealed record AccountOption(Guid Id, string Display);
+    private sealed record UserOption(Guid Id, string Display);
+    private sealed record InvoiceOption(Guid Id, Guid AccountId, string Display);
 
     private sealed class TimeForm
     {
-        [RequiredGuid(ErrorMessage = "Account is required.")]
+        [RequiredGuid(ErrorMessage = "Billing account is required.")]
         public Guid AccountId { get; set; }
+
         [RequiredGuid(ErrorMessage = "User is required.")]
         public Guid UserId { get; set; }
+
         [Required]
         public DateTime EntryDate { get; set; } = DateTime.Today;
+
         [Range(0.01, 24)]
         public decimal Hours { get; set; }
+
         [Range(0, 24)]
         public decimal BillableHours { get; set; }
+
         [Range(0, 100000)]
         public decimal RateAmount { get; set; }
+
         [StringLength(1000)]
         public string? Description { get; set; }
-        [Required, StringLength(50)]
+
+        [Required]
+        [StringLength(50)]
         public string StatusCode { get; set; } = "Draft";
+
         public Guid? InvoiceId { get; set; }
     }
 
     private sealed class RequiredGuidAttribute : ValidationAttribute
     {
         public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty;
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
 }

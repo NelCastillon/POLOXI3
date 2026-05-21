@@ -67,6 +67,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionTransactionRepository, CommissionTransactionRepository>();
         services.AddScoped<ICommissionPayoutRepository, CommissionPayoutRepository>();
         services.AddScoped<IDocumentRepository, DocumentRepository>();
+        services.AddScoped<IDocumentWorkflowRepository, DocumentWorkflowRepository>();
+        services.AddScoped<IAcordFormRepository, AcordFormRepository>();
+        services.AddScoped<IDocumentExceptionRepository, DocumentExceptionRepository>();
+        services.AddScoped<IDocumentPacketRepository, DocumentPacketRepository>();
         services.AddScoped<IContactIntakeRepository, ContactIntakeRepository>();
         services.AddScoped<IAssistantMessageRepository, AssistantMessageRepository>();
         services.AddScoped<IDashboardRepository, DashboardRepository>();
@@ -109,6 +113,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IFinanceService, FinanceService>();
         services.AddScoped<ICommissionService, CommissionService>();
         services.AddScoped<IDocumentService, DocumentService>();
+        services.AddScoped<IAcordFormService, AcordFormService>();
+        services.AddScoped<IDocumentExceptionService, DocumentExceptionService>();
+        services.AddScoped<IDocumentPacketService, DocumentPacketService>();
         services.AddScoped<IContactIntakeService, ContactIntakeService>();
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IAgencyDashboardService, AgencyDashboardService>();

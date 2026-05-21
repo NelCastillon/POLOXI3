@@ -1,211 +1,219 @@
-@page "/commissions"
 @page "/commissions/plans"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Commissions
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Compensation Plans — AMS</PageTitle>
+<PageTitle>Commission Plans � AMS Enterprise</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
+@if (_toastVisible)
+{
+    <div class="cp-toast cp-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="cp-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
 
-<SfDialog @bind-Visible="_showCreate" Width="680px" ShowCloseIcon="false" IsModal="true">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-clipboard-check" aria-hidden="true"></i><span>New Compensation Plan</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCreate"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_createEditContext">
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="cp-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="cp-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="cp-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Archived" ? "um-confirm-icon--danger" : null)"><i class="bi @PendingStatusIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="cp-status-title">@PendingStatusTitle</div>
+                <div class="um-confirm-body">Update <strong>@_statusTarget.PlanName</strong> to <strong>@_pendingStatus</strong>?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Archived" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@PendingStatusAction</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="cp-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="cp-modal cp-action-modal" role="dialog" aria-modal="true" aria-labelledby="cp-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-clipboard-check" aria-hidden="true"></i>
+                <span id="cp-form-title">@(_editingId == Guid.Empty ? "New Compensation Plan" : "Edit Compensation Plan")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
                 <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Plan Code <span class="text-danger">*</span></label><InputText @bind-Value="_createForm.PlanCode" class="um-input" placeholder="e.g. COMM-2025-STD" /><ValidationMessage For="() => _createForm.PlanCode" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Plan Name <span class="text-danger">*</span></label><InputText @bind-Value="_createForm.PlanName" class="um-input" placeholder="e.g. Standard Producer Plan 2025" /><ValidationMessage For="() => _createForm.PlanName" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Plan Type</label><InputSelect @bind-Value="_createForm.PlanTypeCode" class="um-input">@foreach (var t in _planTypes) { <option value="@t">@t</option> }</InputSelect><ValidationMessage For="() => _createForm.PlanTypeCode" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>New Business Rate %</label><InputNumber @bind-Value="_createForm.NewBusinessRatePct" class="um-input" /><ValidationMessage For="() => _createForm.NewBusinessRatePct" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Renewal Rate %</label><InputNumber @bind-Value="_createForm.RenewalRatePct" class="um-input" /><ValidationMessage For="() => _createForm.RenewalRatePct" class="validation-message text-danger" /></div>
-                    <div class="um-field"><label>Effective Date <span class="text-danger">*</span></label><InputDate @bind-Value="_createForm.EffectiveStartDate" class="um-input" /><ValidationMessage For="() => _createForm.EffectiveStartDate" class="validation-message text-danger" /></div>
-                    <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_createForm.AllowSplit" /> Allow split commissions</label></div>
-                    <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_createForm.HouseAccountRules" /> House account rules apply</label></div>
-                    <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_createForm.BranchOverrideEligible" /> Branch override eligible</label></div>
-                    @if (!string.IsNullOrWhiteSpace(_createFormError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_createFormError</div> }
-                </div></div>
+                <div class="um-modal-body">
+                    <div class="cp-modal-intro"><span><i class="bi bi-diagram-3" aria-hidden="true"></i> Compensation workflow</span><p>Define producer, branch, house account, referral, and override compensation plans using tenant-scoped commission data.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Plan Code <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.PlanCode" placeholder="COMM-2025-STD" /><ValidationMessage For="() => _form.PlanCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Plan Name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.PlanName" placeholder="Standard Producer Plan" /><ValidationMessage For="() => _form.PlanName" class="text-danger" /></div>
+                        <div class="um-field"><label>Plan Type <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.PlanTypeCode">@foreach (var type in _planTypes) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.PlanTypeCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.StatusCode">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="um-field"><label>New Business Rate % <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.NewBusinessRatePct" /><ValidationMessage For="() => _form.NewBusinessRatePct" class="text-danger" /></div>
+                        <div class="um-field"><label>Renewal Rate % <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.RenewalRatePct" /><ValidationMessage For="() => _form.RenewalRatePct" class="text-danger" /></div>
+                        <div class="um-field"><label>Effective Date <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_form.EffectiveStartDate" /><ValidationMessage For="() => _form.EffectiveStartDate" class="text-danger" /></div>
+                        <div class="um-field um-field--full cp-rate-preview"><span>Plan blend</span><strong>@AverageRate(_form.NewBusinessRatePct, _form.RenewalRatePct).ToString("N2")%</strong><small>@_form.NewBusinessRatePct.ToString("N2")% new business and @_form.RenewalRatePct.ToString("N2")% renewal commission</small></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.AllowSplit" /> Allow split commissions</label></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.HouseAccountRules" /> House account rules apply</label></div>
+                        <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.BranchOverrideEligible" /> Branch override eligible</label></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Plan" : "Save Changes")</button>
+                </div>
             </EditForm>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseCreate">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="CreatePlanAsync" disabled="@_saving">@(_saving ? "Saving…" : "Create Plan")</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-<AppPageHeader Title="Compensation Plans"
-               Subtitle="Define, version, and manage new business &amp; renewal commission plans, split rules, and producer schedules"
-               Icon="bi-clipboard-check">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/splits")'>
-            <i class="bi bi-scissors" aria-hidden="true"></i> Split Rules
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions/planner")'>
-            <i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-circle" aria-hidden="true"></i> New Plan
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- KPI strip -->
-<div class="cp-kpi-strip">
-    @CpKpi("bi-clipboard-check",  "Total Plans",      _plans.Count.ToString(),                                     "cp-ki-blue")
-    @CpKpi("bi-check-circle",     "Active",           _plans.Count(p=>p.Status=="Active").ToString(),              "cp-ki-green")
-    @CpKpi("bi-layers",           "With Versions",    _plans.Count(p=>p.Versions>1).ToString(),                   "cp-ki-blue")
-    @CpKpi("bi-scissors",         "Split-Enabled",    _plans.Count(p=>p.AllowSplit).ToString(),                   "cp-ki-purple")
-    @CpKpi("bi-building",         "Branch Override",  _plans.Count(p=>p.BranchOverride).ToString(),               "cp-ki-amber")
-    @CpKpi("bi-house",            "House Account",    _plans.Count(p=>p.HouseRules).ToString(),                   "cp-ki-amber")
-    @CpKpi("bi-arrow-up-circle",  "Avg New Biz Rate", _plans.Any()?(_plans.Average(p=>p.NewBizRate).ToString("N1")+"%"):"—", "cp-ki-blue")
-    @CpKpi("bi-arrow-repeat",     "Avg Renewal Rate", _plans.Any()?(_plans.Average(p=>p.RenewalRate).ToString("N1")+"%"):"—","cp-ki-blue")
-</div>
-
-<!-- Sub-nav -->
-<div class="cp-subnav">
-    <button class="cp-snav-btn cp-snav-active"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Plans</button>
-    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/statements")'><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Statements</button>
-    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><i class="bi bi-journal-text" aria-hidden="true"></i> Producer Ledger</button>
-    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/splits")'><i class="bi bi-scissors" aria-hidden="true"></i> Split Rules</button>
-    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/exceptions")'><i class="bi bi-exclamation-circle" aria-hidden="true"></i> Exceptions</button>
-    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/forecast")'><i class="bi bi-graph-up" aria-hidden="true"></i> Forecast</button>
-    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/planner")'><i class="bi bi-calculator" aria-hidden="true"></i> What-If Planner</button>
-    <button class="cp-snav-btn" @onclick='() => Nav.NavigateTo("/commissions/plan-versions")'><i class="bi bi-layers" aria-hidden="true"></i> Plan Versions</button>
-</div>
-
-<!-- Toolbar -->
-<div class="cp-toolbar">
-    <SfTextBox Placeholder="Search plan code, name…" @bind-Value="_searchTerm" Width="270px"></SfTextBox>
-    <select class="e-input cp-sel" @bind="_filterType">
-        <option value="">All Types</option>
-        @foreach (var t in _planTypes) { <option value="@t">@t</option> }
-    </select>
-    <select class="e-input cp-sel" @bind="_filterStatus">
-        <option value="">All Statuses</option>
-        <option value="Active">Active</option>
-        <option value="Draft">Draft</option>
-        <option value="Archived">Archived</option>
-    </select>
-</div>
-
-@if (_loading)
-{
-    <div style="padding:2rem"><SfSpinner Visible="true" /></div>
+        </div>
+    </div>
 }
-else
-{
-<div class="cp-grid-wrap">
-    <SfGrid DataSource="FilteredPlans" AllowSorting="true" AllowPaging="true" Height="520px">
-        <GridPageSettings PageSize="15"></GridPageSettings>
-        <GridColumns>
-            <GridColumn HeaderText="Plan" Width="280">
-                <Template>
-                    @{ var p = (PlanRow)context; }
-                    <div class="cp-plan-cell">
-                        <i class="bi bi-clipboard-check cp-plan-icon" aria-hidden="true"></i>
-                        <div>
-                            <div class="cp-plan-name">@p.Name</div>
-                            <div class="cp-plan-code">@p.Code</div>
-                        </div>
-                    </div>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="Type" Width="140">
-                <Template>
-                    @{ var p2 = (PlanRow)context; }
-                    <span class="cp-type-chip cp-t-@p2.Type.ToLower().Replace(" ","-")">@p2.Type</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PlanRow.NewBizRate)" HeaderText="New Biz %" Format="N2" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(PlanRow.RenewalRate)" HeaderText="Renewal %" Format="N2" Width="100" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(PlanRow.Versions)" HeaderText="Versions" Width="80" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center"></GridColumn>
-            <GridColumn HeaderText="Features" Width="170">
-                <Template>
-                    @{ var p3 = (PlanRow)context; }
-                    <div class="cp-feat-chips">
-                        @if (p3.AllowSplit)    { <span class="cp-feat cp-f-split">Split</span> }
-                        @if (p3.BranchOverride){ <span class="cp-feat cp-f-branch">Branch</span> }
-                        @if (p3.HouseRules)    { <span class="cp-feat cp-f-house">House</span> }
-                    </div>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="Status" Width="100">
-                <Template>
-                    @{ var p4 = (PlanRow)context; }
-                    <span class="cp-status-chip cp-st-@p4.Status.ToLower()">@p4.Status</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(PlanRow.Effective)" HeaderText="Effective" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
-            <GridColumn HeaderText="Actions" Width="120">
-                <Template>
-                    @{ var p5 = (PlanRow)context; }
-                    <div class="cp-row-acts">
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/commissions/plan-versions")' title="Versions">
-                            <i class="bi bi-layers" aria-hidden="true"></i>
-                        </button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/commissions/splits")' title="Splits">
-                            <i class="bi bi-scissors" aria-hidden="true"></i>
-                        </button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/commissions/planner")' title="Model this plan">
-                            <i class="bi bi-calculator" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+
+<div class="cp-enterprise-page">
+    <section class="cp-header">
+        <div class="cp-header-left"><div class="cp-lob-icon"><i class="bi bi-clipboard-check" aria-hidden="true"></i></div><div class="cp-header-info"><div class="cp-title-row"><h1 class="cp-page-title">Commission Plans</h1><span class="cp-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live plan data</span><span class="cp-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div><div class="cp-sub-row"><span>Design, version, activate, and govern compensation plans for producers, branches, referrals, and house accounts.</span><span class="cp-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="cp-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div></div></div>
+        <div class="cp-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/commissions")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Commissions</button><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="@RefreshIconClass" aria-hidden="true"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Plan</button></div>
+    </section>
+
+    <section class="cp-kpi-strip" aria-label="Commission plan metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="@KpiClass(kpi)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="cp-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="cp-kpi-copy"><span class="cp-kpi-label">@kpi.Label</span><span class="cp-kpi-value">@kpi.Value</span><span class="cp-kpi-caption">@kpi.Caption</span></span></button>
+        }
+    </section>
+
+    <section class="cp-workflow-strip" aria-label="Commission plan workflow shortcuts"><button type="button" class="cp-workflow-card cp-wf-design" @onclick="OpenCreate"><span class="cp-workflow-icon"><i class="bi bi-plus-circle" aria-hidden="true"></i></span><span class="cp-workflow-content"><strong>1</strong><span>Design</span><small>Create a new compensation plan.</small></span></button><button type="button" class="cp-workflow-card cp-wf-activate" @onclick="ActivateSelected" disabled="@(!CanActivateSelected)"><span class="cp-workflow-icon"><i class="bi bi-check2-circle" aria-hidden="true"></i></span><span class="cp-workflow-content"><strong>2</strong><span>Activate</span><small>Promote approved plan drafts.</small></span></button><button type="button" class="cp-workflow-card cp-wf-splits" @onclick='() => Nav.NavigateTo("/commissions/splits")'><span class="cp-workflow-icon"><i class="bi bi-scissors" aria-hidden="true"></i></span><span class="cp-workflow-content"><strong>3</strong><span>Splits</span><small>Maintain producer split rules.</small></span></button><button type="button" class="cp-workflow-card cp-wf-payees" @onclick='() => Nav.NavigateTo("/commissions/producer-ledger")'><span class="cp-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="cp-workflow-content"><strong>4</strong><span>Ledger</span><small>Audit producer earnings.</small></span></button><button type="button" class="cp-workflow-card cp-wf-planner" @onclick='() => Nav.NavigateTo("/commissions/planner")'><span class="cp-workflow-icon"><i class="bi bi-calculator" aria-hidden="true"></i></span><span class="cp-workflow-content"><strong>5</strong><span>Model</span><small>Run what-if compensation modeling.</small></span></button></section>
+
+    <section class="cp-enterprise-search" aria-label="Commission plan filters"><div class="cp-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div><div class="cp-search-body"><label for="cp-search">Search plans</label><input id="cp-search" class="cp-search-input" type="search" placeholder="Search plan code, name, type, status, rate..." @bind="SearchFilter" @bind:event="oninput" /><span class="cp-search-hint">Filters apply instantly across synchronized compensation plan data.</span></div><select class="cp-filter-select" @bind="TypeFilter" aria-label="Plan type filter"><option value="">All types</option>@foreach (var type in _planTypes) { <option value="@type">@type</option> }</select><select class="cp-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select><div class="cp-search-result"><strong>@_filtered.Count</strong><span>matches</span></div></section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger cp-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="cp-content-layout"><div class="cp-grid-wrap"><div class="cp-grid-toolbar"><div><strong>Plan register</strong><span>@ActiveFilterText</span></div><div class="cp-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ActivateSelected" disabled="@(!CanActivateSelected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Activate</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ArchiveSelected" disabled="@(!CanArchiveSelected)"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+        @if (_loading)
+        {
+            <div class="cp-loading"><i class="bi bi-arrow-repeat cp-spin" aria-hidden="true"></i><strong>Loading commission plans...</strong><span>Syncing plan schema, seed records, and tenant configuration.</span></div>
+        }
+        else if (!_filtered.Any())
+        {
+            <div class="cp-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No commission plans found</strong><span>Adjust filters or create a compensation plan to start the workflow.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Create Plan</button></div>
+        }
+        else
+        {
+            <div class="cp-table-scroll"><table class="cp-table"><thead><tr><th>Plan</th><th>Type</th><th class="cp-number">New Biz</th><th class="cp-number">Renewal</th><th>Features</th><th>Status</th><th>Effective</th><th class="cp-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="@RowClass(item)" @onclick="() => SelectPlan(item)"><td><div class="cp-entry-cell"><span class="cp-entry-icon @StatusIconTone(item.StatusCode)"><i class="bi bi-clipboard-check" aria-hidden="true"></i></span><span><strong>@item.PlanName</strong><span>@item.PlanCode</span></span></div></td><td><span class="cp-type-chip @TypeCss(item.PlanTypeCode)">@item.PlanTypeCode</span></td><td class="cp-number">@item.NewBusinessRatePct.ToString("N2")%</td><td class="cp-number">@item.RenewalRatePct.ToString("N2")%</td><td><div class="cp-feature-chips">@if (item.AllowSplit) { <span>Split</span> } @if (item.BranchOverrideEligible) { <span>Branch</span> } @if (item.HouseAccountRules) { <span>House</span> } @if (!item.AllowSplit && !item.BranchOverrideEligible && !item.HouseAccountRules) { <span>Standard</span> }</div></td><td><span class="cp-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td><td>@item.EffectiveStartDate.ToString("MMM d, yyyy")</td><td><div class="cp-row-acts"><button type="button" class="um-btn um-btn-primary um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Splits" @onclick:stopPropagation="true" @onclick='() => Nav.NavigateTo("/commissions/splits")'><i class="bi bi-scissors" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Model" @onclick:stopPropagation="true" @onclick='() => Nav.NavigateTo("/commissions/planner")'><i class="bi bi-calculator" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Activate" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Active")' disabled="@(IsActive(item))"><i class="bi bi-check2-circle" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Archive" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Archived")' disabled="@(IsArchived(item))"><i class="bi bi-archive" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div>
+            <div class="cp-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+        }
+    </div><aside class="cp-detail-panel" aria-label="Selected plan detail">@if (_selected is null) { <div class="cp-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a plan</strong><span>Choose a row to inspect rates, feature eligibility, status, and workflow actions.</span></div> } else { <div class="cp-detail-head"><div><span class="cp-detail-eyebrow"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Plan detail</span><h2>@_selected.PlanName</h2><div class="cp-detail-meta"><span>@_selected.PlanCode</span><span class="cp-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div><div class="cp-detail-body"><div class="cp-progress-card"><div><span>Workflow readiness</span><strong>@ReadinessLabel(_selected)</strong></div><div class="cp-progress-track"><span style="width:@ReadinessPercent(_selected)%"></span></div></div><div class="cp-detail-summary"><div class="cp-meta-row"><span class="cp-meta-lbl">Plan Type</span><span class="cp-meta-val">@_selected.PlanTypeCode</span></div><div class="cp-meta-row"><span class="cp-meta-lbl">New Business</span><span class="cp-meta-val">@_selected.NewBusinessRatePct.ToString("N2")%</span></div><div class="cp-meta-row"><span class="cp-meta-lbl">Renewal</span><span class="cp-meta-val">@_selected.RenewalRatePct.ToString("N2")%</span></div><div class="cp-meta-row"><span class="cp-meta-lbl">Effective</span><span class="cp-meta-val">@_selected.EffectiveStartDate.ToString("MMM d, yyyy")</span></div></div><div class="cp-note-card"><span><i class="bi bi-calculator" aria-hidden="true"></i> Compensation profile</span><p>@FeatureSummary(_selected) Average blended rate is @AverageRate(_selected.NewBusinessRatePct, _selected.RenewalRatePct).ToString("N2")%.</p></div><div class="cp-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="ActivateSelected" disabled="@(!CanActivateSelected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Activate</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ArchiveSelected" disabled="@(!CanArchiveSelected)"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/splits")'><i class="bi bi-scissors" aria-hidden="true"></i> Splits</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/commissions/planner")'><i class="bi bi-calculator" aria-hidden="true"></i> Model</button></div></div> }</aside></section>
 </div>
-}
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private const int PageSize = 12;
     private Guid _tenantId;
-    private string? _searchTerm;
-    private string _filterType = "", _filterStatus = "";
-    private bool _loading, _showCreate, _saving;
-    private string? _createFormError;
-    private PlanForm _createForm = new();
-    private EditContext _createEditContext = default!;
-    private SfToast _toast = default!;
+    private Guid _tenantAdminUserId;
+    private List<CommissionPlanDto> _items = [];
+    private List<CommissionPlanDto> _filtered = [];
+    private CommissionPlanDto? _selected;
+    private CommissionPlanDto? _statusTarget;
+    private PlanForm _form = new();
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showStatusConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _planTypes = ["Standard", "Senior Producer", "Branch Manager", "House Account", "Referral", "Override", "Performance Bonus"];
+    private readonly List<string> _statuses = ["Draft", "Active", "Archived"];
 
-    private readonly List<string> _planTypes = ["Standard","Senior Producer","Branch Manager","House Account","Referral","Override","Performance Bonus"];
+    private IEnumerable<CommissionPlanDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private bool CanActivateSelected => _selected is not null && !IsActive(_selected);
+    private bool CanArchiveSelected => _selected is not null && !IsArchived(_selected);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All compensation plans" : $"Filtered by {_kpiFilter}";
+    private string PendingStatusIcon => _pendingStatus switch { "Active" => "bi-check2-circle", "Archived" => "bi-archive", _ => "bi-arrow-repeat" };
+    private string PendingStatusTitle => _pendingStatus switch { "Active" => "Activate compensation plan", "Archived" => "Archive compensation plan", _ => "Update compensation plan" };
+    private string PendingStatusAction => _pendingStatus switch { "Active" => "Activate", "Archived" => "Archive", _ => "Update" };
+    private string RefreshIconClass => _loading ? "bi bi-arrow-repeat cp-spin" : "bi bi-arrow-clockwise";
 
-    private List<PlanRow> _plans = [];
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(); } }
+    private string TypeFilter { get => _typeFilter; set { _typeFilter = value; ApplyFilters(); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(); } }
 
-    private IEnumerable<PlanRow> FilteredPlans => _plans.Where(p =>
-        (string.IsNullOrEmpty(_searchTerm)   || p.Name.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase) || p.Code.Contains(_searchTerm, StringComparison.OrdinalIgnoreCase)) &&
-        (string.IsNullOrEmpty(_filterType)   || p.Type == _filterType) &&
-        (string.IsNullOrEmpty(_filterStatus) || p.Status == _filterStatus));
+    private IEnumerable<KpiCard> Kpis
+    {
+        get
+        {
+            var active = _items.Count(IsActive);
+            var draft = _items.Count(x => x.StatusCode == "Draft");
+            var archived = _items.Count(IsArchived);
+            var split = _items.Count(x => x.AllowSplit);
+            var overrideEligible = _items.Count(x => x.BranchOverrideEligible);
+            var avgRate = _items.Any() ? _items.Average(x => AverageRate(x.NewBusinessRatePct, x.RenewalRatePct)) : 0;
+            return
+            [
+                new("all", "bi-clipboard-check", "Total Plans", _items.Count.ToString("N0"), "All seeded and tenant plans", "cp-tone-blue", "Show all commission plans"),
+                new("active", "bi-check-circle", "Active", active.ToString("N0"), "Ready for commission workflows", "cp-tone-green", "Show active plans"),
+                new("draft", "bi-pencil-square", "Draft", draft.ToString("N0"), "Plans in design", "cp-tone-amber", "Show draft plans"),
+                new("split", "bi-scissors", "Split Enabled", split.ToString("N0"), "Eligible for split rules", "cp-tone-purple", "Show split-enabled plans"),
+                new("override", "bi-diagram-3", "Overrides", overrideEligible.ToString("N0"), "Branch override eligible", "cp-tone-indigo", "Show branch override plans"),
+                new("archived", "bi-archive", "Archived", archived.ToString("N0"), "Retired plan records", "cp-tone-slate", "Show archived plans"),
+                new("rate", "bi-graph-up-arrow", "Avg Blend", $"{avgRate:N1}%", "New business + renewal average", "cp-tone-blue", "Show plans with positive rates")
+            ];
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
-        await ResolveCurrentUserContextAsync();
-        _createEditContext = new(_createForm);
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Commissions","/commissions"), new("Plans",""));
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Commissions", "/commissions"), new("Plans", ""));
         await LoadAsync();
     }
-
-    private void OpenCreate() { _createForm = new(); _createEditContext = new(_createForm); _createFormError = null; _showCreate = true; }
-    private void CloseCreate() => _showCreate = false;
 
     private async Task LoadAsync()
     {
         _loading = true;
+        _loadError = null;
         try
         {
-            var result = await Api.SearchCommissionPlansAsync(_tenantId, _searchTerm);
-            _plans = result?.Items.Select(ToPlanRow).ToList() ?? [];
+            var result = await Api.SearchCommissionPlansAsync(_tenantId, null);
+            _items = result?.Items.OrderByDescending(x => x.StatusCode == "Active").ThenBy(x => x.PlanName).ToList() ?? [];
+            ApplyFilters(keepSelection: true);
+            if (_selected is null && _filtered.Count > 0) _selected = _filtered[0];
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Content = $"Load failed: {ex.Message}", CssClass = "e-toast-danger" });
-            _plans = [];
+            _loadError = $"Load failed: {ex.Message}";
+            _items = [];
+            _filtered = [];
+            _selected = null;
+            ShowToast(_loadError, "danger");
         }
         finally
         {
@@ -213,41 +221,168 @@ else
         }
     }
 
-    async Task CreatePlanAsync()
+    private void ApplyFilters(bool keepSelection = false)
     {
-        if (!_createEditContext.Validate()) return;
-        _saving = true;
-        _createFormError = null;
+        IEnumerable<CommissionPlanDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => x.PlanCode.Contains(term, StringComparison.OrdinalIgnoreCase) || x.PlanName.Contains(term, StringComparison.OrdinalIgnoreCase) || x.PlanTypeCode.Contains(term, StringComparison.OrdinalIgnoreCase) || x.StatusCode.Contains(term, StringComparison.OrdinalIgnoreCase) || x.NewBusinessRatePct.ToString("N2").Contains(term, StringComparison.OrdinalIgnoreCase) || x.RenewalRatePct.ToString("N2").Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+        if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => x.PlanTypeCode == _typeFilter);
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter);
+        query = _kpiFilter switch
+        {
+            "active" => query.Where(IsActive),
+            "draft" => query.Where(x => x.StatusCode == "Draft"),
+            "split" => query.Where(x => x.AllowSplit),
+            "override" => query.Where(x => x.BranchOverrideEligible),
+            "archived" => query.Where(IsArchived),
+            "rate" => query.Where(x => x.NewBusinessRatePct > 0 || x.RenewalRatePct > 0),
+            _ => query
+        };
+        _filtered = query.OrderByDescending(x => x.StatusCode == "Active").ThenBy(x => x.PlanName).ToList();
+        _page = Math.Min(Math.Max(1, _page), TotalPages);
+        if (!keepSelection || _selected is null || !_filtered.Any(x => x.CommissionPlanId == _selected.CommissionPlanId)) _selected = _filtered.FirstOrDefault();
+    }
+
+    private void SetKpiFilter(string filter) { _kpiFilter = _kpiFilter == filter && filter != "all" ? "all" : filter; ApplyFilters(); }
+    private void ResetFilters() { _searchTerm = string.Empty; _typeFilter = string.Empty; _statusFilter = string.Empty; _kpiFilter = "all"; _page = 1; ApplyFilters(); }
+    private void SelectPlan(CommissionPlanDto item) => _selected = item;
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+
+    private void OpenCreate()
+    {
+        _editingId = Guid.Empty;
+        _form = new PlanForm();
+        _formError = null;
+        _showForm = true;
+    }
+
+    private void OpenEdit(CommissionPlanDto item)
+    {
+        _editingId = item.CommissionPlanId;
+        _form = new PlanForm
+        {
+            PlanCode = item.PlanCode,
+            PlanName = item.PlanName,
+            PlanTypeCode = item.PlanTypeCode,
+            NewBusinessRatePct = item.NewBusinessRatePct,
+            RenewalRatePct = item.RenewalRatePct,
+            EffectiveStartDate = item.EffectiveStartDate.ToDateTime(TimeOnly.MinValue),
+            StatusCode = item.StatusCode,
+            AllowSplit = item.AllowSplit,
+            HouseAccountRules = item.HouseAccountRules,
+            BranchOverrideEligible = item.BranchOverrideEligible
+        };
+        _formError = null;
+        _showForm = true;
+    }
+
+    private void CloseForm() => _showForm = false;
+
+    private async Task SaveAsync()
+    {
+        _busy = true;
+        _formError = null;
         try
         {
-            await Api.CreateCommissionPlanAsync(new CreateCommissionPlanRequest { TenantId = _tenantId, PlanCode = _createForm.PlanCode, PlanName = _createForm.PlanName, PlanTypeCode = _createForm.PlanTypeCode, NewBusinessRatePct = _createForm.NewBusinessRatePct, RenewalRatePct = _createForm.RenewalRatePct, EffectiveStartDate = DateOnly.FromDateTime(_createForm.EffectiveStartDate), StatusCode = "Draft", AllowSplit = _createForm.AllowSplit, HouseAccountRules = _createForm.HouseAccountRules, BranchOverrideEligible = _createForm.BranchOverrideEligible });
-            _showCreate = false;
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateCommissionPlanAsync(new CreateCommissionPlanRequest { TenantId = _tenantId, PlanCode = _form.PlanCode, PlanName = _form.PlanName, PlanTypeCode = _form.PlanTypeCode, NewBusinessRatePct = _form.NewBusinessRatePct, RenewalRatePct = _form.RenewalRatePct, EffectiveStartDate = DateOnly.FromDateTime(_form.EffectiveStartDate), StatusCode = _form.StatusCode, AllowSplit = _form.AllowSplit, HouseAccountRules = _form.HouseAccountRules, BranchOverrideEligible = _form.BranchOverrideEligible, CreatedByUserId = _tenantAdminUserId });
+                ShowToast("Commission plan created.", "success");
+            }
+            else
+            {
+                await Api.UpdateCommissionPlanAsync(_editingId, new UpdateCommissionPlanRequest { CommissionPlanId = _editingId, TenantId = _tenantId, PlanCode = _form.PlanCode, PlanName = _form.PlanName, PlanTypeCode = _form.PlanTypeCode, NewBusinessRatePct = _form.NewBusinessRatePct, RenewalRatePct = _form.RenewalRatePct, EffectiveStartDate = DateOnly.FromDateTime(_form.EffectiveStartDate), StatusCode = _form.StatusCode, AllowSplit = _form.AllowSplit, HouseAccountRules = _form.HouseAccountRules, BranchOverrideEligible = _form.BranchOverrideEligible, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast("Commission plan updated.", "success");
+            }
+            _showForm = false;
             await LoadAsync();
-            await _toast.ShowAsync(new ToastModel { Content = "Plan created as Draft.", CssClass = "e-toast-success" });
+            if (_editingId != Guid.Empty) _selected = _items.FirstOrDefault(x => x.CommissionPlanId == _editingId) ?? _selected;
         }
         catch (Exception ex)
         {
-            _createFormError = $"Create failed: {ex.Message}";
-            await _toast.ShowAsync(new ToastModel { Content = _createFormError, CssClass = "e-toast-danger" });
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
         }
         finally
         {
-            _saving = false;
+            _busy = false;
         }
     }
 
-    private static PlanRow ToPlanRow(CommissionPlanDto plan) => new(plan.CommissionPlanId, plan.PlanCode, plan.PlanName, plan.PlanTypeCode, plan.NewBusinessRatePct, plan.RenewalRatePct, 1, plan.AllowSplit, plan.HouseAccountRules, plan.BranchOverrideEligible, plan.StatusCode, plan.EffectiveStartDate.ToDateTime(TimeOnly.MinValue));
+    private void ActivateSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Active"); }
+    private void ArchiveSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Archived"); }
+    private void ConfirmStatusUpdate(CommissionPlanDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
 
-    RenderFragment CpKpi(string icon, string label, string val, string color) => __builder =>
+    private async Task ExecuteStatusUpdateAsync()
     {
-        <div class="cp-kpi-card @color">
-            <i class="bi @icon cp-kpi-icon" aria-hidden="true"></i>
-            <div><div class="cp-kpi-val">@val</div><div class="cp-kpi-lbl">@label</div></div>
-        </div>
-    };
+        if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return;
+        _busy = true;
+        try
+        {
+            await Api.UpdateCommissionPlanAsync(_statusTarget.CommissionPlanId, new UpdateCommissionPlanRequest { CommissionPlanId = _statusTarget.CommissionPlanId, TenantId = _tenantId, PlanCode = _statusTarget.PlanCode, PlanName = _statusTarget.PlanName, PlanTypeCode = _statusTarget.PlanTypeCode, NewBusinessRatePct = _statusTarget.NewBusinessRatePct, RenewalRatePct = _statusTarget.RenewalRatePct, EffectiveStartDate = _statusTarget.EffectiveStartDate, StatusCode = _pendingStatus, AllowSplit = _statusTarget.AllowSplit, HouseAccountRules = _statusTarget.HouseAccountRules, BranchOverrideEligible = _statusTarget.BranchOverrideEligible, ModifiedByUserId = _tenantAdminUserId });
+            ShowToast($"Plan marked {_pendingStatus}.", "success");
+            var selectedId = _statusTarget.CommissionPlanId;
+            CancelStatusUpdate();
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.CommissionPlanId == selectedId) ?? _selected;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Status update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
 
-    record PlanRow(Guid Id, string Code, string Name, string Type, decimal NewBizRate, decimal RenewalRate,
-                  int Versions, bool AllowSplit, bool HouseRules, bool BranchOverride, string Status, DateTime Effective);
+    private async Task ExportAsync()
+    {
+        var csv = new StringBuilder();
+        csv.AppendLine("PlanCode,PlanName,PlanType,NewBusinessRatePct,RenewalRatePct,EffectiveStartDate,Status,AllowSplit,HouseAccountRules,BranchOverrideEligible");
+        foreach (var item in _filtered)
+        {
+            csv.AppendLine($"{Csv(item.PlanCode)},{Csv(item.PlanName)},{Csv(item.PlanTypeCode)},{item.NewBusinessRatePct:N2},{item.RenewalRatePct:N2},{item.EffectiveStartDate:yyyy-MM-dd},{Csv(item.StatusCode)},{item.AllowSplit},{item.HouseAccountRules},{item.BranchOverrideEligible}");
+        }
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("downloadFileFromBytes", $"commission-plans-{DateTime.UtcNow:yyyyMMddHHmm}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast("Commission plans exported.", "success");
+    }
+
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving.", "warning"); return Task.CompletedTask; }
+    private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void HideToast() => _toastVisible = false;
+    private string KpiClass(KpiCard kpi) => $"cp-kpi-card {kpi.Tone} {(_kpiFilter == kpi.Filter ? "cp-kpi-active" : string.Empty)}";
+    private string RowClass(CommissionPlanDto item) => $"cp-table-row {(_selected?.CommissionPlanId == item.CommissionPlanId ? "cp-table-row--selected" : string.Empty)}";
+    private static string Csv(string? value)
+    {
+        const char quote = (char)34;
+        var safe = (value ?? string.Empty).Replace(quote.ToString(), new string(quote, 2));
+        return quote + safe + quote;
+    }
+    private static decimal AverageRate(decimal newBusiness, decimal renewal) => (newBusiness + renewal) / 2m;
+    private static bool IsActive(CommissionPlanDto item) => item.StatusCode == "Active";
+    private static bool IsArchived(CommissionPlanDto item) => item.StatusCode == "Archived";
+    private static string StatusCss(string status) => status switch { "Active" => "cp-status-active", "Archived" => "cp-status-archived", _ => "cp-status-draft" };
+    private static string StatusIconTone(string status) => status switch { "Active" => "cp-icon-green", "Archived" => "cp-icon-slate", _ => "cp-icon-amber" };
+    private static string TypeCss(string type) => "cp-type-" + type.ToLowerInvariant().Replace(" ", "-");
+    private static int ReadinessPercent(CommissionPlanDto item) => item.StatusCode switch { "Active" => 100, "Archived" => 30, _ => 65 };
+    private static string ReadinessLabel(CommissionPlanDto item) => item.StatusCode switch { "Active" => "Active and ready", "Archived" => "Archived", _ => "Draft review" };
+    private static string FeatureSummary(CommissionPlanDto item)
+    {
+        var features = new List<string>();
+        if (item.AllowSplit) features.Add("split commissions");
+        if (item.BranchOverrideEligible) features.Add("branch overrides");
+        if (item.HouseAccountRules) features.Add("house account rules");
+        return features.Count == 0 ? "Standard plan with no special feature flags." : $"Includes {string.Join(", ", features)}.";
+    }
+
+    private sealed record KpiCard(string Filter, string Icon, string Label, string Value, string Caption, string Tone, string Title);
 
     private sealed class PlanForm
     {
@@ -257,19 +392,9 @@ else
         [Range(0, 100)] public decimal NewBusinessRatePct { get; set; } = 10m;
         [Range(0, 100)] public decimal RenewalRatePct { get; set; } = 8m;
         [Required] public DateTime EffectiveStartDate { get; set; } = DateTime.Today;
-        public bool AllowSplit { get; set; }
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft";
+        public bool AllowSplit { get; set; } = true;
         public bool HouseAccountRules { get; set; }
         public bool BranchOverrideEligible { get; set; }
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
 }

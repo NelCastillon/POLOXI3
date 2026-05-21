@@ -1771,6 +1771,19 @@ public sealed partial class ApiClient
     public Task<PagedResult<DeferredRevenueRecognitionDto>?> SearchDeferredRevenueRecognitionsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<DeferredRevenueRecognitionDto>>($"api/finance/deferred-revenue-recognition?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
+    public async Task<Guid> CreateDeferredRevenueRecognitionAsync(CreateDeferredRevenueRecognitionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/finance/deferred-revenue-recognition", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateDeferredRevenueRecognitionAsync(Guid id, UpdateDeferredRevenueRecognitionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/finance/deferred-revenue-recognition/{id}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
     public Task<PagedResult<BadDebtEntryDto>?> SearchBadDebtEntriesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<BadDebtEntryDto>>($"api/finance/bad-debt?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -1845,11 +1858,50 @@ public sealed partial class ApiClient
     public Task<PagedResult<CommissionPayeeDto>?> SearchCommissionPayeesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CommissionPayeeDto>>($"api/commissions/payees?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
+    public async Task<Guid> CreateCommissionPayeeAsync(CreateCommissionPayeeRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/commissions/payees", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateCommissionPayeeAsync(Guid id, UpdateCommissionPayeeRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/commissions/payees/{id}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
     public Task<PagedResult<CommissionTransactionDto>?> SearchCommissionTransactionsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CommissionTransactionDto>>($"api/commissions/transactions?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
+    public async Task<Guid> CreateCommissionTransactionAsync(CreateCommissionTransactionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/commissions/transactions", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateCommissionTransactionAsync(Guid id, UpdateCommissionTransactionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/commissions/transactions/{id}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
     public Task<PagedResult<CommissionPayoutDto>?> SearchCommissionPayoutsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CommissionPayoutDto>>($"api/commissions/payouts?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public async Task<Guid> CreateCommissionPayoutAsync(CreateCommissionPayoutRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/commissions/payouts", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateCommissionPayoutAsync(Guid id, UpdateCommissionPayoutRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/commissions/payouts/{id}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
 
     public Task<PagedResult<CommissionPlanVersionDto>?> SearchCommissionPlanVersionsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CommissionPlanVersionDto>>($"api/commissions/plan-versions?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
@@ -1923,6 +1975,26 @@ public sealed partial class ApiClient
 
     public Task<PagedResult<CommissionPayoutStatementDto>?> SearchCommissionPayoutStatementsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CommissionPayoutStatementDto>>($"api/commissions/payout-statements?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public async Task<Guid> CreateCommissionPayoutStatementAsync(CreateCommissionPayoutStatementRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/commissions/payout-statements", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateCommissionPayoutStatementAsync(Guid id, UpdateCommissionPayoutStatementRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/commissions/payout-statements/{id}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Guid>?> GenerateCommissionPayoutStatementsAsync(GenerateCommissionPayoutStatementsRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/commissions/payout-statements/generate", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<IReadOnlyList<Guid>>(cancellationToken: cancellationToken);
+    }
 
     public Task<PagedResult<CommissionAccrualEntryDto>?> SearchCommissionAccrualEntriesAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CommissionAccrualEntryDto>>($"api/commissions/accruals?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
@@ -2188,6 +2260,109 @@ public sealed partial class ApiClient
     public async Task RemindESignRequestAsync(Guid eSignRequestId, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsync($"api/esign/{eSignRequestId}/remind", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // -- ACORD Forms -------------------------------------------
+    public Task<IReadOnlyList<AcordFormDto>?> GetAcordFormsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<AcordFormDto>>($"api/acordforms?tenantId={tenantId}", cancellationToken);
+
+    public Task<AcordFormDto?> GetAcordFormByIdAsync(Guid acordFormId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<AcordFormDto>($"api/acordforms/{acordFormId}", cancellationToken);
+
+    public async Task<Guid> CreateAcordFormAsync(CreateAcordFormRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/acordforms", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateAcordFormStatusAsync(UpdateAcordFormStatusRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/acordforms/{request.AcordFormId}/status", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task PrefillAcordFormAsync(PrefillAcordFormRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/acordforms/{request.AcordFormId}/prefill", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // -- Document Exceptions -----------------------------------
+    public Task<IReadOnlyList<DocumentExceptionDto>?> GetDocumentExceptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<DocumentExceptionDto>>($"api/document-exceptions?tenantId={tenantId}", cancellationToken);
+
+    public Task<DocumentExceptionDto?> GetDocumentExceptionByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<DocumentExceptionDto>($"api/document-exceptions/{id}", cancellationToken);
+
+    public async Task<Guid> CreateDocumentExceptionAsync(CreateDocumentExceptionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/document-exceptions", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task ClassifyDocumentExceptionAsync(ClassifyDocumentExceptionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/document-exceptions/{request.DocumentExceptionId}/classify", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task UpdateDocumentExceptionStatusAsync(UpdateDocumentExceptionStatusRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/document-exceptions/{request.DocumentExceptionId}/status", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    // -- Document Packets --------------------------------------
+    public Task<IReadOnlyList<DocumentPacketDto>?> GetDocumentPacketsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<DocumentPacketDto>>($"api/document-packets?tenantId={tenantId}", cancellationToken);
+
+    public Task<DocumentPacketDto?> GetDocumentPacketByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<DocumentPacketDto>($"api/document-packets/{id}", cancellationToken);
+
+    public async Task<Guid> CreateDocumentPacketAsync(CreateDocumentPacketRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/document-packets", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task<Guid> AddDocumentPacketDocumentAsync(AddDocumentPacketDocumentRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/document-packets/{request.DocumentPacketId}/documents", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task RemoveDocumentPacketDocumentAsync(Guid packetDocumentId, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/document-packets/documents/{packetDocumentId}?modifiedByUserId={modifiedByUserId}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ReorderDocumentPacketDocumentsAsync(ReorderDocumentPacketDocumentsRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/document-packets/{request.DocumentPacketId}/documents/reorder", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SendDocumentPacketAsync(SendDocumentPacketRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/document-packets/{request.DocumentPacketId}/send", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task UpdateDocumentPacketStatusAsync(UpdateDocumentPacketStatusRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/document-packets/{request.DocumentPacketId}/status", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteDocumentPacketAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/document-packets/{id}?modifiedByUserId={modifiedByUserId}", cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 

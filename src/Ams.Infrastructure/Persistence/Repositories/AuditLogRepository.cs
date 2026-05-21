@@ -17,7 +17,7 @@ public sealed class AuditLogRepository : IAuditLogRepository
 ;WITH Cte AS
 (
     SELECT AuditLogId, TenantId, EntityName, EntityId, EventTypeCode, ActionName,
-           PerformedByUserId, OldValues, NewValues, IpAddress, RegionCode, CorrelationId,
+           PerformedByUserId, OldValues, NewValues, IpAddress, RegionCode, CONVERT(NVARCHAR(120), CorrelationId) AS CorrelationId,
            PerformedDateUtc, CreatedDateUtc
     FROM Audit.AuditLog
     WHERE IsDeleted = 0
@@ -31,14 +31,14 @@ public sealed class AuditLogRepository : IAuditLogRepository
            OR EntityName  LIKE '%' + @SearchTerm + '%'
            OR ActionName  LIKE '%' + @SearchTerm + '%'
            OR IpAddress   LIKE '%' + @SearchTerm + '%'
-           OR CorrelationId LIKE '%' + @SearchTerm + '%')
+           OR CONVERT(NVARCHAR(120), CorrelationId) LIKE '%' + @SearchTerm + '%')
 )
 SELECT COUNT(*) FROM Cte;
 
 ;WITH Cte AS
 (
     SELECT AuditLogId, TenantId, EntityName, EntityId, EventTypeCode, ActionName,
-           PerformedByUserId, OldValues, NewValues, IpAddress, RegionCode, CorrelationId,
+           PerformedByUserId, OldValues, NewValues, IpAddress, RegionCode, CONVERT(NVARCHAR(120), CorrelationId) AS CorrelationId,
            PerformedDateUtc, CreatedDateUtc
     FROM Audit.AuditLog
     WHERE IsDeleted = 0
@@ -52,7 +52,7 @@ SELECT COUNT(*) FROM Cte;
            OR EntityName  LIKE '%' + @SearchTerm + '%'
            OR ActionName  LIKE '%' + @SearchTerm + '%'
            OR IpAddress   LIKE '%' + @SearchTerm + '%'
-           OR CorrelationId LIKE '%' + @SearchTerm + '%')
+           OR CONVERT(NVARCHAR(120), CorrelationId) LIKE '%' + @SearchTerm + '%')
 )
 SELECT * FROM Cte
 ORDER BY PerformedDateUtc DESC
@@ -89,7 +89,7 @@ OFFSET (@PageNumber - 1) * @PageSize ROWS FETCH NEXT @PageSize ROWS ONLY;";
     {
         const string sql = @"
 SELECT AuditLogId, TenantId, EntityName, EntityId, EventTypeCode, ActionName,
-       PerformedByUserId, OldValues, NewValues, IpAddress, RegionCode, CorrelationId,
+       PerformedByUserId, OldValues, NewValues, IpAddress, RegionCode, CONVERT(NVARCHAR(120), CorrelationId) AS CorrelationId,
        PerformedDateUtc, CreatedDateUtc
 FROM Audit.AuditLog
 WHERE AuditLogId = @AuditLogId AND IsDeleted = 0;";

@@ -108,3 +108,94 @@ public sealed class UpdateCommissionDisputeRequest : CreateCommissionDisputeRequ
     [Required] public Guid DisputeId { get; set; }
     public Guid? ModifiedByUserId { get; set; }
 }
+
+public class CreateCommissionPayeeRequest
+{
+    [Required] public Guid TenantId { get; set; }
+    public Guid? UserId { get; set; }
+    [RequiredGuid(ErrorMessage = "Commission Plan is required. ")] public Guid CommissionPlanId { get; set; }
+    [Required, StringLength(50)] public string PayeeTypeCode { get; set; } = "Producer";
+    [Range(0, 100)] public decimal SplitPercentage { get; set; } = 100;
+    [Required] public DateOnly EffectiveDate { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+    [Required, StringLength(50)] public string StatusCode { get; set; } = "Active";
+    public Guid? CreatedByUserId { get; set; }
+}
+
+public sealed class UpdateCommissionPayeeRequest : CreateCommissionPayeeRequest
+{
+    [Required] public Guid PayeeId { get; set; }
+    public Guid? ModifiedByUserId { get; set; }
+}
+
+public class CreateCommissionTransactionRequest
+{
+    [Required] public Guid TenantId { get; set; }
+    [RequiredGuid(ErrorMessage = "Payee is required.")] public Guid PayeeId { get; set; }
+    [RequiredGuid(ErrorMessage = "Commission Plan is required.")] public Guid CommissionPlanId { get; set; }
+    [Required, StringLength(100)] public string SourceEntityName { get; set; } = "Policy";
+    [Required] public Guid SourceEntityId { get; set; } = Guid.NewGuid();
+    [Required] public DateOnly TransactionDate { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+    [Range(0.01, 100000000)] public decimal GrossAmount { get; set; }
+    [Range(0, 100)] public decimal CommissionRate { get; set; }
+    [Range(0, 100000000)] public decimal CommissionAmount { get; set; }
+    [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending";
+    public Guid? PayoutId { get; set; }
+    public Guid? CreatedByUserId { get; set; }
+}
+
+public sealed class UpdateCommissionTransactionRequest : CreateCommissionTransactionRequest
+{
+    [Required] public Guid TransactionId { get; set; }
+    public Guid? ModifiedByUserId { get; set; }
+}
+
+public class CreateCommissionPayoutRequest
+{
+    [Required] public Guid TenantId { get; set; }
+    [RequiredGuid(ErrorMessage = "Payee is required.")] public Guid PayeeId { get; set; }
+    [Required] public DateOnly PayoutDate { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+    [Range(0.01, 100000000)] public decimal TotalAmount { get; set; }
+    [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft";
+    public DateTime? ProcessedDateUtc { get; set; }
+    [StringLength(1000)] public string? Notes { get; set; }
+    public Guid? CreatedByUserId { get; set; }
+}
+
+public sealed class UpdateCommissionPayoutRequest : CreateCommissionPayoutRequest
+{
+    [Required] public Guid PayoutId { get; set; }
+    public Guid? ModifiedByUserId { get; set; }
+}
+
+public class CreateCommissionPayoutStatementRequest
+{
+    [Required] public Guid TenantId { get; set; }
+    [RequiredGuid(ErrorMessage = "Payee is required.")] public Guid PayeeId { get; set; }
+    public Guid? PayoutBatchId { get; set; }
+    [Required] public DateOnly StatementDate { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+    [Range(0, 100000000)] public decimal GrossEarnings { get; set; }
+    [Range(0, 100000000)] public decimal TotalClawbacks { get; set; }
+    [Range(0, 100000000)] public decimal NetPayout { get; set; }
+    [Required, StringLength(3)] public string CurrencyCode { get; set; } = "USD";
+    [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft";
+    public DateTime? IssuedDateUtc { get; set; }
+    public Guid? CreatedByUserId { get; set; }
+}
+
+public sealed class UpdateCommissionPayoutStatementRequest : CreateCommissionPayoutStatementRequest
+{
+    [Required] public Guid StatementId { get; set; }
+    public Guid? ModifiedByUserId { get; set; }
+}
+
+public class GenerateCommissionPayoutStatementsRequest
+{
+    [Required] public Guid TenantId { get; set; }
+    [Required] public DateOnly PayPeriodStart { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-14));
+    [Required] public DateOnly PayPeriodEnd { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+    public Guid? PayeeId { get; set; }
+    [Range(0, 100)] public decimal ClawbackPercent { get; set; } = 0;
+    [Required, StringLength(50)] public string StatusCode { get; set; } = "Draft";
+    public bool IssueImmediately { get; set; }
+    public Guid? CreatedByUserId { get; set; }
+}

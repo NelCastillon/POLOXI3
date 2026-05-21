@@ -1,120 +1,331 @@
 @page "/payments"
 @page "/billing/payments"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Payments
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Payments — AMS</PageTitle>
+<PageTitle>Billing Payments — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Payments"
-               Subtitle="Record, track, and reconcile premium payments across all billing methods and accounts"
-               Icon="bi-cash-coin">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
-            <i class="bi bi-receipt" aria-hidden="true"></i> Invoices
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/payment-experience")'>
-            <i class="bi bi-graph-up" aria-hidden="true"></i> Payment Experience
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="() => _showRecord = true">
-            <i class="bi bi-plus-circle" aria-hidden="true"></i> Record Payment
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- KPI strip -->
-<div class="pay-kpi-strip">
-    @PayKpi("bi-cash-coin",       "Total Payments",   Fmt(_items?.Sum(x=>x.Amount)),                                            "pay-ki-blue")
-    @PayKpi("bi-check-circle",    "Cleared",          (_items?.Count(x=>x.StatusCode=="Cleared") ?? 0).ToString(),             "pay-ki-green")
-    @PayKpi("bi-hourglass",       "Pending",          (_items?.Count(x=>x.StatusCode=="Pending") ?? 0).ToString(),             "pay-ki-amber")
-    @PayKpi("bi-x-circle",        "Failed",           (_items?.Count(x=>x.StatusCode=="Failed")  ?? 0).ToString(),             "pay-ki-red")
-    @PayKpi("bi-arrow-repeat",    "ACH",              (_items?.Count(x=>x.PaymentMethodCode=="ACH") ?? 0).ToString(),           "pay-ki-blue")
-    @PayKpi("bi-credit-card",     "Card",             (_items?.Count(x=>x.PaymentMethodCode=="Card") ?? 0).ToString(),         "pay-ki-purple")
-    @PayKpi("bi-clock-history",   "Avg Days-to-Pay",  _avgDaysToPay.ToString("F1") + " d",                                     "pay-ki-gray")
-    @PayKpi("bi-exclamation-circle","NSF / Returns",  _nsfCount.ToString(),                                                     "pay-ki-red")
-</div>
-
-<!-- Sub-nav -->
-<div class="pay-subnav">
-    <button class="pay-snav-btn pay-snav-active"><i class="bi bi-cash-coin" aria-hidden="true"></i> Payments</button>
-    <button class="pay-snav-btn" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
-    <button class="pay-snav-btn" @onclick='() => Nav.NavigateTo("/billing/credits")'><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Credits</button>
-    <button class="pay-snav-btn" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'><i class="bi bi-ui-checks-grid" aria-hidden="true"></i> Reconciliation</button>
-    <button class="pay-snav-btn" @onclick='() => Nav.NavigateTo("/billing/payment-experience")'><i class="bi bi-graph-up" aria-hidden="true"></i> Payment Experience</button>
-</div>
-
-<!-- Toolbar -->
-<div class="pay-toolbar">
-    <SfTextBox Placeholder="Search reference, notes, method…" @bind-Value="_searchTerm" Width="280px"></SfTextBox>
-    <select class="e-input pay-sel" @bind="_filterMethod">
-        <option value="">All Methods</option>
-        <option value="ACH">ACH</option>
-        <option value="Card">Credit/Debit Card</option>
-        <option value="Check">Check</option>
-        <option value="Wire">Wire Transfer</option>
-        <option value="Cash">Cash</option>
-    </select>
-    <select class="e-input pay-sel" @bind="_filterStatus">
-        <option value="">All Statuses</option>
-        <option value="Cleared">Cleared</option>
-        <option value="Pending">Pending</option>
-        <option value="Failed">Failed</option>
-        <option value="Returned">Returned</option>
-        <option value="Void">Void</option>
-    </select>
-    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync">
-        <i class="bi bi-search" aria-hidden="true"></i> Search
-    </button>
-</div>
-@if (_items is null) { <div style="padding:2rem"><SfSpinner Visible="true" /></div> }
-else if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+    <div class="pay-toast pay-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pay-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
-else {
-<div class="pay-grid-wrap">
-<SfGrid DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="520px">
-    <GridPageSettings PageSize="15"></GridPageSettings>
-    <GridColumns>
-        <GridColumn Field="@nameof(PaymentDto.PaymentDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
-        <GridColumn Field="@nameof(PaymentDto.Amount)" HeaderText="Amount" Width="120" Format="C2" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-        <GridColumn HeaderText="Method" Width="120">
-            <Template>
-                @{ var p = (PaymentDto)context; }
-                <span class="pay-method-chip pay-m-@p.PaymentMethodCode.ToLower()">@PayMethodIcon(p.PaymentMethodCode) @p.PaymentMethodCode</span>
-            </Template>
-        </GridColumn>
-        <GridColumn Field="@nameof(PaymentDto.ReferenceNumber)" HeaderText="Ref #" Width="150"></GridColumn>
-        <GridColumn HeaderText="Status" Width="110">
-            <Template>
-                @{ var p2 = (PaymentDto)context; }
-                <span class="pay-status-chip pay-st-@p2.StatusCode.ToLower()">@p2.StatusCode</span>
-            </Template>
-        </GridColumn>
-        <GridColumn Field="@nameof(PaymentDto.Notes)" HeaderText="Notes" Width="240"></GridColumn>
-        <GridColumn HeaderText="Actions" Width="90">
-            <Template>
-                @{ var p3 = (PaymentDto)context; }
-                <div class="pay-row-acts">
-                    <button class="um-btn um-btn-ghost um-btn-xs"
-                            @onclick='() => Nav.NavigateTo($"/billing/accounts/{p3.AccountId}")'
-                            title="Billing account">
-                        <i class="bi bi-building" aria-hidden="true"></i>
-                    </button>
-                    @if (p3.StatusCode == "Failed" || p3.StatusCode == "Returned")
-                    {
-                        <button class="um-btn um-btn-ghost um-btn-xs" title="View in Payment Experience">
-                            <i class="bi bi-exclamation-circle" style="color:#dc2626" aria-hidden="true"></i>
-                        </button>
-                    }
+
+@if (_showRecord)
+{
+    <div class="pay-modal-backdrop" role="presentation" @onclick="CloseRecord">
+        <div class="pay-modal pay-action-modal" role="dialog" aria-modal="true" aria-labelledby="pay-record-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-cash-coin" aria-hidden="true"></i>
+                <span id="pay-record-title">Record Payment</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseRecord" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="RecordPaymentAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pay-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Payment workflow</span>
+                        <p>Record a tenant-scoped premium payment using the existing Billing.Payment create workflow.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Billing Account <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.AccountId">
+                                <option value="@Guid.Empty">Select account...</option>
+                                @foreach (var account in _accountOptions)
+                                {
+                                    <option value="@account.Id">@account.Display</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
+                            @if (_form.AccountId == Guid.Empty && _saveAttempted)
+                            {
+                                <div class="text-danger">Billing account is required.</div>
+                            }
+                        </div>
+                        <div class="um-field">
+                            <label>Amount <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.Amount" />
+                            <ValidationMessage For="() => _form.Amount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Payment Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_form.PaymentDate" />
+                            <ValidationMessage For="() => _form.PaymentDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Method <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.PaymentMethodCode">
+                                @foreach (var method in _methods)
+                                {
+                                    <option value="@method">@method</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.PaymentMethodCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.StatusCode">
+                                @foreach (var status in _statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Reference #</label>
+                            <InputText class="form-control" @bind-Value="_form.ReferenceNumber" />
+                            <ValidationMessage For="() => _form.ReferenceNumber" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea class="form-control" @bind-Value="_form.Notes" rows="3" />
+                            <ValidationMessage For="() => _form.Notes" class="text-danger" />
+                        </div>
+                    </div>
                 </div>
-            </Template>
-        </GridColumn>
-    </GridColumns>
-</SfGrid>
-</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRecord" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        Record Payment
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
 }
+
+<div class="pay-enterprise-page">
+    <section class="pay-header">
+        <div class="pay-header-left">
+            <div class="pay-lob-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></div>
+            <div class="pay-header-info">
+                <div class="pay-title-row">
+                    <h1 class="pay-page-title">Billing Payments</h1>
+                    <span class="pay-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live payment data</span>
+                    <span class="pay-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <div class="pay-sub-row">
+                    <span>Record, track, and reconcile premium payments across billing accounts.</span>
+                    <span class="pay-sub-chip"><i class="bi bi-cash-coin" aria-hidden="true"></i> @_filtered.Count matching payments</span>
+                    <span class="pay-sub-chip"><i class="bi bi-currency-dollar" aria-hidden="true"></i> @Fmt(_filtered.Sum(x => x.Amount)) visible total</span>
+                </div>
+            </div>
+        </div>
+        <div class="pay-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+                <i class="bi bi-receipt" aria-hidden="true"></i> Invoices
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi @(_loading ? "bi-arrow-repeat pay-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenRecord">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> Record Payment
+            </button>
+        </div>
+    </section>
+
+    <section class="pay-kpi-strip" aria-label="Payment metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="pay-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "pay-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="pay-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="pay-kpi-copy">
+                    <span class="pay-kpi-label">@kpi.Label</span>
+                    <span class="pay-kpi-value">@kpi.Value</span>
+                    <span class="pay-kpi-caption">@kpi.Caption</span>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="pay-workflow-strip" aria-label="Payment workflow shortcuts">
+        <button type="button" class="pay-workflow-card pay-wf-invoice" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+            <span class="pay-workflow-icon"><i class="bi bi-receipt" aria-hidden="true"></i></span>
+            <span class="pay-workflow-content"><strong>1</strong><span>Invoice</span><small>Review receivables.</small></span>
+        </button>
+        <button type="button" class="pay-workflow-card pay-wf-pay" @onclick="OpenRecord">
+            <span class="pay-workflow-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+            <span class="pay-workflow-content"><strong>2</strong><span>Collect</span><small>Record payments.</small></span>
+        </button>
+        <button type="button" class="pay-workflow-card pay-wf-account" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
+            <span class="pay-workflow-icon"><i class="bi bi-building" aria-hidden="true"></i></span>
+            <span class="pay-workflow-content"><strong>3</strong><span>Account</span><small>Billing setup.</small></span>
+        </button>
+        <button type="button" class="pay-workflow-card pay-wf-recon" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'>
+            <span class="pay-workflow-icon"><i class="bi bi-ui-checks-grid" aria-hidden="true"></i></span>
+            <span class="pay-workflow-content"><strong>4</strong><span>Reconcile</span><small>Match deposits.</small></span>
+        </button>
+        <button type="button" class="pay-workflow-card pay-wf-exp" @onclick='() => Nav.NavigateTo("/billing/payment-experience")'>
+            <span class="pay-workflow-icon"><i class="bi bi-graph-up" aria-hidden="true"></i></span>
+            <span class="pay-workflow-content"><strong>5</strong><span>Experience</span><small>Monitor trends.</small></span>
+        </button>
+    </section>
+
+    <section class="pay-enterprise-search" aria-label="Payment filters">
+        <div class="pay-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="pay-search-body">
+            <label for="pay-search">Search payments</label>
+            <input id="pay-search" class="pay-search-input" type="search" placeholder="Search reference, number, notes, method, status..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="pay-search-hint">Filters apply instantly across synchronized payment records.</span>
+        </div>
+        <select class="pay-filter-select" @bind="MethodFilter" aria-label="Method filter">
+            <option value="">All methods</option>
+            @foreach (var method in _methods)
+            {
+                <option value="@method">@method</option>
+            }
+        </select>
+        <select class="pay-filter-select" @bind="StatusFilter" aria-label="Status filter">
+            <option value="">All statuses</option>
+            @foreach (var status in _statuses)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <div class="pay-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pay-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+    }
+
+    <section class="pay-content-layout">
+        <div class="pay-grid-wrap">
+            <div class="pay-grid-toolbar">
+                <div>
+                    <strong>Payment register</strong>
+                    <span>@ActiveFilterText</span>
+                </div>
+                <div class="pay-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'><i class="bi bi-ui-checks-grid" aria-hidden="true"></i> Reconcile</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenRecord"><i class="bi bi-plus-circle" aria-hidden="true"></i> Record</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="pay-loading"><i class="bi bi-arrow-repeat pay-spin" aria-hidden="true"></i><strong>Loading payments...</strong><span>Syncing tenant payment records.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="pay-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No payments found</strong><span>Adjust filters or record a new payment.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenRecord">Record Payment</button></div>
+            }
+            else
+            {
+                <div class="pay-table-scroll">
+                    <table class="pay-table">
+                        <thead>
+                            <tr>
+                                <th>Payment</th>
+                                <th>Date</th>
+                                <th class="pay-number">Amount</th>
+                                <th>Method</th>
+                                <th>Status</th>
+                                <th>Reference</th>
+                                <th class="pay-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var payment in _paged)
+                            {
+                                <tr class="pay-table-row @(IsSelected(payment) ? "pay-table-row--selected" : null)" @onclick="() => SelectPayment(payment)">
+                                    <td>
+                                        <div class="pay-payment-cell">
+                                            <span class="pay-payment-icon @StatusIconClass(payment.StatusCode)"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+                                            <div>
+                                                <strong>@DisplayPaymentNumber(payment)</strong>
+                                                <span>@AccountName(payment.AccountId)</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>@payment.PaymentDate.ToString("MMM d, yyyy")</td>
+                                    <td class="pay-number">@payment.Amount.ToString("C2")</td>
+                                    <td><span class="pay-method-chip @MethodCss(payment.PaymentMethodCode)"><i class="bi @MethodIcon(payment.PaymentMethodCode)" aria-hidden="true"></i> @payment.PaymentMethodCode</span></td>
+                                    <td><span class="pay-status-chip @StatusCss(payment.StatusCode)">@payment.StatusCode</span></td>
+                                    <td>@(payment.ReferenceNumber ?? "—")</td>
+                                    <td>
+                                        <div class="pay-row-acts">
+                                            <button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick="() => SelectPayment(payment)" @onclick:stopPropagation="true" title="Inspect payment"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo($"/billing/accounts/{payment.AccountId}")' @onclick:stopPropagation="true" title="Open billing account"><i class="bi bi-building" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/billing/payment-experience")' @onclick:stopPropagation="true" title="Payment experience"><i class="bi bi-graph-up" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="pay-pager">
+                    <span>Page @_page of @TotalPages · @_filtered.Count records</span>
+                    <div>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <aside class="pay-detail-panel">
+            @if (_selected is null)
+            {
+                <div class="pay-detail-empty"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i><strong>Select a payment</strong><span>Click any row to inspect payment metadata and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="pay-detail-head">
+                    <div>
+                        <span class="pay-detail-eyebrow"><i class="bi bi-cash-coin" aria-hidden="true"></i> Payment detail</span>
+                        <h2>@DisplayPaymentNumber(_selected)</h2>
+                        <div class="pay-detail-meta"><span>@_selected.StatusCode</span><span>@_selected.PaymentDate.ToString("MMM d, yyyy")</span><span>@_selected.PaymentId.ToString()[..8]</span></div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="pay-detail-body">
+                    <div class="pay-detail-summary">
+                        <div class="pay-meta-row"><span class="pay-meta-lbl">Amount</span><span class="pay-meta-val">@_selected.Amount.ToString("C2")</span></div>
+                        <div class="pay-meta-row"><span class="pay-meta-lbl">Method</span><span class="pay-meta-val">@_selected.PaymentMethodCode</span></div>
+                        <div class="pay-meta-row"><span class="pay-meta-lbl">Status</span><span class="pay-meta-val">@_selected.StatusCode</span></div>
+                        <div class="pay-meta-row"><span class="pay-meta-lbl">Reference</span><span class="pay-meta-val">@(_selected.ReferenceNumber ?? "—")</span></div>
+                        <div class="pay-meta-row"><span class="pay-meta-lbl">Created</span><span class="pay-meta-val">@_selected.CreatedDateUtc.ToString("MMM d, yyyy")</span></div>
+                        <div class="pay-meta-row"><span class="pay-meta-lbl">Account</span><span class="pay-meta-val">@AccountName(_selected.AccountId)</span></div>
+                    </div>
+                    <div class="pay-contact-card">
+                        <strong>Payment notes</strong>
+                        <span><i class="bi bi-journal-text" aria-hidden="true"></i> @(_selected.Notes ?? "No notes were recorded for this payment.")</span>
+                        <span><i class="bi bi-receipt" aria-hidden="true"></i> Invoice: @(_selected.InvoiceId?.ToString() ?? "Unapplied / account-level")</span>
+                    </div>
+                    <div class="pay-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo($"/billing/accounts/{_selected.AccountId}")'><i class="bi bi-building" aria-hidden="true"></i> Account</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'><i class="bi bi-ui-checks-grid" aria-hidden="true"></i> Reconcile</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
 @code {
     Guid TenantId { get; set; }
     Guid TenantAdminUserId { get; set; }
@@ -122,60 +333,316 @@ else {
     Guid DevUserId { get; set; }
     private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private string? _searchTerm;
-    private string _filterMethod = "", _filterStatus = "";
-    private bool _showRecord;
+    private string _search = string.Empty;
+    private string _filterMethod = string.Empty;
+    private string _filterStatus = string.Empty;
+    private string _kpiFilter = "all";
     private string? _loadError;
-    private List<PaymentDto>? _items;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private bool _toastVisible;
+    private bool _loading;
+    private bool _busy;
+    private bool _showRecord;
+    private bool _saveAttempted;
+    private int _page = 1;
+    private const int PageSize = 15;
+    private PaymentDto? _selected;
+    private PaymentForm _form = new();
 
-    // Payment experience preview metrics (stub — real data from /billing/payment-experience)
-    private double _avgDaysToPay = 8.3;
-    private int    _nsfCount     = 5;
+    private readonly List<string> _methods = ["ACH", "Credit Card", "Check", "Wire Transfer", "Cash"];
+    private readonly List<string> _statuses = ["Pending", "Cleared", "Applied", "Failed", "Returned", "Void"];
+    private List<PaymentDto> _items = [];
+    private List<PaymentDto> _filtered = [];
+    private List<PaymentDto> _paged = [];
+    private List<AccountOption> _accountOptions = [];
 
-    private IEnumerable<PaymentDto> FilteredItems => (_items ?? []).Where(x =>
-        (string.IsNullOrEmpty(_filterMethod) || x.PaymentMethodCode == _filterMethod) &&
-        (string.IsNullOrEmpty(_filterStatus) || x.StatusCode == _filterStatus));
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All payments" : $"Filtered by {_kpiFilter}";
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Total Payments", Fmt(_items.Sum(x => x.Amount)), "All payment volume", "bi-cash-coin", "pay-ki-blue"),
+        new("cleared", "Cleared", _items.Count(x => IsCleared(x.StatusCode)).ToString("N0"), "Applied or cleared", "bi-check-circle", "pay-ki-green"),
+        new("pending", "Pending", _items.Count(x => x.StatusCode == "Pending").ToString("N0"), "Awaiting application", "bi-hourglass", "pay-ki-amber"),
+        new("failed", "Failed", _items.Count(x => IsProblemStatus(x.StatusCode)).ToString("N0"), "Failed or returned", "bi-x-circle", "pay-ki-red"),
+        new("ach", "ACH", _items.Count(x => x.PaymentMethodCode == "ACH").ToString("N0"), "Bank transfer", "bi-arrow-repeat", "pay-ki-blue"),
+        new("card", "Card", _items.Count(x => IsCard(x.PaymentMethodCode)).ToString("N0"), "Card payments", "bi-credit-card", "pay-ki-purple")
+    ];
+
+    private string SearchFilter
+    {
+        get => _search;
+        set { _search = value; ApplyFilters(resetPage: true); }
+    }
+
+    private string MethodFilter
+    {
+        get => _filterMethod;
+        set { _filterMethod = value; ApplyFilters(resetPage: true); }
+    }
+
+    private string StatusFilter
+    {
+        get => _filterStatus;
+        set { _filterStatus = value; ApplyFilters(resetPage: true); }
+    }
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Billing","/billing/accounts"), new("Payments",""));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Billing", "/billing/accounts"), new("Payments", ""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
+        _loading = true;
         _loadError = null;
         try
         {
-            var result = await Api.SearchPaymentsAsync(_tenantId, _searchTerm);
-            _items = result?.Items.ToList() ?? [];
+            var accounts = await Api.SearchBillingAccountsAsync(_tenantId, null, 1, 500);
+            _accountOptions = accounts?.Items?
+                .Select(a => new AccountOption(a.AccountId, a.AccountName, a.AccountNumber))
+                .OrderBy(a => a.Name)
+                .ToList() ?? [];
+
+            var result = await Api.SearchPaymentsAsync(_tenantId, null);
+            _items = result?.Items?.ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
         }
         catch (Exception ex)
         {
-            _items = [];
             _loadError = $"Payments failed to load: {ex.Message}";
+            _items = [];
+            ApplyFilters(resetPage: true);
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
         }
     }
 
-    static string PayMethodIcon(string m) => m switch
+    private void ApplyFilters(bool resetPage = false)
     {
-        "ACH"   => "🯦",
-        "Card"  => "💳",
-        "Check" => "📝",
-        "Wire"  => "🏦",
-        _       => "💵"
-    };
+        IEnumerable<PaymentDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var search = _search.Trim();
+            query = query.Where(p =>
+                (p.PaymentNumber?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (p.ReferenceNumber?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (p.Notes?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                p.PaymentMethodCode.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                p.StatusCode.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                AccountName(p.AccountId).Contains(search, StringComparison.OrdinalIgnoreCase));
+        }
 
-    static string Fmt(decimal? v) => v.HasValue ? v.Value.ToString("C0") : "$0";
+        if (!string.IsNullOrWhiteSpace(_filterMethod)) query = query.Where(p => p.PaymentMethodCode == _filterMethod);
+        if (!string.IsNullOrWhiteSpace(_filterStatus)) query = query.Where(p => p.StatusCode == _filterStatus);
+        query = _kpiFilter switch
+        {
+            "cleared" => query.Where(p => IsCleared(p.StatusCode)),
+            "pending" => query.Where(p => p.StatusCode == "Pending"),
+            "failed" => query.Where(p => IsProblemStatus(p.StatusCode)),
+            "ach" => query.Where(p => p.PaymentMethodCode == "ACH"),
+            "card" => query.Where(p => IsCard(p.PaymentMethodCode)),
+            _ => query
+        };
 
-    RenderFragment PayKpi(string icon, string label, string val, string color) => __builder =>
+        _filtered = query.OrderByDescending(p => p.PaymentDate).ThenByDescending(p => p.CreatedDateUtc).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+        _paged = _filtered.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    }
+
+    private void SetKpiFilter(string filter)
     {
-        <div class="pay-kpi-card @color">
-            <i class="bi @icon pay-kpi-icon" aria-hidden="true"></i>
-            <div><div class="pay-kpi-val">@val</div><div class="pay-kpi-lbl">@label</div></div>
-        </div>
-    };
+        _kpiFilter = _kpiFilter == filter ? "all" : filter;
+        ApplyFilters(resetPage: true);
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _filterMethod = string.Empty;
+        _filterStatus = string.Empty;
+        _kpiFilter = "all";
+        ApplyFilters(resetPage: true);
+    }
+
+    private void PreviousPage()
+    {
+        if (_page <= 1) return;
+        _page--;
+        ApplyFilters();
+    }
+
+    private void NextPage()
+    {
+        if (_page >= TotalPages) return;
+        _page++;
+        ApplyFilters();
+    }
+
+    private void SelectPayment(PaymentDto item) => _selected = item;
+    private void ClearSelection() => _selected = null;
+    private bool IsSelected(PaymentDto item) => _selected?.PaymentId == item.PaymentId;
+
+    private void OpenRecord()
+    {
+        _saveAttempted = false;
+        _form = new();
+        if (_selected is not null)
+        {
+            _form.AccountId = _selected.AccountId;
+            _form.Amount = Math.Max(0.01m, _selected.Amount);
+            _form.PaymentMethodCode = _selected.PaymentMethodCode;
+        }
+        _showRecord = true;
+    }
+
+    private void CloseRecord()
+    {
+        if (_busy) return;
+        _showRecord = false;
+        _saveAttempted = false;
+    }
+
+    private async Task RecordPaymentAsync()
+    {
+        _saveAttempted = true;
+        if (_form.AccountId == Guid.Empty)
+        {
+            ShowToast("Select a billing account before recording payment.", "warning");
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await Api.CreatePaymentAsync(new CreatePaymentRequest
+            {
+                TenantId = _tenantId,
+                AccountId = _form.AccountId,
+                PaymentDate = _form.PaymentDate,
+                Amount = _form.Amount,
+                PaymentMethodCode = _form.PaymentMethodCode,
+                ReferenceNumber = _form.ReferenceNumber,
+                StatusCode = _form.StatusCode,
+                Notes = _form.Notes,
+                CreatedByUserId = _tenantAdminUserId
+            });
+            _showRecord = false;
+            _form = new();
+            ShowToast("Payment recorded.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Record payment failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task NotifyValidationAsync(EditContext _)
+    {
+        _saveAttempted = true;
+        ShowToast("Please correct the validation errors before recording payment.", "warning");
+        return Task.CompletedTask;
+    }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any())
+        {
+            ShowToast("No payments are available to export.", "warning");
+            return;
+        }
+
+        var csv = new StringBuilder();
+        csv.AppendLine("PaymentNumber,PaymentDate,Amount,Method,Status,Reference,Account,Notes,PaymentId");
+        foreach (var payment in _filtered)
+        {
+            csv.AppendLine(string.Join(',',
+                Csv(DisplayPaymentNumber(payment)),
+                Csv(payment.PaymentDate.ToString("yyyy-MM-dd")),
+                payment.Amount.ToString("0.00"),
+                Csv(payment.PaymentMethodCode),
+                Csv(payment.StatusCode),
+                Csv(payment.ReferenceNumber ?? string.Empty),
+                Csv(AccountName(payment.AccountId)),
+                Csv(payment.Notes ?? string.Empty),
+                Csv(payment.PaymentId.ToString())));
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"billing-payments-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} payments.", "success");
+    }
+
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    private void EnsureSelectedStillVisible()
+    {
+        if (_selected is null) return;
+        _selected = _items.FirstOrDefault(p => p.PaymentId == _selected.PaymentId);
+    }
+
+    private string AccountName(Guid accountId) => _accountOptions.FirstOrDefault(a => a.Id == accountId)?.Display ?? accountId.ToString()[..8];
+    private static string DisplayPaymentNumber(PaymentDto payment) => !string.IsNullOrWhiteSpace(payment.PaymentNumber) ? payment.PaymentNumber : payment.ReferenceNumber ?? payment.PaymentId.ToString()[..8];
+    private static string Fmt(decimal v) => v.ToString("C0");
+    private static bool IsCleared(string status) => status is "Cleared" or "Applied" or "Paid";
+    private static bool IsProblemStatus(string status) => status is "Failed" or "Returned" or "Void" or "Voided";
+    private static bool IsCard(string method) => method is "Card" or "Credit Card" or "Credit/Debit Card";
+    private static string StatusCss(string status) => $"pay-st-{status.ToLowerInvariant().Replace(" ", "-")}";
+    private static string MethodCss(string method) => $"pay-m-{method.ToLowerInvariant().Replace(" ", "-").Replace("/", "-")}";
+    private static string StatusIconClass(string status) => IsCleared(status) ? "pay-di-green" : IsProblemStatus(status) ? "pay-di-red" : status == "Pending" ? "pay-di-amber" : "pay-di-blue";
+    private static string MethodIcon(string method) => method switch { "ACH" => "bi-arrow-repeat", "Credit Card" or "Card" => "bi-credit-card", "Check" => "bi-journal-check", "Wire Transfer" or "Wire" => "bi-bank", _ => "bi-cash" };
+    private static string Csv(string value)
+    {
+        var quote = Convert.ToChar(34).ToString();
+        return string.Concat(quote, value.Replace(quote, quote + quote), quote);
+    }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone)
+    {
+        public string Title => $"Filter by {Label}";
+    }
+
+    private sealed record AccountOption(Guid Id, string Name, string Number)
+    {
+        public string Display => $"{Name} — {Number}";
+    }
+
+    private sealed class PaymentForm
+    {
+        [Required]
+        public Guid AccountId { get; set; }
+        [Range(0.01, 999999999999)]
+        public decimal Amount { get; set; }
+        [Required]
+        public DateTime PaymentDate { get; set; } = DateTime.Today;
+        [Required, StringLength(50)]
+        public string PaymentMethodCode { get; set; } = "ACH";
+        [Required, StringLength(50)]
+        public string StatusCode { get; set; } = "Pending";
+        [StringLength(100)]
+        public string? ReferenceNumber { get; set; }
+        [StringLength(500)]
+        public string? Notes { get; set; }
+    }
 
     async Task ResolveCurrentUserContextAsync()
     {

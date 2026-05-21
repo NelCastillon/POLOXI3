@@ -1,275 +1,220 @@
 @page "/finance/bank-reconciliation"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Finance
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
-@using Ams.Application.Common.Dtos
+@inject NavigationManager Nav
+@inject IJSRuntime Js
 
-<PageTitle>Bank Reconciliation</PageTitle>
+<PageTitle>Bank Reconciliation — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Bank Reconciliation"
-               Subtitle="Reconcile bank statements with ledger records"
-               Icon="bi-bank2">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "fa-spin" : "")" aria-hidden="true"></i> Refresh
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Reconciliation
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- ── Search & Filter ──────────────────────────────────────────────────── -->
-<div class="fin-toolbar">
-    <div class="fin-search-box">
-        <i class="bi bi-search fin-search-icon" aria-hidden="true"></i>
-        <input class="e-input fin-search-input"
-               placeholder="Search reconciliations…"
-               @bind="_searchTerm"
-               @bind:event="oninput"
-               @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" />
+@if (_toastVisible)
+{
+    <div class="br-toast br-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="br-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
-    <div class="fin-filter-buttons">
-        <button class="um-btn um-btn-ghost um-btn-sm @(_filterActive ? "um-btn-active" : "")"
-                @onclick="() => _filterActive = !_filterActive">
-            <i class="bi bi-funnel" aria-hidden="true"></i> Filter
-        </button>
+}
+
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="br-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="br-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="br-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon"><i class="bi @(_pendingStatus == "Reconciled" ? "bi-check-circle" : "bi-arrow-counterclockwise")"></i></div>
+                <div class="um-confirm-title" id="br-status-title">@(_pendingStatus == "Reconciled" ? "Mark Reconciled" : "Reopen Reconciliation")</div>
+                <div class="um-confirm-body">@(_pendingStatus == "Reconciled" ? "Mark" : "Reopen") <strong>@_statusTarget.BankName · @_statusTarget.BankAccountNumber</strong> as <strong>@_pendingStatus</strong>?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-primary" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@(_pendingStatus == "Reconciled" ? "Mark Reconciled" : "Reopen")</button>
+                </div>
+            </div>
+        </div>
     </div>
+}
+
+@if (_showForm)
+{
+    <div class="br-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="br-modal br-action-modal" role="dialog" aria-modal="true" aria-labelledby="br-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-bank" aria-hidden="true"></i>
+                <span id="br-form-title">@(_editingId == Guid.Empty ? "New Bank Reconciliation" : "Edit Bank Reconciliation")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="br-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Bank reconciliation workflow</span><p>Compare bank statement balances against book balances and track reconciliation status.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Bank Account Number <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.BankAccountNumber" /><ValidationMessage For="() => _form.BankAccountNumber" class="text-danger" /></div>
+                        <div class="um-field"><label>Bank Name <span class="text-danger">*</span></label><InputText class="form-control" @bind-Value="_form.BankName" /><ValidationMessage For="() => _form.BankName" class="text-danger" /></div>
+                        <div class="um-field"><label>Statement Date <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_form.BankStatementDate" /><ValidationMessage For="() => _form.BankStatementDate" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.StatusCode">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Bank Balance</label><InputNumber class="form-control" @bind-Value="_form.BankBalance" /><ValidationMessage For="() => _form.BankBalance" class="text-danger" /></div>
+                        <div class="um-field"><label>Book Balance</label><InputNumber class="form-control" @bind-Value="_form.BookBalance" /><ValidationMessage For="() => _form.BookBalance" class="text-danger" /></div>
+                        <div class="um-field"><label>Variance</label><input class="form-control" value="@Variance(_form).ToString("C2")" disabled /></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Reconciliation" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="br-enterprise-page">
+    <section class="br-header">
+        <div class="br-header-left"><div class="br-lob-icon"><i class="bi bi-bank2" aria-hidden="true"></i></div><div class="br-header-info"><div class="br-title-row"><h1 class="br-page-title">Bank Reconciliation</h1><span class="br-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live bank data</span><span class="br-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div><div class="br-sub-row"><span>Compare bank statements, book balances, outstanding items, and reconciliation status.</span><span class="br-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="br-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div></div></div>
+        <div class="br-header-actions"><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/glaccounts")'><i class="bi bi-journals" aria-hidden="true"></i> GL Accounts</button><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i> Journals</button><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat br-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button><button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Reconciliation</button></div>
+    </section>
+
+    <section class="br-kpi-strip" aria-label="Bank reconciliation metrics">@foreach (var kpi in Kpis) { <button type="button" class="br-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "br-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)"><span class="br-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="br-kpi-copy"><span class="br-kpi-label">@kpi.Label</span><span class="br-kpi-value">@kpi.Value</span><span class="br-kpi-caption">@kpi.Caption</span></span></button> }</section>
+
+    <section class="br-workflow-strip" aria-label="Bank reconciliation workflow shortcuts">
+        <button type="button" class="br-workflow-card br-wf-bank" @onclick="OpenCreate"><span class="br-workflow-icon"><i class="bi bi-bank" aria-hidden="true"></i></span><span class="br-workflow-content"><strong>1</strong><span>Statement</span><small>Load bank totals.</small></span></button>
+        <button type="button" class="br-workflow-card br-wf-journal" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><span class="br-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="br-workflow-content"><strong>2</strong><span>Ledger</span><small>Review postings.</small></span></button>
+        <button type="button" class="br-workflow-card br-wf-reconcile" @onclick='() => SetKpiFilter("pending")'><span class="br-workflow-icon"><i class="bi bi-check2-square" aria-hidden="true"></i></span><span class="br-workflow-content"><strong>3</strong><span>Reconcile</span><small>Clear variances.</small></span></button>
+        <button type="button" class="br-workflow-card br-wf-exception" @onclick='() => SetKpiFilter("exception")'><span class="br-workflow-icon"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span><span class="br-workflow-content"><strong>4</strong><span>Exceptions</span><small>Resolve mismatches.</small></span></button>
+        <button type="button" class="br-workflow-card br-wf-report" @onclick='() => Nav.NavigateTo("/analytics/finance")'><span class="br-workflow-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span><span class="br-workflow-content"><strong>5</strong><span>Report</span><small>Review analytics.</small></span></button>
+    </section>
+
+    <section class="br-enterprise-search" aria-label="Bank reconciliation filters"><div class="br-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div><div class="br-search-body"><label for="br-search">Search reconciliations</label><input id="br-search" class="br-search-input" type="search" placeholder="Search account, bank, status..." @bind="SearchFilter" @bind:event="oninput" /><span class="br-search-hint">Filters apply instantly across synchronized reconciliations.</span></div><select class="br-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select><div class="br-search-result"><strong>@_filtered.Count</strong><span>matches</span></div></section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError)) { <div class="alert alert-danger br-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div> }
+
+    <section class="br-content-layout"><div class="br-grid-wrap"><div class="br-grid-toolbar"><div><strong>Reconciliation register</strong><span>@ActiveFilterText</span></div><div class="br-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i> Journals</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+            @if (_loading) { <div class="br-loading"><i class="bi bi-arrow-repeat br-spin" aria-hidden="true"></i><strong>Loading bank reconciliations...</strong><span>Syncing schema, seed data, and reconciliation entries.</span></div> }
+            else if (!_filtered.Any()) { <div class="br-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No reconciliations found</strong><span>Adjust filters or create a new reconciliation.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Reconciliation</button></div> }
+            else { <div class="br-table-scroll"><table class="br-table"><thead><tr><th>Bank / Account</th><th>Status</th><th>Date</th><th class="br-number">Bank</th><th class="br-number">Book</th><th class="br-number">Variance</th><th class="br-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="br-table-row @(_selected?.BankReconciliationId == item.BankReconciliationId ? "br-table-row--selected" : null)" @onclick="() => SelectRecon(item)"><td><div class="br-entry-cell"><span class="br-entry-icon @StatusIconTone(item.StatusCode)"><i class="bi bi-bank" aria-hidden="true"></i></span><span><strong>@item.BankName</strong><span>@item.BankAccountNumber</span></span></div></td><td><span class="br-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td><td>@item.BankStatementDate.ToString("MMM d, yyyy")</td><td class="br-number">@Fmt(item.BankBalance)</td><td class="br-number">@Fmt(item.BookBalance)</td><td class="br-number"><span class="@(item.Discrepancy == 0 ? "br-balanced" : "br-unbalanced")">@Fmt(Math.Abs(item.Discrepancy))</span></td><td><div class="br-row-acts"><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="@(item.StatusCode == "Reconciled" ? "Reopen" : "Mark Reconciled")" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, item.StatusCode == "Reconciled" ? "Pending" : "Reconciled")'><i class="bi @(item.StatusCode == "Reconciled" ? "bi-arrow-counterclockwise" : "bi-check-circle")" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div><div class="br-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div> }
+        </div>
+        <aside class="br-detail-panel" aria-label="Selected bank reconciliation detail">@if (_selected is null) { <div class="br-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a reconciliation</strong><span>Choose a row to inspect balances, variance, and workflow actions.</span></div> } else { <div class="br-detail-head"><div><span class="br-detail-eyebrow"><i class="bi bi-bank" aria-hidden="true"></i> Bank reconciliation</span><h2>@_selected.BankName</h2><div class="br-detail-meta"><span>@_selected.BankStatementDate.ToString("MMM d, yyyy")</span><span class="br-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div><div class="br-detail-body"><div class="br-detail-summary"><div class="br-meta-row"><span class="br-meta-lbl">Bank Balance</span><span class="br-meta-val">@Fmt(_selected.BankBalance)</span></div><div class="br-meta-row"><span class="br-meta-lbl">Book Balance</span><span class="br-meta-val">@Fmt(_selected.BookBalance)</span></div><div class="br-meta-row"><span class="br-meta-lbl">Variance</span><span class="br-meta-val @(_selected.Discrepancy == 0 ? "br-balanced" : "br-unbalanced")">@Fmt(Math.Abs(_selected.Discrepancy))</span></div><div class="br-meta-row"><span class="br-meta-lbl">Outstanding</span><span class="br-meta-val">@Fmt(_selected.OutstandingDeposits + _selected.OutstandingChecks)</span></div></div><div class="br-note-card"><span><i class="bi bi-bank" aria-hidden="true"></i> Account detail</span><p>@_selected.BankAccountNumber · Deposits @Fmt(_selected.OutstandingDeposits), checks @Fmt(_selected.OutstandingChecks).</p></div><div class="br-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, _selected.StatusCode == "Reconciled" ? "Pending" : "Reconciled")'><i class="bi @(_selected.StatusCode == "Reconciled" ? "bi-arrow-counterclockwise" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.StatusCode == "Reconciled" ? "Reopen" : "Mark Reconciled")</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i> Journals</button></div></div> }</aside>
+    </section>
 </div>
 
-@if (_filterActive)
-{
-    <div class="fin-filter-panel">
-        <div class="fin-filter-group">
-            <label class="fin-filter-label">Status</label>
-            <select class="e-input" @bind="_filterStatus">
-                <option value="">All</option>
-                <option value="Reconciled">Reconciled</option>
-                <option value="Pending">Pending</option>
-            </select>
-        </div>
-    </div>
-}
-
-<!-- ── KPI Cards ──────────────────────────────────────────────────────── -->
-@if (_stats is not null)
-{
-    <div class="fin-kpi-strip">
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #dbeafe; color: #1d4ed8;"><i class="bi bi-bank-fill" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.TotalReconciliations</div>
-                <div class="fin-kpi-label">Total Reconciliations</div>
-            </div>
-        </div>
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #d1fae5; color: #047857;"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.ReconciledCount</div>
-                <div class="fin-kpi-label">Reconciled</div>
-            </div>
-        </div>
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #fef3c7; color: #b45309;"><i class="bi bi-hourglass-split" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.PendingCount</div>
-                <div class="fin-kpi-label">Pending</div>
-            </div>
-        </div>
-    </div>
-}
-
-<!-- ── Content ──────────────────────────────────────────────────────── -->
-@if (_error is not null)
-{
-    <div class="fin-alert fin-alert-warning">
-        <div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></div>
-        <div class="fin-alert-body">
-            <div class="fin-alert-title">⚠️ Database Schema Issue</div>
-            <p>Finance schema initialization required. Run: <strong>sql/01_Finance_Schema.sql</strong></p>
-        </div>
-    </div>
-}
-else if (_loading)
-{
-    <div class="fin-loading">
-        <div class="um-spinner" aria-hidden="true"></div>
-        <span>Loading Bank Reconciliations…</span>
-    </div>
-}
-else if (_items?.Count == 0)
-{
-    <div class="fin-empty-state">
-        <i class="bi bi-inbox fin-empty-icon" aria-hidden="true"></i>
-        <h3>No Reconciliations Found</h3>
-        <p>No bank reconciliations have been created yet.</p>
-    </div>
-}
-else
-{
-    <div class="fin-grid-container">
-        <SfGrid TValue="BankReconciliationDto" DataSource="_items" AllowPaging="true" AllowSorting="true" Height="600px">
-            <GridEvents TValue="BankReconciliationDto" RowSelected="OnRowSelected" />
-            <GridPageSettings PageSize="12"></GridPageSettings>
-            <GridColumns>
-                <GridColumn Field="@nameof(BankReconciliationDto.BankAccountNumber)" HeaderText="Bank Account" Width="140" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(BankReconciliationDto.BankName)" HeaderText="Bank Name" Width="140"></GridColumn>
-                <GridColumn Field="@nameof(BankReconciliationDto.BankStatementDate)" HeaderText="Statement Date" Type="ColumnType.Date" Format="d" Width="130" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(BankReconciliationDto.BankBalance)" HeaderText="Bank Balance" Format="C2" Width="130" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(BankReconciliationDto.BookBalance)" HeaderText="Book Balance" Format="C2" Width="130" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(BankReconciliationDto.Discrepancy)" HeaderText="Variance" Format="C2" Width="110" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(BankReconciliationDto.StatusCode)" HeaderText="Status" Width="100" AllowSorting="true">
-                    <Template>
-                        @{
-                            var recon = context as BankReconciliationDto;
-                            var badgeClass = recon?.StatusCode switch
-                            {
-                                "Reconciled" => "fin-badge-success",
-                                "Pending" => "fin-badge-warning",
-                                _ => "fin-badge-secondary"
-                            };
-                        }
-                        <span class="fin-badge @badgeClass">@recon?.StatusCode</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="Actions" Width="90">
-                    <Template>
-                        @{ var recon = (BankReconciliationDto)context; }
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(recon)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
-    </div>
-}
-
-<SfDialog @bind-Visible="_showForm" Width="680px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-bank" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Bank Reconciliation" : "Edit Bank Reconciliation")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_editContext">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Bank Account Number <span class="text-danger">*</span></label><InputText @bind-Value="_form.BankAccountNumber" class="um-input" /><ValidationMessage For="() => _form.BankAccountNumber" class="text-danger" /></div>
-                    <div class="um-field"><label>Bank Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.BankName" class="um-input" /><ValidationMessage For="() => _form.BankName" class="text-danger" /></div>
-                    <div class="um-field"><label>Statement Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.BankStatementDate" class="um-input" /><ValidationMessage For="() => _form.BankStatementDate" class="text-danger" /></div>
-                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option value="Pending">Pending</option><option value="Reconciled">Reconciled</option><option value="Exception">Exception</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
-                    <div class="um-field"><label>Bank Balance</label><InputNumber @bind-Value="_form.BankBalance" class="um-input" /><ValidationMessage For="() => _form.BankBalance" class="text-danger" /></div>
-                    <div class="um-field"><label>Book Balance</label><InputNumber @bind-Value="_form.BookBalance" class="um-input" /><ValidationMessage For="() => _form.BookBalance" class="text-danger" /></div>
-                    <div class="um-field"><label>Variance</label><input class="um-input" value="@((_form.BankBalance - _form.BookBalance).ToString("C2"))" disabled /></div>
-                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-                </div></div>
-            </EditForm>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Reconciliation")</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private const int PageSize = 12;
     private Guid _tenantId;
-    private string? _searchTerm;
-    private string _filterStatus = "";
-    private bool _filterActive = false;
-    private bool _loading = false;
-    private bool _showForm;
-    private bool _saving;
-    private List<BankReconciliationDto>? _items;
-    private string? _error;
-    private string? _formError;
-    private Guid _editingId = Guid.Empty;
+    private Guid _tenantAdminUserId;
+    private List<BankReconciliationDto> _items = [];
+    private List<BankReconciliationDto> _filtered = [];
+    private BankReconciliationDto? _selected;
+    private BankReconciliationDto? _statusTarget;
     private BankReconForm _form = new();
-    private EditContext _editContext = default!;
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showStatusConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _statuses = ["Pending", "Reconciled", "Exception"];
 
-    private class Stats
-    {
-        public int TotalReconciliations { get; set; }
-        public int ReconciledCount { get; set; }
-        public int PendingCount { get; set; }
-    }
+    private IEnumerable<BankReconciliationDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All bank reconciliations" : $"Filtered by {_kpiFilter}";
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Recons", _items.Count.ToString("N0"), "All statements", "bi-bank", "br-ki-blue"),
+        new("reconciled", "Reconciled", _items.Count(x => x.StatusCode == "Reconciled").ToString("N0"), "Completed", "bi-check-circle", "br-ki-green"),
+        new("pending", "Pending", _items.Count(x => x.StatusCode == "Pending").ToString("N0"), "Needs review", "bi-hourglass", "br-ki-amber"),
+        new("exception", "Exceptions", _items.Count(x => x.StatusCode == "Exception").ToString("N0"), "Variance review", "bi-exclamation-triangle", "br-ki-red"),
+        new("variance", "Variance", Fmt(_items.Sum(x => Math.Abs(x.Discrepancy))), "Total difference", "bi-arrows-expand", "br-ki-red"),
+        new("bank", "Bank", Fmt(_items.Sum(x => x.BankBalance)), "Statement total", "bi-currency-dollar", "br-ki-blue")
+    ];
 
-    private Stats? _stats;
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
 
-    protected override async Task OnInitializedAsync()
-    {
-        await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home", "/"),
-            new("Finance", "/finance"),
-            new("Bank Reconciliation", "/finance/bank-reconciliation"));
-        _editContext = new(_form);
-        await LoadAsync();
-    }
-
+    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); Breadcrumbs.SetCrumbs(new("Home", "/"), new("Finance", "/finance"), new("Bank Reconciliation", "/finance/bank-reconciliation")); await LoadAsync(); }
     private async Task LoadAsync()
     {
-        _loading = true;
-        _error = null;
-        _items = null;
-        try
-        {
-            var result = await Api.SearchBankReconciliationsAsync(_tenantId, _searchTerm);
-            _items = result?.Items.ToList() ?? [];
-
-            if (!string.IsNullOrEmpty(_filterStatus))
-                _items = _items.Where(x => x.StatusCode == _filterStatus).ToList();
-
-            _stats = new Stats
-            {
-                TotalReconciliations = _items.Count,
-                ReconciledCount = _items.Count(x => x.StatusCode == "Reconciled"),
-                PendingCount = _items.Count(x => x.StatusCode == "Pending")
-            };
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            if (ex.Message.Contains("Invalid column name") || ex.Message.Contains("BankReconciliation"))
-            {
-                _error = "Database schema mismatch. Please ensure 00_schema_migration.sql has been applied to your database. See db/README.md for setup instructions.";
-            }
-            _items = [];
-        }
-        finally
-        {
-            _loading = false;
-        }
+        _loading = true; _loadError = null;
+        try { var result = await Api.SearchBankReconciliationsAsync(_tenantId, string.Empty); _items = result?.Items.OrderByDescending(x => x.BankStatementDate).ThenByDescending(x => x.CreatedDateUtc).ToList() ?? []; ApplyFilters(resetPage: true); EnsureSelectedStillVisible(); }
+        catch (Exception ex) { _loadError = $"Bank reconciliations failed to load: {ex.Message}"; ShowToast(_loadError, "danger"); _items = []; _filtered = []; }
+        finally { _loading = false; }
     }
-
-    private void OnRowSelected(RowSelectEventArgs<BankReconciliationDto> args) => OpenEdit(args.Data);
-    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
-    private void OpenEdit(BankReconciliationDto recon)
+    private void ApplyFilters(bool resetPage)
     {
-        _editingId = recon.BankReconciliationId;
-        _form = new BankReconForm { BankAccountNumber = recon.BankAccountNumber, BankName = recon.BankName, BankStatementDate = recon.BankStatementDate.ToDateTime(TimeOnly.MinValue), BankBalance = recon.BankBalance, BookBalance = recon.BookBalance, StatusCode = recon.StatusCode };
-        _editContext = new(_form);
-        _formError = null;
-        _showForm = true;
+        IEnumerable<BankReconciliationDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm)) { var term = _searchTerm.Trim(); query = query.Where(x => Contains(x.BankAccountNumber, term) || Contains(x.BankName, term) || Contains(x.StatusCode, term)); }
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter);
+        query = _kpiFilter switch { "reconciled" => query.Where(x => x.StatusCode == "Reconciled"), "pending" => query.Where(x => x.StatusCode == "Pending"), "exception" => query.Where(x => x.StatusCode == "Exception"), "variance" => query.Where(x => x.Discrepancy != 0), _ => query };
+        _filtered = query.OrderByDescending(x => x.BankStatementDate).ThenByDescending(x => x.CreatedDateUtc).ToList(); if (resetPage) _page = 1; if (_page > TotalPages) _page = TotalPages;
     }
-    private void CloseForm() => _showForm = false;
-
+    private void SetKpiFilter(string filter) { _kpiFilter = filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _statusFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Bank reconciliation filters reset.", "info"); }
+    private void SelectRecon(BankReconciliationDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _formError = null; _form = new BankReconForm(); _showForm = true; }
+    private void OpenEdit(BankReconciliationDto recon) { _editingId = recon.BankReconciliationId; _formError = null; _form = new BankReconForm { BankAccountNumber = recon.BankAccountNumber, BankName = recon.BankName, BankStatementDate = recon.BankStatementDate.ToDateTime(TimeOnly.MinValue), BankBalance = recon.BankBalance, BookBalance = recon.BookBalance, StatusCode = recon.StatusCode }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; }
     private async Task SaveAsync()
     {
-        if (!_editContext.Validate()) return;
-        _saving = true;
+        _busy = true; _formError = null;
         try
         {
-            if (_editingId == Guid.Empty)
-                await Api.CreateBankReconciliationAsync(new CreateBankReconciliationRequest { TenantId = _tenantId, BankAccountNumber = _form.BankAccountNumber, BankName = _form.BankName, BankStatementDate = DateOnly.FromDateTime(_form.BankStatementDate), BankBalance = _form.BankBalance, BookBalance = _form.BookBalance, StatusCode = _form.StatusCode });
-            else
-                await Api.UpdateBankReconciliationAsync(_editingId, new UpdateBankReconciliationRequest { TenantId = _tenantId, BankReconciliationId = _editingId, BankAccountNumber = _form.BankAccountNumber, BankName = _form.BankName, BankStatementDate = DateOnly.FromDateTime(_form.BankStatementDate), BankBalance = _form.BankBalance, BookBalance = _form.BookBalance, StatusCode = _form.StatusCode });
-            _showForm = false;
-            await LoadAsync();
+            if (_editingId == Guid.Empty) { await Api.CreateBankReconciliationAsync(new CreateBankReconciliationRequest { TenantId = _tenantId, BankAccountNumber = _form.BankAccountNumber, BankName = _form.BankName, BankStatementDate = DateOnly.FromDateTime(_form.BankStatementDate), BankBalance = _form.BankBalance, BookBalance = _form.BookBalance, StatusCode = _form.StatusCode, CreatedByUserId = _tenantAdminUserId }); ShowToast("Bank reconciliation created.", "success"); }
+            else { await Api.UpdateBankReconciliationAsync(_editingId, new UpdateBankReconciliationRequest { TenantId = _tenantId, BankReconciliationId = _editingId, BankAccountNumber = _form.BankAccountNumber, BankName = _form.BankName, BankStatementDate = DateOnly.FromDateTime(_form.BankStatementDate), BankBalance = _form.BankBalance, BookBalance = _form.BookBalance, StatusCode = _form.StatusCode, ModifiedByUserId = _tenantAdminUserId }); ShowToast("Bank reconciliation updated.", "success"); }
+            _showForm = false; await LoadAsync();
         }
-        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; }
-        finally { _saving = false; }
+        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; ShowToast(_formError, "danger"); }
+        finally { _busy = false; }
     }
-
+    private void ConfirmStatusUpdate(BankReconciliationDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+    private async Task ExecuteStatusUpdateAsync()
+    {
+        if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return;
+        _busy = true;
+        try { await Api.UpdateBankReconciliationAsync(_statusTarget.BankReconciliationId, new UpdateBankReconciliationRequest { TenantId = _tenantId, BankReconciliationId = _statusTarget.BankReconciliationId, BankAccountNumber = _statusTarget.BankAccountNumber, BankName = _statusTarget.BankName, BankStatementDate = _statusTarget.BankStatementDate, BankBalance = _statusTarget.BankBalance, BookBalance = _statusTarget.BookBalance, StatusCode = _pendingStatus, ModifiedByUserId = _tenantAdminUserId }); ShowToast($"Reconciliation marked {_pendingStatus.ToLowerInvariant()}.", "success"); _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; await LoadAsync(); }
+        catch (Exception ex) { ShowToast($"Update failed: {ex.Message}", "danger"); }
+        finally { _busy = false; }
+    }
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving the reconciliation.", "warning"); return Task.CompletedTask; }
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any()) { ShowToast("No reconciliations are available to export.", "warning"); return; }
+        var csv = new StringBuilder(); csv.AppendLine("BankName,BankAccountNumber,StatementDate,BankBalance,BookBalance,Discrepancy,OutstandingDeposits,OutstandingChecks,Status,BankReconciliationId");
+        foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.BankName), Csv(item.BankAccountNumber), Csv(item.BankStatementDate.ToString("yyyy-MM-dd")), item.BankBalance.ToString("0.00"), item.BookBalance.ToString("0.00"), item.Discrepancy.ToString("0.00"), item.OutstandingDeposits.ToString("0.00"), item.OutstandingChecks.ToString("0.00"), Csv(item.StatusCode), Csv(item.BankReconciliationId.ToString())));
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString()); await Js.InvokeVoidAsync("amsShell.downloadBase64", $"bank-reconciliation-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes)); ShowToast($"Exported {_filtered.Count:N0} reconciliations.", "success");
+    }
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.BankReconciliationId == _selected.BankReconciliationId) ?? _filtered.FirstOrDefault();
+    private static decimal Variance(BankReconForm form) => form.BankBalance - form.BookBalance;
+    private static string Fmt(decimal value) => value.ToString("C0");
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static string StatusCss(string status) => $"br-st-{status.ToLowerInvariant()}";
+    private static string StatusIconTone(string status) => status switch { "Reconciled" => "br-di-green", "Exception" => "br-di-red", _ => "br-di-amber" };
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter reconciliations by {Label}"; }
     private sealed class BankReconForm
     {
         [Required, StringLength(50)] public string BankAccountNumber { get; set; } = string.Empty;
@@ -278,16 +223,5 @@ else
         [Range(0, 100000000)] public decimal BankBalance { get; set; }
         [Range(0, 100000000)] public decimal BookBalance { get; set; }
         [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending";
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
 }

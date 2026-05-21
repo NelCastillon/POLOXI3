@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Commissions;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -27,6 +28,36 @@ public sealed class CommissionPayeeRepository : ICommissionPayeeRepository
         var items = (await multi.ReadAsync<CommissionPayeeDto>()).AsList();
         var total = await multi.ReadSingleAsync<int>();
         return new PagedResult<CommissionPayeeDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateCommissionPayeeRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAndSeedAsync(request.TenantId, cancellationToken);
+
+        var id = Guid.NewGuid();
+        const string sql = @"
+INSERT INTO Commission.CommissionPayee (PayeeId, TenantId, UserId, CommissionPlanId, PayeeTypeCode, SplitPercentage, EffectiveDate, StatusCode, CreatedDateUtc, IsDeleted)
+VALUES (@Id, @TenantId, @UserId, @CommissionPlanId, @PayeeTypeCode, @SplitPercentage, @EffectiveDate, @StatusCode, SYSUTCDATETIME(), 0);";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.UserId, request.CommissionPlanId, request.PayeeTypeCode, request.SplitPercentage, request.EffectiveDate, request.StatusCode }, cancellationToken: cancellationToken));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateCommissionPayeeRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAndSeedAsync(request.TenantId, cancellationToken);
+
+        const string sql = @"
+UPDATE Commission.CommissionPayee
+SET UserId = @UserId,
+    CommissionPlanId = @CommissionPlanId,
+    PayeeTypeCode = @PayeeTypeCode,
+    SplitPercentage = @SplitPercentage,
+    EffectiveDate = @EffectiveDate,
+    StatusCode = @StatusCode
+WHERE PayeeId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.UserId, request.CommissionPlanId, request.PayeeTypeCode, request.SplitPercentage, request.EffectiveDate, request.StatusCode }, cancellationToken: cancellationToken));
     }
 
     private async Task EnsureSchemaAndSeedAsync(Guid? tenantId, CancellationToken cancellationToken)

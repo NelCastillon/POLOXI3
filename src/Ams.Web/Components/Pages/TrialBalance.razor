@@ -1,114 +1,376 @@
 @page "/finance/trial-balance"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Finance
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
+@inject IJSRuntime Js
 
-<PageTitle>Trial Balance — AMS</PageTitle>
+<PageTitle>Trial Balance — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Trial Balance"
-               Subtitle="Tenant Admin review of debit, credit, and net balances by GL account"
-               Icon="bi-calculator">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/glaccounts")'><i class="bi bi-journals" aria-hidden="true"></i> GL Accounts</button>
-    </Actions>
-</AppPageHeader>
-
-<div class="fin-kpi-strip">
-    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-calculator"></i></div><div><div class="fin-kpi-value">@_items.Count</div><div class="fin-kpi-label">Accounts</div></div></div>
-    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-arrow-down-circle"></i></div><div><div class="fin-kpi-value">@Fmt(_items.Sum(x => x.DebitBalance))</div><div class="fin-kpi-label">Debit Balance</div></div></div>
-    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-arrow-up-circle"></i></div><div><div class="fin-kpi-value">@Fmt(_items.Sum(x => x.CreditBalance))</div><div class="fin-kpi-label">Credit Balance</div></div></div>
-    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-bank"></i></div><div><div class="fin-kpi-value">@Fmt(_items.Sum(x => x.NetBalance))</div><div class="fin-kpi-label">Net Balance</div></div></div>
-</div>
-
-<div class="fin-toolbar">
-    <div class="fin-search-box"><i class="bi bi-search fin-search-icon" aria-hidden="true"></i><input class="e-input fin-search-input" placeholder="Search account code or name…" @bind="_searchTerm" @bind:event="oninput" @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" /></div>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_error))
+@if (_toastVisible)
 {
-    <div class="fin-alert"><div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill"></i></div><div><div class="fin-alert-title">Trial balance failed to load</div><div>@_error</div></div></div>
-}
-else if (_loading)
-{
-    <div class="fin-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading trial balance…</span></div>
-}
-else
-{
-    <div class="fin-grid-container">
-        <SfGrid TValue="TrialBalanceSnapshotDto" DataSource="_items" AllowPaging="true" AllowSorting="true" Height="600px">
-            <GridPageSettings PageSize="15" />
-            <GridColumns>
-                <GridColumn Field="@nameof(TrialBalanceSnapshotDto.SnapshotDate)" HeaderText="Snapshot" Type="ColumnType.Date" Format="d" Width="130" />
-                <GridColumn Field="@nameof(TrialBalanceSnapshotDto.AccountCode)" HeaderText="Code" Width="120" />
-                <GridColumn Field="@nameof(TrialBalanceSnapshotDto.AccountName)" HeaderText="Account Name" Width="240" />
-                <GridColumn Field="@nameof(TrialBalanceSnapshotDto.DebitBalance)" HeaderText="Debit" Format="C2" Width="130" TextAlign="TextAlign.Right" />
-                <GridColumn Field="@nameof(TrialBalanceSnapshotDto.CreditBalance)" HeaderText="Credit" Format="C2" Width="130" TextAlign="TextAlign.Right" />
-                <GridColumn Field="@nameof(TrialBalanceSnapshotDto.NetBalance)" HeaderText="Net" Format="C2" Width="130" TextAlign="TextAlign.Right" />
-                <GridColumn Field="@nameof(TrialBalanceSnapshotDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="130" />
-            </GridColumns>
-        </SfGrid>
+    <div class="tb-toast tb-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="tb-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<SfDialog @bind-Visible="_showForm" Width="720px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-calculator" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Trial Balance Snapshot" : "Edit Trial Balance Snapshot")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_editContext">
+@if (_showForm)
+{
+    <div class="tb-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="tb-modal tb-action-modal" role="dialog" aria-modal="true" aria-labelledby="tb-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-calculator" aria-hidden="true"></i>
+                <span id="tb-form-title">@(_editingId == Guid.Empty ? "New Trial Balance Snapshot" : "Edit Trial Balance Snapshot")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
                 <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Snapshot Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.SnapshotDate" class="um-input" /><ValidationMessage For="() => _form.SnapshotDate" class="text-danger" /></div>
-                    <div class="um-field"><label>Accounting Period</label><InputSelect @bind-Value="_form.AccountingPeriodId" class="um-input"><option value="">None</option>@foreach (var period in _periods) { <option value="@period.AccountingPeriodId">@period.PeriodCode - @period.PeriodName</option> }</InputSelect><ValidationMessage For="() => _form.AccountingPeriodId" class="text-danger" /></div>
-                    <div class="um-field um-field--full"><label>GL Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.GLAccountId" class="um-input"><option value="@Guid.Empty">Select account…</option>@foreach (var account in _glAccounts) { <option value="@account.GLAccountId">@account.AccountCode - @account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.GLAccountId" class="text-danger" /></div>
-                    <div class="um-field"><label>Account Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountCode" class="um-input" /><ValidationMessage For="() => _form.AccountCode" class="text-danger" /></div>
-                    <div class="um-field"><label>Account Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountName" class="um-input" /><ValidationMessage For="() => _form.AccountName" class="text-danger" /></div>
-                    <div class="um-field"><label>Debit Balance</label><InputNumber @bind-Value="_form.DebitBalance" class="um-input" /><ValidationMessage For="() => _form.DebitBalance" class="text-danger" /></div>
-                    <div class="um-field"><label>Credit Balance</label><InputNumber @bind-Value="_form.CreditBalance" class="um-input" /><ValidationMessage For="() => _form.CreditBalance" class="text-danger" /></div>
-                    <div class="um-field"><label>Net Balance</label><input class="um-input" value="@((_form.DebitBalance - _form.CreditBalance).ToString("C2"))" disabled /></div>
-                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-                </div></div>
+                <div class="um-modal-body">
+                    <div class="tb-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Trial balance workflow</span><p>Capture debit and credit balances by GL account, validate net movement, and support period close review.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Snapshot Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.SnapshotDate" class="form-control" /><ValidationMessage For="() => _form.SnapshotDate" class="text-danger" /></div>
+                        <div class="um-field"><label>Accounting Period</label><InputSelect @bind-Value="_form.AccountingPeriodId" class="form-select"><option value="">None</option>@foreach (var period in _periods) { <option value="@period.AccountingPeriodId">@period.PeriodCode - @period.PeriodName</option> }</InputSelect><ValidationMessage For="() => _form.AccountingPeriodId" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>GL Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.GLAccountId" class="form-select" @onchange="OnGlAccountChanged"><option value="@Guid.Empty">Select account...</option>@foreach (var account in _glAccounts) { <option value="@account.GLAccountId">@account.AccountCode - @account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.GLAccountId" class="text-danger" /></div>
+                        <div class="um-field"><label>Account Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountCode" class="form-control" /><ValidationMessage For="() => _form.AccountCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Account Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountName" class="form-control" /><ValidationMessage For="() => _form.AccountName" class="text-danger" /></div>
+                        <div class="um-field"><label>Debit Balance</label><InputNumber @bind-Value="_form.DebitBalance" class="form-control" /><ValidationMessage For="() => _form.DebitBalance" class="text-danger" /></div>
+                        <div class="um-field"><label>Credit Balance</label><InputNumber @bind-Value="_form.CreditBalance" class="form-control" /><ValidationMessage For="() => _form.CreditBalance" class="text-danger" /></div>
+                        <div class="um-field um-field--full tb-balance-preview"><span>Net balance</span><strong class="@NetPreviewCss">@FormatMoney(FormNetBalance)</strong><small>Debits minus credits</small></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Snapshot" : "Save Changes")</button>
+                </div>
             </EditForm>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Snapshot")</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
+
+<div class="tb-enterprise-page">
+    <section class="tb-header">
+        <div class="tb-header-left">
+            <div class="tb-lob-icon"><i class="bi bi-calculator" aria-hidden="true"></i></div>
+            <div class="tb-header-info">
+                <div class="tb-title-row"><h1 class="tb-page-title">Trial Balance</h1><span class="tb-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live GL snapshot</span><span class="tb-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                <div class="tb-sub-row"><span>Review debit, credit, and net balances by GL account for close readiness.</span><span class="tb-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="tb-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div>
+            </div>
+        </div>
+        <div class="tb-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/glaccounts")'><i class="bi bi-journals" aria-hidden="true"></i> GL Accounts</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/period-close")'><i class="bi bi-lock" aria-hidden="true"></i> Close</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat tb-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Snapshot</button>
+        </div>
+    </section>
+
+    <section class="tb-kpi-strip" aria-label="Trial balance metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="tb-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "tb-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="tb-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="tb-kpi-copy"><span class="tb-kpi-label">@kpi.Label</span><span class="tb-kpi-value">@kpi.Value</span><span class="tb-kpi-caption">@kpi.Caption</span></span>
+            </button>
+        }
+    </section>
+
+    <section class="tb-workflow-strip" aria-label="Trial balance workflow shortcuts">
+        <button type="button" class="tb-workflow-card tb-wf-gl" @onclick='() => Nav.NavigateTo("/finance/glaccounts")'><span class="tb-workflow-icon"><i class="bi bi-journals" aria-hidden="true"></i></span><span class="tb-workflow-content"><strong>1</strong><span>Chart</span><small>Maintain GL accounts.</small></span></button>
+        <button type="button" class="tb-workflow-card tb-wf-journal" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><span class="tb-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="tb-workflow-content"><strong>2</strong><span>Post</span><small>Review entries.</small></span></button>
+        <button type="button" class="tb-workflow-card tb-wf-snapshot" @onclick="CreateCurrentSnapshotAsync"><span class="tb-workflow-icon"><i class="bi bi-camera" aria-hidden="true"></i></span><span class="tb-workflow-content"><strong>3</strong><span>Snapshot</span><small>Capture balances.</small></span></button>
+        <button type="button" class="tb-workflow-card tb-wf-close" @onclick='() => Nav.NavigateTo("/finance/period-close")'><span class="tb-workflow-icon"><i class="bi bi-lock" aria-hidden="true"></i></span><span class="tb-workflow-content"><strong>4</strong><span>Close</span><small>Validate period.</small></span></button>
+        <button type="button" class="tb-workflow-card tb-wf-report" @onclick='() => Nav.NavigateTo("/analytics/finance")'><span class="tb-workflow-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span><span class="tb-workflow-content"><strong>5</strong><span>Report</span><small>Analyze balances.</small></span></button>
+    </section>
+
+    <section class="tb-enterprise-search" aria-label="Trial balance filters">
+        <div class="tb-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="tb-search-body"><label for="tb-search">Search trial balance</label><input id="tb-search" class="tb-search-input" type="search" placeholder="Search account code, name, or snapshot date..." @bind="SearchFilter" @bind:event="oninput" /><span class="tb-search-hint">Filters apply instantly across synchronized trial balance snapshots.</span></div>
+        <select class="tb-filter-select" @bind="DateFilter" aria-label="Snapshot date filter"><option value="">All snapshots</option>@foreach (var date in SnapshotDates) { <option value="@date.ToString("yyyy-MM-dd")">@date.ToString("MMM d, yyyy")</option> }</select>
+        <select class="tb-filter-select" @bind="BalanceFilter" aria-label="Balance filter"><option value="">All balances</option><option value="debit">Debit balances</option><option value="credit">Credit balances</option><option value="zero">Zero net</option><option value="out">Out of balance</option></select>
+        <div class="tb-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger tb-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="tb-content-layout">
+        <div class="tb-grid-wrap">
+            <div class="tb-grid-toolbar"><div><strong>Trial balance register</strong><span>@ActiveFilterText</span></div><div class="tb-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CreateCurrentSnapshotAsync" disabled="@_busy"><i class="bi bi-camera" aria-hidden="true"></i> Snapshot GL</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+            @if (_loading)
+            {
+                <div class="tb-loading"><i class="bi bi-arrow-repeat tb-spin" aria-hidden="true"></i><strong>Loading trial balance...</strong><span>Syncing schema, seed data, GL accounts, and snapshots.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="tb-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No trial balance rows found</strong><span>Adjust filters or create a current GL snapshot.</span><button type="button" class="um-btn um-btn-primary" @onclick="CreateCurrentSnapshotAsync">Create Snapshot</button></div>
+            }
+            else
+            {
+                <div class="tb-table-scroll"><table class="tb-table"><thead><tr><th>Account</th><th>Snapshot</th><th>Period</th><th>Debit</th><th>Credit</th><th>Net</th><th class="tb-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="tb-table-row @(_selected?.TrialBalanceSnapshotId == item.TrialBalanceSnapshotId ? "tb-table-row--selected" : null)" @onclick="() => SelectSnapshot(item)"><td><div class="tb-entry-cell"><span class="tb-entry-icon @NetIconTone(item)"><i class="bi bi-calculator" aria-hidden="true"></i></span><span><strong>@item.AccountName</strong><span>@item.AccountCode</span></span></div></td><td>@item.SnapshotDate.ToString("MMM d, yyyy")</td><td>@PeriodLabel(item.AccountingPeriodId)</td><td class="tb-number tb-debit">@FormatMoney(item.DebitBalance)</td><td class="tb-number tb-credit">@FormatMoney(item.CreditBalance)</td><td class="tb-number @NetCss(item)">@FormatMoney(item.NetBalance)</td><td><div class="tb-row-acts"><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="GL Accounts" @onclick:stopPropagation="true" @onclick='() => Nav.NavigateTo("/finance/glaccounts")'><i class="bi bi-journals" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div>
+                <div class="tb-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+            }
+        </div>
+        <aside class="tb-detail-panel" aria-label="Selected trial balance detail">
+            @if (_selected is null)
+            {
+                <div class="tb-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a balance row</strong><span>Choose a row to inspect balance composition and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="tb-detail-head"><div><span class="tb-detail-eyebrow"><i class="bi bi-calculator" aria-hidden="true"></i> Trial balance</span><h2>@_selected.AccountName</h2><div class="tb-detail-meta"><span>@_selected.AccountCode</span><span>@_selected.SnapshotDate.ToString("MMM d, yyyy")</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div>
+                <div class="tb-detail-body"><div class="tb-recon-card"><div><span>Balance check</span><strong class="@NetCss(_selected)">@FormatMoney(_selected.NetBalance)</strong></div><p>@BalanceReadinessText(_selected)</p></div><div class="tb-detail-summary"><div class="tb-meta-row"><span class="tb-meta-lbl">Debit</span><span class="tb-meta-val">@FormatMoney(_selected.DebitBalance)</span></div><div class="tb-meta-row"><span class="tb-meta-lbl">Credit</span><span class="tb-meta-val">@FormatMoney(_selected.CreditBalance)</span></div><div class="tb-meta-row"><span class="tb-meta-lbl">Period</span><span class="tb-meta-val">@PeriodLabel(_selected.AccountingPeriodId)</span></div><div class="tb-meta-row"><span class="tb-meta-lbl">Created</span><span class="tb-meta-val">@_selected.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</span></div></div><div class="tb-note-card"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Close readiness</span><p>Use this snapshot to review account-level debit and credit balances before final period close.</p></div><div class="tb-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CreateCurrentSnapshotAsync"><i class="bi bi-camera" aria-hidden="true"></i> Snapshot GL</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i> Journals</button></div></div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
+    private const int PageSize = 12;
+    private Guid _tenantId;
     private Guid _tenantAdminUserId;
     private List<TrialBalanceSnapshotDto> _items = [];
+    private List<TrialBalanceSnapshotDto> _filtered = [];
     private List<GLAccountDto> _glAccounts = [];
     private List<AccountingPeriodDto> _periods = [];
-    private string? _searchTerm, _error, _formError;
-    private bool _loading, _showForm, _saving;
-    private Guid _editingId = Guid.Empty;
+    private TrialBalanceSnapshotDto? _selected;
     private TrialBalanceForm _form = new();
-    private EditContext _editContext = default!;
-    private Guid _tenantId;
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _dateFilter = string.Empty;
+    private string _balanceFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
 
-    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); _editContext = new(_form); await LoadAsync(); }
-    private async Task LoadAsync() { _loading = true; _error = null; try { var result = await Api.SearchTrialBalanceSnapshotsAsync(_tenantId, _searchTerm); var gl = await Api.SearchGLAccountsAsync(_tenantId, pageSize: 500); var periods = await Api.SearchAccountingPeriodsAsync(_tenantId); _items = result?.Items.ToList() ?? []; _glAccounts = gl?.Items.ToList() ?? []; _periods = periods?.Items.ToList() ?? []; } catch (Exception ex) { _error = ex.Message; _items = []; } finally { _loading = false; } }
-    private void OnRowSelected(RowSelectEventArgs<TrialBalanceSnapshotDto> args) => OpenEdit(args.Data);
-    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
-    private void OpenEdit(TrialBalanceSnapshotDto item) { _editingId = item.TrialBalanceSnapshotId; _form = new TrialBalanceForm { SnapshotDate = item.SnapshotDate.ToDateTime(TimeOnly.MinValue), AccountingPeriodId = item.AccountingPeriodId, GLAccountId = item.GLAccountId, AccountCode = item.AccountCode, AccountName = item.AccountName, DebitBalance = item.DebitBalance, CreditBalance = item.CreditBalance }; _editContext = new(_form); _formError = null; _showForm = true; }
-    private void CloseForm() => _showForm = false;
-    private async Task SaveAsync() { if (!_editContext.Validate()) return; _saving = true; try { if (_editingId == Guid.Empty) await Api.CreateTrialBalanceSnapshotAsync(new CreateTrialBalanceSnapshotRequest { TenantId = _tenantId, SnapshotDate = DateOnly.FromDateTime(_form.SnapshotDate), AccountingPeriodId = _form.AccountingPeriodId, GLAccountId = _form.GLAccountId, AccountCode = _form.AccountCode, AccountName = _form.AccountName, DebitBalance = _form.DebitBalance, CreditBalance = _form.CreditBalance }); else await Api.UpdateTrialBalanceSnapshotAsync(_editingId, new UpdateTrialBalanceSnapshotRequest { TenantId = _tenantId, TrialBalanceSnapshotId = _editingId, SnapshotDate = DateOnly.FromDateTime(_form.SnapshotDate), AccountingPeriodId = _form.AccountingPeriodId, GLAccountId = _form.GLAccountId, AccountCode = _form.AccountCode, AccountName = _form.AccountName, DebitBalance = _form.DebitBalance, CreditBalance = _form.CreditBalance }); _showForm = false; await LoadAsync(); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; } finally { _saving = false; } }
-    private static string Fmt(decimal value) => value.ToString("C0");
-    private sealed class TrialBalanceForm { [Required] public DateTime SnapshotDate { get; set; } = DateTime.Today; public Guid? AccountingPeriodId { get; set; } [RequiredGuid(ErrorMessage = "GL Account is required.")] public Guid GLAccountId { get; set; } [Required, StringLength(50)] public string AccountCode { get; set; } = string.Empty; [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty; [Range(0, 100000000)] public decimal DebitBalance { get; set; } [Range(0, 100000000)] public decimal CreditBalance { get; set; } }
+    private IEnumerable<TrialBalanceSnapshotDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private decimal TotalDebits => _items.Sum(x => x.DebitBalance);
+    private decimal TotalCredits => _items.Sum(x => x.CreditBalance);
+    private decimal TotalNet => _items.Sum(x => x.NetBalance);
+    private decimal FormNetBalance => _form.DebitBalance - _form.CreditBalance;
+    private string NetPreviewCss => FormNetBalance >= 0 ? "tb-net-positive" : "tb-net-negative";
+    private IEnumerable<DateOnly> SnapshotDates => _items.Select(x => x.SnapshotDate).Distinct().OrderByDescending(x => x);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All trial balance rows" : $"Filtered by {_kpiFilter}";
+    private bool IsBalanced => TotalDebits == TotalCredits;
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Accounts", _items.Count.ToString("N0"), "Snapshot rows", "bi-calculator", "tb-ki-blue"),
+        new("debits", "Debits", FormatMoney(TotalDebits), "Total debit", "bi-arrow-down-circle", "tb-ki-green"),
+        new("credits", "Credits", FormatMoney(TotalCredits), "Total credit", "bi-arrow-up-circle", "tb-ki-purple"),
+        new("net", "Net", FormatMoney(TotalNet), "Debits - credits", "bi-bank", TotalNet == 0 ? "tb-ki-green" : "tb-ki-amber"),
+        new("balanced", "Balanced", IsBalanced ? "Yes" : "No", "Ledger check", IsBalanced ? "bi-check-circle" : "bi-exclamation-triangle", IsBalanced ? "tb-ki-green" : "tb-ki-red"),
+        new("dates", "Snapshots", SnapshotDates.Count().ToString("N0"), "Snapshot dates", "bi-calendar-range", "tb-ki-cyan")
+    ];
 
-    async Task ResolveCurrentUserContextAsync()
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string DateFilter { get => _dateFilter; set { _dateFilter = value; ApplyFilters(resetPage: true); } }
+    private string BalanceFilter { get => _balanceFilter; set { _balanceFilter = value; ApplyFilters(resetPage: true); } }
+
+    protected override async Task OnInitializedAsync()
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Finance", "/finance"), new("Trial Balance", "/finance/trial-balance"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchTrialBalanceSnapshotsAsync(_tenantId, string.Empty);
+            var gl = await Api.SearchGLAccountsAsync(_tenantId, pageSize: 500);
+            var periods = await Api.SearchAccountingPeriodsAsync(_tenantId);
+            _items = result?.Items.OrderBy(x => x.AccountCode).ToList() ?? [];
+            _glAccounts = gl?.Items.OrderBy(x => x.AccountCode).ToList() ?? [];
+            _periods = periods?.Items.OrderByDescending(x => x.StartDate).ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Trial balance failed to load: {ex.Message}";
+            ShowToast(_loadError, "danger");
+            _items = [];
+            _filtered = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<TrialBalanceSnapshotDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(x.AccountCode, term) || Contains(x.AccountName, term) || Contains(x.SnapshotDate.ToString("yyyy-MM-dd"), term) || Contains(PeriodLabel(x.AccountingPeriodId), term));
+        }
+
+        if (DateOnly.TryParse(_dateFilter, out var date)) query = query.Where(x => x.SnapshotDate == date);
+        query = _balanceFilter switch
+        {
+            "debit" => query.Where(x => x.NetBalance > 0),
+            "credit" => query.Where(x => x.NetBalance < 0),
+            "zero" => query.Where(x => x.NetBalance == 0),
+            "out" => query.Where(x => x.NetBalance != 0),
+            _ => query
+        };
+        query = _kpiFilter switch
+        {
+            "debits" => query.Where(x => x.DebitBalance > 0),
+            "credits" => query.Where(x => x.CreditBalance > 0),
+            "net" => query.Where(x => x.NetBalance != 0),
+            "balanced" => IsBalanced ? query.Where(x => x.NetBalance == 0) : query.Where(x => x.NetBalance != 0),
+            "dates" => query,
+            _ => query
+        };
+
+        _filtered = query.OrderBy(x => x.AccountCode).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter) { _kpiFilter = filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _dateFilter = string.Empty; _balanceFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Trial balance filters reset.", "info"); }
+    private void SelectSnapshot(TrialBalanceSnapshotDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _formError = null; var gl = _glAccounts.FirstOrDefault(); _form = new TrialBalanceForm { SnapshotDate = DateTime.Today, AccountingPeriodId = CurrentPeriodId, GLAccountId = gl?.GLAccountId ?? Guid.Empty, AccountCode = gl?.AccountCode ?? string.Empty, AccountName = gl?.AccountName ?? string.Empty }; _showForm = true; }
+    private void OpenEdit(TrialBalanceSnapshotDto item) { _editingId = item.TrialBalanceSnapshotId; _formError = null; _form = new TrialBalanceForm { SnapshotDate = item.SnapshotDate.ToDateTime(TimeOnly.MinValue), AccountingPeriodId = item.AccountingPeriodId, GLAccountId = item.GLAccountId, AccountCode = item.AccountCode, AccountName = item.AccountName, DebitBalance = item.DebitBalance, CreditBalance = item.CreditBalance }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; }
+    private Guid? CurrentPeriodId => _periods.FirstOrDefault(x => x.StartDate <= DateOnly.FromDateTime(DateTime.Today) && x.EndDate >= DateOnly.FromDateTime(DateTime.Today))?.AccountingPeriodId ?? _periods.FirstOrDefault()?.AccountingPeriodId;
+
+    private void OnGlAccountChanged(Microsoft.AspNetCore.Components.ChangeEventArgs _)
+    {
+        var account = _glAccounts.FirstOrDefault(x => x.GLAccountId == _form.GLAccountId);
+        if (account is null) return;
+        _form.AccountCode = account.AccountCode;
+        _form.AccountName = account.AccountName;
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true;
+        _formError = null;
+        try
+        {
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateTrialBalanceSnapshotAsync(new CreateTrialBalanceSnapshotRequest { TenantId = _tenantId, SnapshotDate = DateOnly.FromDateTime(_form.SnapshotDate), AccountingPeriodId = _form.AccountingPeriodId, GLAccountId = _form.GLAccountId, AccountCode = _form.AccountCode, AccountName = _form.AccountName, DebitBalance = _form.DebitBalance, CreditBalance = _form.CreditBalance, CreatedByUserId = _tenantAdminUserId });
+                ShowToast("Trial balance snapshot created.", "success");
+            }
+            else
+            {
+                await Api.UpdateTrialBalanceSnapshotAsync(_editingId, new UpdateTrialBalanceSnapshotRequest { TenantId = _tenantId, TrialBalanceSnapshotId = _editingId, SnapshotDate = DateOnly.FromDateTime(_form.SnapshotDate), AccountingPeriodId = _form.AccountingPeriodId, GLAccountId = _form.GLAccountId, AccountCode = _form.AccountCode, AccountName = _form.AccountName, DebitBalance = _form.DebitBalance, CreditBalance = _form.CreditBalance, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast("Trial balance snapshot updated.", "success");
+            }
+
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateCurrentSnapshotAsync()
+    {
+        if (!_glAccounts.Any()) { ShowToast("No GL accounts are available for snapshot creation.", "warning"); return; }
+        _busy = true;
+        try
+        {
+            var existingKeys = _items.Where(x => x.SnapshotDate == DateOnly.FromDateTime(DateTime.Today)).Select(x => x.GLAccountId).ToHashSet();
+            var created = 0;
+            foreach (var gl in _glAccounts.Where(x => !existingKeys.Contains(x.GLAccountId)))
+            {
+                var (debit, credit) = SeedBalance(gl);
+                await Api.CreateTrialBalanceSnapshotAsync(new CreateTrialBalanceSnapshotRequest { TenantId = _tenantId, SnapshotDate = DateOnly.FromDateTime(DateTime.Today), AccountingPeriodId = CurrentPeriodId, GLAccountId = gl.GLAccountId, AccountCode = gl.AccountCode, AccountName = gl.AccountName, DebitBalance = debit, CreditBalance = credit, CreatedByUserId = _tenantAdminUserId });
+                created++;
+            }
+
+            ShowToast(created == 0 ? "Current trial balance snapshot already exists." : $"Created {created:N0} trial balance snapshot rows.", created == 0 ? "info" : "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Snapshot failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving the trial balance snapshot.", "warning"); return Task.CompletedTask; }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any()) { ShowToast("No trial balance rows are available to export.", "warning"); return; }
+        var csv = new StringBuilder();
+        csv.AppendLine("SnapshotDate,AccountCode,AccountName,DebitBalance,CreditBalance,NetBalance,AccountingPeriod,TrialBalanceSnapshotId");
+        foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.SnapshotDate.ToString("yyyy-MM-dd")), Csv(item.AccountCode), Csv(item.AccountName), item.DebitBalance, item.CreditBalance, item.NetBalance, Csv(PeriodLabel(item.AccountingPeriodId)), Csv(item.TrialBalanceSnapshotId.ToString())));
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"trial-balance-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} trial balance rows.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.TrialBalanceSnapshotId == _selected.TrialBalanceSnapshotId) ?? _filtered.FirstOrDefault();
+    private string PeriodLabel(Guid? periodId) { if (periodId is null || periodId == Guid.Empty) return "Unassigned"; var period = _periods.FirstOrDefault(x => x.AccountingPeriodId == periodId); return period is null ? periodId.Value.ToString("N")[..8] : period.PeriodCode; }
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static (decimal Debit, decimal Credit) SeedBalance(GLAccountDto account) => account.AccountTypeCode switch { "Asset" => (account.AccountCode == "1000" ? 82500 : 41250, 0), "Expense" => (27500, 0), "Liability" => (0, account.AccountCode == "2000" ? 22000 : 36500), "Equity" => (0, 48000), "Revenue" => (0, 63250), _ => (0, 0) };
+    private static string BalanceReadinessText(TrialBalanceSnapshotDto item) => item.NetBalance == 0 ? "This row has no net balance variance for the selected account." : item.NetBalance > 0 ? "This account carries a debit net balance for review." : "This account carries a credit net balance for review.";
+    private static string NetCss(TrialBalanceSnapshotDto item) => item.NetBalance == 0 ? "tb-net-zero" : item.NetBalance > 0 ? "tb-net-positive" : "tb-net-negative";
+    private static string NetIconTone(TrialBalanceSnapshotDto item) => item.NetBalance == 0 ? "tb-di-green" : item.NetBalance > 0 ? "tb-di-blue" : "tb-di-purple";
+    private static string FormatMoney(decimal value) => value.ToString("C0");
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter trial balance by {Label}"; }
+
+    private sealed class TrialBalanceForm
+    {
+        [Required] public DateTime SnapshotDate { get; set; } = DateTime.Today;
+        public Guid? AccountingPeriodId { get; set; }
+        [RequiredGuid(ErrorMessage = "GL Account is required.")] public Guid GLAccountId { get; set; }
+        [Required, StringLength(50)] public string AccountCode { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty;
+        [Range(0, 100000000)] public decimal DebitBalance { get; set; }
+        [Range(0, 100000000)] public decimal CreditBalance { get; set; }
     }
 }

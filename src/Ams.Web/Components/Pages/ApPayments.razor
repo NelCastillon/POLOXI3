@@ -1,257 +1,242 @@
 @page "/finance/ap-payments"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Common.Validation
+@using Ams.Application.Features.Finance
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@inject IJSRuntime Js
 
-<PageTitle>AP Payments</PageTitle>
+<PageTitle>AP Payments â€” AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Accounts Payable Payments"
-               Subtitle="Track vendor payments and payment history"
-               Icon="bi-arrow-up-right-circle">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "fa-spin" : "")" aria-hidden="true"></i> Refresh
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Payment
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- -- Search & Filter ---------------------------------------------------- -->
-<div class="fin-toolbar">
-    <div class="fin-search-box">
-        <i class="bi bi-search fin-search-icon" aria-hidden="true"></i>
-        <input class="e-input fin-search-input"
-               placeholder="Search payments…"
-               @bind="_searchTerm"
-               @bind:event="oninput"
-               @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" />
-    </div>
-    <div class="fin-filter-buttons">
-        <button class="um-btn um-btn-ghost um-btn-sm @(_filterActive ? "um-btn-active" : "")"
-                @onclick="() => _filterActive = !_filterActive">
-            <i class="bi bi-funnel" aria-hidden="true"></i> Filter
-        </button>
-    </div>
-</div>
-
-@if (_filterActive)
+@if (_toastVisible)
 {
-    <div class="fin-filter-panel">
-        <div class="fin-filter-group">
-            <label class="fin-filter-label">Payment Method</label>
-            <select class="e-input" @bind="_filterMethod">
-                <option value="">All Methods</option>
-                <option value="ACH">ACH</option>
-                <option value="Check">Check</option>
-                <option value="Wire">Wire Transfer</option>
-                <option value="Credit Card">Credit Card</option>
-            </select>
-        </div>
-        <div class="fin-filter-group">
-            <label class="fin-filter-label">Status</label>
-            <select class="e-input" @bind="_filterStatus">
-                <option value="">All</option>
-                <option value="Pending">Pending</option>
-                <option value="Processed">Processed</option>
-            </select>
-        </div>
+    <div class="app-toast app-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="app-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<!-- -- KPI Cards -------------------------------------------------------- -->
-@if (_stats is not null)
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
 {
-    <div class="fin-kpi-strip">
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #d1fae5; color: #047857;"><i class="bi bi-cash-flow" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.TotalPayments</div>
-                <div class="fin-kpi-label">Total Payments</div>
-            </div>
-        </div>
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #ede9fe; color: #6d28d9;"><i class="bi bi-currency-dollar" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.TotalAmount.ToString("C0")</div>
-                <div class="fin-kpi-label">Total Amount</div>
-            </div>
-        </div>
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #fef3c7; color: #b45309;"><i class="bi bi-hourglass-split" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.PendingPayments</div>
-                <div class="fin-kpi-label">Pending</div>
+    <div class="app-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="app-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="app-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Void" ? "um-confirm-icon--danger" : null)"><i class="bi @StatusActionIcon(_pendingStatus)"></i></div>
+                <div class="um-confirm-title" id="app-status-title">@StatusActionTitle(_pendingStatus)</div>
+                <div class="um-confirm-body">Update payment <strong>@PaymentReference(_statusTarget)</strong> for <strong>@VendorName(_statusTarget.VendorId)</strong> to <strong>@_pendingStatus</strong>?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Void" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@StatusActionButton(_pendingStatus)</button>
+                </div>
             </div>
         </div>
     </div>
 }
 
-<!-- -- Content -------------------------------------------------------- -->
-@if (_error is not null)
+@if (_showForm)
 {
-    <div class="fin-alert fin-alert-warning">
-        <div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></div>
-        <div class="fin-alert-body">
-            <div class="fin-alert-title">?? Database Schema Issue</div>
-            <p>Finance schema initialization required. Run: <strong>sql/01_Finance_Schema.sql</strong></p>
-        </div>
-    </div>
-}
-else if (_loading)
-{
-    <div class="fin-loading">
-        <div class="um-spinner" aria-hidden="true"></div>
-        <span>Loading AP Payments…</span>
-    </div>
-}
-else if (_items?.Count == 0)
-{
-    <div class="fin-empty-state">
-        <i class="bi bi-inbox fin-empty-icon" aria-hidden="true"></i>
-        <h3>No Payments Found</h3>
-        <p>@(_searchTerm != null ? $"No payments match \"{_searchTerm}\"." : "No payments have been processed yet.")</p>
-    </div>
-}
-else
-{
-    <div class="fin-grid-container">
-        <SfGrid TValue="ApPaymentDto" DataSource="_items" AllowPaging="true" AllowSorting="true" Height="600px">
-            <GridEvents TValue="ApPaymentDto" RowSelected="OnRowSelected" />
-            <GridPageSettings PageSize="12"></GridPageSettings>
-            <GridColumns>
-                <GridColumn Field="@nameof(ApPaymentDto.PaymentDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(ApPaymentDto.Amount)" HeaderText="Amount" Format="C2" Width="120" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(ApPaymentDto.PaymentMethodCode)" HeaderText="Method" Width="110" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(ApPaymentDto.ReferenceNumber)" HeaderText="Reference" Width="140"></GridColumn>
-                <GridColumn Field="@nameof(ApPaymentDto.StatusCode)" HeaderText="Status" Width="100" AllowSorting="true">
-                    <Template>
-                        @{
-                            var payment = context as ApPaymentDto;
-                            var badgeClass = payment?.StatusCode switch
-                            {
-                                "Processed" => "fin-badge-success",
-                                "Pending" => "fin-badge-warning",
-                                _ => "fin-badge-secondary"
-                            };
-                        }
-                        <span class="fin-badge @badgeClass">@payment?.StatusCode</span>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="Actions" Width="90">
-                    <Template>
-                        @{ var payment = (ApPaymentDto)context; }
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(payment)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
-    </div>
-}
-
-<SfDialog @bind-Visible="_showForm" Width="720px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-cash-stack" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New AP Payment" : "Edit AP Payment")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_editContext">
+    <div class="app-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="app-modal app-action-modal" role="dialog" aria-modal="true" aria-labelledby="app-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-cash-stack" aria-hidden="true"></i>
+                <span id="app-form-title">@(_editingId == Guid.Empty ? "New AP Payment" : "Edit AP Payment")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
                 <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Vendor <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.VendorId" class="um-input"><option value="@Guid.Empty">Select vendor…</option>@foreach (var vendor in _vendors) { <option value="@vendor.VendorId">@vendor.VendorName</option> }</InputSelect><ValidationMessage For="() => _form.VendorId" class="text-danger" /></div>
-                    <div class="um-field"><label>AP Invoice</label><InputSelect @bind-Value="_form.ApInvoiceId" class="um-input"><option value="">None</option>@foreach (var invoice in _invoices) { <option value="@invoice.ApInvoiceId">@invoice.InvoiceNumber</option> }</InputSelect><ValidationMessage For="() => _form.ApInvoiceId" class="text-danger" /></div>
-                    <div class="um-field"><label>Payment Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.PaymentDate" class="um-input" /><ValidationMessage For="() => _form.PaymentDate" class="text-danger" /></div>
-                    <div class="um-field"><label>Amount <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.Amount" class="um-input" /><ValidationMessage For="() => _form.Amount" class="text-danger" /></div>
-                    <div class="um-field"><label>Payment Method <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.PaymentMethodCode" class="um-input"><option value="ACH">ACH</option><option value="Check">Check</option><option value="Wire">Wire</option><option value="Credit Card">Credit Card</option></InputSelect><ValidationMessage For="() => _form.PaymentMethodCode" class="text-danger" /></div>
-                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option value="Pending">Pending</option><option value="Processed">Processed</option><option value="Void">Void</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
-                    <div class="um-field"><label>Reference #</label><InputText @bind-Value="_form.ReferenceNumber" class="um-input" /><ValidationMessage For="() => _form.ReferenceNumber" class="text-danger" /></div>
-                    <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_form.Notes" class="um-input" rows="3" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div>
-                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-                </div></div>
+                <div class="um-modal-body">
+                    <div class="app-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> AP payment workflow</span><p>Schedule vendor disbursements, connect payments to invoices, and track payment status.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Vendor <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.VendorId" class="form-select"><option value="@Guid.Empty">Select vendor...</option>@foreach (var vendor in _vendors) { <option value="@vendor.VendorId">@vendor.VendorName</option> }</InputSelect><ValidationMessage For="() => _form.VendorId" class="text-danger" /></div>
+                        <div class="um-field"><label>AP Invoice</label><InputSelect @bind-Value="_form.ApInvoiceId" class="form-select"><option value="">None</option>@foreach (var invoice in _invoices) { <option value="@invoice.ApInvoiceId">@invoice.InvoiceNumber Â· @VendorName(invoice.VendorId) Â· @Fmt(Balance(invoice)) due</option> }</InputSelect><ValidationMessage For="() => _form.ApInvoiceId" class="text-danger" /></div>
+                        <div class="um-field"><label>Payment Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.PaymentDate" class="form-control" /><ValidationMessage For="() => _form.PaymentDate" class="text-danger" /></div>
+                        <div class="um-field"><label>Amount <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.Amount" class="form-control" /><ValidationMessage For="() => _form.Amount" class="text-danger" /></div>
+                        <div class="um-field"><label>Payment Method <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.PaymentMethodCode" class="form-select">@foreach (var method in _paymentMethods) { <option value="@method">@method</option> }</InputSelect><ValidationMessage For="() => _form.PaymentMethodCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="form-select">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
+                        <div class="um-field"><label>Reference #</label><InputText @bind-Value="_form.ReferenceNumber" class="form-control" /><ValidationMessage For="() => _form.ReferenceNumber" class="text-danger" /></div>
+                        <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_form.Notes" class="form-control" rows="3" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Payment" : "Save Changes")</button>
+                </div>
             </EditForm>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Payment")</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
-@code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    private Guid _tenantId;
-    private string? _searchTerm;
-    private string _filterMethod = "";
-    private string _filterStatus = "";
-    private bool _filterActive = false;
-    private bool _loading = false;
-    private bool _showForm;
-    private bool _saving;
-    private List<ApPaymentDto>? _items;
-    private List<VendorDto> _vendors = [];
-    private List<ApInvoiceDto> _invoices = [];
-    private string? _error;
-    private string? _formError;
-    private Guid _editingId = Guid.Empty;
-    private ApPaymentForm _form = new();
-    private EditContext _editContext = default!;
+<div class="app-enterprise-page">
+    <section class="app-header">
+        <div class="app-header-left">
+            <div class="app-lob-icon"><i class="bi bi-credit-card-2-front" aria-hidden="true"></i></div>
+            <div class="app-header-info">
+                <div class="app-title-row"><h1 class="app-page-title">AP Payments</h1><span class="app-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live payment data</span><span class="app-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                <div class="app-sub-row"><span>Track vendor disbursements, payment references, methods, and processing status.</span><span class="app-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="app-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div>
+            </div>
+        </div>
+        <div class="app-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/vendors")'><i class="bi bi-shop" aria-hidden="true"></i> Vendors</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/ap-invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat app-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Payment</button>
+        </div>
+    </section>
 
-    private class Stats
+    <section class="app-kpi-strip" aria-label="AP payment metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="app-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "app-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="app-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="app-kpi-copy"><span class="app-kpi-label">@kpi.Label</span><span class="app-kpi-value">@kpi.Value</span><span class="app-kpi-caption">@kpi.Caption</span></span>
+            </button>
+        }
+    </section>
+
+    <section class="app-workflow-strip" aria-label="AP payment workflow shortcuts">
+        <button type="button" class="app-workflow-card app-wf-vendor" @onclick='() => Nav.NavigateTo("/finance/vendors")'><span class="app-workflow-icon"><i class="bi bi-shop" aria-hidden="true"></i></span><span class="app-workflow-content"><strong>1</strong><span>Vendor</span><small>Verify payee.</small></span></button>
+        <button type="button" class="app-workflow-card app-wf-invoice" @onclick='() => Nav.NavigateTo("/finance/ap-invoices")'><span class="app-workflow-icon"><i class="bi bi-receipt" aria-hidden="true"></i></span><span class="app-workflow-content"><strong>2</strong><span>Invoice</span><small>Review payable.</small></span></button>
+        <button type="button" class="app-workflow-card app-wf-payment" @onclick="OpenCreate"><span class="app-workflow-icon"><i class="bi bi-credit-card" aria-hidden="true"></i></span><span class="app-workflow-content"><strong>3</strong><span>Payment</span><small>Create disbursement.</small></span></button>
+        <button type="button" class="app-workflow-card app-wf-process" @onclick='() => SetKpiFilter("pending")'><span class="app-workflow-icon"><i class="bi bi-check2-square" aria-hidden="true"></i></span><span class="app-workflow-content"><strong>4</strong><span>Process</span><small>Clear pending.</small></span></button>
+        <button type="button" class="app-workflow-card app-wf-ledger" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><span class="app-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="app-workflow-content"><strong>5</strong><span>Post</span><small>Update ledger.</small></span></button>
+    </section>
+
+    <section class="app-enterprise-search" aria-label="AP payment filters">
+        <div class="app-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="app-search-body"><label for="app-search">Search AP payments</label><input id="app-search" class="app-search-input" type="search" placeholder="Search reference, vendor, invoice, method, status..." @bind="SearchFilter" @bind:event="oninput" /><span class="app-search-hint">Filters apply instantly across synchronized AP payment records.</span></div>
+        <select class="app-filter-select" @bind="MethodFilter" aria-label="Payment method filter"><option value="">All methods</option>@foreach (var method in _paymentMethods) { <option value="@method">@method</option> }</select>
+        <select class="app-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select>
+        <div class="app-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        public int TotalPayments { get; set; }
-        public decimal TotalAmount { get; set; }
-        public int PendingPayments { get; set; }
+        <div class="alert alert-danger app-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
     }
 
-    private Stats? _stats;
+    <section class="app-content-layout">
+        <div class="app-grid-wrap">
+            <div class="app-grid-toolbar"><div><strong>AP payment register</strong><span>@ActiveFilterText</span></div><div class="app-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/ap-invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+            @if (_loading)
+            {
+                <div class="app-loading"><i class="bi bi-arrow-repeat app-spin" aria-hidden="true"></i><strong>Loading AP payments...</strong><span>Syncing schema, seed data, vendors, invoices, and payment entries.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="app-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No AP payments found</strong><span>Adjust filters or create a new payment.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Payment</button></div>
+            }
+            else
+            {
+                <div class="app-table-scroll"><table class="app-table"><thead><tr><th>Payment</th><th>Vendor</th><th>Invoice</th><th>Method</th><th class="app-number">Amount</th><th>Status</th><th class="app-actions-col">Actions</th></tr></thead><tbody>@foreach (var item in PagedItems) { <tr class="app-table-row @(_selected?.ApPaymentId == item.ApPaymentId ? "app-table-row--selected" : null)" @onclick="() => SelectPayment(item)"><td><div class="app-entry-cell"><span class="app-entry-icon @StatusIconTone(item.StatusCode)"><i class="bi bi-credit-card" aria-hidden="true"></i></span><span><strong>@PaymentReference(item)</strong><span>@item.PaymentDate.ToString("MMM d, yyyy") Â· @item.CreatedDateUtc.ToLocalTime().ToString("MMM d")</span></span></div></td><td>@VendorName(item.VendorId)</td><td>@InvoiceNumber(item.ApInvoiceId)</td><td><span class="app-method-chip @MethodCss(item.PaymentMethodCode)">@item.PaymentMethodCode</span></td><td class="app-number">@Fmt(item.Amount)</td><td><span class="app-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td><td><div class="app-row-acts"><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Process" disabled="@(item.StatusCode == "Processed")" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Processed")'><i class="bi bi-check-circle" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Void" disabled="@(item.StatusCode == "Void")" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Void")'><i class="bi bi-slash-circle" aria-hidden="true"></i></button></div></td></tr> }</tbody></table></div>
+                <div class="app-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+            }
+        </div>
+        <aside class="app-detail-panel" aria-label="Selected AP payment detail">
+            @if (_selected is null)
+            {
+                <div class="app-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a payment</strong><span>Choose a row to inspect vendor, invoice, method, status, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="app-detail-head"><div><span class="app-detail-eyebrow"><i class="bi bi-credit-card" aria-hidden="true"></i> AP payment</span><h2>@PaymentReference(_selected)</h2><div class="app-detail-meta"><span>@VendorName(_selected.VendorId)</span><span class="app-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div>
+                <div class="app-detail-body"><div class="app-detail-summary"><div class="app-meta-row"><span class="app-meta-lbl">Amount</span><span class="app-meta-val">@Fmt(_selected.Amount)</span></div><div class="app-meta-row"><span class="app-meta-lbl">Method</span><span class="app-meta-val">@_selected.PaymentMethodCode</span></div><div class="app-meta-row"><span class="app-meta-lbl">Payment Date</span><span class="app-meta-val">@_selected.PaymentDate.ToString("MMM d, yyyy")</span></div><div class="app-meta-row"><span class="app-meta-lbl">Invoice</span><span class="app-meta-val">@InvoiceNumber(_selected.ApInvoiceId)</span></div></div><div class="app-note-card"><span><i class="bi bi-card-text" aria-hidden="true"></i> Payment detail</span><p>@(string.IsNullOrWhiteSpace(_selected.Notes) ? "No notes recorded." : _selected.Notes)</p></div><div class="app-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Processed")' disabled="@(_selected.StatusCode == "Processed")"><i class="bi bi-check-circle" aria-hidden="true"></i> Process</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, _selected.StatusCode == "Void" ? "Pending" : "Void")'><i class="bi @(_selected.StatusCode == "Void" ? "bi-arrow-counterclockwise" : "bi-slash-circle")" aria-hidden="true"></i> @(_selected.StatusCode == "Void" ? "Reopen" : "Void")</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/ap-invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button></div></div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private const int PageSize = 12;
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private List<ApPaymentDto> _items = [];
+    private List<ApPaymentDto> _filtered = [];
+    private List<VendorDto> _vendors = [];
+    private List<ApInvoiceDto> _invoices = [];
+    private ApPaymentDto? _selected;
+    private ApPaymentDto? _statusTarget;
+    private ApPaymentForm _form = new();
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _methodFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showStatusConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _paymentMethods = ["ACH", "Check", "Wire", "Credit Card"];
+    private readonly List<string> _statuses = ["Pending", "Processed", "Void"];
+
+    private IEnumerable<ApPaymentDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private decimal TotalProcessed => _items.Where(x => x.StatusCode == "Processed").Sum(x => x.Amount);
+    private decimal PendingAmount => _items.Where(x => x.StatusCode == "Pending").Sum(x => x.Amount);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All AP payments" : $"Filtered by {_kpiFilter}";
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Payments", _items.Count.ToString("N0"), "All disbursements", "bi-credit-card", "app-ki-blue"),
+        new("processed", "Processed", _items.Count(x => x.StatusCode == "Processed").ToString("N0"), "Completed", "bi-check-circle", "app-ki-green"),
+        new("pending", "Pending", _items.Count(x => x.StatusCode == "Pending").ToString("N0"), "Needs action", "bi-hourglass", "app-ki-amber"),
+        new("amount", "Processed", Fmt(TotalProcessed), "Paid out", "bi-cash-stack", "app-ki-green"),
+        new("pendingAmount", "Pending $", Fmt(PendingAmount), "Scheduled", "bi-clock-history", "app-ki-red"),
+        new("methods", "Methods", _items.Select(x => x.PaymentMethodCode).Distinct().Count().ToString("N0"), "In use", "bi-diagram-3", "app-ki-purple")
+    ];
+
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string MethodFilter { get => _methodFilter; set { _methodFilter = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home", "/"),
-            new("Finance", "/finance"),
-            new("AP Payments", "/finance/ap-payments"));
-        _editContext = new(_form);
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Finance", "/finance"), new("AP Payments", "/finance/ap-payments"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
-        _error = null;
-        _items = null;
+        _loadError = null;
         try
         {
-            var result = await Api.SearchApPaymentsAsync(_tenantId, _searchTerm);
+            var result = await Api.SearchApPaymentsAsync(_tenantId, string.Empty);
             var vendors = await Api.SearchVendorsAsync(_tenantId, pageSize: 500);
             var invoices = await Api.SearchApInvoicesAsync(_tenantId);
-            _items = result?.Items.ToList() ?? [];
-            _vendors = vendors?.Items.ToList() ?? [];
-            _invoices = invoices?.Items.ToList() ?? [];
-
-            if (!string.IsNullOrEmpty(_filterMethod))
-                _items = _items.Where(x => x.PaymentMethodCode == _filterMethod).ToList();
-
-            if (!string.IsNullOrEmpty(_filterStatus))
-                _items = _items.Where(x => x.StatusCode == _filterStatus).ToList();
-
-            _stats = new Stats
-            {
-                TotalPayments = _items.Count,
-                TotalAmount = _items.Sum(x => x.Amount),
-                PendingPayments = _items.Count(x => x.StatusCode == "Pending")
-            };
+            _items = result?.Items.OrderByDescending(x => x.PaymentDate).ThenBy(x => x.ReferenceNumber).ToList() ?? [];
+            _vendors = vendors?.Items.OrderBy(x => x.VendorName).ToList() ?? [];
+            _invoices = invoices?.Items.OrderByDescending(x => x.InvoiceDate).ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
-            if (ex.Message.Contains("Invalid column name") || ex.Message.Contains("ApPayment"))
-            {
-                _error = "Database schema mismatch. Please ensure 00_schema_migration.sql has been applied to your database. See db/README.md for setup instructions.";
-            }
+            _loadError = $"AP payments failed to load: {ex.Message}";
+            ShowToast(_loadError, "danger");
             _items = [];
+            _filtered = [];
         }
         finally
         {
@@ -259,26 +244,127 @@ else
         }
     }
 
-    private void OnRowSelected(RowSelectEventArgs<ApPaymentDto> args) => OpenEdit(args.Data);
-    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
-    private void OpenEdit(ApPaymentDto payment) { _editingId = payment.ApPaymentId; _form = new ApPaymentForm { VendorId = payment.VendorId, ApInvoiceId = payment.ApInvoiceId, PaymentDate = payment.PaymentDate.ToDateTime(TimeOnly.MinValue), Amount = payment.Amount, PaymentMethodCode = payment.PaymentMethodCode, ReferenceNumber = payment.ReferenceNumber, Notes = payment.Notes, StatusCode = payment.StatusCode }; _editContext = new(_form); _formError = null; _showForm = true; }
-    private void CloseForm() => _showForm = false;
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<ApPaymentDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(x.ReferenceNumber, term) || Contains(x.Notes, term) || Contains(x.PaymentMethodCode, term) || Contains(x.StatusCode, term) || Contains(VendorName(x.VendorId), term) || Contains(InvoiceNumber(x.ApInvoiceId), term));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_methodFilter)) query = query.Where(x => x.PaymentMethodCode == _methodFilter);
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter);
+        query = _kpiFilter switch
+        {
+            "processed" => query.Where(x => x.StatusCode == "Processed"),
+            "pending" => query.Where(x => x.StatusCode == "Pending"),
+            "amount" => query.Where(x => x.StatusCode == "Processed"),
+            "pendingAmount" => query.Where(x => x.StatusCode == "Pending"),
+            "methods" => query.Where(x => !string.IsNullOrWhiteSpace(x.PaymentMethodCode)),
+            _ => query
+        };
+
+        _filtered = query.OrderByDescending(x => x.PaymentDate).ThenBy(x => x.ReferenceNumber).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter) { _kpiFilter = filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _methodFilter = string.Empty; _statusFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("AP payment filters reset.", "info"); }
+    private void SelectPayment(ApPaymentDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _formError = null; _form = new ApPaymentForm { PaymentDate = DateTime.Today }; _showForm = true; }
+    private void OpenEdit(ApPaymentDto payment) { _editingId = payment.ApPaymentId; _formError = null; _form = new ApPaymentForm { VendorId = payment.VendorId, ApInvoiceId = payment.ApInvoiceId, PaymentDate = payment.PaymentDate.ToDateTime(TimeOnly.MinValue), Amount = payment.Amount, PaymentMethodCode = payment.PaymentMethodCode, ReferenceNumber = payment.ReferenceNumber, Notes = payment.Notes, StatusCode = payment.StatusCode }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; }
+
     private async Task SaveAsync()
     {
-        if (!_editContext.Validate()) return;
-        _saving = true;
+        _busy = true;
+        _formError = null;
         try
         {
             if (_editingId == Guid.Empty)
-                await Api.CreateApPaymentAsync(new CreateApPaymentRequest { TenantId = _tenantId, VendorId = _form.VendorId, ApInvoiceId = _form.ApInvoiceId, PaymentDate = DateOnly.FromDateTime(_form.PaymentDate), Amount = _form.Amount, PaymentMethodCode = _form.PaymentMethodCode, ReferenceNumber = _form.ReferenceNumber, Notes = _form.Notes, StatusCode = _form.StatusCode });
+            {
+                await Api.CreateApPaymentAsync(new CreateApPaymentRequest { TenantId = _tenantId, VendorId = _form.VendorId, ApInvoiceId = _form.ApInvoiceId, PaymentDate = DateOnly.FromDateTime(_form.PaymentDate), Amount = _form.Amount, PaymentMethodCode = _form.PaymentMethodCode, ReferenceNumber = _form.ReferenceNumber, Notes = _form.Notes, StatusCode = _form.StatusCode, CreatedByUserId = _tenantAdminUserId });
+                ShowToast("AP payment created.", "success");
+            }
             else
-                await Api.UpdateApPaymentAsync(_editingId, new UpdateApPaymentRequest { TenantId = _tenantId, ApPaymentId = _editingId, VendorId = _form.VendorId, ApInvoiceId = _form.ApInvoiceId, PaymentDate = DateOnly.FromDateTime(_form.PaymentDate), Amount = _form.Amount, PaymentMethodCode = _form.PaymentMethodCode, ReferenceNumber = _form.ReferenceNumber, Notes = _form.Notes, StatusCode = _form.StatusCode });
+            {
+                await Api.UpdateApPaymentAsync(_editingId, new UpdateApPaymentRequest { TenantId = _tenantId, ApPaymentId = _editingId, VendorId = _form.VendorId, ApInvoiceId = _form.ApInvoiceId, PaymentDate = DateOnly.FromDateTime(_form.PaymentDate), Amount = _form.Amount, PaymentMethodCode = _form.PaymentMethodCode, ReferenceNumber = _form.ReferenceNumber, Notes = _form.Notes, StatusCode = _form.StatusCode, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast("AP payment updated.", "success");
+            }
+
             _showForm = false;
             await LoadAsync();
         }
-        catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; }
-        finally { _saving = false; }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
+
+    private void ConfirmStatusUpdate(ApPaymentDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+    private async Task ExecuteStatusUpdateAsync()
+    {
+        if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return;
+        _busy = true;
+        try
+        {
+            await Api.UpdateApPaymentAsync(_statusTarget.ApPaymentId, new UpdateApPaymentRequest { TenantId = _tenantId, ApPaymentId = _statusTarget.ApPaymentId, VendorId = _statusTarget.VendorId, ApInvoiceId = _statusTarget.ApInvoiceId, PaymentDate = _statusTarget.PaymentDate, Amount = _statusTarget.Amount, PaymentMethodCode = _statusTarget.PaymentMethodCode, ReferenceNumber = _statusTarget.ReferenceNumber, Notes = _statusTarget.Notes, StatusCode = _pendingStatus, ModifiedByUserId = _tenantAdminUserId });
+            ShowToast($"AP payment marked {_pendingStatus.ToLowerInvariant()}.", "success");
+            _showStatusConfirm = false;
+            _statusTarget = null;
+            _pendingStatus = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving the AP payment.", "warning"); return Task.CompletedTask; }
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any()) { ShowToast("No AP payments are available to export.", "warning"); return; }
+        var csv = new StringBuilder();
+        csv.AppendLine("PaymentDate,Vendor,Invoice,Amount,Method,ReferenceNumber,Status,Notes,ApPaymentId");
+        foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.PaymentDate.ToString("yyyy-MM-dd")), Csv(VendorName(item.VendorId)), Csv(InvoiceNumber(item.ApInvoiceId)), item.Amount.ToString("0.00"), Csv(item.PaymentMethodCode), Csv(item.ReferenceNumber ?? string.Empty), Csv(item.StatusCode), Csv(item.Notes ?? string.Empty), Csv(item.ApPaymentId.ToString())));
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"ap-payments-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} AP payments.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.ApPaymentId == _selected.ApPaymentId) ?? _filtered.FirstOrDefault();
+    private string VendorName(Guid vendorId) => _vendors.FirstOrDefault(x => x.VendorId == vendorId)?.VendorName ?? "Unknown vendor";
+    private string InvoiceNumber(Guid? invoiceId) => invoiceId is null ? "Unapplied" : _invoices.FirstOrDefault(x => x.ApInvoiceId == invoiceId)?.InvoiceNumber ?? "Invoice";
+    private static decimal Balance(ApInvoiceDto item) => Math.Max(0, item.Amount - item.AmountPaid);
+    private static string PaymentReference(ApPaymentDto item) => string.IsNullOrWhiteSpace(item.ReferenceNumber) ? $"PAY-{item.ApPaymentId.ToString()[..8]}" : item.ReferenceNumber;
+    private static string Fmt(decimal value) => value.ToString("C0");
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static string StatusCss(string status) => $"app-st-{status.ToLowerInvariant()}";
+    private static string MethodCss(string method) => method switch { "ACH" => "app-mt-ach", "Check" => "app-mt-check", "Wire" => "app-mt-wire", "Credit Card" => "app-mt-card", _ => "app-mt-other" };
+    private static string StatusIconTone(string status) => status switch { "Processed" => "app-di-green", "Void" => "app-di-slate", _ => "app-di-amber" };
+    private static string StatusActionIcon(string status) => status switch { "Processed" => "bi-check-circle", "Void" => "bi-slash-circle", "Pending" => "bi-arrow-counterclockwise", _ => "bi-hourglass" };
+    private static string StatusActionTitle(string status) => status switch { "Processed" => "Process Payment", "Void" => "Void Payment", "Pending" => "Reopen Payment", _ => $"Mark {status}" };
+    private static string StatusActionButton(string status) => status switch { "Processed" => "Process", "Void" => "Void", "Pending" => "Reopen", _ => $"Mark {status}" };
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter AP payments by {Label}"; }
 
     private sealed class ApPaymentForm
     {
@@ -290,16 +376,5 @@ else
         [StringLength(100)] public string? ReferenceNumber { get; set; }
         [StringLength(1000)] public string? Notes { get; set; }
         [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending";
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
 }

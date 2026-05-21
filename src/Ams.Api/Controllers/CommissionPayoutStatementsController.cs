@@ -1,4 +1,5 @@
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Features.Commissions;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
@@ -27,4 +28,19 @@ public sealed class CommissionPayoutStatementsController : ControllerBase
         var result = await _service.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
         return Ok(result);
     }
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateCommissionPayoutStatementRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.CreateAsync(request, cancellationToken));
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCommissionPayoutStatementRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdateAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("generate")]
+    public async Task<IActionResult> Generate([FromBody] GenerateCommissionPayoutStatementsRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.GenerateAsync(request, cancellationToken));
 }

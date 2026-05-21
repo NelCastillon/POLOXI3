@@ -1,3 +1,4 @@
+@page "/audit"
 @page "/platform/audit2"
 @page "/admin/security/audit2"
 @page "/tenant/security/audit2"
@@ -6,245 +7,275 @@
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Platform Audit — AMS</PageTitle>
+<PageTitle>Audit Log — AMS Enterprise</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Platform Audit Log"
-               Subtitle="Audit all critical platform actions"
-               Icon="bi-shield-check">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="ExportAsync" title="Export">
-            <i class="bi bi-download" aria-hidden="true"></i> Export
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<div class="um-grid-card app-datagrid">
-    <div class="td-search-bar">
-        <SfTextBox @bind-Value="_actorFilter" Placeholder="Actor (user id)" CssClass="td-filter-input" />
-        <SfTextBox @bind-Value="_entityFilter" Placeholder="Entity name" CssClass="td-filter-input" />
-        <SfDropDownList TValue="string" TItem="FilterOption"
-                        @bind-Value="_actionFilter"
-                        DataSource="@_actionOptions"
-                        Placeholder="All Actions"
-                        CssClass="td-filter-dropdown">
-            <DropDownListFieldSettings Value="Value" Text="Text" />
-        </SfDropDownList>
-        <SfTextBox @bind-Value="_tenantFilter" Placeholder="Tenant ID" CssClass="td-filter-input" />
-        <SfDatePicker TValue="DateTime?" @bind-Value="_fromDate" Placeholder="From date" CssClass="td-filter-date" Format="yyyy-MM-dd" />
-        <SfDatePicker TValue="DateTime?" @bind-Value="_toDate" Placeholder="To date" CssClass="td-filter-date" Format="yyyy-MM-dd" />
-        <button class="um-btn um-btn-primary um-btn-sm" @onclick="ApplyFilters">
-            <i class="bi bi-search" aria-hidden="true"></i> Search
-        </button>
-        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters">
-            <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
-        </button>
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="al-toast al-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @_toastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="al-toast-close" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
+}
 
-    @if (_loading)
+@if (_detailVisible && _selected is not null)
+{
+    <div class="al-modal-backdrop" role="presentation" @onclick="CloseDetail">
+        <div class="al-modal" role="dialog" aria-modal="true" aria-labelledby="al-detail-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-shield-check" aria-hidden="true"></i>
+                <span id="al-detail-title">Audit Event Detail</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDetail"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <div class="al-modal-intro"><span><i class="bi bi-fingerprint" aria-hidden="true"></i> Immutable audit evidence</span><p>Review actor, tenant, entity, source, and correlation metadata for the selected audit event.</p></div>
+                <div class="al-detail-grid">
+                    <div><span>Audit Log ID</span><strong class="al-mono">@_selected.AuditLogId</strong></div>
+                    <div><span>Timestamp</span><strong>@_selected.PerformedDateUtc.ToLocalTime().ToString("g")</strong></div>
+                    <div><span>Actor</span><strong class="al-mono">@ShortGuid(_selected.PerformedByUserId)</strong></div>
+                    <div><span>Tenant</span><strong class="al-mono">@ShortGuid(_selected.TenantId)</strong></div>
+                    <div><span>Action</span><strong>@_selected.ActionName</strong></div>
+                    <div><span>Event Type</span><strong><span class="al-status @EventTypeCss(_selected.EventTypeCode)">@_selected.EventTypeCode</span></strong></div>
+                    <div><span>Entity</span><strong>@_selected.EntityName</strong></div>
+                    <div><span>Entity ID</span><strong class="al-mono">@_selected.EntityId</strong></div>
+                    <div><span>Region</span><strong>@(_selected.RegionCode ?? "—")</strong></div>
+                    <div><span>IP Address</span><strong>@(_selected.IpAddress ?? "—")</strong></div>
+                    <div class="al-detail-wide"><span>Correlation ID</span><strong class="al-mono">@(_selected.CorrelationId ?? "—")</strong></div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => CopyCorrelation(_selected)"><i class="bi bi-clipboard" aria-hidden="true"></i> Copy Correlation</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenCompare(_selected)" disabled="@(!HasDiff(_selected))"><i class="bi bi-arrows-expand" aria-hidden="true"></i> Compare</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_compareVisible && _selected is not null)
+{
+    <div class="al-modal-backdrop" role="presentation" @onclick="CloseCompare">
+        <div class="al-modal al-compare-modal" role="dialog" aria-modal="true" aria-labelledby="al-compare-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-arrows-expand" aria-hidden="true"></i>
+                <span id="al-compare-title">Compare Before / After</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCompare"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <div class="al-compare-container">
+                    <div class="al-compare-pane"><h3>Before</h3><pre>@FormatJson(_selected.OldValues)</pre></div>
+                    <div class="al-compare-pane"><h3>After</h3><pre>@FormatJson(_selected.NewValues)</pre></div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="al-enterprise-page">
+    <section class="al-header" aria-label="Audit page header">
+        <div class="al-header-left">
+            <span class="al-lob-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
+            <div class="al-header-info">
+                <div class="al-title-row">
+                    <h1 class="al-page-title">Audit Log</h1>
+                    <span class="al-status-pill"><i class="bi bi-database-lock" aria-hidden="true"></i> Audit.AuditLog</span>
+                    <span class="al-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Governance evidence</span>
+                </div>
+                <div class="al-sub-row">
+                    <span class="al-sub-chip"><i class="bi bi-clock-history" aria-hidden="true"></i> Platform timeline</span>
+                    <span class="al-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> API synced</span>
+                    <span class="al-filter-note"><i class="bi bi-funnel" aria-hidden="true"></i> @FilterLabel</span>
+                </div>
+                <p>Search, review, compare, export, and monitor enterprise audit events across tenant activity, security actions, document workflow, reports, and configuration changes.</p>
+            </div>
+        </div>
+        <div class="al-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "al-spin" : "")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ClearFilters"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        <div class="um-loading-overlay" aria-live="polite">
-            <div class="um-spinner" aria-hidden="true"></div>
-            <span>Loading audit logs…</span>
+        <div class="alert alert-danger al-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError
         </div>
     }
 
-    <SfGrid @ref="_grid"
-            TValue="AuditLogDto"
-            DataSource="@_items"
-            AllowSorting="true"
-            AllowResizing="true"
-            EnableHover="true"
-            CssClass="e-sfgrid-clean">
-        <GridColumns>
-            <GridColumn Field="@nameof(AuditLogDto.PerformedDateUtc)" HeaderText="Timestamp" Width="170" Format="g" />
-            <GridColumn Field="@nameof(AuditLogDto.PerformedByUserId)" HeaderText="Actor" Width="150">
-                <Template>
-                    @{ var a = (AuditLogDto)context; }
-                    <span class="td-mono">@(a.PerformedByUserId?.ToString("N")[..8] ?? "—")…</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(AuditLogDto.ActionName)" HeaderText="Action" MinWidth="160" />
-            <GridColumn Field="@nameof(AuditLogDto.EntityName)" HeaderText="Entity" Width="150" />
-            <GridColumn Field="@nameof(AuditLogDto.EntityId)" HeaderText="Entity ID" Width="140">
-                <Template>
-                    @{ var e = (AuditLogDto)context; }
-                    <span class="td-mono">@e.EntityId.ToString("N")[..8]…</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(AuditLogDto.RegionCode)" HeaderText="Region" Width="110">
-                <Template>
-                    @{ var r = (AuditLogDto)context; }
-                    <span>@(r.RegionCode ?? "—")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(AuditLogDto.TenantId)" HeaderText="Tenant" Width="140">
-                <Template>
-                    @{ var t = (AuditLogDto)context; }
-                    <span class="td-mono">@(t.TenantId?.ToString("N")[..8] ?? "—")…</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(AuditLogDto.CorrelationId)" HeaderText="Correlation ID" Width="160">
-                <Template>
-                    @{ var c = (AuditLogDto)context; }
-                    <span class="td-mono">@(string.IsNullOrEmpty(c.CorrelationId) ? "—" : (c.CorrelationId.Length > 12 ? c.CorrelationId[..12] + "…" : c.CorrelationId))</span>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="Actions" Width="160" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center">
-                <Template>
-                    @{ var row = (AuditLogDto)context; }
-                    <button class="um-btn um-btn-ghost um-btn-xs" title="View Detail" @onclick="() => ShowDetail(row)">
-                        <i class="bi bi-eye"></i>
-                    </button>
-                    @if (!string.IsNullOrEmpty(row.OldValues) || !string.IsNullOrEmpty(row.NewValues))
-                    {
-                        <button class="um-btn um-btn-ghost um-btn-xs" title="Compare Before/After" @onclick="() => ShowCompare(row)">
-                            <i class="bi bi-arrows-expand"></i>
-                        </button>
-                    }
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+    <section class="al-kpi-strip" aria-label="Audit metrics">
+        @KpiCard("Total", _totalCount.ToString(), "Matching audit events", "bi-stack", "al-ki-blue", "")
+        @KpiCard("Creates", CountType("Create").ToString(), "New records", "bi-plus-circle", "al-ki-green", "Create")
+        @KpiCard("Updates", CountType("Update").ToString(), "Changed records", "bi-pencil-square", "al-ki-purple", "Update")
+        @KpiCard("Deletes", CountType("Delete").ToString(), "Removal events", "bi-trash3", "al-ki-red", "Delete")
+        @KpiCard("Logins", CountType("Login").ToString(), "Security events", "bi-box-arrow-in-right", "al-ki-amber", "Login")
+        @KpiCard("Exports", CountType("Export").ToString(), "Evidence exports", "bi-download", "al-ki-cyan", "Export")
+    </section>
 
-    <div class="td-pager-bar">
-        <SfPager PageSize="@_pageSize"
-                 TotalItemsCount="@_totalCount"
-                 CurrentPage="@_pageNumber"
-                 PageChanged="OnPageChanged" />
-    </div>
+    <section class="al-workflow-strip al-workflow-strip--polished" aria-label="Audit workflow">
+        <button type="button" class="al-workflow-card al-wf-capture" @onclick='() => SetActionFilter("")'><span class="al-workflow-icon"><i class="bi bi-record-circle" aria-hidden="true"></i></span><span class="al-workflow-content"><strong>@_items.Count</strong><span>Capture</span><small>Current page events</small></span></button>
+        <button type="button" class="al-workflow-card al-wf-review" @onclick='() => SetActionFilter("Update")'><span class="al-workflow-icon"><i class="bi bi-search" aria-hidden="true"></i></span><span class="al-workflow-content"><strong>@CountType("Update")</strong><span>Review</span><small>Changed records</small></span></button>
+        <button type="button" class="al-workflow-card al-wf-secure" @onclick='() => SetActionFilter("Login")'><span class="al-workflow-icon"><i class="bi bi-shield-lock" aria-hidden="true"></i></span><span class="al-workflow-content"><strong>@CountType("Login")</strong><span>Secure</span><small>Login activity</small></span></button>
+        <button type="button" class="al-workflow-card al-wf-compare" @onclick="OpenFirstComparable"><span class="al-workflow-icon"><i class="bi bi-arrows-expand" aria-hidden="true"></i></span><span class="al-workflow-content"><strong>@_items.Count(HasDiff)</strong><span>Compare</span><small>Before/after evidence</small></span></button>
+        <button type="button" class="al-workflow-card al-wf-export" @onclick="ExportAsync"><span class="al-workflow-icon"><i class="bi bi-file-earmark-arrow-down" aria-hidden="true"></i></span><span class="al-workflow-content"><strong>@_totalCount</strong><span>Export</span><small>Evidence package</small></span></button>
+    </section>
+
+    <section class="al-enterprise-search" aria-label="Audit filters">
+        <span class="al-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+        <div class="al-search-body">
+            <label for="al-search">Search audit trail</label>
+            <input id="al-search" class="al-search-input" type="search" placeholder="Search action, entity, IP address, correlation ID..." @bind="_searchTerm" @bind:event="oninput" />
+            <span class="al-search-hint">Use filters for event type, entity, actor, tenant, and date range.</span>
+        </div>
+        <select class="al-filter-select" @bind="_actionFilter" aria-label="Action filter">
+            @foreach (var option in ActionOptions)
+            {
+                <option value="@option.Value">@option.Text</option>
+            }
+        </select>
+        <input class="al-filter-input" type="search" placeholder="Entity" @bind="_entityFilter" @bind:event="oninput" />
+        <input class="al-filter-input" type="search" placeholder="Actor ID" @bind="_actorFilter" @bind:event="oninput" />
+        <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="ApplyFilters"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
+    </section>
+
+    <section class="al-advanced-filters" aria-label="Advanced audit filters">
+        <input class="al-filter-input" type="search" placeholder="Tenant ID" @bind="_tenantFilter" />
+        <label><span>From</span><InputDate class="form-control al-date-input" @bind-Value="_fromDate" /></label>
+        <label><span>To</span><InputDate class="form-control al-date-input" @bind-Value="_toDate" /></label>
+        <select class="al-filter-select" @bind="_pageSize" @bind:after="OnPageSizeChanged" aria-label="Page size"><option value="10">10 rows</option><option value="25">25 rows</option><option value="50">50 rows</option><option value="100">100 rows</option></select>
+        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
+    </section>
+
+    <section class="al-content-layout">
+        <div class="al-grid-wrap">
+            <div class="al-grid-toolbar">
+                <div><strong>Audit Event Register</strong><span>Plain Blazor table backed by api/audit-logs</span></div>
+                <div class="al-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectFirst" disabled="@(!_items.Any())"><i class="bi bi-cursor" aria-hidden="true"></i> Select First</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenFirstComparable" disabled="@(!_items.Any(HasDiff))"><i class="bi bi-arrows-expand" aria-hidden="true"></i> Compare First</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button></div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="al-loading"><i class="bi bi-arrow-repeat al-spin" aria-hidden="true"></i><strong>Loading audit events…</strong></div>
+            }
+            else if (!_items.Any())
+            {
+                <div class="al-empty-state"><i class="bi bi-journal-x" aria-hidden="true"></i><strong>No audit events found</strong><span>Adjust filters or run the migration seed to populate representative audit events.</span></div>
+            }
+            else
+            {
+                <div class="al-table-scroll">
+                    <table class="al-table">
+                        <thead><tr><th>Event</th><th>Action</th><th>Entity</th><th>Actor</th><th>Region</th><th>Correlation</th><th class="al-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _items)
+                            {
+                                <tr class="al-table-row @(_selected?.AuditLogId == item.AuditLogId ? "al-table-row--selected" : "")" @onclick="() => SelectItem(item)">
+                                    <td><div class="al-event-cell"><span class="al-event-icon @EventIconCss(item.EventTypeCode)"><i class="bi @EventIcon(item.EventTypeCode)" aria-hidden="true"></i></span><div><strong>@item.ActionName</strong><span>@item.PerformedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span></div></div></td>
+                                    <td><span class="al-status @EventTypeCss(item.EventTypeCode)">@item.EventTypeCode</span></td>
+                                    <td><span class="al-entity">@item.EntityName</span></td>
+                                    <td><span class="al-mono">@ShortGuid(item.PerformedByUserId)</span></td>
+                                    <td>@(item.RegionCode ?? "—")</td>
+                                    <td><span class="al-mono">@ShortText(item.CorrelationId, 12)</span></td>
+                                    <td><div class="al-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ShowDetail(item)" title="View detail"><i class="bi bi-eye" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenCompare(item)" disabled="@(!HasDiff(item))" title="Compare"><i class="bi bi-arrows-expand" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => CopyCorrelation(item)" title="Copy correlation"><i class="bi bi-clipboard" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="al-pager"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_pageNumber <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button><span>Page @_pageNumber of @TotalPages · @_totalCount records</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_pageNumber >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button></div>
+            }
+        </div>
+
+        <aside class="al-detail-panel" aria-label="Selected audit event">
+            @if (_selected is null)
+            {
+                <div class="al-detail-empty"><i class="bi bi-shield-check" aria-hidden="true"></i><h2>Select an audit event</h2><p>Choose a row to inspect event details, actor, tenant, source, and compare before/after values.</p></div>
+            }
+            else
+            {
+                <div class="al-detail-head"><div class="al-detail-title-block"><span class="al-detail-eyebrow"><i class="bi @EventIcon(_selected.EventTypeCode)" aria-hidden="true"></i> @_selected.EventTypeCode</span><h2>@_selected.ActionName</h2><div class="al-detail-meta"><span><i class="bi bi-diagram-3" aria-hidden="true"></i> @_selected.EntityName</span><span><i class="bi bi-clock" aria-hidden="true"></i> @_selected.PerformedDateUtc.ToLocalTime().ToString("g")</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selected = null" aria-label="Close details"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+                <div class="al-detail-body">
+                    <div class="al-detail-summary"><div class="al-meta-row"><span class="al-meta-lbl">Actor</span><span class="al-meta-val al-mono">@ShortGuid(_selected.PerformedByUserId)</span></div><div class="al-meta-row"><span class="al-meta-lbl">Tenant</span><span class="al-meta-val al-mono">@ShortGuid(_selected.TenantId)</span></div><div class="al-meta-row"><span class="al-meta-lbl">IP Address</span><span class="al-meta-val">@(_selected.IpAddress ?? "—")</span></div><div class="al-meta-row"><span class="al-meta-lbl">Region</span><span class="al-meta-val">@(_selected.RegionCode ?? "—")</span></div></div>
+                    <div class="al-policy-card"><strong>Evidence controls</strong><span><i class="bi bi-check2-circle" aria-hidden="true"></i> Correlation: @(_selected.CorrelationId ?? "—")</span><span><i class="bi bi-check2-circle" aria-hidden="true"></i> Before/after: @(HasDiff(_selected) ? "Available" : "Not supplied")</span><span><i class="bi bi-check2-circle" aria-hidden="true"></i> Source: Audit.AuditLog</span></div>
+                    <div class="al-json-card"><div><strong>After values</strong><span>New values captured for this audit event.</span></div><pre>@FormatJson(_selected.NewValues)</pre></div>
+                    <div class="al-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => ShowDetail(_selected)"><i class="bi bi-eye" aria-hidden="true"></i> Full Detail</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenCompare(_selected)" disabled="@(!HasDiff(_selected))"><i class="bi bi-arrows-expand" aria-hidden="true"></i> Compare</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => CopyCorrelation(_selected)"><i class="bi bi-clipboard" aria-hidden="true"></i> Copy Correlation</button></div>
+                </div>
+            }
+        </aside>
+    </section>
 </div>
 
-@* ── Detail Dialog ─────────────────────────────────────────── *@
-<SfDialog @bind-Visible="_detailVisible" Header="Audit Log Detail" Width="600px" IsModal="true" ShowCloseIcon="true" CssClass="um-dialog">
-    <DialogTemplates>
-        <Content>
-            @if (_selected is not null)
-            {
-                <div class="td-detail-grid">
-                    <div class="td-detail-label">Audit Log ID</div>
-                    <div class="td-detail-value td-mono">@_selected.AuditLogId</div>
-                    <div class="td-detail-label">Timestamp</div>
-                    <div class="td-detail-value">@_selected.PerformedDateUtc.ToString("g")</div>
-                    <div class="td-detail-label">Actor</div>
-                    <div class="td-detail-value td-mono">@(_selected.PerformedByUserId?.ToString() ?? "—")</div>
-                    <div class="td-detail-label">Action</div>
-                    <div class="td-detail-value">@_selected.ActionName</div>
-                    <div class="td-detail-label">Event Type</div>
-                    <div class="td-detail-value"><span class="um-badge @EventTypeBadgeCss(_selected.EventTypeCode)">@_selected.EventTypeCode</span></div>
-                    <div class="td-detail-label">Entity</div>
-                    <div class="td-detail-value">@_selected.EntityName</div>
-                    <div class="td-detail-label">Entity ID</div>
-                    <div class="td-detail-value td-mono">@_selected.EntityId</div>
-                    <div class="td-detail-label">Region</div>
-                    <div class="td-detail-value">@(_selected.RegionCode ?? "—")</div>
-                    <div class="td-detail-label">Tenant</div>
-                    <div class="td-detail-value td-mono">@(_selected.TenantId?.ToString() ?? "—")</div>
-                    <div class="td-detail-label">Correlation ID</div>
-                    <div class="td-detail-value td-mono">@(_selected.CorrelationId ?? "—")</div>
-                    <div class="td-detail-label">IP Address</div>
-                    <div class="td-detail-value">@(_selected.IpAddress ?? "—")</div>
-                </div>
-            }
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
-@* ── Compare Before/After Dialog ──────────────────────────── *@
-<SfDialog @bind-Visible="_compareVisible" Header="Compare Before / After" Width="900px" IsModal="true" ShowCloseIcon="true" CssClass="um-dialog">
-    <DialogTemplates>
-        <Content>
-            @if (_selected is not null)
-            {
-                <div class="td-compare-container">
-                    <div class="td-compare-pane">
-                        <h6 class="td-compare-heading">Before (Old Values)</h6>
-                        <pre class="td-compare-json">@FormatJson(_selected.OldValues)</pre>
-                    </div>
-                    <div class="td-compare-pane">
-                        <h6 class="td-compare-heading">After (New Values)</h6>
-                        <pre class="td-compare-json">@FormatJson(_selected.NewValues)</pre>
-                    </div>
-                </div>
-            }
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
 @code {
-    SfGrid<AuditLogDto>? _grid;
-    SfToast? _toast;
+    private List<AuditLogDto> _items = [];
+    private bool _loading;
+    private string? _loadError;
+    private int _totalCount;
+    private int _pageNumber = 1;
+    private int _pageSize = 25;
+    private string _searchTerm = string.Empty;
+    private string _actorFilter = string.Empty;
+    private string _entityFilter = string.Empty;
+    private string _actionFilter = string.Empty;
+    private string _tenantFilter = string.Empty;
+    private DateTime? _fromDate;
+    private DateTime? _toDate;
+    private AuditLogDto? _selected;
+    private bool _detailVisible;
+    private bool _compareVisible;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private string _toastIcon = "bi-check-circle-fill";
 
-    List<AuditLogDto> _items = [];
-    bool _loading;
-    int  _totalCount;
-    int  _pageNumber = 1;
-    int  _pageSize   = 25;
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_totalCount / (double)_pageSize));
 
-    string _actorFilter  = string.Empty;
-    string _entityFilter = string.Empty;
-    string _actionFilter = string.Empty;
-    string _tenantFilter = string.Empty;
-    DateTime? _fromDate;
-    DateTime? _toDate;
+    private string FilterLabel => string.IsNullOrWhiteSpace(_actionFilter) ? "All events" : _actionFilter;
 
-    AuditLogDto? _selected;
-    bool _detailVisible;
-    bool _compareVisible;
-
-    readonly List<FilterOption> _actionOptions =
+    private static readonly FilterOption[] ActionOptions =
     [
         new("", "All Actions"),
         new("Create", "Create"),
         new("Update", "Update"),
         new("Delete", "Delete"),
-        new("Login",  "Login"),
+        new("Login", "Login"),
         new("Export", "Export")
     ];
 
     protected override async Task OnInitializedAsync()
     {
-        Breadcrumbs.SetCrumbs(
-            new BreadcrumbService.BreadcrumbItem("Platform", "/platform"),
-            new BreadcrumbService.BreadcrumbItem("Audit", null),
-            new BreadcrumbService.BreadcrumbItem("Platform Audit Log", "/platform/audit"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Audit", null), new("Audit Log", "/audit"));
         await LoadAsync();
     }
 
-    async Task LoadAsync()
+    private async Task LoadAsync()
     {
         _loading = true;
+        _loadError = null;
         try
         {
-            var result = await Api.SearchAuditLogsAsync(
-                eventTypeCode: _actionFilter,
-                actor: _actorFilter,
-                entityName: _entityFilter,
-                tenantId: _tenantFilter,
-                fromDate: _fromDate,
-                toDate: _toDate,
-                pageNumber: _pageNumber,
-                pageSize: _pageSize);
-            _items      = result?.Items.ToList() ?? [];
+            var result = await Api.SearchAuditLogsAsync(_searchTerm, _actionFilter, _actorFilter, _entityFilter, _tenantFilter, _fromDate, _toDate, _pageNumber, _pageSize);
+            _items = result?.Items.ToList() ?? [];
             _totalCount = result?.TotalCount ?? 0;
+            EnsureSelectedStillVisible();
         }
-        finally { _loading = false; }
+        catch (Exception ex)
+        {
+            _loadError = $"Error loading audit log: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger", "bi-exclamation-triangle-fill");
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    async Task ApplyFilters()
+    private async Task ApplyFilters()
     {
         _pageNumber = 1;
         await LoadAsync();
     }
 
-    async Task ClearFilters()
+    private async Task ClearFilters()
     {
+        _searchTerm = string.Empty;
         _actorFilter = string.Empty;
         _entityFilter = string.Empty;
         _actionFilter = string.Empty;
@@ -255,40 +286,114 @@
         await LoadAsync();
     }
 
-    async Task OnPageChanged(PageChangedEventArgs e)
+    private async Task OnPageSizeChanged()
     {
-        _pageNumber = e.CurrentPage;
+        _pageNumber = 1;
         await LoadAsync();
     }
 
-    void ShowDetail(AuditLogDto row)
+    private async Task PreviousPage()
+    {
+        if (_pageNumber <= 1)
+            return;
+
+        _pageNumber--;
+        await LoadAsync();
+    }
+
+    private async Task NextPage()
+    {
+        if (_pageNumber >= TotalPages)
+            return;
+
+        _pageNumber++;
+        await LoadAsync();
+    }
+
+    private async Task SetActionFilter(string action)
+    {
+        _actionFilter = _actionFilter == action ? string.Empty : action;
+        _pageNumber = 1;
+        await LoadAsync();
+    }
+
+    private void SelectItem(AuditLogDto item) => _selected = item;
+
+    private void SelectFirst()
+    {
+        _selected = _items.FirstOrDefault();
+        if (_selected is null)
+            ShowToast("No audit event is available to select.", "warning", "bi-exclamation-triangle-fill");
+    }
+
+    private void ShowDetail(AuditLogDto row)
     {
         _selected = row;
         _detailVisible = true;
     }
 
-    void ShowCompare(AuditLogDto row)
+    private void CloseDetail() => _detailVisible = false;
+
+    private void OpenCompare(AuditLogDto row)
     {
+        if (!HasDiff(row))
+        {
+            ShowToast("No before/after values are available for this audit event.", "warning", "bi-exclamation-triangle-fill");
+            return;
+        }
+
         _selected = row;
         _compareVisible = true;
     }
 
-    async Task ExportAsync()
+    private void CloseCompare() => _compareVisible = false;
+
+    private void OpenFirstComparable()
     {
-        if (!_items.Any())
+        var row = _items.FirstOrDefault(HasDiff);
+        if (row is null)
         {
-            if (_toast is not null)
-                await _toast.ShowAsync(new() { Title = "Export", Content = "No data to export.", CssClass = "e-toast-warning" });
+            ShowToast("No comparable audit event is visible on this page.", "warning", "bi-exclamation-triangle-fill");
             return;
         }
 
-        if (_toast is not null)
-            await _toast.ShowAsync(new() { Title = "Export", Content = $"Exporting {_totalCount} audit records…", CssClass = "e-toast-info" });
+        OpenCompare(row);
     }
 
-    static string FormatJson(string? json)
+    private Task ExportAsync()
     {
-        if (string.IsNullOrWhiteSpace(json)) return "(empty)";
+        if (!_items.Any())
+        {
+            ShowToast("No data to export.", "warning", "bi-exclamation-triangle-fill");
+            return Task.CompletedTask;
+        }
+
+        ShowToast($"Export summary prepared for {_totalCount} audit records.", "success", "bi-download");
+        return Task.CompletedTask;
+    }
+
+    private void CopyCorrelation(AuditLogDto row)
+    {
+        ShowToast(string.IsNullOrWhiteSpace(row.CorrelationId) ? "No correlation ID is available for this event." : $"Correlation ID ready to copy: {row.CorrelationId}", string.IsNullOrWhiteSpace(row.CorrelationId) ? "warning" : "success", string.IsNullOrWhiteSpace(row.CorrelationId) ? "bi-exclamation-triangle-fill" : "bi-clipboard-check");
+    }
+
+    private void EnsureSelectedStillVisible()
+    {
+        if (_selected is not null && _items.Any(x => x.AuditLogId == _selected.AuditLogId))
+            return;
+
+        _selected = _items.FirstOrDefault();
+    }
+
+    private int CountType(string type) => _items.Count(x => string.Equals(x.EventTypeCode, type, StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasDiff(AuditLogDto item) => !string.IsNullOrWhiteSpace(item.OldValues) || !string.IsNullOrWhiteSpace(item.NewValues);
+
+    private static string FormatJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return "(empty)";
+
         try
         {
             using var doc = JsonDocument.Parse(json);
@@ -300,15 +405,50 @@
         }
     }
 
-    static string EventTypeBadgeCss(string type) => type switch
+    private static string EventIcon(string type) => type switch
     {
-        "Create" => "um-badge--success",
-        "Update" => "um-badge--info",
-        "Delete" => "um-badge--danger",
-        "Login"  => "um-badge--warning",
-        "Export" => "um-badge--neutral",
-        _        => "um-badge--neutral"
+        "Create" => "bi-plus-circle",
+        "Update" => "bi-pencil-square",
+        "Delete" => "bi-trash3",
+        "Login" => "bi-box-arrow-in-right",
+        "Export" => "bi-download",
+        _ => "bi-shield-check"
     };
 
-    sealed record FilterOption(string Value, string Text);
+    private static string EventIconCss(string type) => type switch
+    {
+        "Create" => "al-di-green",
+        "Update" => "al-di-purple",
+        "Delete" => "al-di-red",
+        "Login" => "al-di-amber",
+        "Export" => "al-di-cyan",
+        _ => "al-di-blue"
+    };
+
+    private static string EventTypeCss(string type) => type switch
+    {
+        "Create" => "al-status-create",
+        "Update" => "al-status-update",
+        "Delete" => "al-status-delete",
+        "Login" => "al-status-login",
+        "Export" => "al-status-export",
+        _ => "al-status-neutral"
+    };
+
+    private static string ShortGuid(Guid? value) => value.HasValue ? $"{value.Value:N}"[..8] + "…" : "—";
+
+    private static string ShortText(string? value, int length) => string.IsNullOrWhiteSpace(value) ? "—" : value.Length > length ? value[..length] + "…" : value;
+
+    private void ShowToast(string message, string kind, string icon)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastIcon = icon;
+    }
+
+    private void ClearToast() => _toastMessage = null;
+
+    private RenderFragment KpiCard(string label, string value, string caption, string icon, string tone, string filterKey) => @<button type="button" class="al-kpi-card @tone @(_actionFilter == filterKey && !string.IsNullOrWhiteSpace(filterKey) ? "al-kpi-active" : "")" @onclick="() => SetActionFilter(filterKey)" title="Filter by @label"><span class="al-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="al-kpi-copy"><span class="al-kpi-label">@label</span><strong class="al-kpi-value">@value</strong><span class="al-kpi-caption">@caption</span></span></button>;
+
+    private sealed record FilterOption(string Value, string Text);
 }

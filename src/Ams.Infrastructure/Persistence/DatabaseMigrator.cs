@@ -163,6 +163,11 @@ public sealed class DatabaseMigrator
         new("0130_PolicyEndorsements_CreateSeed", Migration0130_PolicyEndorsementsCreateSeed),
         new("0131_PolicyCancellations_CreateSeed", Migration0131_PolicyCancellationsCreateSeed),
         new("0132_PolicyDocuments_Seed", Migration0132_PolicyDocumentsSeed),
+        new("0133_DMS_DocumentWorkflow_CreateSeed", Migration0133_DmsDocumentWorkflowCreateSeed),
+        new("0134_DMS_AcordForm_CreateSeed", Migration0134_DmsAcordFormCreateSeed),
+        new("0135_DMS_DocumentException_CreateSeed", Migration0135_DmsDocumentExceptionCreateSeed),
+        new("0136_DMS_DocumentPacket_CreateSeed", Migration0136_DmsDocumentPacketCreateSeed),
+        new("0137_AuditLog_CreateSeed", Migration0137_AuditLogCreateSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -186,6 +191,290 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.[User
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'IAM.[User]') AND name = N'IsLockedOut')
     ALTER TABLE IAM.[User] ADD IsLockedOut BIT NOT NULL DEFAULT 0;
 ";
+
+    private const string Migration0133_DmsDocumentWorkflowCreateSeed = @"
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'DMS') EXEC(N'CREATE SCHEMA DMS');
+
+IF OBJECT_ID(N'DMS.DocumentWorkflowTemplate', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentWorkflowTemplate
+    (
+        WorkflowTemplateId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentWorkflowTemplate PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TemplateName NVARCHAR(255) NOT NULL,
+        TemplateCode NVARCHAR(100) NOT NULL,
+        Description NVARCHAR(MAX) NULL,
+        WorkflowType NVARCHAR(100) NOT NULL,
+        IsSequential BIT NOT NULL CONSTRAINT DF_DocumentWorkflowTemplate_IsSequential DEFAULT 1,
+        RequiresAllApprovals BIT NOT NULL CONSTRAINT DF_DocumentWorkflowTemplate_RequiresAllApprovals DEFAULT 1,
+        AutoArchiveOnComplete BIT NOT NULL CONSTRAINT DF_DocumentWorkflowTemplate_AutoArchiveOnComplete DEFAULT 0,
+        NotifyOnStart BIT NOT NULL CONSTRAINT DF_DocumentWorkflowTemplate_NotifyOnStart DEFAULT 1,
+        NotifyOnComplete BIT NOT NULL CONSTRAINT DF_DocumentWorkflowTemplate_NotifyOnComplete DEFAULT 1,
+        TriggerOnUpload BIT NOT NULL CONSTRAINT DF_DocumentWorkflowTemplate_TriggerOnUpload DEFAULT 0,
+        TriggerOnCategory NVARCHAR(100) NULL,
+        TriggerOnDocType NVARCHAR(100) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_DocumentWorkflowTemplate_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_DocumentWorkflowTemplate_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentWorkflowTemplate_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentWorkflowTemplate_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentWorkflowStepTemplate', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentWorkflowStepTemplate
+    (
+        StepTemplateId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentWorkflowStepTemplate PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        WorkflowTemplateId UNIQUEIDENTIFIER NOT NULL,
+        StepName NVARCHAR(255) NOT NULL,
+        StepType NVARCHAR(100) NOT NULL,
+        StepOrder INT NOT NULL,
+        Description NVARCHAR(MAX) NULL,
+        AssignedToRoleCode NVARCHAR(100) NULL,
+        AssignedToUserId UNIQUEIDENTIFIER NULL,
+        AssignToBranchAdmin BIT NOT NULL CONSTRAINT DF_DocumentWorkflowStepTemplate_AssignToBranchAdmin DEFAULT 0,
+        AssignToDocOwner BIT NOT NULL CONSTRAINT DF_DocumentWorkflowStepTemplate_AssignToDocOwner DEFAULT 0,
+        IsRequired BIT NOT NULL CONSTRAINT DF_DocumentWorkflowStepTemplate_IsRequired DEFAULT 1,
+        DueDays INT NULL,
+        EscalateDays INT NULL,
+        EscalateToRoleCode NVARCHAR(100) NULL,
+        RequiresPreviousApproval BIT NOT NULL CONSTRAINT DF_DocumentWorkflowStepTemplate_RequiresPreviousApproval DEFAULT 0,
+        SkipIfCondition NVARCHAR(500) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentWorkflowStepTemplate_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentWorkflowStepTemplate_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentWorkflowInstance', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentWorkflowInstance
+    (
+        WorkflowInstanceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentWorkflowInstance PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        WorkflowTemplateId UNIQUEIDENTIFIER NOT NULL,
+        InstanceName NVARCHAR(255) NOT NULL,
+        WorkflowStatus NVARCHAR(100) NOT NULL CONSTRAINT DF_DocumentWorkflowInstance_WorkflowStatus DEFAULT N'Pending',
+        CurrentStepOrder INT NULL,
+        StartedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentWorkflowInstance_StartedDateUtc DEFAULT SYSUTCDATETIME(),
+        CompletedDateUtc DATETIME2 NULL,
+        DueDateUtc DATETIME2 NULL,
+        InitiatedByUserId UNIQUEIDENTIFIER NOT NULL,
+        InitiatedByName NVARCHAR(200) NULL,
+        Comments NVARCHAR(MAX) NULL,
+        Priority NVARCHAR(50) NOT NULL CONSTRAINT DF_DocumentWorkflowInstance_Priority DEFAULT N'Normal',
+        FinalOutcome NVARCHAR(100) NULL,
+        FinalComments NVARCHAR(MAX) NULL,
+        CompletedByUserId UNIQUEIDENTIFIER NULL,
+        CompletedByName NVARCHAR(200) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentWorkflowInstance_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentWorkflowInstance_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentApproval', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentApproval
+    (
+        ApprovalId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentApproval PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        WorkflowInstanceId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        StepTemplateId UNIQUEIDENTIFIER NULL,
+        ApprovalName NVARCHAR(255) NOT NULL,
+        ApprovalType NVARCHAR(100) NOT NULL CONSTRAINT DF_DocumentApproval_ApprovalType DEFAULT N'Standard',
+        StepOrder INT NOT NULL,
+        AssignedToUserId UNIQUEIDENTIFIER NOT NULL,
+        AssignedToName NVARCHAR(200) NULL,
+        AssignedToRoleCode NVARCHAR(100) NULL,
+        AssignedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentApproval_AssignedDateUtc DEFAULT SYSUTCDATETIME(),
+        ApprovalStatus NVARCHAR(100) NOT NULL CONSTRAINT DF_DocumentApproval_ApprovalStatus DEFAULT N'Pending',
+        ResponseDateUtc DATETIME2 NULL,
+        ResponseByUserId UNIQUEIDENTIFIER NULL,
+        ResponseByName NVARCHAR(200) NULL,
+        Comments NVARCHAR(MAX) NULL,
+        DueDateUtc DATETIME2 NULL,
+        EscalatedDateUtc DATETIME2 NULL,
+        EscalatedToUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentApproval_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentApproval_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentReview', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentReview
+    (
+        ReviewId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentReview PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        WorkflowInstanceId UNIQUEIDENTIFIER NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        ReviewName NVARCHAR(255) NOT NULL,
+        ReviewType NVARCHAR(100) NOT NULL CONSTRAINT DF_DocumentReview_ReviewType DEFAULT N'Standard',
+        ReviewPurpose NVARCHAR(MAX) NULL,
+        AssignedToUserId UNIQUEIDENTIFIER NOT NULL,
+        AssignedToName NVARCHAR(200) NULL,
+        AssignedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentReview_AssignedDateUtc DEFAULT SYSUTCDATETIME(),
+        ReviewStatus NVARCHAR(100) NOT NULL CONSTRAINT DF_DocumentReview_ReviewStatus DEFAULT N'Pending',
+        CompletedDateUtc DATETIME2 NULL,
+        CompletedByUserId UNIQUEIDENTIFIER NULL,
+        CompletedByName NVARCHAR(200) NULL,
+        ReviewNotes NVARCHAR(MAX) NULL,
+        Rating INT NULL,
+        IssuesFound INT NOT NULL CONSTRAINT DF_DocumentReview_IssuesFound DEFAULT 0,
+        RecommendChanges BIT NOT NULL CONSTRAINT DF_DocumentReview_RecommendChanges DEFAULT 0,
+        ChangesDescription NVARCHAR(MAX) NULL,
+        DueDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentReview_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentReview_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentRetentionPolicy', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentRetentionPolicy
+    (
+        RetentionPolicyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentRetentionPolicy PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyName NVARCHAR(255) NOT NULL,
+        PolicyCode NVARCHAR(100) NOT NULL,
+        Description NVARCHAR(MAX) NULL,
+        ApplicableCategory NVARCHAR(100) NULL,
+        ApplicableDocType NVARCHAR(100) NULL,
+        ApplicableEntityType NVARCHAR(100) NULL,
+        RetentionPeriodYears INT NOT NULL,
+        RetentionStartTrigger NVARCHAR(100) NOT NULL CONSTRAINT DF_DocumentRetentionPolicy_RetentionStartTrigger DEFAULT N'Creation',
+        ActionOnExpiry NVARCHAR(100) NOT NULL CONSTRAINT DF_DocumentRetentionPolicy_ActionOnExpiry DEFAULT N'Archive',
+        RequireApprovalToDelete BIT NOT NULL CONSTRAINT DF_DocumentRetentionPolicy_RequireApprovalToDelete DEFAULT 1,
+        NotifyBeforeDays INT NULL,
+        NotifyRoleCode NVARCHAR(100) NULL,
+        RegulatoryBasis NVARCHAR(MAX) NULL,
+        ComplianceNotes NVARCHAR(MAX) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_DocumentRetentionPolicy_IsActive DEFAULT 1,
+        EffectiveDate DATE NOT NULL,
+        ExpiryDate DATE NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentRetentionPolicy_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentRetentionPolicy_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentAuditTrail', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentAuditTrail
+    (
+        AuditId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentAuditTrail PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        WorkflowInstanceId UNIQUEIDENTIFIER NULL,
+        EventType NVARCHAR(100) NOT NULL,
+        EventCategory NVARCHAR(100) NOT NULL CONSTRAINT DF_DocumentAuditTrail_EventCategory DEFAULT N'Document',
+        EventDescription NVARCHAR(MAX) NULL,
+        PerformedByUserId UNIQUEIDENTIFIER NULL,
+        PerformedByName NVARCHAR(200) NULL,
+        PerformedByRoleCode NVARCHAR(100) NULL,
+        EventDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentAuditTrail_EventDateUtc DEFAULT SYSUTCDATETIME(),
+        OldValue NVARCHAR(MAX) NULL,
+        NewValue NVARCHAR(MAX) NULL,
+        ChangesSummary NVARCHAR(MAX) NULL,
+        IpAddress NVARCHAR(50) NULL,
+        UserAgent NVARCHAR(500) NULL,
+        SessionId NVARCHAR(100) NULL,
+        RetentionYears INT NOT NULL CONSTRAINT DF_DocumentAuditTrail_RetentionYears DEFAULT 7,
+        IsArchived BIT NOT NULL CONSTRAINT DF_DocumentAuditTrail_IsArchived DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentAuditTrail_CreatedDateUtc DEFAULT SYSUTCDATETIME()
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentClassificationQueue', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentClassificationQueue
+    (
+        ClassificationQueueId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentClassificationQueue PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        QueueStatus NVARCHAR(100) NOT NULL CONSTRAINT DF_DocumentClassificationQueue_QueueStatus DEFAULT N'Pending',
+        ClassificationMethod NVARCHAR(100) NOT NULL CONSTRAINT DF_DocumentClassificationQueue_ClassificationMethod DEFAULT N'OCR',
+        OcrConfidence DECIMAL(5,2) NULL,
+        SuggestedCategory NVARCHAR(100) NULL,
+        SuggestedDocType NVARCHAR(100) NULL,
+        ExtractedText NVARCHAR(MAX) NULL,
+        ExtractedMetadata NVARCHAR(MAX) NULL,
+        AssignedToUserId UNIQUEIDENTIFIER NULL,
+        AssignedToName NVARCHAR(200) NULL,
+        AssignedDateUtc DATETIME2 NULL,
+        ClassifiedByUserId UNIQUEIDENTIFIER NULL,
+        ClassifiedByName NVARCHAR(200) NULL,
+        ClassifiedDateUtc DATETIME2 NULL,
+        FinalCategory NVARCHAR(100) NULL,
+        FinalDocType NVARCHAR(100) NULL,
+        ClassificationNotes NVARCHAR(MAX) NULL,
+        Priority NVARCHAR(50) NOT NULL CONSTRAINT DF_DocumentClassificationQueue_Priority DEFAULT N'Normal',
+        DueDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentClassificationQueue_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentClassificationQueue_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_DocumentWorkflowTemplate_TenantId' AND object_id = OBJECT_ID(N'DMS.DocumentWorkflowTemplate')) CREATE INDEX IX_DocumentWorkflowTemplate_TenantId ON DMS.DocumentWorkflowTemplate(TenantId, IsDeleted, IsActive);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_DocumentWorkflowTemplate_Code' AND object_id = OBJECT_ID(N'DMS.DocumentWorkflowTemplate')) CREATE UNIQUE INDEX IX_DocumentWorkflowTemplate_Code ON DMS.DocumentWorkflowTemplate(TenantId, TemplateCode) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_DocumentWorkflowStepTemplate_WorkflowTemplateId' AND object_id = OBJECT_ID(N'DMS.DocumentWorkflowStepTemplate')) CREATE INDEX IX_DocumentWorkflowStepTemplate_WorkflowTemplateId ON DMS.DocumentWorkflowStepTemplate(WorkflowTemplateId, StepOrder);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_DocumentWorkflowInstance_TenantId' AND object_id = OBJECT_ID(N'DMS.DocumentWorkflowInstance')) CREATE INDEX IX_DocumentWorkflowInstance_TenantId ON DMS.DocumentWorkflowInstance(TenantId, IsDeleted);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_DocumentApproval_TenantId' AND object_id = OBJECT_ID(N'DMS.DocumentApproval')) CREATE INDEX IX_DocumentApproval_TenantId ON DMS.DocumentApproval(TenantId, IsDeleted);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_DocumentReview_TenantId' AND object_id = OBJECT_ID(N'DMS.DocumentReview')) CREATE INDEX IX_DocumentReview_TenantId ON DMS.DocumentReview(TenantId, IsDeleted);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_DocumentRetentionPolicy_TenantId' AND object_id = OBJECT_ID(N'DMS.DocumentRetentionPolicy')) CREATE INDEX IX_DocumentRetentionPolicy_TenantId ON DMS.DocumentRetentionPolicy(TenantId, IsDeleted, IsActive);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_DocumentAuditTrail_TenantId' AND object_id = OBJECT_ID(N'DMS.DocumentAuditTrail')) CREATE INDEX IX_DocumentAuditTrail_TenantId ON DMS.DocumentAuditTrail(TenantId, EventDateUtc DESC);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_DocumentClassificationQueue_TenantId' AND object_id = OBJECT_ID(N'DMS.DocumentClassificationQueue')) CREATE INDEX IX_DocumentClassificationQueue_TenantId ON DMS.DocumentClassificationQueue(TenantId, IsDeleted);
+
+IF NOT EXISTS (SELECT 1 FROM DMS.DocumentWorkflowTemplate WHERE TenantId = @TenantId AND TemplateCode = N'CONTRACT-REVIEW' AND IsDeleted = 0)
+    INSERT INTO DMS.DocumentWorkflowTemplate (WorkflowTemplateId, TenantId, TemplateName, TemplateCode, Description, WorkflowType, IsSequential, RequiresAllApprovals, AutoArchiveOnComplete, NotifyOnStart, NotifyOnComplete, TriggerOnUpload, TriggerOnCategory, TriggerOnDocType, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES ('40000000-0000-0000-0000-000000000001', @TenantId, N'Contract Review Approval', N'CONTRACT-REVIEW', N'Multi-stage approval workflow for all client contracts requiring legal and management review.', N'Approval', 1, 1, 0, 1, 1, 0, N'Contract', NULL, 1, 1, SYSUTCDATETIME(), @AdminUserId, 0);
+
+IF NOT EXISTS (SELECT 1 FROM DMS.DocumentWorkflowTemplate WHERE TenantId = @TenantId AND TemplateCode = N'COMPLIANCE-APPROVAL' AND IsDeleted = 0)
+    INSERT INTO DMS.DocumentWorkflowTemplate (WorkflowTemplateId, TenantId, TemplateName, TemplateCode, Description, WorkflowType, IsSequential, RequiresAllApprovals, AutoArchiveOnComplete, NotifyOnStart, NotifyOnComplete, TriggerOnUpload, TriggerOnCategory, TriggerOnDocType, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES ('40000000-0000-0000-0000-000000000002', @TenantId, N'Compliance Document Approval', N'COMPLIANCE-APPROVAL', N'Regulatory compliance workflow for E&O policies, audit reports, and carrier appointments.', N'Approval', 1, 1, 1, 1, 1, 0, N'Compliance', NULL, 1, 2, SYSUTCDATETIME(), @AdminUserId, 0);
+
+IF NOT EXISTS (SELECT 1 FROM DMS.DocumentWorkflowTemplate WHERE TenantId = @TenantId AND TemplateCode = N'POLICY-REVIEW' AND IsDeleted = 0)
+    INSERT INTO DMS.DocumentWorkflowTemplate (WorkflowTemplateId, TenantId, TemplateName, TemplateCode, Description, WorkflowType, IsSequential, RequiresAllApprovals, AutoArchiveOnComplete, NotifyOnStart, NotifyOnComplete, TriggerOnUpload, TriggerOnCategory, TriggerOnDocType, IsActive, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES ('40000000-0000-0000-0000-000000000003', @TenantId, N'Policy Document Review', N'POLICY-REVIEW', N'Quality assurance review for policy documents, endorsements, and certificates.', N'Review', 0, 0, 0, 1, 1, 1, N'Policy', NULL, 1, 3, SYSUTCDATETIME(), @AdminUserId, 0);
+
+IF NOT EXISTS (SELECT 1 FROM DMS.DocumentRetentionPolicy WHERE TenantId = @TenantId AND PolicyCode = N'POLICY-7YR' AND IsDeleted = 0)
+    INSERT INTO DMS.DocumentRetentionPolicy (RetentionPolicyId, TenantId, PolicyName, PolicyCode, Description, ApplicableCategory, RetentionPeriodYears, RetentionStartTrigger, ActionOnExpiry, RequireApprovalToDelete, NotifyBeforeDays, NotifyRoleCode, RegulatoryBasis, IsActive, EffectiveDate, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES ('50000000-0000-0000-0000-000000000001', @TenantId, N'Policy Documents - 7 Years', N'POLICY-7YR', N'Standard retention for policy documents, certificates, and endorsements per state regulations.', N'Policy', 7, N'PolicyExpiry', N'Archive', 1, 30, N'Admin', N'Most states require 7-year retention for policy records.', 1, '2024-01-01', SYSUTCDATETIME(), @AdminUserId, 0);
+
+IF NOT EXISTS (SELECT 1 FROM DMS.DocumentRetentionPolicy WHERE TenantId = @TenantId AND PolicyCode = N'CLAIM-10YR' AND IsDeleted = 0)
+    INSERT INTO DMS.DocumentRetentionPolicy (RetentionPolicyId, TenantId, PolicyName, PolicyCode, Description, ApplicableCategory, RetentionPeriodYears, RetentionStartTrigger, ActionOnExpiry, RequireApprovalToDelete, NotifyBeforeDays, NotifyRoleCode, RegulatoryBasis, IsActive, EffectiveDate, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES ('50000000-0000-0000-0000-000000000002', @TenantId, N'Claims Files - 10 Years', N'CLAIM-10YR', N'Extended retention for claims documentation per carrier agreements and state law.', N'Claim', 10, N'ClaimClosure', N'Archive', 1, 60, N'Admin', N'Claims files must be retained 10 years from closure date per insurance department regulations.', 1, '2024-01-01', SYSUTCDATETIME(), @AdminUserId, 0);
+
+IF NOT EXISTS (SELECT 1 FROM DMS.DocumentRetentionPolicy WHERE TenantId = @TenantId AND PolicyCode = N'COMPLIANCE-PERM' AND IsDeleted = 0)
+    INSERT INTO DMS.DocumentRetentionPolicy (RetentionPolicyId, TenantId, PolicyName, PolicyCode, Description, ApplicableCategory, RetentionPeriodYears, RetentionStartTrigger, ActionOnExpiry, RequireApprovalToDelete, NotifyBeforeDays, NotifyRoleCode, RegulatoryBasis, IsActive, EffectiveDate, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES ('50000000-0000-0000-0000-000000000003', @TenantId, N'Compliance & Audit - Permanent', N'COMPLIANCE-PERM', N'Permanent retention for E&O policies, carrier appointments, and regulatory audit documents.', N'Compliance', 99, N'Creation', N'Review', 1, 90, N'Admin', N'Agency compliance documents must be retained permanently for regulatory audit purposes.', 1, '2024-01-01', SYSUTCDATETIME(), @AdminUserId, 0);
+";
+
     private const string Migration0124_CrmOpportunityDetailSchemaSyncSeed = @"
 DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
 DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
@@ -492,6 +781,78 @@ BEGIN
         QuoteCount = (SELECT COUNT(1) FROM Submissions.Quote q WHERE q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0)
     FROM Submissions.Submission s
     WHERE s.TenantId = @TenantId AND s.SubmissionId IN ('e1000000-0000-0000-0000-000000000001', 'e1000000-0000-0000-0000-000000000002', 'e1000000-0000-0000-0000-000000000003');
+END
+";
+
+    private const string Migration0137_AuditLogCreateSeed = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Audit') EXEC(N'CREATE SCHEMA Audit');
+
+IF OBJECT_ID(N'Audit.AuditLog', N'U') IS NULL
+BEGIN
+    CREATE TABLE Audit.AuditLog
+    (
+        AuditLogId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AuditLog PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NULL,
+        EntityName NVARCHAR(200) NOT NULL,
+        EntityId UNIQUEIDENTIFIER NOT NULL,
+        EventTypeCode NVARCHAR(100) NOT NULL,
+        ActionName NVARCHAR(200) NOT NULL,
+        PerformedByUserId UNIQUEIDENTIFIER NULL,
+        OldValues NVARCHAR(MAX) NULL,
+        NewValues NVARCHAR(MAX) NULL,
+        IpAddress NVARCHAR(64) NULL,
+        RegionCode NVARCHAR(50) NULL,
+        CorrelationId NVARCHAR(120) NULL,
+        PerformedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AuditLog_PerformedDateUtc_0137 DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AuditLog_CreatedDateUtc_0137 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AuditLog_IsDeleted_0137 DEFAULT 0
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'Audit.AuditLog', N'AuditLogId') IS NULL ALTER TABLE Audit.AuditLog ADD AuditLogId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_AuditLog_AuditLogId_0137 DEFAULT NEWID();
+    IF COL_LENGTH(N'Audit.AuditLog', N'TenantId') IS NULL ALTER TABLE Audit.AuditLog ADD TenantId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Audit.AuditLog', N'EntityName') IS NULL ALTER TABLE Audit.AuditLog ADD EntityName NVARCHAR(200) NOT NULL CONSTRAINT DF_AuditLog_EntityName_0137 DEFAULT N'Unknown';
+    IF COL_LENGTH(N'Audit.AuditLog', N'EntityId') IS NULL ALTER TABLE Audit.AuditLog ADD EntityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_AuditLog_EntityId_0137 DEFAULT '00000000-0000-0000-0000-000000000000';
+    IF COL_LENGTH(N'Audit.AuditLog', N'EventTypeCode') IS NULL ALTER TABLE Audit.AuditLog ADD EventTypeCode NVARCHAR(100) NOT NULL CONSTRAINT DF_AuditLog_EventTypeCode_0137 DEFAULT N'Update';
+    IF COL_LENGTH(N'Audit.AuditLog', N'ActionName') IS NULL ALTER TABLE Audit.AuditLog ADD ActionName NVARCHAR(200) NOT NULL CONSTRAINT DF_AuditLog_ActionName_0137 DEFAULT N'Updated';
+    IF COL_LENGTH(N'Audit.AuditLog', N'PerformedByUserId') IS NULL ALTER TABLE Audit.AuditLog ADD PerformedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Audit.AuditLog', N'OldValues') IS NULL ALTER TABLE Audit.AuditLog ADD OldValues NVARCHAR(MAX) NULL;
+    IF COL_LENGTH(N'Audit.AuditLog', N'NewValues') IS NULL ALTER TABLE Audit.AuditLog ADD NewValues NVARCHAR(MAX) NULL;
+    IF COL_LENGTH(N'Audit.AuditLog', N'IpAddress') IS NULL ALTER TABLE Audit.AuditLog ADD IpAddress NVARCHAR(64) NULL;
+    IF COL_LENGTH(N'Audit.AuditLog', N'RegionCode') IS NULL ALTER TABLE Audit.AuditLog ADD RegionCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Audit.AuditLog', N'CorrelationId') IS NULL ALTER TABLE Audit.AuditLog ADD CorrelationId NVARCHAR(120) NULL;
+    IF COL_LENGTH(N'Audit.AuditLog', N'PerformedDateUtc') IS NULL ALTER TABLE Audit.AuditLog ADD PerformedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AuditLog_PerformedDateUtc_0137b DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'Audit.AuditLog', N'CreatedDateUtc') IS NULL ALTER TABLE Audit.AuditLog ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AuditLog_CreatedDateUtc_0137b DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'Audit.AuditLog', N'CreatedByUserId') IS NULL ALTER TABLE Audit.AuditLog ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Audit.AuditLog', N'ModifiedDateUtc') IS NULL ALTER TABLE Audit.AuditLog ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Audit.AuditLog', N'ModifiedByUserId') IS NULL ALTER TABLE Audit.AuditLog ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Audit.AuditLog', N'IsDeleted') IS NULL ALTER TABLE Audit.AuditLog ADD IsDeleted BIT NOT NULL CONSTRAINT DF_AuditLog_IsDeleted_0137b DEFAULT 0;
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Audit.AuditLog') AND name = N'IX_AuditLog_PerformedDate')
+    CREATE INDEX IX_AuditLog_PerformedDate ON Audit.AuditLog(IsDeleted, PerformedDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Audit.AuditLog') AND name = N'IX_AuditLog_TenantEntity')
+    CREATE INDEX IX_AuditLog_TenantEntity ON Audit.AuditLog(TenantId, EntityName, EventTypeCode, IsDeleted, PerformedDateUtc DESC);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 TenantId FROM IAM.[User] WHERE IsDeleted = 0 ORDER BY CreatedDateUtc), CONVERT(UNIQUEIDENTIFIER, '00000000-0000-0000-0000-000000000001'));
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), CONVERT(UNIQUEIDENTIFIER, '00000000-0000-0000-0000-000000000002'));
+
+IF NOT EXISTS (SELECT 1 FROM Audit.AuditLog WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Audit.AuditLog
+        (AuditLogId, TenantId, EntityName, EntityId, EventTypeCode, ActionName, PerformedByUserId, OldValues, NewValues, IpAddress, RegionCode, CorrelationId, PerformedDateUtc, CreatedDateUtc, IsDeleted)
+    VALUES
+        (NEWID(), @TenantId, N'Document', NEWID(), N'Create', N'Uploaded document to enterprise repository', @AdminUserId, NULL, N'{""fileName"":""Riverside BOP Policy.pdf"",""category"":""Policy"",""status"":""Active""}', N'10.10.1.25', N'US-EAST', CONVERT(UNIQUEIDENTIFIER, '01370000-0000-0000-0000-000000001001'), DATEADD(hour, -2, SYSUTCDATETIME()), SYSUTCDATETIME(), 0),
+        (NEWID(), @TenantId, N'DocumentStorage', NEWID(), N'Update', N'Updated document storage encryption policy', @AdminUserId, N'{""encrypted"":false,""tier"":""Hot""}', N'{""encrypted"":true,""tier"":""Hot""}', N'10.10.1.25', N'US-EAST', CONVERT(UNIQUEIDENTIFIER, '01370000-0000-0000-0000-000000001002'), DATEADD(hour, -5, SYSUTCDATETIME()), SYSUTCDATETIME(), 0),
+        (NEWID(), @TenantId, N'IAM.User', @AdminUserId, N'Login', N'Tenant admin signed in', @AdminUserId, NULL, N'{""status"":""Success"",""mfa"":true}', N'10.10.1.44', N'US-EAST', CONVERT(UNIQUEIDENTIFIER, '01370000-0000-0000-0000-000000001003'), DATEADD(day, -1, SYSUTCDATETIME()), SYSUTCDATETIME(), 0),
+        (NEWID(), @TenantId, N'Policy', NEWID(), N'Update', N'Policy renewal metadata changed', @AdminUserId, N'{""status"":""Draft""}', N'{""status"":""Submitted""}', N'10.10.1.33', N'US-CENTRAL', CONVERT(UNIQUEIDENTIFIER, '01370000-0000-0000-0000-000000001004'), DATEADD(day, -2, SYSUTCDATETIME()), SYSUTCDATETIME(), 0),
+        (NEWID(), @TenantId, N'Report', NEWID(), N'Export', N'Exported audit evidence report', @AdminUserId, NULL, N'{""format"":""CSV"",""rows"":128}', N'10.10.1.51', N'US-WEST', CONVERT(UNIQUEIDENTIFIER, '01370000-0000-0000-0000-000000001005'), DATEADD(day, -3, SYSUTCDATETIME()), SYSUTCDATETIME(), 0),
+        (NEWID(), @TenantId, N'DocumentPacket', NEWID(), N'Delete', N'Removed obsolete packet draft', @AdminUserId, N'{""name"":""Old Renewal Packet"",""status"":""Draft""}', N'{""isDeleted"":true}', N'10.10.1.25', N'US-EAST', CONVERT(UNIQUEIDENTIFIER, '01370000-0000-0000-0000-000000001006'), DATEADD(day, -4, SYSUTCDATETIME()), SYSUTCDATETIME(), 0);
 END
 ";
 
@@ -6234,5 +6595,275 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM DMS.Document d WHERE d.TenantId = @TenantId AND d.DocumentId = s.DocumentId)
       AND NOT EXISTS (SELECT 1 FROM DMS.Document d WHERE d.TenantId = @TenantId AND d.FileName = s.FileName AND d.IsDeleted = 0);
 END
+";
+
+    private const string Migration0134_DmsAcordFormCreateSeed = @"
+IF SCHEMA_ID(N'DMS') IS NULL EXEC(N'CREATE SCHEMA DMS');
+
+IF OBJECT_ID(N'DMS.AcordForm', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.AcordForm
+    (
+        AcordFormId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AcordForm PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        FormNumber NVARCHAR(30) NOT NULL,
+        FormName NVARCHAR(200) NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        Edition NVARCHAR(50) NOT NULL,
+        Status NVARCHAR(50) NOT NULL CONSTRAINT DF_AcordForm_Status DEFAULT N'Blank',
+        PolicyNumber NVARCHAR(100) NULL,
+        AiPrefilled BIT NOT NULL CONSTRAINT DF_AcordForm_AiPrefilled DEFAULT 0,
+        PrefillFieldCount INT NULL,
+        PrefillConfidence INT NULL,
+        OwnerName NVARCHAR(160) NULL,
+        Description NVARCHAR(1000) NULL,
+        LastModifiedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AcordForm_LastModifiedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AcordForm_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AcordForm_IsDeleted DEFAULT 0,
+        CONSTRAINT UQ_AcordForm_TenantNumberEdition UNIQUE (TenantId, FormNumber, Edition)
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.AcordForm') AND name = N'IX_AcordForm_TenantStatus')
+    CREATE INDEX IX_AcordForm_TenantStatus ON DMS.AcordForm(TenantId, Status, LineOfBusiness, IsDeleted, LastModifiedDateUtc DESC);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+DECLARE @Seed TABLE
+(
+    AcordFormId UNIQUEIDENTIFIER,
+    FormNumber NVARCHAR(30),
+    FormName NVARCHAR(200),
+    LineOfBusiness NVARCHAR(100),
+    Edition NVARCHAR(50),
+    Status NVARCHAR(50),
+    PolicyNumber NVARCHAR(100),
+    AiPrefilled BIT,
+    PrefillFieldCount INT,
+    PrefillConfidence INT,
+    OwnerName NVARCHAR(160),
+    Description NVARCHAR(1000),
+    LastModifiedDateUtc DATETIME2
+);
+
+INSERT INTO @Seed VALUES
+('c1340000-0000-0000-0000-000000000001', N'25', N'Certificate of Liability Insurance', N'Commercial Lines', N'2016/03', N'Completed', N'POL-2025-10482', 1, 48, 96, N'Amy Scott', N'Standard certificate package generated from policy declarations and certificate holder details.', DATEADD(day, -2, SYSUTCDATETIME())),
+('c1340000-0000-0000-0000-000000000002', N'28', N'Evidence of Property Insurance', N'Commercial Lines', N'2016/03', N'In Progress', N'POL-2025-11877', 1, 42, 94, N'Paula Ngo', N'Property evidence form staged for insured review before e-sign routing.', DATEADD(day, -1, SYSUTCDATETIME())),
+('c1340000-0000-0000-0000-000000000003', N'75', N'Commercial Insurance Application', N'Commercial Lines', N'2013/02', N'Blank', NULL, 0, NULL, NULL, N'Chris Hall', N'Blank commercial application template ready for intake workflows.', DATEADD(day, -5, SYSUTCDATETIME())),
+('c1340000-0000-0000-0000-000000000004', N'126', N'Commercial General Liability Section', N'Commercial Lines', N'2016/11', N'Pending E-Sign', N'POL-2025-10482', 1, 55, 97, N'Amy Scott', N'CGL section prepared from exposure, classification, and limits data.', DATEADD(hour, -3, SYSUTCDATETIME())),
+('c1340000-0000-0000-0000-000000000005', N'130', N'Commercial Property Application', N'Commercial Lines', N'2014/05', N'Blank', NULL, 0, NULL, NULL, N'Linda Torres', N'Property application template available for new business submissions.', DATEADD(day, -7, SYSUTCDATETIME())),
+('c1340000-0000-0000-0000-000000000006', N'160', N'Homeowners Insurance Application', N'Personal Lines', N'2014/04', N'Completed', N'POL-2025-14211', 1, 36, 93, N'Robert Kim', N'Homeowners application completed and retained with policy file.', DATEADD(day, -3, SYSUTCDATETIME())),
+('c1340000-0000-0000-0000-000000000007', N'1', N'Property Insurance Application', N'Personal Lines', N'2011/03', N'In Progress', N'POL-2025-16540', 0, NULL, NULL, N'Dan Rivera', N'Property application in service review for missing property details.', DATEADD(day, -1, SYSUTCDATETIME())),
+('c1340000-0000-0000-0000-000000000008', N'80', N'Homeowner Policy Change Request', N'Personal Lines', N'2011/03', N'Completed', N'POL-2025-17892', 1, 31, 91, N'Karen Lee', N'Policy change request completed from endorsement workflow.', DATEADD(hour, -6, SYSUTCDATETIME())),
+('c1340000-0000-0000-0000-000000000009', N'36', N'Binder', N'Commercial Lines', N'2007/09', N'Pending E-Sign', N'POL-2025-11877', 1, 28, 95, N'Paula Ngo', N'Binder ready for insured acknowledgement and delivery.', DATEADD(day, -4, SYSUTCDATETIME())),
+('c1340000-0000-0000-0000-000000000010', N'137', N'Commercial Umbrella Application', N'Excess & Surplus', N'2013/02', N'Blank', NULL, 0, NULL, NULL, N'Chris Hall', N'Umbrella application template ready for excess submissions.', DATEADD(day, -10, SYSUTCDATETIME())),
+('c1340000-0000-0000-0000-000000000011', N'125', N'Business Auto Application', N'Commercial Lines', N'2013/02', N'In Progress', N'POL-2025-10482', 0, NULL, NULL, N'Amy Scott', N'Business auto application awaiting vehicle schedule validation.', DATEADD(day, -2, SYSUTCDATETIME())),
+('c1340000-0000-0000-0000-000000000012', N'702', N'Workers Compensation Application', N'Commercial Lines', N'2014/05', N'Rejected', N'POL-2025-16540', 0, NULL, NULL, N'Dan Rivera', N'Workers compensation application rejected for missing payroll class data.', DATEADD(day, -6, SYSUTCDATETIME()));
+
+INSERT INTO DMS.AcordForm
+(AcordFormId, TenantId, FormNumber, FormName, LineOfBusiness, Edition, Status, PolicyNumber, AiPrefilled, PrefillFieldCount, PrefillConfidence, OwnerName, Description, LastModifiedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT s.AcordFormId, @TenantId, s.FormNumber, s.FormName, s.LineOfBusiness, s.Edition, s.Status, s.PolicyNumber, s.AiPrefilled, s.PrefillFieldCount, s.PrefillConfidence, s.OwnerName, s.Description, s.LastModifiedDateUtc, s.LastModifiedDateUtc, @AdminUserId, 0
+FROM @Seed s
+WHERE NOT EXISTS (SELECT 1 FROM DMS.AcordForm f WHERE f.TenantId = @TenantId AND f.FormNumber = s.FormNumber AND f.Edition = s.Edition AND f.IsDeleted = 0);
+";
+
+    private const string Migration0135_DmsDocumentExceptionCreateSeed = @"
+IF SCHEMA_ID(N'DMS') IS NULL EXEC(N'CREATE SCHEMA DMS');
+
+IF OBJECT_ID(N'DMS.DocumentException', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentException
+    (
+        DocumentExceptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DocumentException PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NULL,
+        FileName NVARCHAR(260) NOT NULL,
+        ContentType NVARCHAR(200) NOT NULL,
+        FileSizeBytes BIGINT NOT NULL CONSTRAINT DF_DocumentException_FileSize DEFAULT 0,
+        ExceptionType NVARCHAR(80) NOT NULL,
+        ExceptionReason NVARCHAR(1000) NOT NULL,
+        Status NVARCHAR(80) NOT NULL CONSTRAINT DF_DocumentException_Status DEFAULT N'Needs Review',
+        AiSuggestion NVARCHAR(160) NOT NULL CONSTRAINT DF_DocumentException_AiSuggestion DEFAULT N'Needs manual review',
+        AiConfidence INT NOT NULL CONSTRAINT DF_DocumentException_AiConfidence DEFAULT 0,
+        AssignedToName NVARCHAR(160) NULL,
+        CategoryCode NVARCHAR(100) NULL,
+        DocumentTypeCode NVARCHAR(100) NULL,
+        LinkedEntity NVARCHAR(160) NULL,
+        Tags NVARCHAR(500) NULL,
+        Notes NVARCHAR(1000) NULL,
+        ReceivedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentException_ReceivedDateUtc DEFAULT SYSUTCDATETIME(),
+        ResolvedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentException_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentException_IsDeleted DEFAULT 0
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentException') AND name = N'IX_DocumentException_TenantStatus')
+    CREATE INDEX IX_DocumentException_TenantStatus ON DMS.DocumentException(TenantId, Status, ExceptionType, IsDeleted, ReceivedDateUtc DESC);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+DECLARE @Seed TABLE
+(
+    DocumentExceptionId UNIQUEIDENTIFIER,
+    FileName NVARCHAR(260),
+    ContentType NVARCHAR(200),
+    FileSizeBytes BIGINT,
+    ExceptionType NVARCHAR(80),
+    ExceptionReason NVARCHAR(1000),
+    Status NVARCHAR(80),
+    AiSuggestion NVARCHAR(160),
+    AiConfidence INT,
+    AssignedToName NVARCHAR(160),
+    CategoryCode NVARCHAR(100),
+    DocumentTypeCode NVARCHAR(100),
+    LinkedEntity NVARCHAR(160),
+    Tags NVARCHAR(500),
+    Notes NVARCHAR(1000),
+    ReceivedDateUtc DATETIME2,
+    ResolvedDateUtc DATETIME2
+);
+
+INSERT INTO @Seed VALUES
+('c1350000-0000-0000-0000-000000000001', N'UnknownCarrier_COI_2025.pdf', N'application/pdf', 487620, N'Classification', N'OCR could not confidently map the certificate to an existing carrier or category.', N'Needs Review', N'Certificate', 72, N'Amy Scott', NULL, NULL, N'Harbor Logistics Co', N'ocr,certificate,carrier-match', NULL, DATEADD(hour, -4, SYSUTCDATETIME()), NULL),
+('c1350000-0000-0000-0000-000000000002', N'Signed Binder - Cascade Retail.pdf', N'application/pdf', 932118, N'Missing Metadata', N'Required document type and linked policy metadata were not supplied during upload.', N'Needs Review', N'Binder', 86, N'Paula Ngo', NULL, NULL, N'POL-2025-14211', N'binder,policy,missing-metadata', NULL, DATEADD(day, -1, SYSUTCDATETIME()), NULL),
+('c1350000-0000-0000-0000-000000000003', N'2025_GL_Endorsement_scan.tif', N'image/tiff', 1764200, N'Unreadable OCR', N'Scan quality is below the OCR confidence threshold and needs a cleaner copy or manual indexing.', N'Reprocess', N'Endorsement', 44, N'Chris Hall', NULL, NULL, N'Sullivan Manufacturing LLC', N'endorsement,scan-quality,reprocess', N'Ask insured for a cleaner scan if reprocess fails.', DATEADD(day, -2, SYSUTCDATETIME()), NULL),
+('c1350000-0000-0000-0000-000000000004', N'Workers Comp Payroll Supplement.pdf', N'application/pdf', 628900, N'Duplicate Candidate', N'Potential duplicate of an existing underwriting supplement was detected.', N'Needs Review', N'Claims Supplement', 68, N'Dan Rivera', NULL, NULL, N'Apex Tech Solutions', N'supplement,duplicate,workers-comp', NULL, DATEADD(day, -3, SYSUTCDATETIME()), NULL),
+('c1350000-0000-0000-0000-000000000005', N'Lakeside Evidence of Property.pdf', N'application/pdf', 398144, N'Missing Metadata', N'AI suggested category and document type but linked account requires confirmation.', N'Resolved', N'Evidence of Insurance', 93, N'Linda Torres', N'Certificate', N'Evidence of Insurance', N'Lakeside Medical Group', N'evidence,property,resolved', N'Confirmed with account timeline and indexed.', DATEADD(day, -5, SYSUTCDATETIME()), DATEADD(day, -4, SYSUTCDATETIME())),
+('c1350000-0000-0000-0000-000000000006', N'Cancellation Notice - Green Valley.pdf', N'application/pdf', 512240, N'Workflow Routing', N'Document category was detected but cancellation workflow routing could not be completed automatically.', N'Needs Review', N'Cancellation Notice', 81, N'Karen Lee', NULL, NULL, N'Green Valley Foods Inc', N'cancellation,workflow-routing', NULL, DATEADD(hour, -10, SYSUTCDATETIME()), NULL);
+
+INSERT INTO DMS.DocumentException
+(DocumentExceptionId, TenantId, DocumentId, FileName, ContentType, FileSizeBytes, ExceptionType, ExceptionReason, Status, AiSuggestion, AiConfidence, AssignedToName, CategoryCode, DocumentTypeCode, LinkedEntity, Tags, Notes, ReceivedDateUtc, ResolvedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT s.DocumentExceptionId, @TenantId, NULL, s.FileName, s.ContentType, s.FileSizeBytes, s.ExceptionType, s.ExceptionReason, s.Status, s.AiSuggestion, s.AiConfidence, s.AssignedToName, s.CategoryCode, s.DocumentTypeCode, s.LinkedEntity, s.Tags, s.Notes, s.ReceivedDateUtc, s.ResolvedDateUtc, s.ReceivedDateUtc, @AdminUserId, 0
+FROM @Seed s
+WHERE NOT EXISTS (SELECT 1 FROM DMS.DocumentException e WHERE e.TenantId = @TenantId AND e.FileName = s.FileName AND e.IsDeleted = 0);
+";
+
+    private const string Migration0136_DmsDocumentPacketCreateSeed = @"
+IF SCHEMA_ID(N'DMS') IS NULL EXEC(N'CREATE SCHEMA DMS');
+
+IF OBJECT_ID(N'DMS.DocumentPacket', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentPacket
+    (
+        DocumentPacketId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DocumentPacket PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PacketName NVARCHAR(200) NOT NULL,
+        PacketType NVARCHAR(80) NOT NULL,
+        PolicyNumber NVARCHAR(100) NULL,
+        Status NVARCHAR(40) NOT NULL CONSTRAINT DF_DocumentPacket_Status DEFAULT N'Draft',
+        AiAssisted BIT NOT NULL CONSTRAINT DF_DocumentPacket_AiAssisted DEFAULT 0,
+        Description NVARCHAR(1000) NULL,
+        RecipientEmail NVARCHAR(256) NULL,
+        DeliveryMethod NVARCHAR(80) NULL,
+        SentMessage NVARCHAR(1000) NULL,
+        Notes NVARCHAR(1000) NULL,
+        SentDateUtc DATETIME2 NULL,
+        MergedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentPacket_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentPacket_IsDeleted DEFAULT 0
+    );
+END
+
+IF OBJECT_ID(N'DMS.DocumentPacketDocument', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentPacketDocument
+    (
+        PacketDocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DocumentPacketDocument PRIMARY KEY DEFAULT NEWID(),
+        DocumentPacketId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NULL,
+        DocumentName NVARCHAR(260) NOT NULL,
+        DocumentType NVARCHAR(100) NOT NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_DocumentPacketDocument_IsRequired DEFAULT 0,
+        Status NVARCHAR(40) NOT NULL CONSTRAINT DF_DocumentPacketDocument_Status DEFAULT N'Pending',
+        SortOrder INT NOT NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentPacketDocument_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentPacketDocument_IsDeleted DEFAULT 0
+    );
+END
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentPacket') AND name = N'IX_DocumentPacket_TenantStatus')
+    CREATE INDEX IX_DocumentPacket_TenantStatus ON DMS.DocumentPacket(TenantId, Status, PacketType, IsDeleted, CreatedDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentPacketDocument') AND name = N'IX_DocumentPacketDocument_Packet')
+    CREATE INDEX IX_DocumentPacketDocument_Packet ON DMS.DocumentPacketDocument(DocumentPacketId, IsDeleted, SortOrder);
+
+DECLARE @TenantId UNIQUEIDENTIFIER = '00000000-0000-0000-0000-000000000001';
+DECLARE @AdminUserId UNIQUEIDENTIFIER = COALESCE((SELECT TOP 1 UserId FROM IAM.[User] WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc), '00000000-0000-0000-0000-000000000002');
+
+DECLARE @Packets TABLE
+(
+    DocumentPacketId UNIQUEIDENTIFIER,
+    PacketName NVARCHAR(200),
+    PacketType NVARCHAR(80),
+    PolicyNumber NVARCHAR(100),
+    Status NVARCHAR(40),
+    AiAssisted BIT,
+    Description NVARCHAR(1000),
+    RecipientEmail NVARCHAR(256),
+    DeliveryMethod NVARCHAR(80),
+    SentDateUtc DATETIME2,
+    MergedDateUtc DATETIME2,
+    CreatedDateUtc DATETIME2
+);
+
+INSERT INTO @Packets VALUES
+('c1360000-0000-0000-0000-000000000001', N'Renewal Package — Acme Corp 2025', N'Renewal', N'POL-2025-00142', N'Complete', 1, N'Complete renewal packet including dec page, endorsements and certificate.', NULL, NULL, NULL, DATEADD(day, -2, SYSUTCDATETIME()), DATEADD(day, -5, SYSUTCDATETIME())),
+('c1360000-0000-0000-0000-000000000002', N'New Submission — Green Valley LLC', N'New Business', N'POL-2025-00217', N'Draft', 1, N'Initial submission packet for new commercial lines account.', NULL, NULL, NULL, NULL, DATEADD(day, -3, SYSUTCDATETIME())),
+('c1360000-0000-0000-0000-000000000003', N'Claim Settlement Packet', N'Claim', N'POL-2024-88204', N'Sent', 0, N'Claim settlement packet delivered through secure portal.', N'claims@example.com', N'Secure Portal', DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(day, -1, SYSUTCDATETIME()), DATEADD(day, -7, SYSUTCDATETIME())),
+('c1360000-0000-0000-0000-000000000004', N'Audit Evidence — Q4 2024', N'Audit', NULL, N'Draft', 0, N'Premium audit supporting evidence packet.', NULL, NULL, NULL, NULL, DATEADD(day, -4, SYSUTCDATETIME()));
+
+INSERT INTO DMS.DocumentPacket
+(DocumentPacketId, TenantId, PacketName, PacketType, PolicyNumber, Status, AiAssisted, Description, RecipientEmail, DeliveryMethod, SentDateUtc, MergedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT p.DocumentPacketId, @TenantId, p.PacketName, p.PacketType, p.PolicyNumber, p.Status, p.AiAssisted, p.Description, p.RecipientEmail, p.DeliveryMethod, p.SentDateUtc, p.MergedDateUtc, p.CreatedDateUtc, @AdminUserId, 0
+FROM @Packets p
+WHERE NOT EXISTS (SELECT 1 FROM DMS.DocumentPacket x WHERE x.TenantId = @TenantId AND x.PacketName = p.PacketName AND x.IsDeleted = 0);
+
+DECLARE @Docs TABLE
+(
+    DocumentPacketId UNIQUEIDENTIFIER,
+    DocumentName NVARCHAR(260),
+    DocumentType NVARCHAR(100),
+    IsRequired BIT,
+    Status NVARCHAR(40),
+    SortOrder INT
+);
+
+INSERT INTO @Docs VALUES
+('c1360000-0000-0000-0000-000000000001', N'Dec Page 2025', N'Policy / Dec Page', 1, N'Ready', 1),
+('c1360000-0000-0000-0000-000000000001', N'ACORD 25 — Certificate', N'ACORD Form', 1, N'Ready', 2),
+('c1360000-0000-0000-0000-000000000001', N'ACORD 126 — GL Section', N'ACORD Form', 1, N'Ready', 3),
+('c1360000-0000-0000-0000-000000000001', N'Renewal Cover Letter', N'Correspondence', 0, N'Ready', 4),
+('c1360000-0000-0000-0000-000000000001', N'Endorsement — BI Limit Change', N'Endorsement', 0, N'Ready', 5),
+('c1360000-0000-0000-0000-000000000002', N'ACORD 75 — Commercial App', N'ACORD Form', 1, N'Ready', 1),
+('c1360000-0000-0000-0000-000000000002', N'ACORD 126 — GL Section', N'ACORD Form', 1, N'Pending', 2),
+('c1360000-0000-0000-0000-000000000002', N'Loss Run — 5 Year', N'Loss History', 1, N'Missing', 3),
+('c1360000-0000-0000-0000-000000000002', N'Risk Photos', N'Supporting', 0, N'Pending', 4),
+('c1360000-0000-0000-0000-000000000003', N'FNOL Report', N'Claim Document', 1, N'Ready', 1),
+('c1360000-0000-0000-0000-000000000003', N'Adjuster Report', N'Claim Document', 1, N'Ready', 2),
+('c1360000-0000-0000-0000-000000000003', N'Settlement Agreement', N'Legal', 1, N'Ready', 3),
+('c1360000-0000-0000-0000-000000000004', N'Premium Audit Form', N'Audit', 1, N'Ready', 1),
+('c1360000-0000-0000-0000-000000000004', N'Payroll Summary', N'Supporting', 1, N'Pending', 2);
+
+INSERT INTO DMS.DocumentPacketDocument
+(PacketDocumentId, DocumentPacketId, DocumentId, DocumentName, DocumentType, IsRequired, Status, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), d.DocumentPacketId, NULL, d.DocumentName, d.DocumentType, d.IsRequired, d.Status, d.SortOrder, SYSUTCDATETIME(), @AdminUserId, 0
+FROM @Docs d
+WHERE EXISTS (SELECT 1 FROM DMS.DocumentPacket p WHERE p.DocumentPacketId = d.DocumentPacketId AND p.IsDeleted = 0)
+  AND NOT EXISTS (SELECT 1 FROM DMS.DocumentPacketDocument x WHERE x.DocumentPacketId = d.DocumentPacketId AND x.DocumentName = d.DocumentName AND x.IsDeleted = 0);
 ";
 }

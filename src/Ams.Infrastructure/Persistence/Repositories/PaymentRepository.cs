@@ -20,8 +20,43 @@ public sealed class PaymentRepository : IPaymentRepository
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var hasInvoiceId = await HasColumnAsync(cn, "InvoiceId", cancellationToken);
         var hasNotes = await HasColumnAsync(cn, "Notes", cancellationToken);
+        var hasPaymentNumber = await HasColumnAsync(cn, "PaymentNumber", cancellationToken);
+        var hasCurrencyCode = await HasColumnAsync(cn, "CurrencyCode", cancellationToken);
+        var hasTotalAmount = await HasColumnAsync(cn, "TotalAmount", cancellationToken);
+        var hasPaymentStatusCodeId = await HasColumnAsync(cn, "PaymentStatusCodeId", cancellationToken);
+        var hasStatusCode = await HasColumnAsync(cn, "StatusCode", cancellationToken);
         var columns = "PaymentId, TenantId, AccountId, PaymentDate, Amount, PaymentMethodCode, ReferenceNumber, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted";
         var values = "@PaymentId, @TenantId, @AccountId, @PaymentDate, @Amount, @PaymentMethodCode, @ReferenceNumber, @StatusCode, SYSUTCDATETIME(), @CreatedByUserId, 0";
+
+        if (!hasStatusCode)
+        {
+            columns = columns.Replace(", StatusCode", string.Empty);
+            values = values.Replace(", @StatusCode", string.Empty);
+        }
+
+        if (hasPaymentNumber)
+        {
+            columns = columns.Replace("PaymentId,", "PaymentId, PaymentNumber,");
+            values = values.Replace("@PaymentId,", "@PaymentId, @PaymentNumber,");
+        }
+
+        if (hasCurrencyCode)
+        {
+            columns = columns.Replace("Amount,", "CurrencyCode, Amount,");
+            values = values.Replace("@Amount,", "@CurrencyCode, @Amount,");
+        }
+
+        if (hasTotalAmount)
+        {
+            columns = columns.Replace("Amount,", "TotalAmount, Amount,");
+            values = values.Replace("@Amount,", "@TotalAmount, @Amount,");
+        }
+
+        if (hasPaymentStatusCodeId)
+        {
+            columns = columns.Replace("ReferenceNumber,", "ReferenceNumber, PaymentStatusCodeId,");
+            values = values.Replace("@ReferenceNumber,", "@ReferenceNumber, @PaymentStatusCodeId,");
+        }
 
         if (hasInvoiceId)
         {
@@ -39,14 +74,18 @@ public sealed class PaymentRepository : IPaymentRepository
         await cn.ExecuteAsync(new CommandDefinition(sql, new
         {
             PaymentId = id,
+            PaymentNumber = hasPaymentNumber ? await NextPaymentNumberAsync(cn, cancellationToken) : null,
             request.TenantId,
             request.AccountId,
             request.InvoiceId,
             PaymentDate = request.PaymentDate.Date,
             request.Amount,
+            CurrencyCode = "USD",
+            TotalAmount = request.Amount,
             PaymentMethodCode = request.PaymentMethodCode.Trim(),
             ReferenceNumber = string.IsNullOrWhiteSpace(request.ReferenceNumber) ? null : request.ReferenceNumber.Trim(),
             request.StatusCode,
+            PaymentStatusCodeId = PaymentStatusCodeId(request.StatusCode),
             Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
             request.CreatedByUserId
         }, cancellationToken: cancellationToken));
@@ -80,7 +119,31 @@ public sealed class PaymentRepository : IPaymentRepository
     {
         var hasInvoiceId = await HasColumnAsync(connection, "InvoiceId", cancellationToken);
         var hasNotes = await HasColumnAsync(connection, "Notes", cancellationToken);
-        return $"PaymentId, TenantId, AccountId, {(hasInvoiceId ? "InvoiceId" : "CAST(NULL AS UNIQUEIDENTIFIER) AS InvoiceId")}, CAST(PaymentDate AS DATETIME2) AS PaymentDate, Amount, PaymentMethodCode, ReferenceNumber, StatusCode, {(hasNotes ? "Notes" : "CAST(NULL AS NVARCHAR(500)) AS Notes")}, CreatedDateUtc";
+        var hasPaymentNumber = await HasColumnAsync(connection, "PaymentNumber", cancellationToken);
+        var statusSql = await HasColumnAsync(connection, "StatusCode", cancellationToken)
+            ? "StatusCode"
+            : await HasColumnAsync(connection, "PaymentStatusCodeId", cancellationToken)
+                ? "CASE PaymentStatusCodeId WHEN 1 THEN 'Pending' WHEN 2 THEN 'Applied' WHEN 3 THEN 'Voided' ELSE 'Pending' END AS StatusCode"
+                : "CAST('Pending' AS NVARCHAR(50)) AS StatusCode";
+        return $"PaymentId, {(hasPaymentNumber ? "PaymentNumber" : "CAST(NULL AS NVARCHAR(50)) AS PaymentNumber")}, TenantId, AccountId, {(hasInvoiceId ? "InvoiceId" : "CAST(NULL AS UNIQUEIDENTIFIER) AS InvoiceId")}, CAST(PaymentDate AS DATETIME2) AS PaymentDate, Amount, PaymentMethodCode, ReferenceNumber, {statusSql}, {(hasNotes ? "Notes" : "CAST(NULL AS NVARCHAR(500)) AS Notes")}, CreatedDateUtc";
+    }
+
+    private static int PaymentStatusCodeId(string statusCode) => statusCode.Trim().ToUpperInvariant() switch
+    {
+        "APPLIED" or "CLEARED" or "PAID" => 2,
+        "VOIDED" or "FAILED" => 3,
+        _ => 1
+    };
+
+    private static async Task<string> NextPaymentNumberAsync(System.Data.IDbConnection connection, CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT ISNULL(MAX(TRY_CONVERT(INT, SUBSTRING(PaymentNumber, 5, 20))), 0) + 1
+            FROM Billing.Payment
+            WHERE PaymentNumber LIKE 'PAY-%';
+            """;
+        var next = await connection.ExecuteScalarAsync<int>(new CommandDefinition(sql, cancellationToken: cancellationToken));
+        return $"PAY-{next:000000}";
     }
 
     private static async Task<bool> HasColumnAsync(System.Data.IDbConnection connection, string columnName, CancellationToken cancellationToken)

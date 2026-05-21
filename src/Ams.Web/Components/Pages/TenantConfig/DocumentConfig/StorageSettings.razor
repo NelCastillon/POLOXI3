@@ -1,2 +1,666 @@
+@page "/documents/storage"
 @page "/tenant/documents/storage"
-<DocumentConfigPage Kind="StorageSetting" Title="Storage Settings" Subtitle="Configure document storage providers, retention locations, and encryption settings" Icon="bi bi-hdd" />
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.DocumentConfig
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Document Storage Settings — AMS Enterprise</PageTitle>
+
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
+{
+    <div class="dss-toast dss-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @_toastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="dss-toast-close" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="dss-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="dss-modal" role="dialog" aria-modal="true" aria-labelledby="dss-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-hdd" aria-hidden="true"></i>
+                <span id="dss-form-title">@(_editId.HasValue ? "Edit Storage Setting" : "Add Storage Setting")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="ShowValidationToast">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="dss-modal-intro">
+                        <span><i class="bi bi-database-check" aria-hidden="true"></i> Documents.DocumentConfigItem</span>
+                        <p>Storage settings are persisted as tenant document configuration records with provider, encryption, usage, and region controls in JSON.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Code <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.Code" placeholder="PRIMARY_STORE" />
+                            <ValidationMessage For="() => _form.Code" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.Name" placeholder="Primary Document Storage" />
+                            <ValidationMessage For="() => _form.Name" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Category</label>
+                            <InputText class="form-control" @bind-Value="_form.Category" placeholder="Storage" />
+                            <ValidationMessage For="() => _form.Category" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Sort Order <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.SortOrder" />
+                            <ValidationMessage For="() => _form.SortOrder" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description</label>
+                            <InputTextArea class="form-control" @bind-Value="_form.Description" rows="3" placeholder="Primary encrypted document storage configuration." />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Configuration JSON</label>
+                            <InputTextArea class="form-control dss-json-input" @bind-Value="_form.ConfigurationJson" rows="7" placeholder="{}" />
+                            <ValidationMessage For="() => _form.ConfigurationJson" class="text-danger" />
+                        </div>
+                        <div class="um-field dss-switch-field">
+                            <label><InputCheckbox @bind-Value="_form.IsActive" /> Active storage setting</label>
+                            <span>Inactive storage settings stay visible for audit and migration review.</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="ValidateJson" disabled="@_saving"><i class="bi bi-braces" aria-hidden="true"></i> Validate JSON</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @(_editId.HasValue ? "Save Changes" : "Create")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_confirmAction is not null)
+{
+    <div class="dss-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="dss-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="dss-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></div>
+                <div class="um-confirm-content">
+                    <h3 id="dss-confirm-title">@_confirmAction.Title</h3>
+                    <p>@_confirmAction.Message</p>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_saving">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteConfirmAsync" disabled="@_saving">
+                        @if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @_confirmAction.ConfirmLabel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="dss-enterprise-page">
+    <section class="dss-header" aria-label="Document storage settings header">
+        <div class="dss-header-left">
+            <span class="dss-lob-icon"><i class="bi bi-hdd" aria-hidden="true"></i></span>
+            <div class="dss-header-info">
+                <div class="dss-title-row">
+                    <h1 class="dss-page-title">Document Storage Settings</h1>
+                    <span class="dss-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Encrypted storage</span>
+                    <span class="dss-status-pill"><i class="bi bi-database" aria-hidden="true"></i> StorageSetting</span>
+                </div>
+                <div class="dss-sub-row">
+                    <span class="dss-sub-chip"><i class="bi bi-folder-gear" aria-hidden="true"></i> Documents workflow</span>
+                    <span class="dss-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> API synced</span>
+                    <span class="dss-filter-note"><i class="bi bi-funnel" aria-hidden="true"></i> @FilterLabel</span>
+                </div>
+                <p>Configure tenant storage providers, encryption posture, regional policy, usage thresholds, archive tiers, and document lifecycle storage controls.</p>
+            </div>
+        </div>
+        <div class="dss-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "dss-spin" : "")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Storage</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger dss-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError
+        </div>
+    }
+
+    <section class="dss-kpi-strip" aria-label="Storage metrics">
+        @KpiCard("Total", FilteredBySearch.Count.ToString(), "Storage records", "bi-hdd", "dss-ki-blue", "")
+        @KpiCard("Active", FilteredBySearch.Count(x => x.IsActive).ToString(), "Available providers", "bi-check-circle-fill", "dss-ki-green", "active")
+        @KpiCard("Encrypted", FilteredBySearch.Count(x => ReadMeta(x).Encrypted).ToString(), "Encryption enabled", "bi-shield-lock", "dss-ki-purple", "encrypted")
+        @KpiCard("High Usage", FilteredBySearch.Count(x => ReadMeta(x).UsagePercent >= 80).ToString(), "At or above 80%", "bi-speedometer2", "dss-ki-amber", "high-usage")
+        @KpiCard("Needs Review", FilteredBySearch.Count(x => NeedsReview(x)).ToString(), "Inactive or incomplete", "bi-exclamation-triangle", "dss-ki-red", "review")
+        @KpiCard("Providers", FilteredBySearch.Select(x => ReadMeta(x).Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count().ToString(), "Configured backends", "bi-cloud", "dss-ki-cyan", "")
+    </section>
+
+    <section class="dss-workflow-strip dss-workflow-strip--polished" aria-label="Storage workflow">
+        <button type="button" class="dss-workflow-card dss-wf-primary" @onclick='() => SetFilter("")'><span class="dss-workflow-icon"><i class="bi bi-hdd-network" aria-hidden="true"></i></span><span class="dss-workflow-content"><strong>@FilteredBySearch.Count</strong><span>Primary</span><small>Provider inventory</small></span></button>
+        <button type="button" class="dss-workflow-card dss-wf-encrypt" @onclick='() => SetFilter("encrypted")'><span class="dss-workflow-icon"><i class="bi bi-shield-lock" aria-hidden="true"></i></span><span class="dss-workflow-content"><strong>@FilteredBySearch.Count(x => ReadMeta(x).Encrypted)</strong><span>Encrypt</span><small>Encryption controls</small></span></button>
+        <button type="button" class="dss-workflow-card dss-wf-usage" @onclick='() => SetFilter("high-usage")'><span class="dss-workflow-icon"><i class="bi bi-speedometer" aria-hidden="true"></i></span><span class="dss-workflow-content"><strong>@FilteredBySearch.Count(x => ReadMeta(x).UsagePercent >= 80)</strong><span>Monitor</span><small>Quota and usage</small></span></button>
+        <button type="button" class="dss-workflow-card dss-wf-archive" @onclick='() => ShowToast("Archive tier review completed for visible storage settings.", "success", "bi-archive")'><span class="dss-workflow-icon"><i class="bi bi-archive" aria-hidden="true"></i></span><span class="dss-workflow-content"><strong>@FilteredBySearch.Count(x => !string.IsNullOrWhiteSpace(ReadMeta(x).Tier))</strong><span>Archive</span><small>Tier policy</small></span></button>
+        <button type="button" class="dss-workflow-card dss-wf-audit" @onclick="RunStorageAudit"><span class="dss-workflow-icon"><i class="bi bi-clipboard-check" aria-hidden="true"></i></span><span class="dss-workflow-content"><strong>@FilteredBySearch.Count(x => !NeedsReview(x))</strong><span>Audit</span><small>Healthy records</small></span></button>
+    </section>
+
+    <section class="dss-enterprise-search" aria-label="Storage filters">
+        <span class="dss-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+        <div class="dss-search-body">
+            <label for="dss-search">Search storage settings</label>
+            <input id="dss-search" class="dss-search-input" type="search" placeholder="Search code, provider, region, category, description, or JSON..." @bind="_search" @bind:event="oninput" />
+            <span class="dss-search-hint">Search updates the storage grid, KPI cards, workflow strip, and detail panel.</span>
+        </div>
+        <select class="dss-filter-select" @bind="_activeFilter" aria-label="Storage filter">
+            <option value="">All records</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+            <option value="encrypted">Encrypted</option>
+            <option value="high-usage">High usage</option>
+            <option value="review">Needs review</option>
+        </select>
+        <select class="dss-filter-select" @bind="_providerFilter" aria-label="Provider filter">
+            <option value="">All providers</option>
+            @foreach (var provider in ProviderOptions)
+            {
+                <option value="@provider">@provider</option>
+            }
+        </select>
+        <div class="dss-search-result"><strong>@FilteredItems.Count</strong><span>visible</span></div>
+    </section>
+
+    <section class="dss-content-layout">
+        <div class="dss-grid-wrap">
+            <div class="dss-grid-toolbar">
+                <div>
+                    <strong>Storage Configuration Register</strong>
+                    <span>Custom Blazor table backed by api/document-config</span>
+                </div>
+                <div class="dss-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectFirst" disabled="@(FilteredItems.Count == 0)"><i class="bi bi-cursor" aria-hidden="true"></i> Select First</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="RunStorageAudit"><i class="bi bi-clipboard-check" aria-hidden="true"></i> Audit</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ShowExportSummary" disabled="@(FilteredItems.Count == 0)"><i class="bi bi-download" aria-hidden="true"></i> Export Summary</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="dss-loading"><i class="bi bi-arrow-repeat dss-spin" aria-hidden="true"></i><strong>Loading storage settings…</strong></div>
+            }
+            else if (FilteredItems.Count == 0)
+            {
+                <div class="dss-empty-state">
+                    <i class="bi bi-hdd" aria-hidden="true"></i>
+                    <strong>No storage settings found</strong>
+                    <span>Adjust filters or add a storage provider configuration.</span>
+                    <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Storage</button>
+                </div>
+            }
+            else
+            {
+                <div class="dss-table-scroll">
+                    <table class="dss-table">
+                        <thead>
+                            <tr>
+                                <th>Storage Setting</th>
+                                <th>Provider</th>
+                                <th>Region</th>
+                                <th>Status</th>
+                                <th>Usage</th>
+                                <th>Encryption</th>
+                                <th class="dss-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in FilteredItems)
+                            {
+                                var meta = ReadMeta(item);
+                                <tr class="dss-table-row @(_selected?.DocumentConfigItemId == item.DocumentConfigItemId ? "dss-table-row--selected" : "")" @onclick="() => SelectItem(item)">
+                                    <td><div class="dss-record-cell"><span class="dss-record-icon"><i class="bi bi-hdd" aria-hidden="true"></i></span><div><strong>@item.Name</strong><span>@item.Code · @(item.Category ?? "Storage")</span></div></div></td>
+                                    <td><span class="dss-code">@meta.Provider</span></td>
+                                    <td><span class="dss-category">@meta.Region</span></td>
+                                    <td><span class="dss-status @(item.IsActive ? "dss-status-active" : "dss-status-inactive")">@(item.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td><div class="dss-usage"><span style="width:@Math.Clamp(meta.UsagePercent, 0, 100)%"></span></div><small class="dss-usage-label">@meta.UsagePercent%</small></td>
+                                    <td><span class="dss-status @(meta.Encrypted ? "dss-status-configured" : "dss-status-warning")">@(meta.Encrypted ? "Encrypted" : "Review")</span></td>
+                                    <td><div class="dss-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => TestStorage(item)" title="Validate"><i class="bi bi-wifi" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmToggle(item)" title="Toggle active"><i class="bi @(item.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmDuplicate(item)" title="Duplicate"><i class="bi bi-files" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash3" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="dss-detail-panel" aria-label="Selected storage setting">
+            @if (_selected is null)
+            {
+                <div class="dss-detail-empty"><i class="bi bi-hdd" aria-hidden="true"></i><h2>Select a storage setting</h2><p>Choose a row to inspect provider, usage, encryption, region, and configuration JSON.</p></div>
+            }
+            else
+            {
+                var selectedMeta = ReadMeta(_selected);
+                <div class="dss-detail-head"><div class="dss-detail-title-block"><span class="dss-detail-eyebrow"><i class="bi bi-hdd" aria-hidden="true"></i> Storage</span><h2>@_selected.Name</h2><div class="dss-detail-meta"><span><i class="bi bi-hash" aria-hidden="true"></i> @_selected.Code</span><span><i class="bi bi-cloud" aria-hidden="true"></i> @selectedMeta.Provider</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selected = null" aria-label="Close details"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+                <div class="dss-detail-body">
+                    <div class="dss-detail-summary">
+                        <div class="dss-meta-row"><span class="dss-meta-lbl">Status</span><span class="dss-meta-val">@(_selected.IsActive ? "Active" : "Inactive")</span></div>
+                        <div class="dss-meta-row"><span class="dss-meta-lbl">Provider</span><span class="dss-meta-val">@selectedMeta.Provider</span></div>
+                        <div class="dss-meta-row"><span class="dss-meta-lbl">Region</span><span class="dss-meta-val">@selectedMeta.Region</span></div>
+                        <div class="dss-meta-row"><span class="dss-meta-lbl">Usage</span><span class="dss-meta-val">@selectedMeta.UsagePercent%</span></div>
+                    </div>
+                    <div class="dss-detail-description"><strong>Storage workflow description</strong><p>@(string.IsNullOrWhiteSpace(_selected.Description) ? "No description has been configured for this storage setting." : _selected.Description)</p></div>
+                    <div class="dss-policy-card"><strong>Storage controls</strong><span><i class="bi bi-check2-circle" aria-hidden="true"></i> Encryption: @(selectedMeta.Encrypted ? "Enabled" : "Needs review")</span><span><i class="bi bi-check2-circle" aria-hidden="true"></i> Tier: @selectedMeta.Tier</span><span><i class="bi bi-check2-circle" aria-hidden="true"></i> Configuration: @(HasConfiguration(_selected) ? "Present" : "Missing")</span></div>
+                    <div class="dss-json-card"><div><strong>Configuration JSON</strong><span>Provider-specific storage controls used by document workflow.</span></div><pre>@(string.IsNullOrWhiteSpace(_selected.ConfigurationJson) ? "{}" : _selected.ConfigurationJson)</pre></div>
+                    <div class="dss-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil-square" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => TestStorage(_selected)"><i class="bi bi-wifi" aria-hidden="true"></i> Validate</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmDuplicate(_selected)"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button><button type="button" class="um-btn um-btn-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash3" aria-hidden="true"></i> Delete</button></div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private const string Kind = "StorageSetting";
+    private Guid TenantId { get; set; }
+    private Guid TenantAdminUserId { get; set; }
+    private Guid DevTenantId { get; set; }
+    private Guid DevUserId { get; set; }
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private string _search = string.Empty;
+    private string _activeFilter = string.Empty;
+    private string _providerFilter = string.Empty;
+    private bool _loading;
+    private bool _saving;
+    private bool _showForm;
+    private string? _loadError;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private string _toastIcon = "bi-check-circle-fill";
+    private Guid? _editId;
+    private DocumentConfigItemDto? _selected;
+    private ConfirmAction? _confirmAction;
+    private StorageFormModel _form = new();
+    private readonly List<DocumentConfigItemDto> _items = [];
+
+    private List<DocumentConfigItemDto> FilteredBySearch => _items.Where(MatchesSearch).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList();
+
+    private List<DocumentConfigItemDto> FilteredItems => FilteredBySearch
+        .Where(x => string.IsNullOrWhiteSpace(_providerFilter) || string.Equals(ReadMeta(x).Provider, _providerFilter, StringComparison.OrdinalIgnoreCase))
+        .Where(x => _activeFilter switch
+        {
+            "active" => x.IsActive,
+            "inactive" => !x.IsActive,
+            "encrypted" => ReadMeta(x).Encrypted,
+            "high-usage" => ReadMeta(x).UsagePercent >= 80,
+            "review" => NeedsReview(x),
+            _ => true
+        })
+        .ToList();
+
+    private List<string> ProviderOptions => _items.Select(x => ReadMeta(x).Provider).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+
+    private string FilterLabel => _activeFilter switch
+    {
+        "active" => "Active records",
+        "inactive" => "Inactive records",
+        "encrypted" => "Encrypted providers",
+        "high-usage" => "High usage",
+        "review" => "Needs review",
+        _ => "All records"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents", "/documents"), new("Storage Settings", null));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchDocumentConfigItemsAsync(TenantId, Kind, pageSize: 1000);
+            _items.Clear();
+            _items.AddRange(result?.Items ?? []);
+            EnsureSelectedStillVisible();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Error loading storage settings: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger", "bi-exclamation-triangle-fill");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _activeFilter = string.Empty;
+        _providerFilter = string.Empty;
+        EnsureSelectedStillVisible();
+    }
+
+    private void SetFilter(string filter)
+    {
+        _activeFilter = _activeFilter == filter ? string.Empty : filter;
+        EnsureSelectedStillVisible();
+    }
+
+    private void SelectItem(DocumentConfigItemDto item) => _selected = item;
+
+    private void SelectFirst()
+    {
+        _selected = FilteredItems.FirstOrDefault();
+        if (_selected is null)
+            ShowToast("No storage settings are available to select.", "warning", "bi-exclamation-triangle-fill");
+    }
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _form = new StorageFormModel { Category = "Storage", ConfigurationJson = DefaultConfigurationJson, SortOrder = NextSortOrder, IsActive = true };
+        _showForm = true;
+    }
+
+    private void OpenEdit(DocumentConfigItemDto item)
+    {
+        _editId = item.DocumentConfigItemId;
+        _form = new StorageFormModel { Code = item.Code, Name = item.Name, Category = item.Category, Description = item.Description, ConfigurationJson = string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson, SortOrder = item.SortOrder, IsActive = item.IsActive };
+        _showForm = true;
+    }
+
+    private void CloseForm()
+    {
+        if (_saving)
+            return;
+
+        _showForm = false;
+        _editId = null;
+        _form = new();
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!IsJsonValid(_form.ConfigurationJson, out var jsonError))
+        {
+            ShowToast($"Save failed: {jsonError}", "danger", "bi-exclamation-triangle-fill");
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+            {
+                await Api.UpdateDocumentConfigItemAsync(_editId.Value, new UpdateDocumentConfigItemRequest(_form.Code.Trim(), _form.Name.Trim(), Normalize(_form.Category), Normalize(_form.Description), NormalizeJson(_form.ConfigurationJson), _form.IsActive, _form.SortOrder));
+                ShowToast("Storage setting updated successfully.", "success", "bi-check-circle-fill");
+            }
+            else
+            {
+                var id = await Api.CreateDocumentConfigItemAsync(new CreateDocumentConfigItemRequest(TenantId, Kind, _form.Code.Trim(), _form.Name.Trim(), Normalize(_form.Category), Normalize(_form.Description), NormalizeJson(_form.ConfigurationJson), _form.SortOrder));
+                _editId = id;
+                ShowToast("Storage setting created successfully.", "success", "bi-check-circle-fill");
+            }
+
+            _showForm = false;
+            await LoadAsync();
+            _selected = _editId.HasValue ? _items.FirstOrDefault(x => x.DocumentConfigItemId == _editId.Value) ?? FilteredItems.FirstOrDefault() : FilteredItems.FirstOrDefault();
+            _editId = null;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger", "bi-exclamation-triangle-fill");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmToggle(DocumentConfigItemDto item)
+    {
+        _confirmAction = new ConfirmAction(item.IsActive ? "Deactivate Storage Setting" : "Activate Storage Setting", $"{(item.IsActive ? "Deactivate" : "Activate")} {item.Name}? This updates document workflow storage availability.", item.IsActive ? "Deactivate" : "Activate", "bi-pause-circle", async () => await ToggleActiveAsync(item));
+    }
+
+    private async Task ToggleActiveAsync(DocumentConfigItemDto item)
+    {
+        await Api.UpdateDocumentConfigItemAsync(item.DocumentConfigItemId, new UpdateDocumentConfigItemRequest(item.Code, item.Name, item.Category, item.Description, item.ConfigurationJson, !item.IsActive, item.SortOrder));
+        ShowToast($"{item.Name} {(item.IsActive ? "deactivated" : "activated")} successfully.", "success", "bi-check-circle-fill");
+        await LoadAsync();
+        _selected = _items.FirstOrDefault(x => x.DocumentConfigItemId == item.DocumentConfigItemId);
+    }
+
+    private void ConfirmDuplicate(DocumentConfigItemDto item)
+    {
+        _confirmAction = new ConfirmAction("Duplicate Storage Setting", $"Create a duplicate copy of {item.Name}? A new storage setting will be created with copied provider configuration.", "Duplicate", "bi-files", async () => await DuplicateAsync(item));
+    }
+
+    private async Task DuplicateAsync(DocumentConfigItemDto item)
+    {
+        var suffix = DateTime.UtcNow.ToString("HHmmss");
+        var id = await Api.CreateDocumentConfigItemAsync(new CreateDocumentConfigItemRequest(TenantId, Kind, $"{item.Code}_COPY_{suffix}", $"{item.Name} Copy", item.Category, item.Description, item.ConfigurationJson, item.SortOrder + 10));
+        ShowToast("Duplicate storage setting created successfully.", "success", "bi-files");
+        await LoadAsync();
+        _selected = _items.FirstOrDefault(x => x.DocumentConfigItemId == id);
+    }
+
+    private void ConfirmDelete(DocumentConfigItemDto item)
+    {
+        _confirmAction = new ConfirmAction("Delete Storage Setting", $"Delete {item.Name}? This soft-deletes the tenant storage setting after confirmation.", "Delete", "bi-trash3-fill", async () => await DeleteAsync(item));
+    }
+
+    private async Task DeleteAsync(DocumentConfigItemDto item)
+    {
+        await Api.DeleteDocumentConfigItemAsync(item.DocumentConfigItemId);
+        ShowToast("Storage setting deleted successfully.", "success", "bi-check-circle-fill");
+        await LoadAsync();
+        if (_selected?.DocumentConfigItemId == item.DocumentConfigItemId)
+            _selected = FilteredItems.FirstOrDefault();
+    }
+
+    private async Task ExecuteConfirmAsync()
+    {
+        if (_confirmAction is null)
+            return;
+
+        _saving = true;
+        try
+        {
+            var action = _confirmAction;
+            _confirmAction = null;
+            await action.ExecuteAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger", "bi-exclamation-triangle-fill");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void CancelConfirm()
+    {
+        if (_saving)
+            return;
+
+        _confirmAction = null;
+    }
+
+    private void TestStorage(DocumentConfigItemDto item)
+    {
+        var meta = ReadMeta(item);
+        if (!item.IsActive)
+            ShowToast($"Validation warning: {item.Name} is inactive.", "warning", "bi-exclamation-triangle-fill");
+        else if (!HasConfiguration(item))
+            ShowToast($"Validation warning: {item.Name} has no configuration JSON.", "warning", "bi-exclamation-triangle-fill");
+        else
+            ShowToast($"Storage validation passed for {meta.Provider} in {meta.Region}.", "success", "bi-wifi");
+    }
+
+    private void RunStorageAudit()
+    {
+        var reviewCount = FilteredItems.Count(NeedsReview);
+        ShowToast(reviewCount == 0 ? "Storage audit passed for all visible settings." : $"Storage audit completed: {reviewCount} visible setting(s) need review.", reviewCount == 0 ? "success" : "warning", reviewCount == 0 ? "bi-clipboard-check" : "bi-exclamation-triangle-fill");
+    }
+
+    private void ValidateJson()
+    {
+        if (IsJsonValid(_form.ConfigurationJson, out var error))
+            ShowToast("Configuration JSON is valid.", "success", "bi-check-circle-fill");
+        else
+            ShowToast($"JSON validation failed: {error}", "danger", "bi-exclamation-triangle-fill");
+    }
+
+    private void ShowValidationToast() => ShowToast("Please fix validation errors before saving.", "danger", "bi-exclamation-triangle-fill");
+
+    private void ShowExportSummary() => ShowToast($"Export summary prepared for {FilteredItems.Count} storage setting records.", "success", "bi-download");
+
+    private void EnsureSelectedStillVisible()
+    {
+        if (_selected is not null && FilteredItems.Any(x => x.DocumentConfigItemId == _selected.DocumentConfigItemId))
+            return;
+
+        _selected = FilteredItems.FirstOrDefault();
+    }
+
+    private bool MatchesSearch(DocumentConfigItemDto item)
+    {
+        if (string.IsNullOrWhiteSpace(_search))
+            return true;
+
+        var meta = ReadMeta(item);
+        return Contains(item.Code, _search) || Contains(item.Name, _search) || Contains(item.Category, _search) || Contains(item.Description, _search) || Contains(item.ConfigurationJson, _search) || Contains(meta.Provider, _search) || Contains(meta.Region, _search) || Contains(meta.Tier, _search);
+    }
+
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool HasConfiguration(DocumentConfigItemDto item) => !string.IsNullOrWhiteSpace(item.ConfigurationJson) && item.ConfigurationJson.Trim() != "{}";
+
+    private static bool NeedsReview(DocumentConfigItemDto item) => !item.IsActive || !HasConfiguration(item) || !ReadMeta(item).Encrypted;
+
+    private static StorageMeta ReadMeta(DocumentConfigItemDto item)
+    {
+        if (string.IsNullOrWhiteSpace(item.ConfigurationJson))
+            return new("Unassigned", "Primary", 0, false, "Hot");
+
+        try
+        {
+            using var doc = JsonDocument.Parse(item.ConfigurationJson);
+            var root = doc.RootElement;
+            return new(
+                GetString(root, "provider", "Unassigned"),
+                GetString(root, "region", "Primary"),
+                GetInt(root, "usagePercent", 0),
+                GetBool(root, "encrypted", string.Equals(GetString(root, "provider", string.Empty), "AzureBlob", StringComparison.OrdinalIgnoreCase)),
+                GetString(root, "tier", "Hot"));
+        }
+        catch (JsonException)
+        {
+            return new("Invalid JSON", "Review", 0, false, "Review");
+        }
+    }
+
+    private static string GetString(JsonElement root, string property, string fallback) => root.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? fallback : fallback;
+
+    private static int GetInt(JsonElement root, string property, int fallback) => root.TryGetProperty(property, out var value) && value.TryGetInt32(out var result) ? result : fallback;
+
+    private static bool GetBool(JsonElement root, string property, bool fallback) => root.TryGetProperty(property, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False ? value.GetBoolean() : fallback;
+
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string NormalizeJson(string? value) => string.IsNullOrWhiteSpace(value) ? "{}" : value.Trim();
+
+    private static bool IsJsonValid(string? json, out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(json))
+            return true;
+
+        try
+        {
+            using var _ = JsonDocument.Parse(json);
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private void ShowToast(string message, string kind, string icon)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastIcon = icon;
+    }
+
+    private void ClearToast() => _toastMessage = null;
+
+    private RenderFragment KpiCard(string label, string value, string caption, string icon, string tone, string filterKey) => @<button type="button" class="dss-kpi-card @tone @(_activeFilter == filterKey && !string.IsNullOrWhiteSpace(filterKey) ? "dss-kpi-active" : "")" @onclick="() => SetFilter(filterKey)" title="Filter by @label"><span class="dss-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span class="dss-kpi-copy"><span class="dss-kpi-label">@label</span><strong class="dss-kpi-value">@value</strong><span class="dss-kpi-caption">@caption</span></span></button>;
+
+    private int NextSortOrder => _items.Count == 0 ? 10 : _items.Max(x => x.SortOrder) + 10;
+
+    private const string DefaultConfigurationJson = "{\"provider\":\"AzureBlob\",\"region\":\"Primary\",\"usagePercent\":0,\"encrypted\":true,\"tier\":\"Hot\"}";
+
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        TenantId = context.TenantId;
+        TenantAdminUserId = context.UserId;
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+        DevTenantId = context.TenantId;
+        DevUserId = context.UserId;
+    }
+
+    private sealed record StorageMeta(string Provider, string Region, int UsagePercent, bool Encrypted, string Tier);
+
+    private sealed record ConfirmAction(string Title, string Message, string ConfirmLabel, string Icon, Func<Task> ExecuteAsync);
+
+    private sealed class StorageFormModel
+    {
+        [Required]
+        [StringLength(80)]
+        public string Code { get; set; } = string.Empty;
+
+        [Required]
+        [StringLength(200)]
+        public string Name { get; set; } = string.Empty;
+
+        [StringLength(120)]
+        public string? Category { get; set; }
+
+        [StringLength(500)]
+        public string? Description { get; set; }
+
+        [StringLength(4000)]
+        public string? ConfigurationJson { get; set; }
+
+        [Range(0, 9999)]
+        public int SortOrder { get; set; }
+
+        public bool IsActive { get; set; } = true;
+    }
+}

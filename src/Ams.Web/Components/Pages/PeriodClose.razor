@@ -1,109 +1,513 @@
 @page "/finance/period-close"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Finance
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Period Close — AMS</PageTitle>
+<PageTitle>Period Close — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Period Close"
-               Subtitle="Tenant Admin period-end checklist for financial close readiness"
-               Icon="bi-lock">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/accounting-periods")'><i class="bi bi-calendar-range" aria-hidden="true"></i> Periods</button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Task</button>
-    </Actions>
-</AppPageHeader>
-
-<div class="fin-kpi-strip">
-    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-list-check"></i></div><div><div class="fin-kpi-value">@_items.Count</div><div class="fin-kpi-label">Close Tasks</div></div></div>
-    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-check-circle"></i></div><div><div class="fin-kpi-value">@_items.Count(x => x.StatusCode == "Completed")</div><div class="fin-kpi-label">Completed</div></div></div>
-    <div class="fin-kpi-card"><div class="fin-kpi-icon"><i class="bi bi-hourglass"></i></div><div><div class="fin-kpi-value">@_items.Count(x => x.StatusCode != "Completed")</div><div class="fin-kpi-label">Open</div></div></div>
-</div>
-
-<div class="fin-toolbar">
-    <div class="fin-search-box"><i class="bi bi-search fin-search-icon" aria-hidden="true"></i><input class="e-input fin-search-input" placeholder="Search close task or notes…" @bind="_searchTerm" @bind:event="oninput" @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" /></div>
-    <select class="um-input" @bind="_statusFilter"><option value="">All Statuses</option><option value="Completed">Completed</option><option value="Open">Open</option><option value="Blocked">Blocked</option></select>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_error))
+@if (_toastVisible)
 {
-    <div class="fin-alert"><div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill"></i></div><div><div class="fin-alert-title">Period close failed to load</div><div>@_error</div></div></div>
-}
-else if (_loading)
-{
-    <div class="fin-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading period close tasks…</span></div>
-}
-else
-{
-    <div class="fin-grid-container">
-        <SfGrid TValue="PeriodCloseEntryDto" DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="600px">
-            <GridEvents TValue="PeriodCloseEntryDto" RowSelected="OnRowSelected" />
-            <GridPageSettings PageSize="15"></GridPageSettings>
-            <GridColumns>
-                <GridColumn Field="@nameof(PeriodCloseEntryDto.TaskDescription)" HeaderText="Task" Width="360"></GridColumn>
-                <GridColumn Field="@nameof(PeriodCloseEntryDto.StatusCode)" HeaderText="Status" Width="120"><Template>@{ var item = (PeriodCloseEntryDto)context; }<span class="fin-chip @StatusClass(item.StatusCode)">@item.StatusCode</span></Template></GridColumn>
-                <GridColumn Field="@nameof(PeriodCloseEntryDto.CompletedDateUtc)" HeaderText="Completed" Type="ColumnType.DateTime" Format="d" Width="140"></GridColumn>
-                <GridColumn Field="@nameof(PeriodCloseEntryDto.Notes)" HeaderText="Notes" Width="320"></GridColumn>
-                <GridColumn HeaderText="Actions" Width="90"><Template>@{ var item = (PeriodCloseEntryDto)context; }<button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button></Template></GridColumn>
-            </GridColumns>
-        </SfGrid>
+    <div class="pcl-toast pcl-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pcl-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<SfDialog @bind-Visible="_showForm" Width="680px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates><Content>
-        <div class="um-modal-header"><i class="bi bi-lock" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New Period Close Task" : "Edit Period Close Task")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-        <EditForm EditContext="_editContext"><DataAnnotationsValidator />
-            <div class="um-modal-body"><div class="um-form-grid">
-                <div class="um-field"><label>Accounting Period <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountingPeriodId" class="um-input"><option value="@Guid.Empty">Select period…</option>@foreach (var period in _periods) { <option value="@period.AccountingPeriodId">@period.PeriodCode - @period.PeriodName</option> }</InputSelect><ValidationMessage For="() => _form.AccountingPeriodId" class="text-danger" /></div>
-                <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input"><option value="Open">Open</option><option value="Completed">Completed</option><option value="Blocked">Blocked</option></InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
-                <div class="um-field um-field--full"><label>Task Description <span class="text-danger">*</span></label><InputTextArea @bind-Value="_form.TaskDescription" class="um-input" rows="3" /><ValidationMessage For="() => _form.TaskDescription" class="text-danger" /></div>
-                <div class="um-field"><label>Completed Date</label><InputDate @bind-Value="_form.CompletedDateUtc" class="um-input" /><ValidationMessage For="() => _form.CompletedDateUtc" class="text-danger" /></div>
-                <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_form.Notes" class="um-input" rows="3" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div>
-                @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-            </div></div>
-        </EditForm>
-        <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Task")</button></div>
-    </Content></DialogTemplates>
-</SfDialog>
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="pcl-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="pcl-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="pcl-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Blocked" ? "um-confirm-icon--danger" : null)"><i class="bi @PendingStatusIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="pcl-status-title">@PendingStatusTitle</div>
+                <div class="um-confirm-body">Mark <strong>@_statusTarget.TaskDescription</strong> as <strong>@_pendingStatus</strong> for the selected period close checklist?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Blocked" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@PendingStatusAction</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="pcl-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="pcl-modal pcl-action-modal" role="dialog" aria-modal="true" aria-labelledby="pcl-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-list-check" aria-hidden="true"></i>
+                <span id="pcl-form-title">@(_editingId == Guid.Empty ? "New Period Close Task" : "Edit Period Close Task")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pcl-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Period close workflow</span>
+                        <p>Track close checklist ownership, completion state, blockers, and finance notes for each accounting period.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Accounting Period <span class="text-danger">*</span></label>
+                            <InputSelect @bind-Value="_form.AccountingPeriodId" class="form-select">
+                                <option value="@Guid.Empty">Select period...</option>
+                                @foreach (var period in _periods)
+                                {
+                                    <option value="@period.AccountingPeriodId">@period.PeriodCode - @period.PeriodName (@period.StatusCode)</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AccountingPeriodId" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Task Description <span class="text-danger">*</span></label>
+                            <InputTextArea @bind-Value="_form.TaskDescription" class="form-control" rows="3" />
+                            <ValidationMessage For="() => _form.TaskDescription" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect @bind-Value="_form.StatusCode" class="form-select">
+                                @foreach (var status in _statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Completed Date</label>
+                            <InputDate @bind-Value="_form.CompletedDateUtc" class="form-control" />
+                            <ValidationMessage For="() => _form.CompletedDateUtc" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea @bind-Value="_form.Notes" class="form-control" rows="3" />
+                            <ValidationMessage For="() => _form.Notes" class="text-danger" />
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Task" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="pcl-enterprise-page">
+    <section class="pcl-header">
+        <div class="pcl-header-left">
+            <div class="pcl-lob-icon"><i class="bi bi-lock" aria-hidden="true"></i></div>
+            <div class="pcl-header-info">
+                <div class="pcl-title-row">
+                    <h1 class="pcl-page-title">Period Close</h1>
+                    <span class="pcl-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live close checklist</span>
+                    <span class="pcl-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <div class="pcl-sub-row">
+                    <span>Coordinate period-end tasks, blockers, reconciliation readiness, and approval status.</span>
+                    <span class="pcl-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span>
+                    <span class="pcl-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span>
+                </div>
+            </div>
+        </div>
+        <div class="pcl-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/accounting-periods")'><i class="bi bi-calendar-range" aria-hidden="true"></i> Periods</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/bank-reconciliation")'><i class="bi bi-bank" aria-hidden="true"></i> Reconcile</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat pcl-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Task</button>
+        </div>
+    </section>
+
+    <section class="pcl-kpi-strip" aria-label="Period close metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="pcl-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "pcl-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="pcl-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="pcl-kpi-copy"><span class="pcl-kpi-label">@kpi.Label</span><span class="pcl-kpi-value">@kpi.Value</span><span class="pcl-kpi-caption">@kpi.Caption</span></span>
+            </button>
+        }
+    </section>
+
+    <section class="pcl-workflow-strip" aria-label="Period close workflow shortcuts">
+        <button type="button" class="pcl-workflow-card pcl-wf-period" @onclick='() => Nav.NavigateTo("/finance/accounting-periods")'><span class="pcl-workflow-icon"><i class="bi bi-calendar-range" aria-hidden="true"></i></span><span class="pcl-workflow-content"><strong>1</strong><span>Period</span><small>Confirm fiscal window.</small></span></button>
+        <button type="button" class="pcl-workflow-card pcl-wf-journal" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><span class="pcl-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="pcl-workflow-content"><strong>2</strong><span>Post</span><small>Review journals.</small></span></button>
+        <button type="button" class="pcl-workflow-card pcl-wf-recon" @onclick='() => Nav.NavigateTo("/finance/bank-reconciliation")'><span class="pcl-workflow-icon"><i class="bi bi-bank" aria-hidden="true"></i></span><span class="pcl-workflow-content"><strong>3</strong><span>Reconcile</span><small>Validate cash.</small></span></button>
+        <button type="button" class="pcl-workflow-card pcl-wf-complete" @onclick='() => SetKpiFilter("open")'><span class="pcl-workflow-icon"><i class="bi bi-check2-circle" aria-hidden="true"></i></span><span class="pcl-workflow-content"><strong>4</strong><span>Clear</span><small>Complete tasks.</small></span></button>
+        <button type="button" class="pcl-workflow-card pcl-wf-approve" @onclick='() => SetKpiFilter("blocked")'><span class="pcl-workflow-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></span><span class="pcl-workflow-content"><strong>5</strong><span>Approve</span><small>Resolve blockers.</small></span></button>
+    </section>
+
+    <section class="pcl-enterprise-search" aria-label="Period close filters">
+        <div class="pcl-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="pcl-search-body">
+            <label for="pcl-search">Search close tasks</label>
+            <input id="pcl-search" class="pcl-search-input" type="search" placeholder="Search task, status, notes, or period..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="pcl-search-hint">Filters apply instantly across the synchronized period close checklist.</span>
+        </div>
+        <select class="pcl-filter-select" @bind="PeriodFilter" aria-label="Accounting period filter">
+            <option value="">All periods</option>
+            @foreach (var period in _periods)
+            {
+                <option value="@period.AccountingPeriodId">@period.PeriodCode - @period.PeriodName</option>
+            }
+        </select>
+        <select class="pcl-filter-select" @bind="StatusFilter" aria-label="Status filter">
+            <option value="">All statuses</option>
+            @foreach (var status in _statuses)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <div class="pcl-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pcl-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="pcl-content-layout">
+        <div class="pcl-grid-wrap">
+            <div class="pcl-grid-toolbar">
+                <div><strong>Period close checklist</strong><span>@ActiveFilterText</span></div>
+                <div class="pcl-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Task</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="CompleteVisibleAsync" disabled="@IsCompleteVisibleDisabled"><i class="bi bi-check2-all" aria-hidden="true"></i> Complete Visible</button>
+                </div>
+            </div>
+            @if (_loading)
+            {
+                <div class="pcl-loading"><i class="bi bi-arrow-repeat pcl-spin" aria-hidden="true"></i><strong>Loading period close...</strong><span>Syncing schema, seed tasks, and accounting periods.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="pcl-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No period close tasks found</strong><span>Adjust filters or create a new close task for an accounting period.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Task</button></div>
+            }
+            else
+            {
+                <div class="pcl-table-scroll">
+                    <table class="pcl-table">
+                        <thead><tr><th>Task</th><th>Period</th><th>Status</th><th>Completed</th><th>Notes</th><th class="pcl-actions-col">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in PagedItems)
+                            {
+                                <tr class="pcl-table-row @(_selected?.PeriodCloseEntryId == item.PeriodCloseEntryId ? "pcl-table-row--selected" : null)" @onclick="() => SelectTask(item)">
+                                    <td><div class="pcl-entry-cell"><span class="pcl-entry-icon @StatusIconTone(item.StatusCode)"><i class="bi @StatusIcon(item.StatusCode)" aria-hidden="true"></i></span><span><strong>@item.TaskDescription</strong><span>@PeriodLabel(item.AccountingPeriodId)</span></span></div></td>
+                                    <td>@PeriodShortLabel(item.AccountingPeriodId)</td>
+                                    <td><span class="pcl-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td>
+                                    <td>@(item.CompletedDateUtc?.ToLocalTime().ToString("MMM d, yyyy") ?? "—")</td>
+                                    <td class="pcl-notes-col">@(!string.IsNullOrWhiteSpace(item.Notes) ? item.Notes : "—")</td>
+                                    <td><div class="pcl-row-acts"><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Complete" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Completed")' disabled="@IsCompleted(item)"><i class="bi bi-check2" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Block" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Blocked")' disabled="@IsBlocked(item)"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="pcl-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+            }
+        </div>
+        <aside class="pcl-detail-panel" aria-label="Selected period close task detail">
+            @if (_selected is null)
+            {
+                <div class="pcl-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a close task</strong><span>Choose a row to inspect status, period, notes, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="pcl-detail-head"><div><span class="pcl-detail-eyebrow"><i class="bi bi-list-check" aria-hidden="true"></i> Close task</span><h2>@_selected.TaskDescription</h2><div class="pcl-detail-meta"><span>@PeriodLabel(_selected.AccountingPeriodId)</span><span class="pcl-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div>
+                <div class="pcl-detail-body">
+                    <div class="pcl-detail-summary">
+                        <div class="pcl-meta-row"><span class="pcl-meta-lbl">Period</span><span class="pcl-meta-val">@PeriodLabel(_selected.AccountingPeriodId)</span></div>
+                        <div class="pcl-meta-row"><span class="pcl-meta-lbl">Status</span><span class="pcl-meta-val">@_selected.StatusCode</span></div>
+                        <div class="pcl-meta-row"><span class="pcl-meta-lbl">Created</span><span class="pcl-meta-val">@_selected.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</span></div>
+                        <div class="pcl-meta-row"><span class="pcl-meta-lbl">Completed</span><span class="pcl-meta-val">@(_selected.CompletedDateUtc?.ToLocalTime().ToString("MMM d, yyyy") ?? "Not completed")</span></div>
+                    </div>
+                    <div class="pcl-note-card"><span><i class="bi bi-clipboard-check" aria-hidden="true"></i> Close readiness</span><p>@TaskReadinessText(_selected)</p></div>
+                    <div class="pcl-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="CompleteSelected" disabled="@IsSelectedCompleted"><i class="bi bi-check2-circle" aria-hidden="true"></i> Complete</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ReopenSelected" disabled="@IsSelectedOpen"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reopen</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="BlockSelected" disabled="@IsSelectedBlocked"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Block</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/accounting-periods")'><i class="bi bi-calendar-range" aria-hidden="true"></i> Periods</button></div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private const int PageSize = 12;
     private Guid _tenantId;
-    private string? _searchTerm, _error;
-    private string _statusFilter = string.Empty;
-    private bool _loading, _showForm, _saving;
+    private Guid _tenantAdminUserId;
     private List<PeriodCloseEntryDto> _items = [];
+    private List<PeriodCloseEntryDto> _filtered = [];
     private List<AccountingPeriodDto> _periods = [];
-    private string? _formError;
-    private Guid _editingId = Guid.Empty;
+    private PeriodCloseEntryDto? _selected;
+    private PeriodCloseEntryDto? _statusTarget;
     private PeriodCloseForm _form = new();
-    private EditContext _editContext = default!;
-    private IEnumerable<PeriodCloseEntryDto> FilteredItems => _items.Where(x => string.IsNullOrWhiteSpace(_statusFilter) || x.StatusCode == _statusFilter);
-    protected override async Task OnInitializedAsync() { await ResolveCurrentUserContextAsync(); _editContext = new(_form); await LoadAsync(); }
-    private async Task LoadAsync() { _loading = true; _error = null; try { var result = await Api.SearchPeriodCloseEntriesAsync(_tenantId, _searchTerm); var periods = await Api.SearchAccountingPeriodsAsync(_tenantId); _items = result?.Items.ToList() ?? []; _periods = periods?.Items.ToList() ?? []; } catch (Exception ex) { _error = ex.Message; _items = []; } finally { _loading = false; } }
-    private void OnRowSelected(RowSelectEventArgs<PeriodCloseEntryDto> args) => OpenEdit(args.Data);
-    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
-    private void OpenEdit(PeriodCloseEntryDto item) { _editingId = item.PeriodCloseEntryId; _form = new PeriodCloseForm { AccountingPeriodId = item.AccountingPeriodId, TaskDescription = item.TaskDescription, StatusCode = item.StatusCode, CompletedDateUtc = item.CompletedDateUtc, Notes = item.Notes }; _editContext = new(_form); _formError = null; _showForm = true; }
-    private void CloseForm() => _showForm = false;
-    private async Task SaveAsync() { if (!_editContext.Validate()) return; _saving = true; try { if (_editingId == Guid.Empty) await Api.CreatePeriodCloseEntryAsync(new CreatePeriodCloseEntryRequest { TenantId = _tenantId, AccountingPeriodId = _form.AccountingPeriodId, TaskDescription = _form.TaskDescription, StatusCode = _form.StatusCode, CompletedDateUtc = _form.CompletedDateUtc, Notes = _form.Notes }); else await Api.UpdatePeriodCloseEntryAsync(_editingId, new UpdatePeriodCloseEntryRequest { TenantId = _tenantId, PeriodCloseEntryId = _editingId, AccountingPeriodId = _form.AccountingPeriodId, TaskDescription = _form.TaskDescription, StatusCode = _form.StatusCode, CompletedDateUtc = _form.CompletedDateUtc, Notes = _form.Notes }); _showForm = false; await LoadAsync(); } catch (Exception ex) { _formError = $"Save failed: {ex.Message}"; } finally { _saving = false; } }
-    private static string StatusClass(string status) => status switch { "Completed" => "fin-chip-success", "Blocked" => "fin-chip-danger", "Open" => "fin-chip-warning", _ => "fin-chip-neutral" };
-    private sealed class PeriodCloseForm { [RequiredGuid(ErrorMessage = "Accounting Period is required.")] public Guid AccountingPeriodId { get; set; } [Required, StringLength(500)] public string TaskDescription { get; set; } = string.Empty; [Required, StringLength(50)] public string StatusCode { get; set; } = "Open"; public DateTime? CompletedDateUtc { get; set; } [StringLength(1000)] public string? Notes { get; set; } }
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _periodFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showStatusConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _statuses = ["Open", "Completed", "Blocked"];
 
-    async Task ResolveCurrentUserContextAsync()
+    private IEnumerable<PeriodCloseEntryDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private int CompletionPercent => _items.Count == 0 ? 0 : (int)Math.Round(_items.Count(x => x.StatusCode == "Completed") * 100m / _items.Count);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All close tasks" : $"Filtered by {_kpiFilter}";
+    private string PendingStatusIcon => _pendingStatus switch { "Completed" => "bi-check2-circle", "Blocked" => "bi-exclamation-triangle-fill", _ => "bi-arrow-counterclockwise" };
+    private string PendingStatusTitle => _pendingStatus switch { "Completed" => "Complete Close Task", "Blocked" => "Block Close Task", _ => "Reopen Close Task" };
+    private string PendingStatusAction => _pendingStatus switch { "Completed" => "Complete Task", "Blocked" => "Block Task", _ => "Reopen Task" };
+    private bool IsCompleteVisibleDisabled => !_filtered.Any(x => x.StatusCode != "Completed") || _busy;
+    private bool IsSelectedCompleted => _selected?.StatusCode == "Completed";
+    private bool IsSelectedOpen => _selected?.StatusCode == "Open";
+    private bool IsSelectedBlocked => _selected?.StatusCode == "Blocked";
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Tasks", _items.Count.ToString("N0"), "All close items", "bi-list-check", "pcl-ki-blue"),
+        new("completed", "Completed", _items.Count(x => x.StatusCode == "Completed").ToString("N0"), "Finished", "bi-check-circle", "pcl-ki-green"),
+        new("open", "Open", _items.Count(x => x.StatusCode == "Open").ToString("N0"), "In progress", "bi-hourglass-split", "pcl-ki-amber"),
+        new("blocked", "Blocked", _items.Count(x => x.StatusCode == "Blocked").ToString("N0"), "Needs attention", "bi-exclamation-triangle", "pcl-ki-red"),
+        new("periods", "Periods", _items.Select(x => x.AccountingPeriodId).Distinct().Count().ToString("N0"), "With close work", "bi-calendar-range", "pcl-ki-purple"),
+        new("readiness", "Ready", $"{CompletionPercent}%", "Completion rate", "bi-speedometer2", "pcl-ki-cyan")
+    ];
+
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string PeriodFilter { get => _periodFilter; set { _periodFilter = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+
+    protected override async Task OnInitializedAsync()
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Finance", "/finance"), new("Period Close", "/finance/period-close"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var periods = await Api.SearchAccountingPeriodsAsync(_tenantId, string.Empty);
+            _periods = periods?.Items.OrderByDescending(x => x.StartDate).ToList() ?? [];
+            var result = await Api.SearchPeriodCloseEntriesAsync(_tenantId, string.Empty);
+            _items = result?.Items.OrderByDescending(x => x.CreatedDateUtc).ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Period close failed to load: {ex.Message}";
+            ShowToast(_loadError, "danger");
+            _items = [];
+            _filtered = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<PeriodCloseEntryDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(x.TaskDescription, term) || Contains(x.StatusCode, term) || Contains(x.Notes, term) || Contains(PeriodLabel(x.AccountingPeriodId), term));
+        }
+
+        if (Guid.TryParse(_periodFilter, out var periodId)) query = query.Where(x => x.AccountingPeriodId == periodId);
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter);
+        query = _kpiFilter switch
+        {
+            "completed" => query.Where(x => x.StatusCode == "Completed"),
+            "open" => query.Where(x => x.StatusCode == "Open"),
+            "blocked" => query.Where(x => x.StatusCode == "Blocked"),
+            "periods" => query,
+            "readiness" => query.Where(x => x.StatusCode != "Completed"),
+            _ => query
+        };
+
+        _filtered = query.OrderBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.CreatedDateUtc).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter) { _kpiFilter = filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _periodFilter = string.Empty; _statusFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Period close filters reset.", "info"); }
+    private void SelectTask(PeriodCloseEntryDto item) => _selected = item;
+    private void CompleteSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Completed"); }
+    private void ReopenSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Open"); }
+    private void BlockSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Blocked"); }
+
+    private void OpenCreate()
+    {
+        _editingId = Guid.Empty;
+        _formError = null;
+        _form = new PeriodCloseForm { AccountingPeriodId = _periods.FirstOrDefault(x => x.StatusCode == "Open")?.AccountingPeriodId ?? _periods.FirstOrDefault()?.AccountingPeriodId ?? Guid.Empty };
+        _showForm = true;
+    }
+
+    private void OpenEdit(PeriodCloseEntryDto item)
+    {
+        _editingId = item.PeriodCloseEntryId;
+        _formError = null;
+        _form = new PeriodCloseForm { AccountingPeriodId = item.AccountingPeriodId, TaskDescription = item.TaskDescription, StatusCode = item.StatusCode, CompletedDateUtc = item.CompletedDateUtc?.ToLocalTime().Date, Notes = item.Notes };
+        _showForm = true;
+    }
+
+    private void CloseForm() { if (_busy) return; _showForm = false; }
+
+    private async Task SaveAsync()
+    {
+        _busy = true;
+        _formError = null;
+        try
+        {
+            var completedDate = _form.StatusCode == "Completed" ? _form.CompletedDateUtc ?? DateTime.Today : _form.CompletedDateUtc;
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreatePeriodCloseEntryAsync(new CreatePeriodCloseEntryRequest { TenantId = _tenantId, AccountingPeriodId = _form.AccountingPeriodId, TaskDescription = _form.TaskDescription, StatusCode = _form.StatusCode, CompletedByUserId = _form.StatusCode == "Completed" ? _tenantAdminUserId : null, CompletedDateUtc = completedDate, Notes = _form.Notes, CreatedByUserId = _tenantAdminUserId });
+                ShowToast("Period close task created.", "success");
+            }
+            else
+            {
+                await Api.UpdatePeriodCloseEntryAsync(_editingId, new UpdatePeriodCloseEntryRequest { TenantId = _tenantId, PeriodCloseEntryId = _editingId, AccountingPeriodId = _form.AccountingPeriodId, TaskDescription = _form.TaskDescription, StatusCode = _form.StatusCode, CompletedByUserId = _form.StatusCode == "Completed" ? _tenantAdminUserId : null, CompletedDateUtc = completedDate, Notes = _form.Notes, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast("Period close task updated.", "success");
+            }
+
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ConfirmStatusUpdate(PeriodCloseEntryDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+
+    private async Task ExecuteStatusUpdateAsync()
+    {
+        if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return;
+        _busy = true;
+        try
+        {
+            await UpdateTaskStatusAsync(_statusTarget, _pendingStatus);
+            ShowToast($"Period close task marked {_pendingStatus.ToLowerInvariant()}.", "success");
+            _showStatusConfirm = false;
+            _statusTarget = null;
+            _pendingStatus = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CompleteVisibleAsync()
+    {
+        if (!_filtered.Any(x => x.StatusCode != "Completed")) { ShowToast("Visible tasks are already complete.", "info"); return; }
+        _busy = true;
+        try
+        {
+            foreach (var item in _filtered.Where(x => x.StatusCode != "Completed").ToList())
+            {
+                await UpdateTaskStatusAsync(item, "Completed");
+            }
+
+            ShowToast("Visible period close tasks completed.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Bulk complete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task UpdateTaskStatusAsync(PeriodCloseEntryDto item, string status)
+        => Api.UpdatePeriodCloseEntryAsync(item.PeriodCloseEntryId, new UpdatePeriodCloseEntryRequest { TenantId = _tenantId, PeriodCloseEntryId = item.PeriodCloseEntryId, AccountingPeriodId = item.AccountingPeriodId, TaskDescription = item.TaskDescription, StatusCode = status, CompletedByUserId = status == "Completed" ? _tenantAdminUserId : null, CompletedDateUtc = status == "Completed" ? DateTime.UtcNow : null, Notes = item.Notes, ModifiedByUserId = _tenantAdminUserId });
+
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving the close task.", "warning"); return Task.CompletedTask; }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any()) { ShowToast("No period close tasks are available to export.", "warning"); return; }
+        var csv = new StringBuilder();
+        csv.AppendLine("TaskDescription,Period,Status,CompletedDateUtc,Notes,PeriodCloseEntryId");
+        foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.TaskDescription), Csv(PeriodLabel(item.AccountingPeriodId)), Csv(item.StatusCode), Csv(item.CompletedDateUtc?.ToString("O") ?? string.Empty), Csv(item.Notes ?? string.Empty), Csv(item.PeriodCloseEntryId.ToString())));
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"period-close-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} period close tasks.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.PeriodCloseEntryId == _selected.PeriodCloseEntryId) ?? _filtered.FirstOrDefault();
+    private string PeriodLabel(Guid accountingPeriodId) { var period = _periods.FirstOrDefault(x => x.AccountingPeriodId == accountingPeriodId); return period is null ? "Unassigned period" : $"{period.PeriodCode} - {period.PeriodName}"; }
+    private string PeriodShortLabel(Guid accountingPeriodId) { var period = _periods.FirstOrDefault(x => x.AccountingPeriodId == accountingPeriodId); return period?.PeriodCode ?? "—"; }
+    private static string TaskReadinessText(PeriodCloseEntryDto item) => item.StatusCode switch { "Completed" => "This close task is complete and supports period-end readiness.", "Blocked" => "This close task is blocked and should be resolved before final close approval.", _ => "This close task is open and should be completed before the accounting period is closed." };
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static int StatusSort(string status) => status switch { "Blocked" => 0, "Open" => 1, "Completed" => 2, _ => 3 };
+    private static bool IsCompleted(PeriodCloseEntryDto item) => item.StatusCode == "Completed";
+    private static bool IsBlocked(PeriodCloseEntryDto item) => item.StatusCode == "Blocked";
+    private static string StatusCss(string status) => $"pcl-st-{status.ToLowerInvariant()}";
+    private static string StatusIconTone(string status) => status switch { "Completed" => "pcl-di-green", "Blocked" => "pcl-di-red", _ => "pcl-di-amber" };
+    private static string StatusIcon(string status) => status switch { "Completed" => "bi-check2-circle", "Blocked" => "bi-exclamation-triangle", _ => "bi-hourglass-split" };
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter close tasks by {Label}"; }
+
+    private sealed class PeriodCloseForm
+    {
+        [RequiredGuid(ErrorMessage = "Accounting Period is required.")] public Guid AccountingPeriodId { get; set; }
+        [Required, StringLength(500)] public string TaskDescription { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Open";
+        public DateTime? CompletedDateUtc { get; set; }
+        [StringLength(1000)] public string? Notes { get; set; }
     }
 }

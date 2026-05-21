@@ -1,109 +1,253 @@
 @page "/invoices"
 @page "/billing/invoices"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Microsoft.JSInterop
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Invoices — AMS</PageTitle>
+<PageTitle>Billing Invoices — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Invoices"
-               Subtitle="Track, issue, and manage all policy invoices across direct-bill and agency-bill accounts"
-               Icon="bi-receipt">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
-            <i class="bi bi-building" aria-hidden="true"></i> Billing Accounts
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/payments")'>
-            <i class="bi bi-cash-coin" aria-hidden="true"></i> Payments
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="() => _showCreate = true">
-            <i class="bi bi-plus-circle" aria-hidden="true"></i> New Invoice
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- KPI strip -->
-<div class="inv-kpi-strip">
-    @InvKpi("bi-receipt",          "Total",          (_items?.Count ?? 0).ToString(),                                                        "inv-ki-blue")
-    @InvKpi("bi-hourglass",        "Outstanding",    Fmt(_items?.Where(x=>x.StatusCode!=2).Sum(x=>x.BalanceAmount)),                        "inv-ki-amber")
-    @InvKpi("bi-exclamation-circle","Overdue",       (_items?.Count(x=>x.StatusCode==3) ?? 0).ToString(),                                   "inv-ki-red")
-    @InvKpi("bi-check-circle",     "Paid",           (_items?.Count(x=>x.StatusCode==2) ?? 0).ToString(),                                   "inv-ki-green")
-    @InvKpi("bi-currency-dollar",  "Total Billed",   Fmt(_items?.Sum(x=>x.TotalAmount)),                                                    "inv-ki-blue")
-    @InvKpi("bi-calendar-x",       "Past Due 30+",   Fmt(_items?.Where(x=>x.StatusCode==3 && x.CreatedDateUtc<DateTime.UtcNow.AddDays(-30)).Sum(x=>x.BalanceAmount)), "inv-ki-red")
-</div>
-
-<!-- Sub-nav -->
-<div class="inv-subnav">
-    <button class="inv-snav-btn inv-snav-active"><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
-    <button class="inv-snav-btn" @onclick='() => Nav.NavigateTo("/billing/payments")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Payments</button>
-    <button class="inv-snav-btn" @onclick='() => Nav.NavigateTo("/billing/credits")'><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Credits &amp; Refunds</button>
-    <button class="inv-snav-btn" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'><i class="bi bi-ui-checks-grid" aria-hidden="true"></i> Reconciliation</button>
-    <button class="inv-snav-btn" @onclick='() => Nav.NavigateTo("/billing/collections")'><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Collections</button>
-    <button class="inv-snav-btn" @onclick='() => Nav.NavigateTo("/billing/payment-experience")'><i class="bi bi-graph-up" aria-hidden="true"></i> Payment Experience</button>
-</div>
-
-<!-- Toolbar -->
-<div class="inv-toolbar">
-    <SfTextBox Placeholder="Search invoice #, account, amount…" @bind-Value="_searchTerm" Width="280px"></SfTextBox>
-    <select class="e-input inv-sel" @bind="_filterStatus">
-        <option value="">All Statuses</option>
-        <option value="1">Draft</option>
-        <option value="2">Paid</option>
-        <option value="3">Overdue</option>
-        <option value="4">Void</option>
-    </select>
-    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync">
-        <i class="bi bi-search" aria-hidden="true"></i> Search
-    </button>
-</div>
-
-@if (_items is null)
+@if (_toastVisible)
 {
-    <div style="padding:2rem"><SfSpinner Visible="true" /></div>
-}
-else
-{
-    <div class="inv-grid-wrap">
-    <SfGrid DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridPageSettings PageSize="15"></GridPageSettings>
-        <GridColumns>
-            <GridColumn Field="@nameof(InvoiceDto.InvoiceNumber)" HeaderText="Invoice #" Width="150"></GridColumn>
-            <GridColumn Field="@nameof(InvoiceDto.TotalAmount)" HeaderText="Total" Format="C2" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-            <GridColumn HeaderText="Balance" Width="130" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right">
-                <Template>
-                    @{ var inv = (InvoiceDto)context; }
-                    <span class="@(inv.BalanceAmount > 0 ? "inv-bal-due" : "inv-bal-clear")">@inv.BalanceAmount.ToString("C2")</span>
-                </Template>
-            </GridColumn>
-            <GridColumn HeaderText="Status" Width="120">
-                <Template>
-                    @{ var inv2 = (InvoiceDto)context; }
-                    <span class="inv-status-chip inv-st-@inv2.StatusCode">@InvoiceStatusLabel(inv2.StatusCode)</span>
-                </Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(InvoiceDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="120"></GridColumn>
-            <GridColumn HeaderText="Actions" Width="100">
-                <Template>
-                    @{ var inv3 = (InvoiceDto)context; }
-                    <div class="inv-row-acts">
-                        <button class="um-btn um-btn-ghost um-btn-xs"
-                                @onclick='() => Nav.NavigateTo($"/billing/accounts/{inv3.AccountId}")'
-                                title="Open billing account">
-                            <i class="bi bi-building" aria-hidden="true"></i>
-                        </button>
-                        <button class="um-btn um-btn-ghost um-btn-xs"
-                                @onclick='() => Nav.NavigateTo("/billing/payments")'
-                                title="Record payment">
-                            <i class="bi bi-cash-coin" aria-hidden="true"></i>
-                        </button>
-                    </div>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+    <div class="inv-toast inv-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="inv-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
+
+@if (_showIssueDialog)
+{
+    <div class="inv-modal-backdrop" role="presentation" @onclick="CloseIssueDialog">
+        <div class="inv-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="inv-issue-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon"><i class="bi bi-receipt-cutoff"></i></div>
+                <div class="um-confirm-title" id="inv-issue-title">Invoice workflow</div>
+                <div class="um-confirm-body">Invoice creation is available through the billing workflow center. The current API exposes invoice search/detail only, so this page keeps persisted actions aligned with the existing backend.</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseIssueDialog">Close</button>
+                    <button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/billing/accounts")'>Open Billing Accounts</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="inv-enterprise-page">
+    <section class="inv-header">
+        <div class="inv-header-left">
+            <div class="inv-lob-icon"><i class="bi bi-receipt-cutoff" aria-hidden="true"></i></div>
+            <div class="inv-header-info">
+                <div class="inv-title-row">
+                    <h1 class="inv-page-title">Billing Invoices</h1>
+                    <span class="inv-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live invoice data</span>
+                    <span class="inv-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <div class="inv-sub-row">
+                    <span>Track issued invoices, open receivables, overdue balances, and payment workflows.</span>
+                    <span class="inv-sub-chip"><i class="bi bi-receipt" aria-hidden="true"></i> @_filtered.Count matching invoices</span>
+                    <span class="inv-sub-chip"><i class="bi bi-currency-dollar" aria-hidden="true"></i> @Fmt(_filtered.Sum(x => x.BalanceAmount)) outstanding</span>
+                </div>
+            </div>
+        </div>
+        <div class="inv-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
+                <i class="bi bi-building" aria-hidden="true"></i> Billing Accounts
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi @(_loading ? "bi-arrow-repeat inv-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenIssueDialog">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> New Invoice
+            </button>
+        </div>
+    </section>
+
+    <section class="inv-kpi-strip" aria-label="Invoice metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="inv-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "inv-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="inv-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="inv-kpi-copy">
+                    <span class="inv-kpi-label">@kpi.Label</span>
+                    <span class="inv-kpi-value">@kpi.Value</span>
+                    <span class="inv-kpi-caption">@kpi.Caption</span>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="inv-workflow-strip" aria-label="Billing workflow shortcuts">
+        <button type="button" class="inv-workflow-card inv-wf-account" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
+            <span class="inv-workflow-icon"><i class="bi bi-building" aria-hidden="true"></i></span>
+            <span class="inv-workflow-content"><strong>1</strong><span>Account</span><small>Review billing setup.</small></span>
+        </button>
+        <button type="button" class="inv-workflow-card inv-wf-invoice" @onclick="OpenIssueDialog">
+            <span class="inv-workflow-icon"><i class="bi bi-receipt" aria-hidden="true"></i></span>
+            <span class="inv-workflow-content"><strong>2</strong><span>Invoice</span><small>Issue and track receivables.</small></span>
+        </button>
+        <button type="button" class="inv-workflow-card inv-wf-pay" @onclick='() => Nav.NavigateTo("/billing/payments")'>
+            <span class="inv-workflow-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+            <span class="inv-workflow-content"><strong>3</strong><span>Collect</span><small>Apply payment activity.</small></span>
+        </button>
+        <button type="button" class="inv-workflow-card inv-wf-credit" @onclick='() => Nav.NavigateTo("/billing/credits")'>
+            <span class="inv-workflow-icon"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></span>
+            <span class="inv-workflow-content"><strong>4</strong><span>Adjust</span><small>Manage credits and refunds.</small></span>
+        </button>
+        <button type="button" class="inv-workflow-card inv-wf-collect" @onclick='() => Nav.NavigateTo("/billing/collections")'>
+            <span class="inv-workflow-icon"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>
+            <span class="inv-workflow-content"><strong>5</strong><span>Recover</span><small>Resolve delinquent invoices.</small></span>
+        </button>
+    </section>
+
+    <section class="inv-enterprise-search" aria-label="Invoice filters">
+        <div class="inv-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="inv-search-body">
+            <label for="inv-search">Search invoices</label>
+            <input id="inv-search" class="inv-search-input" type="search" placeholder="Search invoice number, status, amount..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="inv-search-hint">Filters apply instantly across synchronized invoice data.</span>
+        </div>
+        <select class="inv-filter-select" @bind="StatusFilter" aria-label="Status filter">
+            <option value="">All statuses</option>
+            @foreach (var status in StatusOptions)
+            {
+                <option value="@status.Code.ToString()">@status.Label</option>
+            }
+        </select>
+        <select class="inv-filter-select" @bind="BalanceFilter" aria-label="Balance filter">
+            <option value="">Balance: all</option>
+            <option value="open">Open balance</option>
+            <option value="paid">Paid/cleared</option>
+            <option value="overdue">Overdue</option>
+        </select>
+        <div class="inv-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger inv-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+    }
+
+    <section class="inv-content-layout">
+        <div class="inv-grid-wrap">
+            <div class="inv-grid-toolbar">
+                <div>
+                    <strong>Invoice register</strong>
+                    <span>@ActiveFilterText</span>
+                </div>
+                <div class="inv-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/payments")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Payments</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenIssueDialog"><i class="bi bi-plus-circle" aria-hidden="true"></i> New</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="inv-loading"><i class="bi bi-arrow-repeat inv-spin" aria-hidden="true"></i><strong>Loading invoices...</strong><span>Syncing tenant billing invoice data.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="inv-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No invoices found</strong><span>Adjust filters or review billing account workflow.</span><button type="button" class="um-btn um-btn-primary" @onclick="ResetFilters">Reset Filters</button></div>
+            }
+            else
+            {
+                <div class="inv-table-scroll">
+                    <table class="inv-table">
+                        <thead>
+                            <tr>
+                                <th>Invoice</th>
+                                <th class="inv-number">Total</th>
+                                <th class="inv-number">Balance</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th class="inv-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var invoice in _paged)
+                            {
+                                <tr class="inv-table-row @(IsSelected(invoice) ? "inv-table-row--selected" : null)" @onclick="() => SelectInvoice(invoice)">
+                                    <td>
+                                        <div class="inv-invoice-cell">
+                                            <span class="inv-invoice-icon @StatusIconClass(invoice.StatusCode)"><i class="bi bi-receipt" aria-hidden="true"></i></span>
+                                            <div>
+                                                <strong>@invoice.InvoiceNumber</strong>
+                                                <span>@InvoiceStatusLabel(invoice.StatusCode) · @invoice.InvoiceId.ToString()[..8]</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="inv-number">@invoice.TotalAmount.ToString("C2")</td>
+                                    <td class="inv-number"><span class="@(invoice.BalanceAmount > 0 ? "inv-bal-due" : "inv-bal-clear")">@invoice.BalanceAmount.ToString("C2")</span></td>
+                                    <td><span class="inv-status-chip @StatusCss(invoice.StatusCode)">@InvoiceStatusLabel(invoice.StatusCode)</span></td>
+                                    <td>@invoice.CreatedDateUtc.ToString("MMM d, yyyy")</td>
+                                    <td>
+                                        <div class="inv-row-acts">
+                                            <button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick="() => SelectInvoice(invoice)" @onclick:stopPropagation="true" title="Inspect invoice"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo($"/billing/accounts/{invoice.AccountId}")' @onclick:stopPropagation="true" title="Open billing account"><i class="bi bi-building" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/billing/payments")' @onclick:stopPropagation="true" title="Record payment"><i class="bi bi-cash-coin" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="inv-pager">
+                    <span>Page @_page of @TotalPages · @_filtered.Count records</span>
+                    <div>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <aside class="inv-detail-panel">
+            @if (_selected is null)
+            {
+                <div class="inv-detail-empty"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i><strong>Select an invoice</strong><span>Click an invoice row to inspect balance, status, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="inv-detail-head">
+                    <div>
+                        <span class="inv-detail-eyebrow"><i class="bi bi-receipt" aria-hidden="true"></i> Invoice detail</span>
+                        <h2>@_selected.InvoiceNumber</h2>
+                        <div class="inv-detail-meta"><span>@InvoiceStatusLabel(_selected.StatusCode)</span><span>@_selected.CreatedDateUtc.ToString("MMM d, yyyy")</span><span>@_selected.InvoiceId.ToString()[..8]</span></div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="inv-detail-body">
+                    <div class="inv-detail-summary">
+                        <div class="inv-meta-row"><span class="inv-meta-lbl">Total</span><span class="inv-meta-val">@_selected.TotalAmount.ToString("C2")</span></div>
+                        <div class="inv-meta-row"><span class="inv-meta-lbl">Balance</span><span class="inv-meta-val @(_selected.BalanceAmount > 0 ? "inv-bal-due" : "inv-bal-clear")">@_selected.BalanceAmount.ToString("C2")</span></div>
+                        <div class="inv-meta-row"><span class="inv-meta-lbl">Status</span><span class="inv-meta-val">@InvoiceStatusLabel(_selected.StatusCode)</span></div>
+                        <div class="inv-meta-row"><span class="inv-meta-lbl">Created</span><span class="inv-meta-val">@_selected.CreatedDateUtc.ToString("MMM d, yyyy")</span></div>
+                    </div>
+                    <div class="inv-contact-card">
+                        <strong>Workflow guidance</strong>
+                        <span><i class="bi bi-building" aria-hidden="true"></i> Account: @_selected.AccountId</span>
+                        <span><i class="bi bi-cash-coin" aria-hidden="true"></i> Use Payments to apply collections against balances.</span>
+                    </div>
+                    <div class="inv-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/billing/payments")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Record Payment</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo($"/billing/accounts/{_selected.AccountId}")'><i class="bi bi-building" aria-hidden="true"></i> Account</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
     Guid TenantId { get; set; }
@@ -112,37 +256,217 @@ else
     Guid DevUserId { get; set; }
     private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private string? _searchTerm;
-    private string _filterStatus = "";
-    private bool _showCreate;
-    private List<InvoiceDto>? _items;
+    private string _search = string.Empty;
+    private string _filterStatus = string.Empty;
+    private string _filterBalance = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _loadError;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private bool _toastVisible;
+    private bool _loading;
+    private bool _showIssueDialog;
+    private int _page = 1;
+    private const int PageSize = 15;
+    private InvoiceDto? _selected;
 
-    private IEnumerable<InvoiceDto> FilteredItems => (_items ?? []).Where(x =>
-        (string.IsNullOrEmpty(_filterStatus) || x.StatusCode.ToString() == _filterStatus));
+    private List<InvoiceDto> _items = [];
+    private List<InvoiceDto> _filtered = [];
+    private List<InvoiceDto> _paged = [];
+
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All invoices" : $"Filtered by {_kpiFilter}";
+    private IReadOnlyList<StatusOption> StatusOptions => [new(1, "Draft"), new(2, "Paid"), new(3, "Overdue"), new(4, "Void")];
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Total", _items.Count.ToString("N0"), "All invoice records", "bi-receipt", "inv-ki-blue"),
+        new("outstanding", "Outstanding", Fmt(_items.Where(x => x.BalanceAmount > 0).Sum(x => x.BalanceAmount)), "Open receivables", "bi-hourglass", "inv-ki-amber"),
+        new("overdue", "Overdue", _items.Count(x => x.StatusCode == 3).ToString("N0"), "Collection attention", "bi-exclamation-circle", "inv-ki-red"),
+        new("paid", "Paid", _items.Count(x => x.StatusCode == 2 || x.BalanceAmount <= 0).ToString("N0"), "Cleared invoices", "bi-check-circle", "inv-ki-green"),
+        new("billed", "Total Billed", Fmt(_items.Sum(x => x.TotalAmount)), "Gross billed amount", "bi-currency-dollar", "inv-ki-blue"),
+        new("pastdue", "Past Due 30+", Fmt(_items.Where(IsPastDue30).Sum(x => x.BalanceAmount)), "Aged receivables", "bi-calendar-x", "inv-ki-red")
+    ];
+
+    private string SearchFilter
+    {
+        get => _search;
+        set { _search = value; ApplyFilters(resetPage: true); }
+    }
+
+    private string StatusFilter
+    {
+        get => _filterStatus;
+        set { _filterStatus = value; ApplyFilters(resetPage: true); }
+    }
+
+    private string BalanceFilter
+    {
+        get => _filterBalance;
+        set { _filterBalance = value; ApplyFilters(resetPage: true); }
+    }
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home","/"), new("Billing","/billing/accounts"), new("Invoices",""));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Billing", "/billing/accounts"), new("Invoices", ""));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
-        var result = await Api.SearchInvoicesAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchInvoicesAsync(_tenantId, null);
+            _items = result?.Items?.ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Invoices failed to load: {ex.Message}";
+            _items = [];
+            ApplyFilters(resetPage: true);
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    static string InvoiceStatusLabel(int code) => code switch { 1 => "Draft", 2 => "Paid", 3 => "Overdue", 4 => "Void", _ => "Open" };
-    static string Fmt(decimal? v) => v.HasValue ? v.Value.ToString("C0") : "$0";
-
-    RenderFragment InvKpi(string icon, string label, string val, string color) => __builder =>
+    private void ApplyFilters(bool resetPage = false)
     {
-        <div class="inv-kpi-card @color">
-            <i class="bi @icon inv-kpi-icon" aria-hidden="true"></i>
-            <div><div class="inv-kpi-val">@val</div><div class="inv-kpi-lbl">@label</div></div>
-        </div>
-    };
+        IEnumerable<InvoiceDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var search = _search.Trim();
+            query = query.Where(i =>
+                i.InvoiceNumber.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                InvoiceStatusLabel(i.StatusCode).Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                i.TotalAmount.ToString("0.00").Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                i.BalanceAmount.ToString("0.00").Contains(search, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (int.TryParse(_filterStatus, out var statusCode)) query = query.Where(i => i.StatusCode == statusCode);
+        query = _filterBalance switch
+        {
+            "open" => query.Where(i => i.BalanceAmount > 0),
+            "paid" => query.Where(i => i.BalanceAmount <= 0),
+            "overdue" => query.Where(i => i.StatusCode == 3),
+            _ => query
+        };
+        query = _kpiFilter switch
+        {
+            "outstanding" => query.Where(i => i.BalanceAmount > 0),
+            "overdue" => query.Where(i => i.StatusCode == 3),
+            "paid" => query.Where(i => i.StatusCode == 2 || i.BalanceAmount <= 0),
+            "billed" => query.Where(i => i.TotalAmount > 0),
+            "pastdue" => query.Where(IsPastDue30),
+            _ => query
+        };
+
+        _filtered = query.OrderByDescending(i => i.CreatedDateUtc).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+        _paged = _filtered.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    }
+
+    private void SetKpiFilter(string filter)
+    {
+        _kpiFilter = _kpiFilter == filter ? "all" : filter;
+        ApplyFilters(resetPage: true);
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _filterStatus = string.Empty;
+        _filterBalance = string.Empty;
+        _kpiFilter = "all";
+        ApplyFilters(resetPage: true);
+    }
+
+    private void PreviousPage()
+    {
+        if (_page <= 1) return;
+        _page--;
+        ApplyFilters();
+    }
+
+    private void NextPage()
+    {
+        if (_page >= TotalPages) return;
+        _page++;
+        ApplyFilters();
+    }
+
+    private void SelectInvoice(InvoiceDto item) => _selected = item;
+    private void ClearSelection() => _selected = null;
+    private bool IsSelected(InvoiceDto item) => _selected?.InvoiceId == item.InvoiceId;
+    private void OpenIssueDialog() => _showIssueDialog = true;
+    private void CloseIssueDialog() => _showIssueDialog = false;
+    private void HideToast() => _toastVisible = false;
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any())
+        {
+            ShowToast("No invoices are available to export.", "warning");
+            return;
+        }
+
+        var csv = new StringBuilder();
+        csv.AppendLine("InvoiceNumber,Status,TotalAmount,BalanceAmount,CreatedDateUtc,InvoiceId,AccountId");
+        foreach (var invoice in _filtered)
+        {
+            csv.AppendLine(string.Join(',',
+                Csv(invoice.InvoiceNumber),
+                Csv(InvoiceStatusLabel(invoice.StatusCode)),
+                invoice.TotalAmount.ToString("0.00"),
+                invoice.BalanceAmount.ToString("0.00"),
+                Csv(invoice.CreatedDateUtc.ToString("yyyy-MM-dd")),
+                Csv(invoice.InvoiceId.ToString()),
+                Csv(invoice.AccountId.ToString())));
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"billing-invoices-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} invoices.", "success");
+    }
+
+    private void ShowToast(string message, string kind)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    private void EnsureSelectedStillVisible()
+    {
+        if (_selected is null) return;
+        _selected = _items.FirstOrDefault(i => i.InvoiceId == _selected.InvoiceId);
+    }
+
+    private static bool IsPastDue30(InvoiceDto invoice) => invoice.StatusCode == 3 && invoice.BalanceAmount > 0 && invoice.CreatedDateUtc < DateTime.UtcNow.AddDays(-30);
+    private static string InvoiceStatusLabel(int code) => code switch { 1 => "Draft", 2 => "Paid", 3 => "Overdue", 4 => "Void", _ => "Open" };
+    private static string StatusCss(int code) => $"inv-st-{code}";
+    private static string StatusIconClass(int code) => code switch { 2 => "inv-di-green", 3 => "inv-di-red", 4 => "inv-di-gray", _ => "inv-di-blue" };
+    private static string Fmt(decimal v) => v.ToString("C0");
+    private static string Csv(string value)
+    {
+        var quote = Convert.ToChar(34).ToString();
+        return string.Concat(quote, value.Replace(quote, quote + quote), quote);
+    }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone)
+    {
+        public string Title => $"Filter by {Label}";
+    }
+
+    private sealed record StatusOption(int Code, string Label);
 
     async Task ResolveCurrentUserContextAsync()
     {

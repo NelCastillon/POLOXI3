@@ -181,6 +181,23 @@ public sealed class UpdateDeferredRevenueScheduleRequest : CreateDeferredRevenue
     public Guid? ModifiedByUserId { get; set; }
 }
 
+public class CreateDeferredRevenueRecognitionRequest
+{
+    [Required] public Guid TenantId { get; set; }
+    [RequiredGuid(ErrorMessage = "Deferred Revenue Schedule is required.")] public Guid DeferredRevenueScheduleId { get; set; }
+    [Required] public DateOnly RecognitionDate { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+    [Range(0.01, 100000000)] public decimal Amount { get; set; }
+    public Guid? JournalEntryId { get; set; }
+    [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending";
+    public Guid? CreatedByUserId { get; set; }
+}
+
+public sealed class UpdateDeferredRevenueRecognitionRequest : CreateDeferredRevenueRecognitionRequest
+{
+    [Required] public Guid RecognitionId { get; set; }
+    public Guid? ModifiedByUserId { get; set; }
+}
+
 public class CreateCashReceiptEntryRequest
 {
     [Required] public Guid TenantId { get; set; }

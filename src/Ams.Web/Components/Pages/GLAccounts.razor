@@ -1,283 +1,356 @@
 @page "/finance/glaccounts"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Finance
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Nav
+@inject IJSRuntime Js
 
-<PageTitle>GL Accounts</PageTitle>
+<PageTitle>GL Accounts — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="GL Accounts"
-               Subtitle="Chart of accounts for tracking financial transactions"
-               Icon="bi-journals">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" title="Refresh" disabled="@_loading">
-            <i class="bi bi-arrow-clockwise @(_loading ? "fa-spin" : "")" aria-hidden="true"></i> Refresh
-        </button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate">
-            <i class="bi bi-plus-lg" aria-hidden="true"></i> New Account
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- ── Search & Filter ──────────────────────────────────────────────────── -->
-<div class="fin-toolbar">
-    <div class="fin-search-box">
-        <i class="bi bi-search fin-search-icon" aria-hidden="true"></i>
-        <input class="e-input fin-search-input"
-               placeholder="Search by code or name…"
-               @bind="_searchTerm"
-               @bind:event="oninput"
-               @onkeyup="@(e => e.Key == "Enter" ? LoadAsync() : Task.CompletedTask)" />
-    </div>
-    <div class="fin-filter-buttons">
-        <button class="um-btn um-btn-ghost um-btn-sm @(_filterActive ? "um-btn-active" : "")"
-                @onclick="() => { _filterActive = !_filterActive; }">
-            <i class="bi bi-funnel" aria-hidden="true"></i> Filter
-        </button>
-    </div>
-</div>
-
-@if (_filterActive)
+@if (_toastVisible)
 {
-    <div class="fin-filter-panel">
-        <div class="fin-filter-group">
-            <label class="fin-filter-label">Account Type</label>
-            <select class="e-input" @bind="_filterType">
-                <option value="">All Types</option>
-                <option value="Asset">Asset</option>
-                <option value="Liability">Liability</option>
-                <option value="Equity">Equity</option>
-                <option value="Revenue">Revenue</option>
-                <option value="Expense">Expense</option>
-            </select>
-        </div>
-        <div class="fin-filter-group">
-            <label class="fin-filter-label">Status</label>
-            <select class="e-input" @bind="_filterStatus">
-                <option value="">All</option>
-                <option value="active">Active</option>
-                <option value="inactive">Inactive</option>
-            </select>
-        </div>
+    <div class="gl-toast gl-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="gl-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<!-- ── KPI Cards ──────────────────────────────────────────────────────── -->
-@if (_stats is not null)
+@if (_showStatusConfirm && _statusTarget is not null)
 {
-    <div class="fin-kpi-strip">
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #dbeafe; color: #1d4ed8;"><i class="bi bi-diagram-3-fill" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.TotalAccounts</div>
-                <div class="fin-kpi-label">Total Accounts</div>
-            </div>
-        </div>
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #d1fae5; color: #047857;"><i class="bi bi-check-circle-fill" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.ActiveAccounts</div>
-                <div class="fin-kpi-label">Active</div>
-            </div>
-        </div>
-        <div class="fin-kpi-card">
-            <div class="fin-kpi-icon" style="background: #fecaca; color: #b91c1c;"><i class="bi bi-exclamation-circle-fill" aria-hidden="true"></i></div>
-            <div class="fin-kpi-body">
-                <div class="fin-kpi-value">@_stats.InactiveAccounts</div>
-                <div class="fin-kpi-label">Inactive</div>
+    <div class="gl-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="gl-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="gl-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon"><i class="bi @(_pendingIsActive ? "bi-check-circle" : "bi-slash-circle")"></i></div>
+                <div class="um-confirm-title" id="gl-status-title">@(_pendingIsActive ? "Activate GL Account" : "Deactivate GL Account")</div>
+                <div class="um-confirm-body">@(_pendingIsActive ? "Activate" : "Deactivate") <strong>@_statusTarget.AccountCode - @_statusTarget.AccountName</strong>? This updates the account availability for finance workflows.</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-primary" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@(_pendingIsActive ? "Activate" : "Deactivate")</button>
+                </div>
             </div>
         </div>
     </div>
 }
 
-<!-- ── Content ──────────────────────────────────────────────────────── -->
-@if (_error is not null)
+@if (_showForm)
 {
-    <div class="fin-alert fin-alert-warning">
-        <div class="fin-alert-icon"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i></div>
-        <div class="fin-alert-body">
-            <div class="fin-alert-title">⚠️ Database Schema Issue</div>
-            <p>The Finance schema may not be initialized. Please run the SQL migration scripts:</p>
-            <ul>
-                <li><strong>sql/01_Finance_Schema.sql</strong> - Create tables and indexes</li>
-                <li><strong>sql/02_Finance_SeedData.sql</strong> - Add sample data (optional)</li>
-            </ul>
-            <p style="margin-top: 10px; font-size: 0.85em; color: #666;">Technical: @_error</p>
-        </div>
-    </div>
-}
-else if (_loading)
-{
-    <div class="fin-loading">
-        <div class="um-spinner" aria-hidden="true"></div>
-        <span>Loading GL Accounts…</span>
-    </div>
-}
-else if (_items?.Count == 0)
-{
-    <div class="fin-empty-state">
-        <i class="bi bi-inbox fin-empty-icon" aria-hidden="true"></i>
-        <h3>No GL Accounts Found</h3>
-        <p>@(_searchTerm != null ? $"No accounts match \"{_searchTerm}\"." : "No GL accounts have been created yet.")</p>
-    </div>
-}
-else
-{
-    <div class="fin-grid-container">
-        <SfGrid TValue="GLAccountDto" DataSource="_items" AllowPaging="true" AllowSorting="true" AllowExcelExport="true" Height="600px">
-            <GridEvents TValue="GLAccountDto" RowSelected="OnRowSelected" />
-            <GridPageSettings PageSize="15"></GridPageSettings>
-            <GridColumns>
-                <GridColumn Field="@nameof(GLAccountDto.AccountCode)"     HeaderText="Code"   Width="100" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(GLAccountDto.AccountName)"     HeaderText="Account Name" Width="280" AllowSorting="true"></GridColumn>
-                <GridColumn Field="@nameof(GLAccountDto.AccountTypeCode)" HeaderText="Type"   Width="110" AllowSorting="true">
-                    <Template>
-                        @{
-                            var account = context as GLAccountDto;
-                            var typeColor = account?.AccountTypeCode switch
-                            {
-                                "Asset" => "#1d4ed8",
-                                "Liability" => "#b91c1c",
-                                "Equity" => "#7c3aed",
-                                "Revenue" => "#047857",
-                                "Expense" => "#b45309",
-                                _ => "#6b7280"
-                            };
-                            var typeBg = account?.AccountTypeCode switch
-                            {
-                                "Asset" => "#dbeafe",
-                                "Liability" => "#fee2e2",
-                                "Equity" => "#ede9fe",
-                                "Revenue" => "#d1fae5",
-                                "Expense" => "#fef3c7",
-                                _ => "#f3f4f6"
-                            };
-                        }
-                        <span style="background: @typeBg; color: @typeColor; padding: 4px 8px; border-radius: 20px; font-size: 0.85em; font-weight: 600;">
-                            @account?.AccountTypeCode
-                        </span>
-                    </Template>
-                </GridColumn>
-                <GridColumn Field="@nameof(GLAccountDto.IsActive)" HeaderText="Status" Width="100" AllowSorting="true">
-                    <Template>
-                        @{
-                            var account = context as GLAccountDto;
-                        }
-                        <span class="fin-badge @(account?.IsActive == true ? "fin-badge-success" : "fin-badge-secondary")">
-                            @(account?.IsActive == true ? "Active" : "Inactive")
-                        </span>
-                    </Template>
-                </GridColumn>
-                <GridColumn HeaderText="Actions" Width="90">
-                    <Template>
-                        @{ var account = (GLAccountDto)context; }
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(account)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                    </Template>
-                </GridColumn>
-            </GridColumns>
-        </SfGrid>
-    </div>
-}
-
-<SfDialog @bind-Visible="_showForm" Width="680px" IsModal="true" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-journals" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "New GL Account" : "Edit GL Account")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_editContext">
+    <div class="gl-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="gl-modal gl-action-modal" role="dialog" aria-modal="true" aria-labelledby="gl-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-journals" aria-hidden="true"></i>
+                <span id="gl-form-title">@(_editingId == Guid.Empty ? "New GL Account" : "Edit GL Account")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
                 <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Account Code <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountCode" class="um-input" /><ValidationMessage For="() => _form.AccountCode" class="text-danger" /></div>
-                    <div class="um-field"><label>Account Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountName" class="um-input" /><ValidationMessage For="() => _form.AccountName" class="text-danger" /></div>
-                    <div class="um-field"><label>Account Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountTypeCode" class="um-input">@foreach (var type in _accountTypes) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.AccountTypeCode" class="text-danger" /></div>
-                    <div class="um-field"><label>Parent Account</label><InputSelect @bind-Value="_form.ParentGLAccountId" class="um-input"><option value="">None</option>@foreach (var account in _items ?? []) { <option value="@account.GLAccountId">@account.AccountCode - @account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.ParentGLAccountId" class="text-danger" /></div>
-                    <div class="um-field"><label class="d-flex align-items-center gap-2"><InputCheckbox @bind-Value="_form.IsActive" /> Active</label><ValidationMessage For="() => _form.IsActive" class="text-danger" /></div>
-                    <div class="um-field um-field--full"><label>Description</label><InputTextArea @bind-Value="_form.Description" class="um-input" rows="3" /><ValidationMessage For="() => _form.Description" class="text-danger" /></div>
-                    @if (!string.IsNullOrWhiteSpace(_formError)) { <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div> }
-                </div></div>
+                <div class="um-modal-body">
+                    <div class="gl-modal-intro">
+                        <span><i class="bi bi-diagram-3" aria-hidden="true"></i> Chart of accounts workflow</span>
+                        <p>Maintain tenant-scoped GL accounts used by billing, journal entries, reconciliation, and finance reporting.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Account Code <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.AccountCode" />
+                            <ValidationMessage For="() => _form.AccountCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Account Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.AccountName" />
+                            <ValidationMessage For="() => _form.AccountName" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Account Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.AccountTypeCode">
+                                @foreach (var type in _accountTypes)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AccountTypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Parent Account</label>
+                            <InputSelect class="form-select" @bind-Value="_form.ParentGLAccountId">
+                                <option value="">None</option>
+                                @foreach (var account in ParentAccountOptions)
+                                {
+                                    <option value="@account.GLAccountId">@account.AccountCode - @account.AccountName</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ParentGLAccountId" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--checkbox">
+                            <label><InputCheckbox @bind-Value="_form.IsActive" /> Active account</label>
+                            <ValidationMessage For="() => _form.IsActive" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description</label>
+                            <InputTextArea class="form-control" @bind-Value="_form.Description" rows="3" />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @(_editingId == Guid.Empty ? "Create Account" : "Save Changes")
+                    </button>
+                </div>
             </EditForm>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Account")</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
 
-@code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    private Guid _tenantId;
-    private string? _searchTerm;
-    private string _filterType = "";
-    private string _filterStatus = "";
-    private bool _filterActive = false;
-    private bool _loading = false;
-    private bool _showForm;
-    private bool _saving;
-    private List<GLAccountDto>? _items;
-    private string? _error;
-    private string? _formError;
-    private Guid _editingId = Guid.Empty;
-    private GLAccountForm _form = new();
-    private EditContext _editContext = default!;
-    private readonly List<string> _accountTypes = ["Asset", "Liability", "Equity", "Revenue", "Expense"];
+<div class="gl-enterprise-page">
+    <section class="gl-header">
+        <div class="gl-header-left">
+            <div class="gl-lob-icon"><i class="bi bi-journals" aria-hidden="true"></i></div>
+            <div class="gl-header-info">
+                <div class="gl-title-row">
+                    <h1 class="gl-page-title">GL Accounts</h1>
+                    <span class="gl-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live chart data</span>
+                    <span class="gl-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <div class="gl-sub-row">
+                    <span>Manage the chart of accounts that powers billing, receivables, journal entries, and reporting.</span>
+                    <span class="gl-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span>
+                    <span class="gl-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span>
+                </div>
+            </div>
+        </div>
+        <div class="gl-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance")'><i class="bi bi-speedometer2" aria-hidden="true"></i> Finance</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i> Journals</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat gl-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Account</button>
+        </div>
+    </section>
 
-    private class Stats
+    <section class="gl-kpi-strip" aria-label="GL account metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="gl-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "gl-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="gl-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="gl-kpi-copy">
+                    <span class="gl-kpi-label">@kpi.Label</span>
+                    <span class="gl-kpi-value">@kpi.Value</span>
+                    <span class="gl-kpi-caption">@kpi.Caption</span>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="gl-workflow-strip" aria-label="Finance workflow shortcuts">
+        <button type="button" class="gl-workflow-card gl-wf-chart" @onclick="OpenCreate"><span class="gl-workflow-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></span><span class="gl-workflow-content"><strong>1</strong><span>Chart</span><small>Maintain GL accounts.</small></span></button>
+        <button type="button" class="gl-workflow-card gl-wf-journal" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><span class="gl-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="gl-workflow-content"><strong>2</strong><span>Journal</span><small>Record postings.</small></span></button>
+        <button type="button" class="gl-workflow-card gl-wf-billing" @onclick='() => Nav.NavigateTo("/billing/accounts")'><span class="gl-workflow-icon"><i class="bi bi-wallet2" aria-hidden="true"></i></span><span class="gl-workflow-content"><strong>3</strong><span>Billing</span><small>Map receivables.</small></span></button>
+        <button type="button" class="gl-workflow-card gl-wf-recon" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'><span class="gl-workflow-icon"><i class="bi bi-ui-checks-grid" aria-hidden="true"></i></span><span class="gl-workflow-content"><strong>4</strong><span>Reconcile</span><small>Validate balances.</small></span></button>
+        <button type="button" class="gl-workflow-card gl-wf-report" @onclick='() => Nav.NavigateTo("/analytics/finance")'><span class="gl-workflow-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span><span class="gl-workflow-content"><strong>5</strong><span>Report</span><small>Review finance analytics.</small></span></button>
+    </section>
+
+    <section class="gl-enterprise-search" aria-label="GL account filters">
+        <div class="gl-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="gl-search-body">
+            <label for="gl-search">Search GL accounts</label>
+            <input id="gl-search" class="gl-search-input" type="search" placeholder="Search code, name, type, description..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="gl-search-hint">Filters apply instantly across the synchronized chart of accounts.</span>
+        </div>
+        <select class="gl-filter-select" @bind="TypeFilter" aria-label="Account type filter">
+            <option value="">All types</option>
+            @foreach (var type in _accountTypes)
+            {
+                <option value="@type">@type</option>
+            }
+        </select>
+        <select class="gl-filter-select" @bind="StatusFilter" aria-label="Status filter">
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+        </select>
+        <div class="gl-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        public int TotalAccounts { get; set; }
-        public int ActiveAccounts { get; set; }
-        public int InactiveAccounts { get; set; }
+        <div class="alert alert-danger gl-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
     }
 
-    private Stats? _stats;
+    <section class="gl-content-layout">
+        <div class="gl-grid-wrap">
+            <div class="gl-grid-toolbar">
+                <div><strong>Chart register</strong><span>@ActiveFilterText</span></div>
+                <div class="gl-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i> Journals</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="gl-loading"><i class="bi bi-arrow-repeat gl-spin" aria-hidden="true"></i><strong>Loading GL accounts...</strong><span>Syncing schema, seed data, and chart of accounts.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="gl-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No GL accounts found</strong><span>Adjust filters or create a new GL account.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Account</button></div>
+            }
+            else
+            {
+                <div class="gl-table-scroll">
+                    <table class="gl-table">
+                        <thead>
+                            <tr><th>Account</th><th>Type</th><th>Status</th><th>Parent</th><th>Created</th><th class="gl-actions-col">Actions</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in PagedItems)
+                            {
+                                <tr class="gl-table-row @(_selected?.GLAccountId == item.GLAccountId ? "gl-table-row--selected" : null)" @onclick="() => SelectAccount(item)">
+                                    <td>
+                                        <div class="gl-entry-cell">
+                                            <span class="gl-entry-icon @TypeIconTone(item.AccountTypeCode)"><i class="bi @TypeIcon(item.AccountTypeCode)" aria-hidden="true"></i></span>
+                                            <span><strong>@item.AccountCode · @item.AccountName</strong><span>@Truncate(item.Description ?? "No description", 92)</span></span>
+                                        </div>
+                                    </td>
+                                    <td><span class="gl-type-chip @TypeCss(item.AccountTypeCode)">@item.AccountTypeCode</span></td>
+                                    <td><span class="gl-status-chip @(item.IsActive ? "gl-st-active" : "gl-st-inactive")">@(item.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td>@ParentName(item.ParentGLAccountId)</td>
+                                    <td>@item.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                    <td>
+                                        <div class="gl-row-acts">
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="@(item.IsActive ? "Deactivate" : "Activate")" @onclick:stopPropagation="true" @onclick="() => ConfirmStatusUpdate(item, !item.IsActive)"><i class="bi @(item.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="gl-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+            }
+        </div>
+
+        <aside class="gl-detail-panel" aria-label="Selected GL account detail">
+            @if (_selected is null)
+            {
+                <div class="gl-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select an account</strong><span>Choose a row to inspect chart hierarchy, status, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="gl-detail-head">
+                    <div>
+                        <span class="gl-detail-eyebrow"><i class="bi bi-journals" aria-hidden="true"></i> GL account</span>
+                        <h2>@_selected.AccountCode · @_selected.AccountName</h2>
+                        <div class="gl-detail-meta"><span>@_selected.AccountTypeCode</span><span class="gl-status-chip @(_selected.IsActive ? "gl-st-active" : "gl-st-inactive")">@(_selected.IsActive ? "Active" : "Inactive")</span></div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                </div>
+                <div class="gl-detail-body">
+                    <div class="gl-detail-summary">
+                        <div class="gl-meta-row"><span class="gl-meta-lbl">Code</span><span class="gl-meta-val">@_selected.AccountCode</span></div>
+                        <div class="gl-meta-row"><span class="gl-meta-lbl">Type</span><span class="gl-meta-val">@_selected.AccountTypeCode</span></div>
+                        <div class="gl-meta-row"><span class="gl-meta-lbl">Parent</span><span class="gl-meta-val">@ParentName(_selected.ParentGLAccountId)</span></div>
+                        <div class="gl-meta-row"><span class="gl-meta-lbl">Created</span><span class="gl-meta-val">@_selected.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</span></div>
+                    </div>
+                    <div class="gl-note-card"><span><i class="bi bi-journal-text" aria-hidden="true"></i> Account description</span><p>@(_selected.Description ?? "No description provided.")</p></div>
+                    <div class="gl-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmStatusUpdate(_selected, !_selected.IsActive)"><i class="bi @(_selected.IsActive ? "bi-slash-circle" : "bi-check-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i> Journals</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@code {
+    private const int PageSize = 12;
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private List<GLAccountDto> _items = [];
+    private List<GLAccountDto> _filtered = [];
+    private GLAccountDto? _selected;
+    private GLAccountDto? _statusTarget;
+    private GLAccountForm _form = new();
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _typeFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showStatusConfirm;
+    private bool _pendingIsActive;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _accountTypes = ["Asset", "Liability", "Equity", "Revenue", "Expense"];
+
+    private IEnumerable<GLAccountDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private IEnumerable<GLAccountDto> ParentAccountOptions => _items.Where(x => x.GLAccountId != _editingId).OrderBy(x => x.AccountCode);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All GL accounts" : $"Filtered by {_kpiFilter}";
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Accounts", _items.Count.ToString("N0"), "Full chart", "bi-diagram-3", "gl-ki-blue"),
+        new("active", "Active", _items.Count(x => x.IsActive).ToString("N0"), "Available", "bi-check-circle", "gl-ki-green"),
+        new("asset", "Assets", _items.Count(x => x.AccountTypeCode == "Asset").ToString("N0"), "Balance sheet", "bi-bank", "gl-ki-blue"),
+        new("liability", "Liability", _items.Count(x => x.AccountTypeCode == "Liability").ToString("N0"), "Obligations", "bi-exclamation-circle", "gl-ki-red"),
+        new("revenue", "Revenue", _items.Count(x => x.AccountTypeCode == "Revenue").ToString("N0"), "Income", "bi-graph-up-arrow", "gl-ki-green"),
+        new("expense", "Expense", _items.Count(x => x.AccountTypeCode == "Expense").ToString("N0"), "Costs", "bi-receipt", "gl-ki-amber")
+    ];
+
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string TypeFilter { get => _typeFilter; set { _typeFilter = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(
-            new("Home", "/"),
-            new("Finance", "/finance"),
-            new("GL Accounts", "/finance/glaccounts"));
-        _editContext = new(_form);
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Finance", "/finance"), new("GL Accounts", "/finance/glaccounts"));
         await LoadAsync();
     }
 
     private async Task LoadAsync()
     {
         _loading = true;
-        _error = null;
-        _items = null;
+        _loadError = null;
         try
         {
-            var result = await Api.SearchGLAccountsAsync(_tenantId, _searchTerm);
-            _items = result?.Items.ToList() ?? [];
-
-            // Apply filters
-            if (!string.IsNullOrEmpty(_filterType))
-                _items = _items.Where(x => x.AccountTypeCode == _filterType).ToList();
-
-            if (_filterStatus == "active")
-                _items = _items.Where(x => x.IsActive).ToList();
-            else if (_filterStatus == "inactive")
-                _items = _items.Where(x => !x.IsActive).ToList();
-
-            // Calculate stats
-            _stats = new Stats
-            {
-                TotalAccounts = _items.Count,
-                ActiveAccounts = _items.Count(x => x.IsActive),
-                InactiveAccounts = _items.Count(x => !x.IsActive)
-            };
+            var result = await Api.SearchGLAccountsAsync(_tenantId, string.Empty, pageSize: 500);
+            _items = result?.Items.OrderBy(x => x.AccountCode).ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
-            if (ex.Message.Contains("Invalid column name") || ex.Message.Contains("GLAccount"))
-            {
-                _error = "Database schema mismatch. Please ensure 00_schema_migration.sql has been applied to your database. See db/README.md for setup instructions.";
-            }
+            _loadError = $"GL accounts failed to load: {ex.Message}";
+            ShowToast(_loadError, "danger");
             _items = [];
+            _filtered = [];
         }
         finally
         {
@@ -285,38 +358,117 @@ else
         }
     }
 
-    private void OnRowSelected(RowSelectEventArgs<GLAccountDto> args) => OpenEdit(args.Data);
-    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<GLAccountDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(x.AccountCode, term) || Contains(x.AccountName, term) || Contains(x.AccountTypeCode, term) || Contains(x.Description, term));
+        }
+        if (!string.IsNullOrWhiteSpace(_typeFilter)) query = query.Where(x => x.AccountTypeCode == _typeFilter);
+        query = _statusFilter switch { "active" => query.Where(x => x.IsActive), "inactive" => query.Where(x => !x.IsActive), _ => query };
+        query = _kpiFilter switch
+        {
+            "active" => query.Where(x => x.IsActive),
+            "asset" => query.Where(x => x.AccountTypeCode == "Asset"),
+            "liability" => query.Where(x => x.AccountTypeCode == "Liability"),
+            "revenue" => query.Where(x => x.AccountTypeCode == "Revenue"),
+            "expense" => query.Where(x => x.AccountTypeCode == "Expense"),
+            _ => query
+        };
+        _filtered = query.OrderBy(x => x.AccountCode).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter) { _kpiFilter = filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _typeFilter = string.Empty; _statusFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("GL account filters reset.", "info"); }
+    private void SelectAccount(GLAccountDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _formError = null; _form = new GLAccountForm(); _showForm = true; }
     private void OpenEdit(GLAccountDto account)
     {
         _editingId = account.GLAccountId;
-        _form = new GLAccountForm { AccountCode = account.AccountCode, AccountName = account.AccountName, AccountTypeCode = account.AccountTypeCode, Description = account.Description, ParentGLAccountId = account.ParentGLAccountId, IsActive = account.IsActive };
-        _editContext = new(_form);
         _formError = null;
+        _form = new GLAccountForm { AccountCode = account.AccountCode, AccountName = account.AccountName, AccountTypeCode = account.AccountTypeCode, Description = account.Description, ParentGLAccountId = account.ParentGLAccountId, IsActive = account.IsActive };
         _showForm = true;
     }
-    private void CloseForm() => _showForm = false;
+    private void CloseForm() { if (_busy) return; _showForm = false; }
 
     private async Task SaveAsync()
     {
-        if (!_editContext.Validate()) return;
-        _saving = true;
+        _busy = true;
+        _formError = null;
         try
         {
             if (_editingId == Guid.Empty)
-                await Api.CreateGLAccountAsync(new CreateGLAccountRequest { TenantId = _tenantId, AccountCode = _form.AccountCode, AccountName = _form.AccountName, AccountTypeCode = _form.AccountTypeCode, Description = _form.Description, ParentGLAccountId = _form.ParentGLAccountId, IsActive = _form.IsActive });
+            {
+                await Api.CreateGLAccountAsync(new CreateGLAccountRequest { TenantId = _tenantId, AccountCode = _form.AccountCode, AccountName = _form.AccountName, AccountTypeCode = _form.AccountTypeCode, Description = _form.Description, ParentGLAccountId = _form.ParentGLAccountId, IsActive = _form.IsActive, CreatedByUserId = _tenantAdminUserId });
+                ShowToast("GL account created.", "success");
+            }
             else
-                await Api.UpdateGLAccountAsync(_editingId, new UpdateGLAccountRequest { TenantId = _tenantId, GLAccountId = _editingId, AccountCode = _form.AccountCode, AccountName = _form.AccountName, AccountTypeCode = _form.AccountTypeCode, Description = _form.Description, ParentGLAccountId = _form.ParentGLAccountId, IsActive = _form.IsActive });
+            {
+                await Api.UpdateGLAccountAsync(_editingId, new UpdateGLAccountRequest { TenantId = _tenantId, GLAccountId = _editingId, AccountCode = _form.AccountCode, AccountName = _form.AccountName, AccountTypeCode = _form.AccountTypeCode, Description = _form.Description, ParentGLAccountId = _form.ParentGLAccountId, IsActive = _form.IsActive, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast("GL account updated.", "success");
+            }
             _showForm = false;
             await LoadAsync();
         }
         catch (Exception ex)
         {
             _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
         }
-        finally { _saving = false; }
+        finally { _busy = false; }
     }
 
+    private void ConfirmStatusUpdate(GLAccountDto item, bool isActive) { _statusTarget = item; _pendingIsActive = isActive; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; }
+    private async Task ExecuteStatusUpdateAsync()
+    {
+        if (_statusTarget is null) return;
+        _busy = true;
+        try
+        {
+            await Api.UpdateGLAccountAsync(_statusTarget.GLAccountId, new UpdateGLAccountRequest { TenantId = _tenantId, GLAccountId = _statusTarget.GLAccountId, AccountCode = _statusTarget.AccountCode, AccountName = _statusTarget.AccountName, AccountTypeCode = _statusTarget.AccountTypeCode, Description = _statusTarget.Description, ParentGLAccountId = _statusTarget.ParentGLAccountId, IsActive = _pendingIsActive, ModifiedByUserId = _tenantAdminUserId });
+            ShowToast($"GL account {(_pendingIsActive ? "activated" : "deactivated")}.", "success");
+            _showStatusConfirm = false;
+            _statusTarget = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast($"Update failed: {ex.Message}", "danger"); }
+        finally { _busy = false; }
+    }
+
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving the GL account.", "warning"); return Task.CompletedTask; }
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any()) { ShowToast("No GL accounts are available to export.", "warning"); return; }
+        var csv = new StringBuilder();
+        csv.AppendLine("AccountCode,AccountName,AccountType,Status,Parent,Description,GLAccountId");
+        foreach (var item in _filtered)
+            csv.AppendLine(string.Join(',', Csv(item.AccountCode), Csv(item.AccountName), Csv(item.AccountTypeCode), Csv(item.IsActive ? "Active" : "Inactive"), Csv(ParentName(item.ParentGLAccountId)), Csv(item.Description ?? string.Empty), Csv(item.GLAccountId.ToString())));
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"glaccounts-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} GL accounts.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.GLAccountId == _selected.GLAccountId) ?? _filtered.FirstOrDefault();
+    private string ParentName(Guid? parentId) => parentId is Guid id ? _items.FirstOrDefault(x => x.GLAccountId == id) is { } parent ? $"{parent.AccountCode} · {parent.AccountName}" : id.ToString()[..8] : "No parent";
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max] + "…";
+    private static string TypeCss(string type) => $"gl-type-{CssKey(type)}";
+    private static string CssKey(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+    private static string TypeIconTone(string type) => type switch { "Asset" => "gl-di-blue", "Liability" => "gl-di-red", "Equity" => "gl-di-purple", "Revenue" => "gl-di-green", "Expense" => "gl-di-amber", _ => "gl-di-blue" };
+    private static string TypeIcon(string type) => type switch { "Asset" => "bi-bank", "Liability" => "bi-exclamation-circle", "Equity" => "bi-pie-chart", "Revenue" => "bi-graph-up-arrow", "Expense" => "bi-receipt", _ => "bi-journals" };
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter GL accounts by {Label}"; }
     private sealed class GLAccountForm
     {
         [Required, StringLength(50)] public string AccountCode { get; set; } = string.Empty;
@@ -325,16 +477,5 @@ else
         [StringLength(500)] public string? Description { get; set; }
         public Guid? ParentGLAccountId { get; set; }
         public bool IsActive { get; set; } = true;
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
 }

@@ -1,123 +1,358 @@
 @page "/billing/credits"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Billing
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Credits &amp; Refunds — AMS</PageTitle>
+<PageTitle>Credits & Refunds — AMS Enterprise</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Credits &amp; Refunds"
-               Subtitle="Tenant Admin view of billing credits, refunds, and adjustment approvals synchronized with Billing and Accounting"
-               Icon="bi-arrow-counterclockwise">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
-        <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Issue Credit</button>
-    </Actions>
-</AppPageHeader>
-
-<div class="cr-kpi-strip">
-    <button type="button" class="cr-kpi" @onclick='() => SetFilter("")'><i class="bi bi-arrow-counterclockwise cr-ki blue" aria-hidden="true"></i><div><div class="cr-kv">@_items.Count</div><div class="cr-kl">Total Credits</div></div></button>
-    <button type="button" class="cr-kpi" @onclick='() => SetFilter("Pending")'><i class="bi bi-hourglass cr-ki amber" aria-hidden="true"></i><div><div class="cr-kv">@_items.Count(x => x.StatusCode == "Pending")</div><div class="cr-kl">Pending</div></div></button>
-    <button type="button" class="cr-kpi" @onclick='() => SetFilter("Approved")'><i class="bi bi-check-circle cr-ki green" aria-hidden="true"></i><div><div class="cr-kv">@_items.Count(x => x.StatusCode == "Approved")</div><div class="cr-kl">Approved</div></div></button>
-    <button type="button" class="cr-kpi" @onclick='() => SetFilter("Applied")'><i class="bi bi-arrow-return-left cr-ki green" aria-hidden="true"></i><div><div class="cr-kv">@_items.Count(x => x.StatusCode == "Applied")</div><div class="cr-kl">Applied</div></div></button>
-    <button type="button" class="cr-kpi"><i class="bi bi-currency-dollar cr-ki blue" aria-hidden="true"></i><div><div class="cr-kv">@Fmt(_items.Sum(x => x.Amount))</div><div class="cr-kl">Total Value</div></div></button>
-    <button type="button" class="cr-kpi"><i class="bi bi-bank cr-ki purple" aria-hidden="true"></i><div><div class="cr-kv">Finance</div><div class="cr-kl">GL Synced</div></div></button>
-</div>
-
-<div class="cr-toolbar">
-    <SfTextBox Placeholder="Search reason, type, invoice..." @bind-Value="_search" Width="280px"></SfTextBox>
-    <select class="um-input cr-sel" @bind="_filterType">
-        <option value="">All Types</option>
-        @foreach (var type in _creditTypes)
-        {
-            <option value="@type">@type</option>
-        }
-    </select>
-    <select class="um-input cr-sel" @bind="_filterStatus">
-        <option value="">All Statuses</option>
-        @foreach (var status in _statuses)
-        {
-            <option value="@status">@status</option>
-        }
-    </select>
-    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    <div class="cr-toast cr-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="cr-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<div class="cr-grid-wrap">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading credits…</span></div>
-    }
-    <SfGrid TValue="BillingAdjustmentDto" DataSource="FilteredItems" AllowSorting="true" AllowPaging="true" Height="520px">
-        <GridEvents TValue="BillingAdjustmentDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="15"></GridPageSettings>
-        <GridColumns>
-            <GridColumn Field="@nameof(BillingAdjustmentDto.AdjustmentDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
-            <GridColumn Field="@nameof(BillingAdjustmentDto.AdjustmentTypeCode)" HeaderText="Type" Width="170">
-                <Template>@{ var item = (BillingAdjustmentDto)context; }<span class="cr-type-chip cr-t-@CssKey(item.AdjustmentTypeCode)">@item.AdjustmentTypeCode</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(BillingAdjustmentDto.Amount)" HeaderText="Amount" Format="C2" Width="130" TextAlign="TextAlign.Right"></GridColumn>
-            <GridColumn Field="@nameof(BillingAdjustmentDto.Reason)" HeaderText="Reason" Width="300"></GridColumn>
-            <GridColumn Field="@nameof(BillingAdjustmentDto.StatusCode)" HeaderText="Status" Width="120">
-                <Template>@{ var item = (BillingAdjustmentDto)context; }<span class="cr-status-chip cr-st-@CssKey(item.StatusCode)">@item.StatusCode</span></Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(BillingAdjustmentDto.ApprovedDateUtc)" HeaderText="Approved" Type="ColumnType.DateTime" Format="d" Width="120"></GridColumn>
-            <GridColumn HeaderText="Actions" Width="150">
-                <Template>
-                    @{ var item = (BillingAdjustmentDto)context; }
-                    <div style="display:flex;gap:.25rem">
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                        @if (item.StatusCode == "Pending")
+@if (_showForm)
+{
+    <div class="cr-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="cr-modal cr-action-modal" role="dialog" aria-modal="true" aria-labelledby="cr-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
+                <span id="cr-form-title">@(_editingId == Guid.Empty ? "Issue Credit / Refund" : "Edit Credit / Refund")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="cr-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Adjustment workflow</span>
+                        <p>Create credits, refund requests, and billing adjustments against synchronized billing invoices.</p>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Account <span class="text-danger">*</span></label>
+                            <InputSelect @bind-Value="_form.AccountId" class="form-select">
+                                <option value="@Guid.Empty">Select account...</option>
+                                @foreach (var account in _accounts)
+                                {
+                                    <option value="@account.AccountId">@account.AccountName</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Invoice <span class="text-danger">*</span></label>
+                            <InputSelect @bind-Value="_form.InvoiceId" class="form-select">
+                                <option value="@Guid.Empty">Select invoice...</option>
+                                @foreach (var invoice in _invoices)
+                                {
+                                    <option value="@invoice.InvoiceId">@invoice.InvoiceNumber (@invoice.BalanceAmount.ToString("C0"))</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.InvoiceId" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Credit Type <span class="text-danger">*</span></label>
+                            <InputSelect @bind-Value="_form.AdjustmentTypeCode" class="form-select">
+                                @foreach (var type in _creditTypes)
+                                {
+                                    <option value="@type">@type</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AdjustmentTypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Date <span class="text-danger">*</span></label>
+                            <InputDate @bind-Value="_form.AdjustmentDate" class="form-control" />
+                            <ValidationMessage For="() => _form.AdjustmentDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Amount <span class="text-danger">*</span></label>
+                            <InputNumber @bind-Value="_form.Amount" class="form-control" />
+                            <ValidationMessage For="() => _form.Amount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect @bind-Value="_form.StatusCode" class="form-select">
+                                @foreach (var status in _statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Reason <span class="text-danger">*</span></label>
+                            <InputTextArea @bind-Value="_form.Reason" class="form-control" rows="3" />
+                            <ValidationMessage For="() => _form.Reason" class="text-danger" />
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
                         {
-                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick='() => UpdateStatusAsync(item, "Approved")' title="Approve"><i class="bi bi-check-circle" aria-hidden="true"></i></button>
-                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick='() => UpdateStatusAsync(item, "Denied")' title="Deny"><i class="bi bi-x-circle" aria-hidden="true"></i></button>
-                        }
-                        @if (item.StatusCode == "Approved")
-                        {
-                            <button class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick='() => UpdateStatusAsync(item, "Applied")' title="Apply">Apply</button>
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
                         }
                     </div>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
-</div>
-
-<SfDialog @bind-Visible="_showForm" Width="620px" ShowCloseIcon="false" IsModal="true">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "Issue Credit / Refund" : "Edit Credit / Refund")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_editContext">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountId" class="um-input"><option value="@Guid.Empty">Select account…</option>@foreach (var account in _accounts) { <option value="@account.AccountId">@account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.AccountId" class="text-danger" /></div>
-                    <div class="um-field"><label>Invoice <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.InvoiceId" class="um-input"><option value="@Guid.Empty">Select invoice…</option>@foreach (var invoice in _invoices) { <option value="@invoice.InvoiceId">@invoice.InvoiceNumber (@invoice.BalanceAmount.ToString("C0"))</option> }</InputSelect><ValidationMessage For="() => _form.InvoiceId" class="text-danger" /></div>
-                    <div class="um-field"><label>Credit Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AdjustmentTypeCode" class="um-input">@foreach (var type in _creditTypes) { <option value="@type">@type</option> }</InputSelect><ValidationMessage For="() => _form.AdjustmentTypeCode" class="text-danger" /></div>
-                    <div class="um-field"><label>Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.AdjustmentDate" class="um-input" /><ValidationMessage For="() => _form.AdjustmentDate" class="text-danger" /></div>
-                    <div class="um-field"><label>Amount <span class="text-danger">*</span></label><InputNumber @bind-Value="_form.Amount" class="um-input" /><ValidationMessage For="() => _form.Amount" class="text-danger" /></div>
-                    <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input">@foreach (var status in _statuses) { <option value="@status">@status</option> }</InputSelect><ValidationMessage For="() => _form.StatusCode" class="text-danger" /></div>
-                    <div class="um-field um-field--full"><label>Reason <span class="text-danger">*</span></label><InputTextArea @bind-Value="_form.Reason" class="um-input" rows="3" /><ValidationMessage For="() => _form.Reason" class="text-danger" /></div>
-                    @if (!string.IsNullOrWhiteSpace(_formError))
-                    {
-                        <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
-                    }
-                </div></div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        Save Credit
+                    </button>
+                </div>
             </EditForm>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Credit")</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
+        </div>
+    </div>
+}
+
+@if (_showDeleteConfirm && _deleteTarget is not null)
+{
+    <div class="cr-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="cr-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="cr-delete-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash-fill"></i></div>
+                <div class="um-confirm-title" id="cr-delete-title">Remove Credit</div>
+                <div class="um-confirm-body">Remove <strong>@_deleteTarget.AdjustmentTypeCode</strong> for <strong>@_deleteTarget.Amount.ToString("C2")</strong>? This action will remove it from active credit views.</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_busy">Remove Credit</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="cr-enterprise-page">
+    <section class="cr-header">
+        <div class="cr-header-left">
+            <div class="cr-lob-icon"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></div>
+            <div class="cr-header-info">
+                <div class="cr-title-row">
+                    <h1 class="cr-page-title">Credits & Refunds</h1>
+                    <span class="cr-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live adjustment data</span>
+                    <span class="cr-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <div class="cr-sub-row">
+                    <span>Manage billing credits, refund requests, approvals, and applied adjustments.</span>
+                    <span class="cr-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span>
+                    <span class="cr-sub-chip"><i class="bi bi-currency-dollar" aria-hidden="true"></i> @Fmt(_filtered.Sum(x => x.Amount)) visible value</span>
+                </div>
+            </div>
+        </div>
+        <div class="cr-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat cr-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Issue Credit</button>
+        </div>
+    </section>
+
+    <section class="cr-kpi-strip" aria-label="Credits and refunds metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="cr-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "cr-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="cr-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="cr-kpi-copy">
+                    <span class="cr-kpi-label">@kpi.Label</span>
+                    <span class="cr-kpi-value">@kpi.Value</span>
+                    <span class="cr-kpi-caption">@kpi.Caption</span>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="cr-workflow-strip" aria-label="Credit workflow shortcuts">
+        <button type="button" class="cr-workflow-card cr-wf-invoice" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+            <span class="cr-workflow-icon"><i class="bi bi-receipt" aria-hidden="true"></i></span>
+            <span class="cr-workflow-content"><strong>1</strong><span>Invoice</span><small>Review balance source.</small></span>
+        </button>
+        <button type="button" class="cr-workflow-card cr-wf-credit" @onclick="OpenCreate">
+            <span class="cr-workflow-icon"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></span>
+            <span class="cr-workflow-content"><strong>2</strong><span>Credit</span><small>Issue adjustment.</small></span>
+        </button>
+        <button type="button" class="cr-workflow-card cr-wf-approve" @onclick='() => SetKpiFilter("pending")'>
+            <span class="cr-workflow-icon"><i class="bi bi-check2-circle" aria-hidden="true"></i></span>
+            <span class="cr-workflow-content"><strong>3</strong><span>Approve</span><small>Review pending items.</small></span>
+        </button>
+        <button type="button" class="cr-workflow-card cr-wf-pay" @onclick='() => Nav.NavigateTo("/billing/payments")'>
+            <span class="cr-workflow-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+            <span class="cr-workflow-content"><strong>4</strong><span>Payment</span><small>Offset or refund.</small></span>
+        </button>
+        <button type="button" class="cr-workflow-card cr-wf-recon" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'>
+            <span class="cr-workflow-icon"><i class="bi bi-ui-checks-grid" aria-hidden="true"></i></span>
+            <span class="cr-workflow-content"><strong>5</strong><span>Reconcile</span><small>Confirm GL sync.</small></span>
+        </button>
+    </section>
+
+    <section class="cr-enterprise-search" aria-label="Credit filters">
+        <div class="cr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="cr-search-body">
+            <label for="cr-search">Search credits</label>
+            <input id="cr-search" class="cr-search-input" type="search" placeholder="Search reason, type, status, invoice..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="cr-search-hint">Filters apply instantly across synchronized billing adjustment data.</span>
+        </div>
+        <select class="cr-filter-select" @bind="TypeFilter" aria-label="Credit type filter">
+            <option value="">All types</option>
+            @foreach (var type in _creditTypes)
+            {
+                <option value="@type">@type</option>
+            }
+        </select>
+        <select class="cr-filter-select" @bind="StatusFilter" aria-label="Status filter">
+            <option value="">All statuses</option>
+            @foreach (var status in _statuses)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <div class="cr-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger cr-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="cr-content-layout">
+        <div class="cr-grid-wrap">
+            <div class="cr-grid-toolbar">
+                <div>
+                    <strong>Credit and refund register</strong>
+                    <span>@ActiveFilterText</span>
+                </div>
+                <div class="cr-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Issue</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="cr-loading"><i class="bi bi-arrow-repeat cr-spin" aria-hidden="true"></i><strong>Loading credits...</strong><span>Syncing billing adjustments, accounts, and invoices.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="cr-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No credits found</strong><span>Adjust filters or issue a credit/refund.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Issue Credit</button></div>
+            }
+            else
+            {
+                <div class="cr-table-scroll">
+                    <table class="cr-table">
+                        <thead>
+                            <tr>
+                                <th>Credit</th>
+                                <th>Date</th>
+                                <th class="cr-number">Amount</th>
+                                <th>Invoice</th>
+                                <th>Status</th>
+                                <th>Approved</th>
+                                <th class="cr-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in _paged)
+                            {
+                                <tr class="cr-table-row @(IsSelected(item) ? "cr-table-row--selected" : null)" @onclick="() => SelectCredit(item)">
+                                    <td>
+                                        <div class="cr-credit-cell">
+                                            <span class="cr-credit-icon @StatusIconClass(item.StatusCode)"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></span>
+                                            <div>
+                                                <strong>@item.AdjustmentTypeCode</strong>
+                                                <span>@item.Reason</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>@item.AdjustmentDate.ToString("MMM d, yyyy")</td>
+                                    <td class="cr-number">@item.Amount.ToString("C2")</td>
+                                    <td>@InvoiceNumber(item.InvoiceId)</td>
+                                    <td><span class="cr-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td>
+                                    <td>@(item.ApprovedDateUtc?.ToString("MMM d, yyyy") ?? "—")</td>
+                                    <td>
+                                        <div class="cr-row-acts">
+                                            <button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick="() => OpenEdit(item)" @onclick:stopPropagation="true" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            @if (item.StatusCode == "Pending")
+                                            {
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick='() => UpdateStatusAsync(item, "Approved")' @onclick:stopPropagation="true" title="Approve"><i class="bi bi-check-circle" aria-hidden="true"></i></button>
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick='() => UpdateStatusAsync(item, "Denied")' @onclick:stopPropagation="true" title="Deny"><i class="bi bi-x-circle" aria-hidden="true"></i></button>
+                                            }
+                                            @if (item.StatusCode == "Approved")
+                                            {
+                                                <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick='() => UpdateStatusAsync(item, "Applied")' @onclick:stopPropagation="true" title="Apply"><i class="bi bi-arrow-return-left" aria-hidden="true"></i></button>
+                                            }
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ConfirmDelete(item)" @onclick:stopPropagation="true" title="Remove"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="cr-pager">
+                    <span>Page @_page of @TotalPages · @_filtered.Count records</span>
+                    <div>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left" aria-hidden="true"></i> Previous</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <aside class="cr-detail-panel">
+            @if (_selected is null)
+            {
+                <div class="cr-detail-empty"><i class="bi bi-layout-sidebar-inset" aria-hidden="true"></i><strong>Select a credit</strong><span>Click any row to inspect credit/refund details and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="cr-detail-head">
+                    <div>
+                        <span class="cr-detail-eyebrow"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Credit detail</span>
+                        <h2>@_selected.AdjustmentTypeCode</h2>
+                        <div class="cr-detail-meta"><span>@_selected.StatusCode</span><span>@_selected.AdjustmentDate.ToString("MMM d, yyyy")</span><span>@_selected.AdjustmentId.ToString()[..8]</span></div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearSelection"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="cr-detail-body">
+                    <div class="cr-detail-summary">
+                        <div class="cr-meta-row"><span class="cr-meta-lbl">Amount</span><span class="cr-meta-val">@_selected.Amount.ToString("C2")</span></div>
+                        <div class="cr-meta-row"><span class="cr-meta-lbl">Status</span><span class="cr-meta-val">@_selected.StatusCode</span></div>
+                        <div class="cr-meta-row"><span class="cr-meta-lbl">Invoice</span><span class="cr-meta-val">@InvoiceNumber(_selected.InvoiceId)</span></div>
+                        <div class="cr-meta-row"><span class="cr-meta-lbl">Account</span><span class="cr-meta-val">@AccountName(_selected.AccountId)</span></div>
+                        <div class="cr-meta-row"><span class="cr-meta-lbl">Approved</span><span class="cr-meta-val">@(_selected.ApprovedDateUtc?.ToString("MMM d, yyyy") ?? "Not approved")</span></div>
+                        <div class="cr-meta-row"><span class="cr-meta-lbl">Created</span><span class="cr-meta-val">@_selected.CreatedDateUtc.ToString("MMM d, yyyy")</span></div>
+                    </div>
+                    <div class="cr-contact-card">
+                        <strong>Adjustment reason</strong>
+                        <span><i class="bi bi-journal-text" aria-hidden="true"></i> @_selected.Reason</span>
+                    </div>
+                    <div class="cr-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                        @if (_selected.StatusCode == "Pending")
+                        {
+                            <button type="button" class="um-btn um-btn-ghost" @onclick='() => UpdateStatusAsync(_selected, "Approved")'><i class="bi bi-check-circle" aria-hidden="true"></i> Approve</button>
+                        }
+                        @if (_selected.StatusCode == "Approved")
+                        {
+                            <button type="button" class="um-btn um-btn-ghost" @onclick='() => UpdateStatusAsync(_selected, "Applied")'><i class="bi bi-arrow-return-left" aria-hidden="true"></i> Apply</button>
+                        }
+                        <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoice Center</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
     Guid TenantId { get; set; }
@@ -126,30 +361,70 @@
     Guid DevUserId { get; set; }
     private Guid _tenantAdminUserId;
     private Guid _tenantId;
-    private SfToast _toast = default!;
     private List<BillingAdjustmentDto> _items = [];
+    private List<BillingAdjustmentDto> _filtered = [];
+    private List<BillingAdjustmentDto> _paged = [];
     private List<BillingAccountDto> _accounts = [];
     private List<InvoiceDto> _invoices = [];
-    private string _search = string.Empty, _filterType = string.Empty, _filterStatus = string.Empty;
-    private bool _loading, _showForm, _saving;
-    private string? _loadError, _formError;
+    private string _search = string.Empty;
+    private string _filterType = string.Empty;
+    private string _filterStatus = string.Empty;
+    private string _kpiFilter = "all";
+    private bool _loading;
+    private bool _showForm;
+    private bool _busy;
+    private bool _saveAttempted;
+    private bool _showDeleteConfirm;
+    private string? _loadError;
+    private string? _formError;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private bool _toastVisible;
     private Guid _editingId = Guid.Empty;
+    private int _page = 1;
+    private const int PageSize = 15;
+    private BillingAdjustmentDto? _selected;
+    private BillingAdjustmentDto? _deleteTarget;
     private CreditForm _form = new();
-    private EditContext _editContext = default!;
 
     private readonly List<string> _creditTypes = ["Premium Refund", "Endorsement Credit", "Cancellation Return", "Billing Adjustment", "Duplicate Payment", "Carrier Credit", "Other"];
     private readonly List<string> _statuses = ["Pending", "Approved", "Applied", "Refunded", "Denied"];
 
-    private IEnumerable<BillingAdjustmentDto> FilteredItems => _items.Where(i =>
-        (string.IsNullOrWhiteSpace(_search) || i.Reason.Contains(_search, StringComparison.OrdinalIgnoreCase) || i.AdjustmentTypeCode.Contains(_search, StringComparison.OrdinalIgnoreCase)) &&
-        (string.IsNullOrWhiteSpace(_filterType) || i.AdjustmentTypeCode == _filterType) &&
-        (string.IsNullOrWhiteSpace(_filterStatus) || i.StatusCode == _filterStatus));
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All credits and refunds" : $"Filtered by {_kpiFilter}";
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Total Credits", _items.Count.ToString("N0"), "All adjustment records", "bi-arrow-counterclockwise", "cr-ki-blue"),
+        new("pending", "Pending", _items.Count(x => x.StatusCode == "Pending").ToString("N0"), "Awaiting approval", "bi-hourglass", "cr-ki-amber"),
+        new("approved", "Approved", _items.Count(x => x.StatusCode == "Approved").ToString("N0"), "Ready to apply", "bi-check-circle", "cr-ki-green"),
+        new("applied", "Applied", _items.Count(x => x.StatusCode == "Applied").ToString("N0"), "Posted adjustments", "bi-arrow-return-left", "cr-ki-green"),
+        new("value", "Total Value", Fmt(_items.Sum(x => x.Amount)), "Credit and refund value", "bi-currency-dollar", "cr-ki-blue"),
+        new("denied", "Denied", _items.Count(x => x.StatusCode == "Denied").ToString("N0"), "Rejected requests", "bi-x-circle", "cr-ki-red")
+    ];
+
+    private string SearchFilter
+    {
+        get => _search;
+        set { _search = value; ApplyFilters(resetPage: true); }
+    }
+
+    private string TypeFilter
+    {
+        get => _filterType;
+        set { _filterType = value; ApplyFilters(resetPage: true); }
+    }
+
+    private string StatusFilter
+    {
+        get => _filterStatus;
+        set { _filterStatus = value; ApplyFilters(resetPage: true); }
+    }
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Billing", "/billing/accounts"), new("Credits & Refunds", ""));
-        _editContext = new(_form);
         await LoadAsync();
     }
 
@@ -159,49 +434,165 @@
         _loadError = null;
         try
         {
-            var credits = await Api.SearchBillingAdjustmentsAsync(_tenantId, _search);
+            var credits = await Api.SearchBillingAdjustmentsAsync(_tenantId, null);
             var accounts = await Api.SearchBillingAccountsAsync(_tenantId, pageSize: 500);
             var invoices = await Api.SearchInvoicesAsync(_tenantId);
-            _items = credits?.Items.ToList() ?? [];
-            _accounts = accounts?.Items.ToList() ?? [];
-            _invoices = invoices?.Items.ToList() ?? [];
+            _items = credits?.Items?.ToList() ?? [];
+            _accounts = accounts?.Items?.ToList() ?? [];
+            _invoices = invoices?.Items?.ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
         }
         catch (Exception ex)
         {
             _loadError = $"Credits failed to load: {ex.Message}";
-            await ToastAsync(_loadError, true);
+            _items = [];
+            ApplyFilters(resetPage: true);
+            ShowToast($"Load failed: {ex.Message}", "danger");
         }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private void SetFilter(string status) => _filterStatus = status;
-    private void OnRowSelected(RowSelectEventArgs<BillingAdjustmentDto> args) => OpenEdit(args.Data);
-    private void OpenCreate() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
-    private void OpenEdit(BillingAdjustmentDto item)
+    private void ApplyFilters(bool resetPage = false)
     {
-        _editingId = item.AdjustmentId;
-        _form = new CreditForm { AccountId = item.AccountId, InvoiceId = item.InvoiceId, AdjustmentTypeCode = item.AdjustmentTypeCode, AdjustmentDate = item.AdjustmentDate.ToDateTime(TimeOnly.MinValue), Amount = item.Amount, Reason = item.Reason, StatusCode = item.StatusCode };
-        _editContext = new(_form);
+        IEnumerable<BillingAdjustmentDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var search = _search.Trim();
+            query = query.Where(i =>
+                i.Reason.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                i.AdjustmentTypeCode.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                i.StatusCode.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                InvoiceNumber(i.InvoiceId).Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                AccountName(i.AccountId).Contains(search, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_filterType)) query = query.Where(i => i.AdjustmentTypeCode == _filterType);
+        if (!string.IsNullOrWhiteSpace(_filterStatus)) query = query.Where(i => i.StatusCode == _filterStatus);
+        query = _kpiFilter switch
+        {
+            "pending" => query.Where(i => i.StatusCode == "Pending"),
+            "approved" => query.Where(i => i.StatusCode == "Approved"),
+            "applied" => query.Where(i => i.StatusCode == "Applied"),
+            "denied" => query.Where(i => i.StatusCode == "Denied"),
+            "value" => query.Where(i => i.Amount > 0),
+            _ => query
+        };
+
+        _filtered = query.OrderByDescending(i => i.AdjustmentDate).ThenByDescending(i => i.CreatedDateUtc).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+        _paged = _filtered.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    }
+
+    private void SetKpiFilter(string filter)
+    {
+        _kpiFilter = _kpiFilter == filter ? "all" : filter;
+        ApplyFilters(resetPage: true);
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _filterType = string.Empty;
+        _filterStatus = string.Empty;
+        _kpiFilter = "all";
+        ApplyFilters(resetPage: true);
+    }
+
+    private void PreviousPage()
+    {
+        if (_page <= 1) return;
+        _page--;
+        ApplyFilters();
+    }
+
+    private void NextPage()
+    {
+        if (_page >= TotalPages) return;
+        _page++;
+        ApplyFilters();
+    }
+
+    private void SelectCredit(BillingAdjustmentDto item) => _selected = item;
+    private void ClearSelection() => _selected = null;
+    private bool IsSelected(BillingAdjustmentDto item) => _selected?.AdjustmentId == item.AdjustmentId;
+
+    private void OpenCreate()
+    {
+        _editingId = Guid.Empty;
+        _saveAttempted = false;
+        _form = new();
         _formError = null;
         _showForm = true;
     }
-    private void CloseForm() => _showForm = false;
+
+    private void OpenEdit(BillingAdjustmentDto item)
+    {
+        _editingId = item.AdjustmentId;
+        _saveAttempted = false;
+        _form = new CreditForm
+        {
+            AccountId = item.AccountId,
+            InvoiceId = item.InvoiceId,
+            AdjustmentTypeCode = item.AdjustmentTypeCode,
+            AdjustmentDate = item.AdjustmentDate.ToDateTime(TimeOnly.MinValue),
+            Amount = item.Amount,
+            Reason = item.Reason,
+            StatusCode = item.StatusCode
+        };
+        _formError = null;
+        _showForm = true;
+    }
+
+    private void CloseForm()
+    {
+        if (_busy) return;
+        _showForm = false;
+        _saveAttempted = false;
+    }
 
     private async Task SaveAsync()
     {
-        if (!_editContext.Validate()) return;
-        _saving = true;
+        _saveAttempted = true;
+        _busy = true;
+        _formError = null;
         try
         {
             if (_editingId == Guid.Empty)
             {
-                await Api.CreateBillingAdjustmentAsync(new CreateBillingAdjustmentRequest { TenantId = _tenantId, AccountId = _form.AccountId, InvoiceId = _form.InvoiceId, AdjustmentTypeCode = _form.AdjustmentTypeCode, AdjustmentDate = DateOnly.FromDateTime(_form.AdjustmentDate), Amount = _form.Amount, Reason = _form.Reason, StatusCode = _form.StatusCode });
-                await ToastAsync("Credit issued.");
+                await Api.CreateBillingAdjustmentAsync(new CreateBillingAdjustmentRequest
+                {
+                    TenantId = _tenantId,
+                    AccountId = _form.AccountId,
+                    InvoiceId = _form.InvoiceId,
+                    AdjustmentTypeCode = _form.AdjustmentTypeCode,
+                    AdjustmentDate = DateOnly.FromDateTime(_form.AdjustmentDate),
+                    Amount = _form.Amount,
+                    Reason = _form.Reason,
+                    StatusCode = _form.StatusCode,
+                    CreatedByUserId = _tenantAdminUserId
+                });
+                ShowToast("Credit issued.", "success");
             }
             else
             {
-                await Api.UpdateBillingAdjustmentAsync(_editingId, new UpdateBillingAdjustmentRequest { AdjustmentId = _editingId, AccountId = _form.AccountId, InvoiceId = _form.InvoiceId, AdjustmentTypeCode = _form.AdjustmentTypeCode, AdjustmentDate = DateOnly.FromDateTime(_form.AdjustmentDate), Amount = _form.Amount, Reason = _form.Reason, StatusCode = _form.StatusCode });
-                await ToastAsync("Credit updated.");
+                await Api.UpdateBillingAdjustmentAsync(_editingId, new UpdateBillingAdjustmentRequest
+                {
+                    AdjustmentId = _editingId,
+                    AccountId = _form.AccountId,
+                    InvoiceId = _form.InvoiceId,
+                    AdjustmentTypeCode = _form.AdjustmentTypeCode,
+                    AdjustmentDate = DateOnly.FromDateTime(_form.AdjustmentDate),
+                    Amount = _form.Amount,
+                    Reason = _form.Reason,
+                    StatusCode = _form.StatusCode,
+                    ModifiedByUserId = _tenantAdminUserId
+                });
+                ShowToast("Credit updated.", "success");
             }
             _showForm = false;
             await LoadAsync();
@@ -209,25 +600,148 @@
         catch (Exception ex)
         {
             _formError = $"Save failed: {ex.Message}";
-            await ToastAsync(_formError, true);
+            ShowToast(_formError, "danger");
         }
-        finally { _saving = false; }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task NotifyValidationAsync(EditContext _)
+    {
+        _saveAttempted = true;
+        ShowToast("Please correct the validation errors before saving.", "warning");
+        return Task.CompletedTask;
     }
 
     private async Task UpdateStatusAsync(BillingAdjustmentDto item, string status)
     {
+        _busy = true;
         try
         {
-            await Api.UpdateBillingAdjustmentAsync(item.AdjustmentId, new UpdateBillingAdjustmentRequest { AdjustmentId = item.AdjustmentId, AccountId = item.AccountId, InvoiceId = item.InvoiceId, AdjustmentTypeCode = item.AdjustmentTypeCode, AdjustmentDate = item.AdjustmentDate, Amount = item.Amount, Reason = item.Reason, StatusCode = status, ApprovedDateUtc = status == "Approved" ? DateTime.UtcNow : item.ApprovedDateUtc });
-            await ToastAsync($"Credit {status.ToLowerInvariant()}.");
+            await Api.UpdateBillingAdjustmentAsync(item.AdjustmentId, new UpdateBillingAdjustmentRequest
+            {
+                AdjustmentId = item.AdjustmentId,
+                AccountId = item.AccountId,
+                InvoiceId = item.InvoiceId,
+                AdjustmentTypeCode = item.AdjustmentTypeCode,
+                AdjustmentDate = item.AdjustmentDate,
+                Amount = item.Amount,
+                Reason = item.Reason,
+                StatusCode = status,
+                ApprovedByUserId = status == "Approved" ? _tenantAdminUserId : item.ApprovedByUserId,
+                ApprovedDateUtc = status == "Approved" ? DateTime.UtcNow : item.ApprovedDateUtc,
+                ModifiedByUserId = _tenantAdminUserId
+            });
+            ShowToast($"Credit {status.ToLowerInvariant()}.", "success");
             await LoadAsync();
         }
-        catch (Exception ex) { await ToastAsync($"Update failed: {ex.Message}", true); }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
-    private async Task ToastAsync(string message, bool isError = false) => await _toast.ShowAsync(new ToastModel { Content = message, CssClass = isError ? "e-toast-danger" : "e-toast-success" });
+    private void ConfirmDelete(BillingAdjustmentDto item)
+    {
+        _deleteTarget = item;
+        _showDeleteConfirm = true;
+    }
+
+    private void CancelDelete()
+    {
+        if (_busy) return;
+        _showDeleteConfirm = false;
+        _deleteTarget = null;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _busy = true;
+        try
+        {
+            await Api.DeleteBillingAdjustmentAsync(_deleteTarget.AdjustmentId, _tenantAdminUserId);
+            _showDeleteConfirm = false;
+            _deleteTarget = null;
+            ShowToast("Credit removed.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Remove failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any())
+        {
+            ShowToast("No credits are available to export.", "warning");
+            return;
+        }
+
+        var csv = new StringBuilder();
+        csv.AppendLine("Type,Date,Amount,Status,Invoice,Account,Reason,ApprovedDate,AdjustmentId");
+        foreach (var item in _filtered)
+        {
+            csv.AppendLine(string.Join(',',
+                Csv(item.AdjustmentTypeCode),
+                Csv(item.AdjustmentDate.ToString("yyyy-MM-dd")),
+                item.Amount.ToString("0.00"),
+                Csv(item.StatusCode),
+                Csv(InvoiceNumber(item.InvoiceId)),
+                Csv(AccountName(item.AccountId)),
+                Csv(item.Reason),
+                Csv(item.ApprovedDateUtc?.ToString("yyyy-MM-dd") ?? string.Empty),
+                Csv(item.AdjustmentId.ToString())));
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"billing-credits-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} credits.", "success");
+    }
+
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    private void EnsureSelectedStillVisible()
+    {
+        if (_selected is null) return;
+        _selected = _items.FirstOrDefault(i => i.AdjustmentId == _selected.AdjustmentId);
+    }
+
+    private string AccountName(Guid accountId) => _accounts.FirstOrDefault(a => a.AccountId == accountId)?.AccountName ?? accountId.ToString()[..8];
+    private string InvoiceNumber(Guid invoiceId) => _invoices.FirstOrDefault(i => i.InvoiceId == invoiceId)?.InvoiceNumber ?? invoiceId.ToString()[..8];
     private static string Fmt(decimal v) => v.ToString("C0");
+    private static string StatusCss(string status) => $"cr-st-{CssKey(status)}";
+    private static string TypeCss(string type) => $"cr-t-{CssKey(type)}";
+    private static string StatusIconClass(string status) => status switch { "Applied" or "Refunded" => "cr-di-green", "Approved" => "cr-di-amber", "Denied" => "cr-di-red", _ => "cr-di-blue" };
     private static string CssKey(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+    private static string Csv(string value)
+    {
+        var quote = Convert.ToChar(34).ToString();
+        return string.Concat(quote, value.Replace(quote, quote + quote), quote);
+    }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone)
+    {
+        public string Title => $"Filter by {Label}";
+    }
 
     private sealed class CreditForm
     {

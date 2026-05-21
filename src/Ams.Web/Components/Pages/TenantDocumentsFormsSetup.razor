@@ -7,272 +7,390 @@
 @page "/tenant/documents/ocr2"
 @page "/tenant/documents/storage2"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Features.DocumentConfig
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Documents & Forms Setup — AMS</PageTitle>
+<PageTitle>@CurrentModule.Title — AMS</PageTitle>
 
-<AppPageHeader Title="Documents & Forms Setup"
-               Subtitle="Tenant admin control center for document categories, templates, ACORD forms, e-sign templates, packet templates, retention, OCR/indexing, and storage settings"
-               Icon="bi-folder-gear">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
-            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick="ResetFilters">
-            <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset
-        </button>
-        <button class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/tenant/documents/categories")'>
-            <i class="bi bi-folder2" aria-hidden="true"></i> Document Categories
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<section class="doccfg-hero" aria-label="Documents and forms setup overview">
-    <div>
-        <span class="doccfg-eyebrow">Tenant administration</span>
-        <h2>Documents & Forms Workflow</h2>
-        <p>Configure the tenant document ecosystem across categories, document templates, ACORD libraries, e-sign templates, packets, retention, OCR/indexing automation, and storage governance.</p>
-    </div>
-    <div class="doccfg-hero-grid">
-        @foreach (var action in _quickActions)
-        {
-            <button class="doccfg-quick-action" @onclick="() => Nav.NavigateTo(action.Url)">
-                <i class="bi @action.Icon" aria-hidden="true"></i>
-                <span>@action.Label</span>
-            </button>
-        }
-    </div>
-</section>
-
-<section class="doccfg-kpi-grid" aria-label="Documents and forms setup metrics">
-    @Kpi("Categories", FilterCount("categories").ToString(), "Document classification records", "bi-folder2", "doccfg-tone-blue", "categories")
-    @Kpi("Templates", FilterCount("templates").ToString(), "Document template records", "bi-file-earmark-text", "doccfg-tone-violet", "templates")
-    @Kpi("ACORD Forms", FilterCount("forms").ToString(), "Mapped form library", "bi-file-earmark-medical", "doccfg-tone-green", "forms")
-    @Kpi("OCR Rules", FilterCount("ocr").ToString(), "Indexing automations", "bi-upc-scan", "doccfg-tone-red", "ocr")
-    @Kpi("Governance", FilterCount("govern").ToString(), "Retention and storage controls", "bi-shield-check", "doccfg-tone-amber", "govern")
-</section>
-
-@if (_loading)
+@if (!string.IsNullOrWhiteSpace(_toastMessage))
 {
-    <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading document configuration…</span></div>
-}
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
-{
-    <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
-        <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError
+    <div class="tds-toast tds-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @_toastIcon" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="tds-toast-close" @onclick="ClearToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
 }
 
-<section class="doccfg-command-bar" aria-label="Documents and forms setup filters">
-    <div class="doccfg-search-wrap">
-        <i class="bi bi-search" aria-hidden="true"></i>
-        <input type="search"
-               placeholder="Search document setup, owner, control, module..."
-               @bind="_search"
-               @bind:event="oninput" />
-    </div>
-    <div class="doccfg-pill-group" role="group" aria-label="Documents workflow filter">
-        @foreach (var filter in _filters)
-        {
-            <button class="doccfg-pill @(_filter == filter.Key ? "doccfg-pill--active" : "")"
-                    @onclick="() => SetFilter(filter.Key)">
-                @filter.Label
-                <span>@FilterCount(filter.Key)</span>
-            </button>
-        }
-    </div>
-</section>
-
-<section class="doccfg-layout">
-    <div class="doccfg-flow" aria-label="Documents and forms workflow lanes">
-        @foreach (var lane in _lanes)
-        {
-            var laneItems = FilteredWorkflow.Where(x => x.Stage == lane.Key).ToList();
-            <article class="doccfg-lane">
-                <header class="doccfg-lane-header">
-                    <div>
-                        <span class="doccfg-lane-title">@lane.Label</span>
-                        <span class="doccfg-lane-subtitle">@lane.Description</span>
+@if (_showForm)
+{
+    <div class="tds-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="tds-modal" role="dialog" aria-modal="true" aria-labelledby="tds-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi @CurrentModule.Icon" aria-hidden="true"></i>
+                <span id="tds-form-title">@(_editId.HasValue ? $"Edit {CurrentModule.SingularTitle}" : $"Add {CurrentModule.SingularTitle}")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_saving"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="ShowValidationToast">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="tds-modal-intro">
+                        <span><i class="bi bi-database-check" aria-hidden="true"></i> Persisted in Documents.DocumentConfigItem</span>
+                        <p>Update the tenant source-of-truth record used by document workflow, portal, and operations modules.</p>
                     </div>
-                    <span class="doccfg-lane-count">@laneItems.Count</span>
-                </header>
-
-                <div class="doccfg-lane-list">
-                    @if (laneItems.Count == 0)
-                    {
-                        <div class="doccfg-empty-mini">No visible workflow items.</div>
-                    }
-                    else
-                    {
-                        @foreach (var item in laneItems)
-                        {
-                            <button class="doccfg-work-card @(item.Risk == "High" ? "doccfg-work-card--risk" : "")"
-                                    @onclick="() => _selected = item">
-                                <div class="doccfg-work-topline">
-                                    <span class="doccfg-chip @ToneCss(item.Domain)">@item.Domain</span>
-                                    <span class="doccfg-status @RiskCss(item.Risk)">@item.Risk</span>
-                                </div>
-                                <strong>@item.Title</strong>
-                                <p>@item.Summary</p>
-                                <div class="doccfg-work-meta">
-                                    <span><i class="bi bi-person" aria-hidden="true"></i> @item.Owner</span>
-                                    <span><i class="bi bi-clock" aria-hidden="true"></i> @item.Sla</span>
-                                </div>
-                            </button>
-                        }
-                    }
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Code <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.Code" placeholder="COMMERCIAL" />
+                            <ValidationMessage For="() => _form.Code" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Name <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_form.Name" placeholder="Commercial Lines" />
+                            <ValidationMessage For="() => _form.Name" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Category</label>
+                            <InputText class="form-control" @bind-Value="_form.Category" placeholder="Operations" />
+                            <ValidationMessage For="() => _form.Category" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Sort Order <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.SortOrder" />
+                            <ValidationMessage For="() => _form.SortOrder" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description</label>
+                            <InputTextArea class="form-control" @bind-Value="_form.Description" rows="3" placeholder="Describe the workflow purpose and controls." />
+                            <ValidationMessage For="() => _form.Description" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Configuration JSON</label>
+                            <InputTextArea class="form-control tds-json-input" @bind-Value="_form.ConfigurationJson" rows="6" placeholder="{}" />
+                            <ValidationMessage For="() => _form.ConfigurationJson" class="text-danger" />
+                        </div>
+                        <div class="um-field tds-switch-field">
+                            <label>
+                                <InputCheckbox @bind-Value="_form.IsActive" />
+                                Active record
+                            </label>
+                            <span>Inactive records remain visible as high-risk governance items.</span>
+                        </div>
+                    </div>
                 </div>
-            </article>
-        }
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="ValidateJson" disabled="@_saving"><i class="bi bi-braces" aria-hidden="true"></i> Validate JSON</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                        @if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @(_editId.HasValue ? "Save Changes" : "Create")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
     </div>
+}
 
-    <aside class="doccfg-admin-panel" aria-label="Tenant documents and forms administration controls">
-        @if (_selected is null)
-        {
-            <div class="doccfg-side-empty">
-                <i class="bi bi-folder-gear" aria-hidden="true"></i>
-                <h3>Document governance</h3>
-                <p>Select a workflow item to inspect owner, SLA, risk, document control, and setup module.</p>
+@if (_confirmAction is not null)
+{
+    <div class="tds-modal-backdrop" role="presentation" @onclick="CancelConfirm">
+        <div class="tds-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="tds-confirm-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi @_confirmAction.Icon" aria-hidden="true"></i></div>
+                <div class="um-confirm-content">
+                    <h3 id="tds-confirm-title">@_confirmAction.Title</h3>
+                    <p>@_confirmAction.Message</p>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelConfirm" disabled="@_saving">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteConfirmAsync" disabled="@_saving">
+                        @if (_saving) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @_confirmAction.ConfirmLabel
+                    </button>
+                </div>
             </div>
-        }
-        else
-        {
-            <div class="doccfg-detail-header">
-                <span class="doccfg-chip @ToneCss(_selected.Domain)">@_selected.Domain</span>
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selected = null" aria-label="Close details">
-                    <i class="bi bi-x-lg" aria-hidden="true"></i>
-                </button>
+        </div>
+    </div>
+}
+
+<div class="tds-enterprise-page">
+    <section class="tds-header" aria-label="Documents and forms setup header">
+        <div class="tds-header-left">
+            <span class="tds-lob-icon"><i class="bi @CurrentModule.Icon" aria-hidden="true"></i></span>
+            <div class="tds-header-info">
+                <div class="tds-title-row">
+                    <h1 class="tds-page-title">@CurrentModule.Title</h1>
+                    <span class="tds-status-pill"><i class="bi bi-shield-check" aria-hidden="true"></i> Tenant source of truth</span>
+                    <span class="tds-status-pill"><i class="bi bi-database" aria-hidden="true"></i> @CurrentModule.Kind</span>
+                </div>
+                <div class="tds-sub-row">
+                    <span class="tds-sub-chip"><i class="bi bi-folder-gear" aria-hidden="true"></i> Documents & Forms Setup</span>
+                    <span class="tds-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> API synced</span>
+                    <span class="tds-filter-note"><i class="bi bi-funnel" aria-hidden="true"></i> @FilterLabel</span>
+                </div>
+                <p>@CurrentModule.Description</p>
             </div>
-            <h3>@_selected.Title</h3>
-            <p>@_selected.Summary</p>
+        </div>
+        <div class="tds-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "tds-spin" : "")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ResetFilters"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Reset</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add @CurrentModule.SingularTitle</button>
+        </div>
+    </section>
 
-            <dl class="doccfg-detail-list">
-                <div><dt>Owner</dt><dd>@_selected.Owner</dd></div>
-                <div><dt>Stage</dt><dd>@_selected.Stage</dd></div>
-                <div><dt>Risk</dt><dd><span class="doccfg-status @RiskCss(_selected.Risk)">@_selected.Risk</span></dd></div>
-                <div><dt>SLA</dt><dd>@_selected.Sla</dd></div>
-                <div><dt>Control</dt><dd>@_selected.Control</dd></div>
-            </dl>
-
-            <div class="doccfg-policy-card">
-                <strong>Tenant document controls</strong>
-                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Categories, templates, ACORD, and packet governance enforced</span>
-                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> E-sign, OCR/indexing, and retention rules auditable</span>
-                <span><i class="bi bi-check2-circle" aria-hidden="true"></i> Storage allocation, legal hold, and lifecycle controls monitored</span>
-            </div>
-
-            <div class="doccfg-detail-actions">
-                <button class="um-btn um-btn-primary" @onclick="() => Nav.NavigateTo(_selected.Url)">
-                    <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Module
-                </button>
-                <button class="um-btn um-btn-ghost" @onclick="() => OpenRecord(_selected)">
-                    <i class="bi bi-search" aria-hidden="true"></i> Find Record
-                </button>
-            </div>
-        }
-    </aside>
-</section>
-
-<section class="doccfg-module-grid" aria-label="Documents and forms setup modules">
-    @foreach (var module in _modules)
+    @if (!string.IsNullOrWhiteSpace(_loadError))
     {
-        <button class="doccfg-module-card" @onclick="() => Nav.NavigateTo(module.Url)">
-            <span class="doccfg-module-icon @ToneCss(module.Domain)"><i class="bi @module.Icon" aria-hidden="true"></i></span>
-            <span class="doccfg-module-content">
-                <strong>@module.Title</strong>
-                <small>@module.Description</small>
-            </span>
-            <i class="bi bi-chevron-right doccfg-module-arrow" aria-hidden="true"></i>
-        </button>
+        <div class="alert alert-danger tds-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i> @_loadError
+        </div>
     }
-</section>
+
+    <section class="tds-kpi-strip" aria-label="Document setup metrics">
+        @KpiCard("Total", FilteredBySearch.Count.ToString(), "Records in this module", CurrentModule.Icon, "tds-ki-blue", "")
+        @KpiCard("Active", FilteredBySearch.Count(x => x.IsActive).ToString(), "Available in workflow", "bi-check-circle-fill", "tds-ki-green", "active")
+        @KpiCard("Inactive", FilteredBySearch.Count(x => !x.IsActive).ToString(), "Needs tenant review", "bi-pause-circle", "tds-ki-amber", "inactive")
+        @KpiCard("Configured", FilteredBySearch.Count(x => HasConfiguration(x)).ToString(), "JSON controls present", "bi-braces", "tds-ki-purple", "configured")
+        @KpiCard("Needs Setup", FilteredBySearch.Count(x => !HasConfiguration(x)).ToString(), "Missing JSON controls", "bi-exclamation-triangle", "tds-ki-red", "needs-setup")
+        @KpiCard("Categories", FilteredBySearch.Select(x => x.Category ?? "Unassigned").Distinct(StringComparer.OrdinalIgnoreCase).Count().ToString(), "Owner/control groups", "bi-tags", "tds-ki-cyan", "")
+    </section>
+
+    <section class="tds-workflow-strip tds-workflow-strip--polished" aria-label="Documents and forms setup workflow">
+        @foreach (var module in Modules)
+        {
+            <button type="button" class="tds-workflow-card @module.WorkflowCss @(CurrentModule.Kind == module.Kind ? "tds-workflow-card--active" : "")" @onclick="() => NavigateModule(module)">
+                <span class="tds-workflow-icon"><i class="bi @module.Icon" aria-hidden="true"></i></span>
+                <span class="tds-workflow-content">
+                    <strong>@ModuleCount(module.Kind)</strong>
+                    <span>@module.ShortTitle</span>
+                    <small>@module.WorkflowCaption</small>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="tds-enterprise-search" aria-label="Search and filters">
+        <span class="tds-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+        <div class="tds-search-body">
+            <label for="tds-search">Search @CurrentModule.ShortTitle</label>
+            <input id="tds-search" class="tds-search-input" type="search" placeholder="Search code, name, category, description, or JSON..." @bind="_search" @bind:event="oninput" />
+            <span class="tds-search-hint">Search updates the custom table, KPI cards, and selected detail panel.</span>
+        </div>
+        <select class="tds-filter-select" @bind="_activeFilter" aria-label="Status filter">
+            <option value="">All records</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+            <option value="configured">Configured</option>
+            <option value="needs-setup">Needs setup</option>
+        </select>
+        <select class="tds-filter-select" @bind="_categoryFilter" aria-label="Category filter">
+            <option value="">All categories</option>
+            @foreach (var category in CategoryOptions)
+            {
+                <option value="@category">@category</option>
+            }
+        </select>
+        <div class="tds-search-result">
+            <strong>@FilteredItems.Count</strong>
+            <span>visible</span>
+        </div>
+    </section>
+
+    <section class="tds-content-layout">
+        <div class="tds-grid-wrap">
+            <div class="tds-grid-toolbar">
+                <div>
+                    <strong>@CurrentModule.Title Register</strong>
+                    <span>Plain Blazor table backed by api/document-config</span>
+                </div>
+                <div class="tds-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="SelectFirst" disabled="@(FilteredItems.Count == 0)"><i class="bi bi-cursor" aria-hidden="true"></i> Select First</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ShowExportSummary" disabled="@(FilteredItems.Count == 0)"><i class="bi bi-download" aria-hidden="true"></i> Export Summary</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="tds-loading"><i class="bi bi-arrow-repeat tds-spin" aria-hidden="true"></i><strong>Loading document setup records…</strong></div>
+            }
+            else if (FilteredItems.Count == 0)
+            {
+                <div class="tds-empty-state">
+                    <i class="bi bi-inboxes" aria-hidden="true"></i>
+                    <strong>No records found</strong>
+                    <span>Adjust filters or add a new @CurrentModule.SingularTitle record.</span>
+                    <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add @CurrentModule.SingularTitle</button>
+                </div>
+            }
+            else
+            {
+                <div class="tds-table-scroll">
+                    <table class="tds-table">
+                        <thead>
+                            <tr>
+                                <th>Record</th>
+                                <th>Code</th>
+                                <th>Category</th>
+                                <th>Status</th>
+                                <th>Config</th>
+                                <th class="tds-number">Order</th>
+                                <th class="tds-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in FilteredItems)
+                            {
+                                <tr class="tds-table-row @(_selected?.DocumentConfigItemId == item.DocumentConfigItemId ? "tds-table-row--selected" : "")" @onclick="() => SelectItem(item)">
+                                    <td>
+                                        <div class="tds-record-cell">
+                                            <span class="tds-record-icon @CurrentModule.IconCss"><i class="bi @CurrentModule.Icon" aria-hidden="true"></i></span>
+                                            <div>
+                                                <strong>@item.Name</strong>
+                                                <span>@(string.IsNullOrWhiteSpace(item.Description) ? "No description supplied." : item.Description)</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td><span class="tds-code">@item.Code</span></td>
+                                    <td><span class="tds-category">@(item.Category ?? "Unassigned")</span></td>
+                                    <td><span class="tds-status @(item.IsActive ? "tds-status-active" : "tds-status-inactive")">@(item.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td><span class="tds-status @(HasConfiguration(item) ? "tds-status-configured" : "tds-status-warning")">@(HasConfiguration(item) ? "Configured" : "Needs setup")</span></td>
+                                    <td class="tds-number">@item.SortOrder</td>
+                                    <td>
+                                        <div class="tds-row-actions">
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmToggle(item)" title="Toggle active"><i class="bi @(item.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick:stopPropagation="true" @onclick="() => ConfirmDuplicate(item)" title="Duplicate"><i class="bi bi-files" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(item)" title="Delete"><i class="bi bi-trash3" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="tds-detail-panel" aria-label="Selected document setup record">
+            @if (_selected is null)
+            {
+                <div class="tds-detail-empty">
+                    <i class="bi @CurrentModule.Icon" aria-hidden="true"></i>
+                    <h2>Select a setup record</h2>
+                    <p>Choose a row to inspect configuration JSON, controls, and workflow health.</p>
+                </div>
+            }
+            else
+            {
+                <div class="tds-detail-head">
+                    <div class="tds-detail-title-block">
+                        <span class="tds-detail-eyebrow"><i class="bi @CurrentModule.Icon" aria-hidden="true"></i> @CurrentModule.ShortTitle</span>
+                        <h2>@_selected.Name</h2>
+                        <div class="tds-detail-meta">
+                            <span><i class="bi bi-hash" aria-hidden="true"></i> @_selected.Code</span>
+                            <span><i class="bi bi-tag" aria-hidden="true"></i> @(_selected.Category ?? "Unassigned")</span>
+                        </div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selected = null" aria-label="Close details"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="tds-detail-body">
+                    <div class="tds-detail-summary">
+                        <div class="tds-meta-row"><span class="tds-meta-lbl">Status</span><span class="tds-meta-val">@(_selected.IsActive ? "Active" : "Inactive")</span></div>
+                        <div class="tds-meta-row"><span class="tds-meta-lbl">Configuration</span><span class="tds-meta-val">@(HasConfiguration(_selected) ? "Present" : "Missing")</span></div>
+                        <div class="tds-meta-row"><span class="tds-meta-lbl">Sort Order</span><span class="tds-meta-val">@_selected.SortOrder</span></div>
+                        <div class="tds-meta-row"><span class="tds-meta-lbl">Created</span><span class="tds-meta-val">@_selected.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</span></div>
+                    </div>
+                    <div class="tds-detail-description">
+                        <strong>Workflow description</strong>
+                        <p>@(string.IsNullOrWhiteSpace(_selected.Description) ? "No description has been configured for this record." : _selected.Description)</p>
+                    </div>
+                    <div class="tds-json-card">
+                        <div>
+                            <strong>Configuration JSON</strong>
+                            <span>@(HasConfiguration(_selected) ? "Controls are stored with this record." : "Add JSON controls to complete setup.")</span>
+                        </div>
+                        <pre>@(string.IsNullOrWhiteSpace(_selected.ConfigurationJson) ? "{}" : _selected.ConfigurationJson)</pre>
+                    </div>
+                    <div class="tds-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil-square" aria-hidden="true"></i> Edit</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmToggle(_selected)"><i class="bi @(_selected.IsActive ? "bi-pause-circle" : "bi-play-circle")" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => ConfirmDuplicate(_selected)"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
+                        <button type="button" class="um-btn um-btn-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash3" aria-hidden="true"></i> Delete</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
+    private Guid TenantAdminUserId { get; set; }
+    private Guid DevTenantId { get; set; }
+    private Guid DevUserId { get; set; }
     private Guid _tenantId;
     private Guid _tenantAdminUserId;
     private Guid TenantId { get; set; }
     private string _search = string.Empty;
-    private string _filter = string.Empty;
-    private DocumentWorkflowItem? _selected;
-    private readonly List<DocumentWorkflowItem> _workflow = [];
-    private readonly List<DocumentConfigItemDto> _items = [];
+    private string _activeFilter = string.Empty;
+    private string _categoryFilter = string.Empty;
     private bool _loading;
+    private bool _saving;
+    private bool _showForm;
     private string? _loadError;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private string _toastIcon = "bi-check-circle-fill";
+    private Guid? _editId;
+    private DocumentConfigItemDto? _selected;
+    private ConfirmAction? _confirmAction;
+    private ConfigFormModel _form = new();
+    private readonly List<DocumentConfigItemDto> _items = [];
 
-    private readonly Lane[] _lanes =
-    [
-        new("Classify", "Classify", "Categories and metadata"),
-        new("Author", "Author", "Templates and forms"),
-        new("Package", "Package", "E-sign and packets"),
-        new("Index", "Index", "OCR and automation"),
-        new("Govern", "Govern", "Retention and storage")
-    ];
+    private ModuleDefinition CurrentModule => Modules.FirstOrDefault(x => Nav.ToBaseRelativePath(Nav.Uri).Split('?', 2)[0].Equals(x.Route.TrimStart('/'), StringComparison.OrdinalIgnoreCase)) ?? Modules[0];
 
-    private readonly Filter[] _filters =
-    [
-        new("", "All"),
-        new("risk", "High Risk"),
-        new("categories", "Categories"),
-        new("templates", "Templates"),
-        new("forms", "ACORD Forms"),
-        new("ocr", "OCR"),
-        new("govern", "Governance")
-    ];
+    private List<DocumentConfigItemDto> FilteredBySearch => _items
+        .Where(MatchesSearch)
+        .OrderBy(x => x.SortOrder)
+        .ThenBy(x => x.Name)
+        .ToList();
 
-    private readonly DocumentModule[] _modules =
-    [
-        new("Document Categories", "Configure categories, metadata, access policy, required fields, and lifecycle class.", "/tenant/documents/categories", "bi-folder2", "Categories"),
-        new("Document Templates", "Manage templates, merge fields, versions, approvals, and output naming conventions.", "/tenant/documents/templates", "bi-file-earmark-text", "Templates"),
-        new("ACORD Forms", "Configure form library, prefill mappings, validation rules, and form availability.", "/tenant/documents/acord", "bi-file-earmark-medical", "Forms"),
-        new("E-Sign Templates", "Manage signing templates, signer roles, routing, reminders, and completion callbacks.", "/tenant/documents/esign", "bi-pen", "Signing"),
-        new("Packet Templates", "Build packet templates, document bundles, conditional inclusions, and delivery rules.", "/tenant/documents/packets", "bi-collection", "Packets"),
-        new("Retention Rules", "Define retention schedules, legal holds, archive eligibility, and purge approvals.", "/tenant/documents/retention", "bi-clock-history", "Governance"),
-        new("OCR / Indexing Rules", "Configure OCR extraction, confidence thresholds, exception routing, and indexing fields.", "/tenant/documents/ocr", "bi-upc-scan", "OCR"),
-        new("Storage Settings", "Control storage quotas, encryption, region policy, archive tiering, and growth alerts.", "/tenant/documents/storage", "bi-hdd", "Storage")
-    ];
-
-    private readonly DocumentModule[] _quickActions =
-    [
-        new("Categories", "", "/tenant/documents/categories", "bi-folder2", "Categories"),
-        new("Templates", "", "/tenant/documents/templates", "bi-file-earmark-text", "Templates"),
-        new("OCR", "", "/tenant/documents/ocr", "bi-upc-scan", "OCR"),
-        new("Storage", "", "/tenant/documents/storage", "bi-hdd", "Storage")
-    ];
-
-    private IEnumerable<DocumentWorkflowItem> FilteredWorkflow => _workflow.Where(item =>
-        (string.IsNullOrWhiteSpace(_filter) || _filter switch
+    private List<DocumentConfigItemDto> FilteredItems => FilteredBySearch
+        .Where(x => string.IsNullOrWhiteSpace(_categoryFilter) || string.Equals(x.Category ?? "Unassigned", _categoryFilter, StringComparison.OrdinalIgnoreCase))
+        .Where(x => _activeFilter switch
         {
-            "risk" => item.Risk == "High",
-            "categories" => item.Domain == "Categories",
-            "templates" => item.Domain == "Templates",
-            "forms" => item.Domain == "Forms",
-            "ocr" => item.Domain == "OCR",
-            "govern" => item.Domain is "Governance" or "Storage",
+            "active" => x.IsActive,
+            "inactive" => !x.IsActive,
+            "configured" => HasConfiguration(x),
+            "needs-setup" => !HasConfiguration(x),
             _ => true
-        }) &&
-        (string.IsNullOrWhiteSpace(_search) ||
-         item.Title.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-         item.Summary.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-         item.Owner.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-         item.Domain.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-         item.Control.Contains(_search, StringComparison.OrdinalIgnoreCase)))
-        .OrderByDescending(x => x.Risk == "High")
-        .ThenBy(x => x.Stage)
-        .ThenBy(x => x.Title);
+        })
+        .ToList();
+
+    private List<string> CategoryOptions => _items
+        .Select(x => string.IsNullOrWhiteSpace(x.Category) ? "Unassigned" : x.Category!)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(x => x)
+        .ToList();
+
+    private string FilterLabel => _activeFilter switch
+    {
+        "active" => "Active records",
+        "inactive" => "Inactive records",
+        "configured" => "Configured records",
+        "needs-setup" => "Needs setup",
+        _ => "All records"
+    };
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
-        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents & Forms Setup", "/tenant/documents/templates"));
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents & Forms", null), new(CurrentModule.Title, null));
+        _search = GetQueryValue("searchTerm") ?? string.Empty;
         await LoadAsync();
-        _selected = _workflow.FirstOrDefault(x => x.Risk == "High") ?? _workflow.FirstOrDefault();
     }
 
     private async Task LoadAsync()
@@ -281,16 +399,15 @@
         _loadError = null;
         try
         {
+            var result = await Api.SearchDocumentConfigItemsAsync(TenantId, CurrentModule.Kind, pageSize: 1000);
             _items.Clear();
-            var result = await Api.SearchDocumentConfigItemsAsync(TenantId, pageSize: 1000);
-            _items.AddRange((result?.Items ?? []).Where(x => _moduleKinds.Any(module => module.Kind == x.Kind)));
-
-            BuildWorkflow();
+            _items.AddRange(result?.Items ?? []);
+            EnsureSelectedStillVisible();
         }
         catch (Exception ex)
         {
             _loadError = $"Error loading document configuration: {ex.Message}";
-            _workflow.Clear();
+            ShowToast($"Load failed: {ex.Message}", "danger", "bi-exclamation-triangle-fill");
         }
         finally
         {
@@ -298,115 +415,320 @@
         }
     }
 
-    private void BuildWorkflow()
-    {
-        _workflow.Clear();
-        _workflow.AddRange(_items.Select(ToWorkflowItem));
-    }
-
     private void ResetFilters()
     {
         _search = string.Empty;
-        _filter = string.Empty;
+        _activeFilter = string.Empty;
+        _categoryFilter = string.Empty;
+        EnsureSelectedStillVisible();
     }
 
-    private void SetFilter(string key) => _filter = _filter == key ? string.Empty : key;
-
-    private int FilterCount(string key) => key switch
+    private void SetFilter(string filter)
     {
-        "risk" => _workflow.Count(x => x.Risk == "High"),
-        "categories" => _workflow.Count(x => x.Domain == "Categories"),
-        "templates" => _workflow.Count(x => x.Domain == "Templates"),
-        "forms" => _workflow.Count(x => x.Domain == "Forms"),
-        "ocr" => _workflow.Count(x => x.Domain == "OCR"),
-        "govern" => _workflow.Count(x => x.Domain is "Governance" or "Storage"),
-        _ => _workflow.Count
-    };
-
-    private static string ToneCss(string domain) => domain switch
-    {
-        "Categories" => "doccfg-tone-blue",
-        "Templates" => "doccfg-tone-violet",
-        "Forms" => "doccfg-tone-green",
-        "Signing" => "doccfg-tone-cyan",
-        "Packets" => "doccfg-tone-amber",
-        "OCR" => "doccfg-tone-red",
-        "Governance" => "doccfg-tone-blue",
-        "Storage" => "doccfg-tone-neutral",
-        _ => "doccfg-tone-neutral"
-    };
-
-    private static string RiskCss(string risk) => risk switch
-    {
-        "High" => "doccfg-status-high",
-        "Medium" => "doccfg-status-medium",
-        _ => "doccfg-status-low"
-    };
-
-    private RenderFragment Kpi(string label, string value, string meta, string icon, string tone, string filterKey) => @<article class="doccfg-kpi-card @(_filter == filterKey ? "doccfg-kpi-card--active" : "")" @onclick="() => SetFilter(filterKey)" role="button" tabindex="0" title="Filter by @label">
-        <span class="doccfg-kpi-icon @tone"><i class="bi @icon" aria-hidden="true"></i></span>
-        <div>
-            <strong>@value</strong>
-            <span>@label</span>
-            <small>@meta</small>
-        </div>
-    </article>;
-
-    private void OpenRecord(DocumentWorkflowItem item)
-    {
-        Nav.NavigateTo($"{item.Url}?searchTerm={Uri.EscapeDataString(item.Code)}");
+        _activeFilter = _activeFilter == filter ? string.Empty : filter;
+        EnsureSelectedStillVisible();
     }
 
-    private sealed record Lane(string Key, string Label, string Description);
-    private sealed record Filter(string Key, string Label);
-    private sealed record ModuleKind(string Kind, string Domain, string Stage, string Url, string Control);
-    private sealed record DocumentModule(string Title, string Description, string Url, string Icon, string Domain)
+    private void NavigateModule(ModuleDefinition module) => Nav.NavigateTo(module.Route);
+
+    private int ModuleCount(string kind) => CurrentModule.Kind == kind ? _items.Count : 0;
+
+    private void SelectItem(DocumentConfigItemDto item) => _selected = item;
+
+    private void SelectFirst()
     {
-        public string Label => Title;
+        _selected = FilteredItems.FirstOrDefault();
+        if (_selected is null)
+            ShowToast("No records are available to select.", "warning", "bi-exclamation-triangle-fill");
     }
 
-    private sealed class DocumentWorkflowItem(string title, string summary, string domain, string risk, string stage, string owner, string sla, string control, string url)
+    private void OpenCreate()
     {
-        public string Code { get; set; } = string.Empty;
-        public string Title { get; set; } = title;
-        public string Summary { get; set; } = summary;
-        public string Domain { get; set; } = domain;
-        public string Risk { get; set; } = risk;
-        public string Stage { get; set; } = stage;
-        public string Owner { get; set; } = owner;
-        public string Sla { get; set; } = sla;
-        public string Control { get; set; } = control;
-        public string Url { get; set; } = url;
-    }
-
-    private static readonly ModuleKind[] _moduleKinds =
-    [
-        new("DocumentCategory", "Categories", "Classify", "/tenant/documents/categories", "Category access policy"),
-        new("DocumentTemplate", "Templates", "Author", "/tenant/documents/templates", "Template approval"),
-        new("AcordForm", "Forms", "Author", "/tenant/documents/acord", "Form mapping validation"),
-        new("ESignTemplate", "Signing", "Package", "/tenant/documents/esign", "Signer routing policy"),
-        new("PacketTemplate", "Packets", "Package", "/tenant/documents/packets", "Packet assembly governance"),
-        new("OcrIndexingRule", "OCR", "Index", "/tenant/documents/ocr", "OCR exception routing"),
-        new("RetentionRule", "Governance", "Govern", "/tenant/documents/retention", "Retention and legal hold"),
-        new("StorageSetting", "Storage", "Govern", "/tenant/documents/storage", "Storage quota policy"),
-    ];
-
-    private static DocumentWorkflowItem ToWorkflowItem(DocumentConfigItemDto item)
-    {
-        var module = _moduleKinds.FirstOrDefault(x => x.Kind == item.Kind) ?? new(item.Kind, item.Kind, "Govern", "/tenant/documents/categories", "Document control");
-        var risk = !item.IsActive ? "High" : string.IsNullOrWhiteSpace(item.ConfigurationJson) || item.ConfigurationJson == "{}" ? "Medium" : "Low";
-        var sla = risk switch { "High" => "Today", "Medium" => "This week", _ => "Standard" };
-        var owner = string.IsNullOrWhiteSpace(item.Category) ? "Tenant Admin" : item.Category!;
-        var summary = string.IsNullOrWhiteSpace(item.Description)
-            ? $"{item.Name} is configured as {item.Kind} with code {item.Code}."
-            : item.Description!;
-        return new(item.Name, summary, module.Domain, risk, module.Stage, owner, sla, module.Control, module.Url)
+        _editId = null;
+        _form = new ConfigFormModel
         {
-            Code = item.Code
+            ConfigurationJson = DefaultConfigurationJson,
+            SortOrder = NextSortOrder,
+            IsActive = true
         };
+        _showForm = true;
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private void OpenEdit(DocumentConfigItemDto item)
+    {
+        _editId = item.DocumentConfigItemId;
+        _form = new ConfigFormModel
+        {
+            Code = item.Code,
+            Name = item.Name,
+            Category = item.Category,
+            Description = item.Description,
+            ConfigurationJson = string.IsNullOrWhiteSpace(item.ConfigurationJson) ? "{}" : item.ConfigurationJson,
+            SortOrder = item.SortOrder,
+            IsActive = item.IsActive
+        };
+        _showForm = true;
+    }
+
+    private void CloseForm()
+    {
+        if (_saving)
+            return;
+
+        _showForm = false;
+        _editId = null;
+        _form = new();
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!IsJsonValid(_form.ConfigurationJson, out var jsonError))
+        {
+            ShowToast($"Save failed: {jsonError}", "danger", "bi-exclamation-triangle-fill");
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+            {
+                await Api.UpdateDocumentConfigItemAsync(_editId.Value, new UpdateDocumentConfigItemRequest(_form.Code.Trim(), _form.Name.Trim(), Normalize(_form.Category), Normalize(_form.Description), NormalizeJson(_form.ConfigurationJson), _form.IsActive, _form.SortOrder));
+                ShowToast("Record updated successfully.", "success", "bi-check-circle-fill");
+            }
+            else
+            {
+                var id = await Api.CreateDocumentConfigItemAsync(new CreateDocumentConfigItemRequest(TenantId, CurrentModule.Kind, _form.Code.Trim(), _form.Name.Trim(), Normalize(_form.Category), Normalize(_form.Description), NormalizeJson(_form.ConfigurationJson), _form.SortOrder));
+                ShowToast("Record created successfully.", "success", "bi-check-circle-fill");
+                _editId = id;
+            }
+
+            _showForm = false;
+            await LoadAsync();
+            _selected = _editId.HasValue ? _items.FirstOrDefault(x => x.DocumentConfigItemId == _editId.Value) ?? FilteredItems.FirstOrDefault() : FilteredItems.FirstOrDefault();
+            _editId = null;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger", "bi-exclamation-triangle-fill");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmToggle(DocumentConfigItemDto item)
+    {
+        _confirmAction = new ConfirmAction(
+            item.IsActive ? "Deactivate Setup Record" : "Activate Setup Record",
+            $"{(item.IsActive ? "Deactivate" : "Activate")} {item.Name}? This updates workflow availability for this tenant.",
+            item.IsActive ? "Deactivate" : "Activate",
+            "bi-pause-circle",
+            async () => await ToggleActiveAsync(item));
+    }
+
+    private async Task ToggleActiveAsync(DocumentConfigItemDto item)
+    {
+        await Api.UpdateDocumentConfigItemAsync(item.DocumentConfigItemId, new UpdateDocumentConfigItemRequest(item.Code, item.Name, item.Category, item.Description, item.ConfigurationJson, !item.IsActive, item.SortOrder));
+        ShowToast($"{item.Name} {(item.IsActive ? "deactivated" : "activated")} successfully.", "success", "bi-check-circle-fill");
+        await LoadAsync();
+        _selected = _items.FirstOrDefault(x => x.DocumentConfigItemId == item.DocumentConfigItemId);
+    }
+
+    private void ConfirmDuplicate(DocumentConfigItemDto item)
+    {
+        _confirmAction = new ConfirmAction(
+            "Duplicate Setup Record",
+            $"Create a duplicate copy of {item.Name}? A new record will be created with a unique code and copied configuration.",
+            "Duplicate",
+            "bi-files",
+            async () => await DuplicateAsync(item));
+    }
+
+    private async Task DuplicateAsync(DocumentConfigItemDto item)
+    {
+        _saving = true;
+        try
+        {
+            var suffix = DateTime.UtcNow.ToString("HHmmss");
+            var copyCode = $"{item.Code}_COPY_{suffix}";
+            var id = await Api.CreateDocumentConfigItemAsync(new CreateDocumentConfigItemRequest(TenantId, CurrentModule.Kind, copyCode, $"{item.Name} Copy", item.Category, item.Description, item.ConfigurationJson, item.SortOrder + 10));
+            ShowToast("Duplicate record created successfully.", "success", "bi-files");
+            await LoadAsync();
+            _selected = _items.FirstOrDefault(x => x.DocumentConfigItemId == id);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Duplicate failed: {ex.Message}", "danger", "bi-exclamation-triangle-fill");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDelete(DocumentConfigItemDto item)
+    {
+        _confirmAction = new ConfirmAction(
+            "Delete Setup Record",
+            $"Delete {item.Name}? This soft-deletes the tenant document setup record after confirmation.",
+            "Delete",
+            "bi-trash3-fill",
+            async () => await DeleteAsync(item));
+    }
+
+    private async Task DeleteAsync(DocumentConfigItemDto item)
+    {
+        await Api.DeleteDocumentConfigItemAsync(item.DocumentConfigItemId);
+        ShowToast("Record deleted successfully.", "success", "bi-check-circle-fill");
+        await LoadAsync();
+        if (_selected?.DocumentConfigItemId == item.DocumentConfigItemId)
+            _selected = FilteredItems.FirstOrDefault();
+    }
+
+    private async Task ExecuteConfirmAsync()
+    {
+        if (_confirmAction is null)
+            return;
+
+        _saving = true;
+        try
+        {
+            var action = _confirmAction;
+            _confirmAction = null;
+            await action.ExecuteAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Action failed: {ex.Message}", "danger", "bi-exclamation-triangle-fill");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void CancelConfirm()
+    {
+        if (_saving)
+            return;
+
+        _confirmAction = null;
+    }
+
+    private void ValidateJson()
+    {
+        if (IsJsonValid(_form.ConfigurationJson, out var error))
+            ShowToast("Configuration JSON is valid.", "success", "bi-check-circle-fill");
+        else
+            ShowToast($"JSON validation failed: {error}", "danger", "bi-exclamation-triangle-fill");
+    }
+
+    private void ShowValidationToast() => ShowToast("Please fix validation errors before saving.", "danger", "bi-exclamation-triangle-fill");
+
+    private void ShowExportSummary()
+    {
+        var message = $"Export summary prepared for {FilteredItems.Count} {CurrentModule.ShortTitle.ToLowerInvariant()} records.";
+        ShowToast(message, "success", "bi-download");
+    }
+
+    private void EnsureSelectedStillVisible()
+    {
+        if (_selected is not null && FilteredItems.Any(x => x.DocumentConfigItemId == _selected.DocumentConfigItemId))
+            return;
+
+        _selected = FilteredItems.FirstOrDefault();
+    }
+
+    private bool MatchesSearch(DocumentConfigItemDto item)
+    {
+        if (string.IsNullOrWhiteSpace(_search))
+            return true;
+
+        return Contains(item.Code, _search) ||
+               Contains(item.Name, _search) ||
+               Contains(item.Category, _search) ||
+               Contains(item.Description, _search) ||
+               Contains(item.ConfigurationJson, _search);
+    }
+
+    private static bool Contains(string? value, string search) => value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool HasConfiguration(DocumentConfigItemDto item) => !string.IsNullOrWhiteSpace(item.ConfigurationJson) && item.ConfigurationJson.Trim() != "{}";
+
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? NormalizeJson(string? value) => string.IsNullOrWhiteSpace(value) ? "{}" : value.Trim();
+
+    private static bool IsJsonValid(string? json, out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(json))
+            return true;
+
+        try
+        {
+            using var _ = JsonDocument.Parse(json);
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private void ShowToast(string message, string kind, string icon)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastIcon = icon;
+    }
+
+    private void ClearToast() => _toastMessage = null;
+
+    private RenderFragment KpiCard(string label, string value, string caption, string icon, string tone, string filterKey) => @<button type="button" class="tds-kpi-card @tone @(_activeFilter == filterKey && !string.IsNullOrWhiteSpace(filterKey) ? "tds-kpi-active" : "")" @onclick="() => SetFilter(filterKey)" title="Filter by @label">
+        <span class="tds-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span>
+        <span class="tds-kpi-copy">
+            <span class="tds-kpi-label">@label</span>
+            <strong class="tds-kpi-value">@value</strong>
+            <span class="tds-kpi-caption">@caption</span>
+        </span>
+    </button>;
+
+    private int NextSortOrder => _items.Count == 0 ? 10 : _items.Max(x => x.SortOrder) + 10;
+
+    private string DefaultConfigurationJson => CurrentModule.Kind switch
+    {
+        "DocumentCategory" => "{\"requiresIndexing\":true,\"access\":\"Producer,CSR\"}",
+        "DocumentTemplate" => "{\"version\":\"1\",\"approvalRequired\":true}",
+        "AcordForm" => "{\"mapped\":true,\"prefill\":\"Account\"}",
+        "ESignTemplate" => "{\"roles\":[\"NamedInsured\",\"Producer\"],\"reminders\":true}",
+        "PacketTemplate" => "{\"conditionalInclusions\":true,\"delivery\":\"Portal\"}",
+        "RetentionRule" => "{\"years\":7,\"legalHold\":true}",
+        "OcrIndexingRule" => "{\"confidenceThreshold\":0.86,\"exceptionRouting\":true}",
+        "StorageSetting" => "{\"provider\":\"AzureBlob\",\"encrypted\":true}",
+        _ => "{}"
+    };
+
+    private string? GetQueryValue(string key)
+    {
+        var query = Nav.ToAbsoluteUri(Nav.Uri).Query;
+        if (string.IsNullOrWhiteSpace(query))
+            return null;
+
+        foreach (var part in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var pair = part.Split('=', 2);
+            if (pair.Length == 2 && string.Equals(Uri.UnescapeDataString(pair[0]), key, StringComparison.OrdinalIgnoreCase))
+                return Uri.UnescapeDataString(pair[1].Replace('+', ' '));
+        }
+
+        return null;
+    }
+
+    private async Task ResolveCurrentUserContextAsync()
     {
         var context = await CurrentUser.RequireAsync();
         TenantId = context.TenantId;
@@ -415,5 +737,46 @@
         _tenantAdminUserId = context.UserId;
         DevTenantId = context.TenantId;
         DevUserId = context.UserId;
+    }
+
+    private static readonly ModuleDefinition[] Modules =
+    [
+        new("DocumentCategory", "Document Categories", "Categories", "Category", "Classify document libraries, metadata, access policy, and lifecycle categories.", "/tenant/documents/categories2", "bi-folder2", "tds-di-blue", "tds-wf-classify", "Classification controls"),
+        new("DocumentTemplate", "Document Templates", "Templates", "Template", "Manage reusable document templates, merge fields, versioning, and approvals.", "/tenant/documents/templates2", "bi-file-earmark-text", "tds-di-purple", "tds-wf-author", "Authoring templates"),
+        new("AcordForm", "ACORD Forms", "ACORD", "ACORD Form", "Configure ACORD libraries, prefill mappings, validation rules, and availability.", "/tenant/documents/acord2", "bi-file-earmark-medical", "tds-di-green", "tds-wf-author", "Mapped form library"),
+        new("ESignTemplate", "E-Sign Templates", "E-Sign", "E-Sign Template", "Manage signing templates, signer roles, routing, reminders, and callbacks.", "/tenant/documents/esign2", "bi-pen", "tds-di-cyan", "tds-wf-package", "Signer routing"),
+        new("PacketTemplate", "Packet Templates", "Packets", "Packet Template", "Build packet templates, bundle rules, conditional inclusions, and delivery controls.", "/tenant/documents/packets2", "bi-collection", "tds-di-amber", "tds-wf-package", "Packet assembly"),
+        new("RetentionRule", "Retention Rules", "Retention", "Retention Rule", "Define retention schedules, legal holds, archive eligibility, and purge approvals.", "/tenant/documents/retention2", "bi-clock-history", "tds-di-blue", "tds-wf-govern", "Lifecycle governance"),
+        new("OcrIndexingRule", "OCR / Indexing Rules", "OCR", "OCR Rule", "Configure OCR extraction, confidence thresholds, exception routing, and indexing fields.", "/tenant/documents/ocr2", "bi-upc-scan", "tds-di-red", "tds-wf-index", "Index automation"),
+        new("StorageSetting", "Storage Settings", "Storage", "Storage Setting", "Control storage quotas, encryption, region policy, archive tiers, and growth alerts.", "/tenant/documents/storage2", "bi-hdd", "tds-di-neutral", "tds-wf-govern", "Storage controls")
+    ];
+
+    private sealed record ModuleDefinition(string Kind, string Title, string ShortTitle, string SingularTitle, string Description, string Route, string Icon, string IconCss, string WorkflowCss, string WorkflowCaption);
+
+    private sealed record ConfirmAction(string Title, string Message, string ConfirmLabel, string Icon, Func<Task> ExecuteAsync);
+
+    private sealed class ConfigFormModel
+    {
+        [Required]
+        [StringLength(80)]
+        public string Code { get; set; } = string.Empty;
+
+        [Required]
+        [StringLength(200)]
+        public string Name { get; set; } = string.Empty;
+
+        [StringLength(120)]
+        public string? Category { get; set; }
+
+        [StringLength(500)]
+        public string? Description { get; set; }
+
+        [StringLength(4000)]
+        public string? ConfigurationJson { get; set; }
+
+        [Range(0, 9999)]
+        public int SortOrder { get; set; }
+
+        public bool IsActive { get; set; } = true;
     }
 }

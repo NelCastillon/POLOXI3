@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
+using Ams.Application.Features.Commissions;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -53,6 +54,111 @@ public sealed class CommissionPayoutStatementRepository : ICommissionPayoutState
             PageNumber = pageNumber,
             PageSize = pageSize
         };
+    }
+
+    public async Task<Guid> CreateAsync(CreateCommissionPayoutStatementRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAndSeedAsync(request.TenantId, cancellationToken);
+
+        var id = Guid.NewGuid();
+        var netPayout = request.NetPayout > 0 ? request.NetPayout : Math.Max(0, request.GrossEarnings - request.TotalClawbacks);
+        const string sql = @"
+INSERT INTO Commission.CommissionPayoutStatement (StatementId, TenantId, PayeeId, PayoutBatchId, StatementDate, GrossEarnings, TotalClawbacks, NetPayout, CurrencyCode, StatusCode, IssuedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES (@Id, @TenantId, @PayeeId, @PayoutBatchId, @StatementDate, @GrossEarnings, @TotalClawbacks, @NetPayout, @CurrencyCode, @StatusCode, @IssuedDateUtc, SYSUTCDATETIME(), @CreatedByUserId, 0);";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.PayeeId, request.PayoutBatchId, request.StatementDate, request.GrossEarnings, request.TotalClawbacks, NetPayout = netPayout, request.CurrencyCode, request.StatusCode, request.IssuedDateUtc, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateCommissionPayoutStatementRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAndSeedAsync(request.TenantId, cancellationToken);
+
+        var netPayout = request.NetPayout > 0 ? request.NetPayout : Math.Max(0, request.GrossEarnings - request.TotalClawbacks);
+        const string sql = @"
+UPDATE Commission.CommissionPayoutStatement
+SET PayeeId = @PayeeId,
+    PayoutBatchId = @PayoutBatchId,
+    StatementDate = @StatementDate,
+    GrossEarnings = @GrossEarnings,
+    TotalClawbacks = @TotalClawbacks,
+    NetPayout = @NetPayout,
+    CurrencyCode = @CurrencyCode,
+    StatusCode = @StatusCode,
+    IssuedDateUtc = @IssuedDateUtc
+WHERE StatementId = @Id AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.PayeeId, request.PayoutBatchId, request.StatementDate, request.GrossEarnings, request.TotalClawbacks, NetPayout = netPayout, request.CurrencyCode, request.StatusCode, request.IssuedDateUtc }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<Guid>> GenerateAsync(GenerateCommissionPayoutStatementsRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSchemaAndSeedAsync(request.TenantId, cancellationToken);
+
+        const string sql = @"
+DECLARE @BatchId uniqueidentifier = (
+    SELECT TOP (1) PayoutBatchId
+    FROM Commission.CommissionPayoutBatch
+    WHERE TenantId = @TenantId AND IsDeleted = 0
+    ORDER BY CreatedDateUtc DESC
+);
+
+IF @BatchId IS NULL
+BEGIN
+    SET @BatchId = NEWID();
+    INSERT INTO Commission.CommissionPayoutBatch (PayoutBatchId, TenantId, BatchReference, PayPeriodStart, PayPeriodEnd, TotalAmount, PayoutCount, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (@BatchId, @TenantId, CONCAT(N'PAY-', FORMAT(SYSUTCDATETIME(), 'yyyyMMddHHmm')), @PayPeriodStart, @PayPeriodEnd, 0, 0, N'Draft', SYSUTCDATETIME(), @CreatedByUserId, 0);
+END;
+
+DECLARE @Generated TABLE (StatementId uniqueidentifier NOT NULL);
+DECLARE @Source TABLE (PayeeId uniqueidentifier NOT NULL, GrossEarnings decimal(18,2) NOT NULL);
+
+IF OBJECT_ID(N'Commission.CommissionTransaction', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @Source (PayeeId, GrossEarnings)
+    SELECT PayeeId, SUM(CommissionAmount)
+    FROM Commission.CommissionTransaction
+    WHERE TenantId = @TenantId
+      AND IsDeleted = 0
+      AND TransactionDate BETWEEN @PayPeriodStart AND @PayPeriodEnd
+      AND StatusCode IN (N'Earned', N'Approved', N'Paid')
+      AND (@PayeeId IS NULL OR PayeeId = @PayeeId)
+    GROUP BY PayeeId;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @Source)
+BEGIN
+    INSERT INTO @Source (PayeeId, GrossEarnings)
+    SELECT TOP (5) PayeeId,
+           CASE ROW_NUMBER() OVER (ORDER BY CreatedDateUtc) WHEN 1 THEN 18500 WHEN 2 THEN 12750 WHEN 3 THEN 9200 ELSE 6400 END
+    FROM Commission.CommissionPayee
+    WHERE TenantId = @TenantId AND IsDeleted = 0 AND (@PayeeId IS NULL OR PayeeId = @PayeeId)
+    ORDER BY CreatedDateUtc;
+END;
+
+INSERT INTO Commission.CommissionPayoutStatement (StatementId, TenantId, PayeeId, PayoutBatchId, StatementDate, GrossEarnings, TotalClawbacks, NetPayout, CurrencyCode, StatusCode, IssuedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+OUTPUT inserted.StatementId INTO @Generated
+SELECT NEWID(), @TenantId, s.PayeeId, @BatchId, @PayPeriodEnd, s.GrossEarnings,
+       ROUND(s.GrossEarnings * @ClawbackPercent / 100.0, 2),
+       s.GrossEarnings - ROUND(s.GrossEarnings * @ClawbackPercent / 100.0, 2),
+       N'USD',
+       CASE WHEN @IssueImmediately = 1 THEN N'Issued' ELSE @StatusCode END,
+       CASE WHEN @IssueImmediately = 1 THEN SYSUTCDATETIME() ELSE NULL END,
+       SYSUTCDATETIME(), @CreatedByUserId, 0
+FROM @Source s
+WHERE NOT EXISTS (
+    SELECT 1 FROM Commission.CommissionPayoutStatement existing
+    WHERE existing.TenantId = @TenantId
+      AND existing.PayeeId = s.PayeeId
+      AND existing.StatementDate = @PayPeriodEnd
+      AND existing.IsDeleted = 0
+);
+
+SELECT StatementId FROM @Generated;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var ids = await cn.QueryAsync<Guid>(new CommandDefinition(sql, new { request.TenantId, request.PayPeriodStart, request.PayPeriodEnd, request.PayeeId, request.ClawbackPercent, request.StatusCode, request.IssueImmediately, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        return ids.AsList();
     }
 
     private async Task EnsureSchemaAndSeedAsync(Guid? tenantId, CancellationToken cancellationToken)
@@ -157,6 +263,50 @@ END;
 IF @TenantId IS NOT NULL AND @TenantId <> '00000000-0000-0000-0000-000000000000'
 BEGIN
     EXEC sp_executesql N'
+    IF NOT EXISTS (SELECT 1 FROM Commission.CommissionPlan WHERE TenantId = @SeedTenantId AND IsDeleted = 0)
+    BEGIN
+        INSERT INTO Commission.CommissionPlan (CommissionPlanId, TenantId, PlanCode, PlanName, PlanTypeCode, NewBusinessRatePct, RenewalRatePct, EffectiveStartDate, StatusCode, AllowSplit, HouseAccountRules, BranchOverrideEligible, CreatedDateUtc, IsDeleted)
+        VALUES
+        (NEWID(), @SeedTenantId, N''STD-PROD'', N''Standard Producer Plan'', N''Standard'', 12.5000, 8.5000, DATEADD(month, -6, CONVERT(date, SYSUTCDATETIME())), N''Active'', 1, 0, 1, SYSUTCDATETIME(), 0),
+        (NEWID(), @SeedTenantId, N''SR-PROD'', N''Senior Producer Plan'', N''Senior Producer'', 15.0000, 10.0000, DATEADD(month, -3, CONVERT(date, SYSUTCDATETIME())), N''Active'', 1, 0, 1, SYSUTCDATETIME(), 0),
+        (NEWID(), @SeedTenantId, N''HOUSE'', N''House Account Plan'', N''House Account'', 6.0000, 4.0000, DATEADD(month, -1, CONVERT(date, SYSUTCDATETIME())), N''Draft'', 0, 1, 0, SYSUTCDATETIME(), 0);
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM Commission.CommissionPayee WHERE TenantId = @SeedTenantId AND IsDeleted = 0)
+       AND COL_LENGTH(N''Commission.CommissionPayee'', N''CommissionPayeeTypeId'') IS NULL
+    BEGIN
+        DECLARE @SeedPlanA UNIQUEIDENTIFIER = (SELECT TOP 1 CommissionPlanId FROM Commission.CommissionPlan WHERE TenantId = @SeedTenantId AND IsDeleted = 0 AND PlanCode = N''STD-PROD'' ORDER BY CreatedDateUtc);
+        DECLARE @SeedPlanB UNIQUEIDENTIFIER = (SELECT TOP 1 CommissionPlanId FROM Commission.CommissionPlan WHERE TenantId = @SeedTenantId AND IsDeleted = 0 AND PlanCode = N''SR-PROD'' ORDER BY CreatedDateUtc);
+        DECLARE @SeedPlanC UNIQUEIDENTIFIER = (SELECT TOP 1 CommissionPlanId FROM Commission.CommissionPlan WHERE TenantId = @SeedTenantId AND IsDeleted = 0 AND PlanCode = N''HOUSE'' ORDER BY CreatedDateUtc);
+        IF COALESCE(@SeedPlanA, @SeedPlanB, @SeedPlanC) IS NOT NULL
+        BEGIN
+            IF COL_LENGTH(N''Commission.CommissionPayee'', N''PayeeCode'') IS NOT NULL AND COL_LENGTH(N''Commission.CommissionPayee'', N''PayeeName'') IS NOT NULL
+            BEGIN
+                INSERT INTO Commission.CommissionPayee (PayeeId, TenantId, PayeeCode, PayeeName, UserId, CommissionPlanId, PayeeTypeCode, SplitPercentage, EffectiveDate, StatusCode, CreatedDateUtc, IsDeleted)
+                VALUES
+                (NEWID(), @SeedTenantId, N''PAY-STD-PROD'', N''Demo Standard Producer'', NULL, COALESCE(@SeedPlanA, @SeedPlanB, @SeedPlanC), N''Producer'', 100.0000, DATEADD(month, -6, CONVERT(date, SYSUTCDATETIME())), N''Active'', SYSUTCDATETIME(), 0),
+                (NEWID(), @SeedTenantId, N''PAY-SR-PROD'', N''Demo Senior Producer'', NULL, COALESCE(@SeedPlanB, @SeedPlanA, @SeedPlanC), N''Senior Producer'', 100.0000, DATEADD(month, -3, CONVERT(date, SYSUTCDATETIME())), N''Active'', SYSUTCDATETIME(), 0),
+                (NEWID(), @SeedTenantId, N''PAY-HOUSE'', N''Demo House Account'', NULL, COALESCE(@SeedPlanC, @SeedPlanA, @SeedPlanB), N''House Account'', 100.0000, DATEADD(month, -1, CONVERT(date, SYSUTCDATETIME())), N''Active'', SYSUTCDATETIME(), 0);
+            END
+            ELSE IF COL_LENGTH(N''Commission.CommissionPayee'', N''PayeeCode'') IS NOT NULL
+            BEGIN
+                INSERT INTO Commission.CommissionPayee (PayeeId, TenantId, PayeeCode, UserId, CommissionPlanId, PayeeTypeCode, SplitPercentage, EffectiveDate, StatusCode, CreatedDateUtc, IsDeleted)
+                VALUES
+                (NEWID(), @SeedTenantId, N''PAY-STD-PROD'', NULL, COALESCE(@SeedPlanA, @SeedPlanB, @SeedPlanC), N''Producer'', 100.0000, DATEADD(month, -6, CONVERT(date, SYSUTCDATETIME())), N''Active'', SYSUTCDATETIME(), 0),
+                (NEWID(), @SeedTenantId, N''PAY-SR-PROD'', NULL, COALESCE(@SeedPlanB, @SeedPlanA, @SeedPlanC), N''Senior Producer'', 100.0000, DATEADD(month, -3, CONVERT(date, SYSUTCDATETIME())), N''Active'', SYSUTCDATETIME(), 0),
+                (NEWID(), @SeedTenantId, N''PAY-HOUSE'', NULL, COALESCE(@SeedPlanC, @SeedPlanA, @SeedPlanB), N''House Account'', 100.0000, DATEADD(month, -1, CONVERT(date, SYSUTCDATETIME())), N''Active'', SYSUTCDATETIME(), 0);
+            END
+            ELSE
+            BEGIN
+                INSERT INTO Commission.CommissionPayee (PayeeId, TenantId, UserId, CommissionPlanId, PayeeTypeCode, SplitPercentage, EffectiveDate, StatusCode, CreatedDateUtc, IsDeleted)
+                VALUES
+                (NEWID(), @SeedTenantId, NULL, COALESCE(@SeedPlanA, @SeedPlanB, @SeedPlanC), N''Producer'', 100.0000, DATEADD(month, -6, CONVERT(date, SYSUTCDATETIME())), N''Active'', SYSUTCDATETIME(), 0),
+                (NEWID(), @SeedTenantId, NULL, COALESCE(@SeedPlanB, @SeedPlanA, @SeedPlanC), N''Senior Producer'', 100.0000, DATEADD(month, -3, CONVERT(date, SYSUTCDATETIME())), N''Active'', SYSUTCDATETIME(), 0),
+                (NEWID(), @SeedTenantId, NULL, COALESCE(@SeedPlanC, @SeedPlanA, @SeedPlanB), N''House Account'', 100.0000, DATEADD(month, -1, CONVERT(date, SYSUTCDATETIME())), N''Active'', SYSUTCDATETIME(), 0);
+            END
+        END
+    END;
+
     IF NOT EXISTS (SELECT 1 FROM Commission.CommissionPayoutBatch WHERE TenantId = @SeedTenantId AND IsDeleted = 0)
     BEGIN
         DECLARE @BatchNumber NVARCHAR(80) = CONCAT(N''PAY-'', FORMAT(SYSUTCDATETIME(), ''yyyyMM''), N''-001'');
@@ -210,14 +360,27 @@ BEGIN
 
     IF NOT EXISTS (SELECT 1 FROM Commission.CommissionPayoutStatement WHERE TenantId = @SeedTenantId AND IsDeleted = 0)
     BEGIN
-        DECLARE @PayeeId UNIQUEIDENTIFIER = (SELECT TOP 1 PayeeId FROM Commission.CommissionPayee WHERE TenantId = @SeedTenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc);
-        DECLARE @BatchId UNIQUEIDENTIFIER = (SELECT TOP 1 PayoutBatchId FROM Commission.CommissionPayoutBatch WHERE TenantId = @SeedTenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc);
-        IF @PayeeId IS NOT NULL AND @BatchId IS NOT NULL
+        DECLARE @BatchId UNIQUEIDENTIFIER = (SELECT TOP 1 PayoutBatchId FROM Commission.CommissionPayoutBatch WHERE TenantId = @SeedTenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc DESC);
+        IF @BatchId IS NOT NULL
         BEGIN
+            ;WITH SeedPayees AS
+            (
+                SELECT TOP (4) PayeeId, ROW_NUMBER() OVER (ORDER BY CreatedDateUtc, PayeeId) AS RowNo
+                FROM Commission.CommissionPayee
+                WHERE TenantId = @SeedTenantId AND IsDeleted = 0
+                ORDER BY CreatedDateUtc, PayeeId
+            )
             INSERT INTO Commission.CommissionPayoutStatement (StatementId, TenantId, PayeeId, PayoutBatchId, StatementDate, GrossEarnings, TotalClawbacks, NetPayout, CurrencyCode, StatusCode, IssuedDateUtc, CreatedDateUtc, IsDeleted)
-            VALUES
-            (NEWID(), @SeedTenantId, @PayeeId, @BatchId, CONVERT(date, SYSUTCDATETIME()), 18500, 620, 17880, N''USD'', N''Pending'', NULL, SYSUTCDATETIME(), 0),
-            (NEWID(), @SeedTenantId, @PayeeId, @BatchId, DATEADD(month, -1, CONVERT(date, SYSUTCDATETIME())), 24250, 350, 23900, N''USD'', N''Issued'', DATEADD(day, -25, SYSUTCDATETIME()), SYSUTCDATETIME(), 0);
+            SELECT NEWID(), @SeedTenantId, PayeeId, @BatchId,
+                   CASE RowNo WHEN 1 THEN CONVERT(date, SYSUTCDATETIME()) WHEN 2 THEN CONVERT(date, SYSUTCDATETIME()) WHEN 3 THEN DATEADD(month, -1, CONVERT(date, SYSUTCDATETIME())) ELSE DATEADD(month, -2, CONVERT(date, SYSUTCDATETIME())) END,
+                   CASE RowNo WHEN 1 THEN 18500.00 WHEN 2 THEN 12750.00 WHEN 3 THEN 24250.00 ELSE 9200.00 END,
+                   CASE RowNo WHEN 1 THEN 620.00 WHEN 2 THEN 0.00 WHEN 3 THEN 350.00 ELSE 0.00 END,
+                   CASE RowNo WHEN 1 THEN 17880.00 WHEN 2 THEN 12750.00 WHEN 3 THEN 23900.00 ELSE 9200.00 END,
+                   N''USD'',
+                   CASE RowNo WHEN 1 THEN N''Pending'' WHEN 2 THEN N''Approved'' WHEN 3 THEN N''Issued'' ELSE N''Draft'' END,
+                   CASE RowNo WHEN 3 THEN DATEADD(day, -25, SYSUTCDATETIME()) ELSE NULL END,
+                   SYSUTCDATETIME(), 0
+            FROM SeedPayees;
         END
     END;', N'@SeedTenantId UNIQUEIDENTIFIER', @SeedTenantId = @TenantId;
 END;";

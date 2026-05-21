@@ -1,139 +1,429 @@
 @page "/billing/collections"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Billing
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Delinquency &amp; Collections — AMS</PageTitle>
+<PageTitle>Billing Collections — AMS Enterprise</PageTitle>
 
-<SfToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true">
-    <ToastPosition X="Right" Y="Bottom" />
-</SfToast>
-
-<AppPageHeader Title="Delinquency &amp; Collections Queue"
-               Subtitle="Tenant Admin view of overdue account collection actions synchronized with Billing invoices"
-               Icon="bi-exclamation-triangle">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
-        <button class="um-btn um-btn-primary" @onclick="OpenAdd"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add Note</button>
-    </Actions>
-</AppPageHeader>
-
-<div class="col-kpi-strip">
-    <button type="button" class="col-kpi" @onclick='() => SetActionFilter("")'><i class="bi bi-exclamation-triangle col-ki red" aria-hidden="true"></i><div><div class="col-kv">@_items.Count</div><div class="col-kl">Open Cases</div></div></button>
-    <button type="button" class="col-kpi" @onclick='() => SetActionFilter("Escalated")'><i class="bi bi-clock-history col-ki amber" aria-hidden="true"></i><div><div class="col-kv">@_items.Count(x => x.ActionCode == "Escalated")</div><div class="col-kl">Escalated</div></div></button>
-    <button type="button" class="col-kpi" @onclick='() => SetActionFilter("Called")'><i class="bi bi-telephone col-ki blue" aria-hidden="true"></i><div><div class="col-kv">@_items.Count(x => x.ActionCode == "Called")</div><div class="col-kl">Called</div></div></button>
-    <button type="button" class="col-kpi" @onclick='() => SetActionFilter("Email Sent")'><i class="bi bi-envelope col-ki blue" aria-hidden="true"></i><div><div class="col-kv">@_items.Count(x => x.ActionCode == "Email Sent")</div><div class="col-kl">Emailed</div></div></button>
-    <button type="button" class="col-kpi"><i class="bi bi-calendar-check col-ki green" aria-hidden="true"></i><div><div class="col-kv">@_items.Count(x => x.NextFollowUpDate is not null && x.NextFollowUpDate.Value.ToDateTime(TimeOnly.MinValue) <= DateTime.Today)</div><div class="col-kl">Due Today</div></div></button>
-    <button type="button" class="col-kpi"><i class="bi bi-shield-x col-ki red" aria-hidden="true"></i><div><div class="col-kv">@_items.Count(x => x.ActionCode == "Payment Plan")</div><div class="col-kl">Payment Plans</div></div></button>
-</div>
-
-<div class="col-subnav">
-    <button class="col-snav-btn col-snav-active"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Collections</button>
-    <button class="col-snav-btn" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i> Invoices</button>
-    <button class="col-snav-btn" @onclick='() => Nav.NavigateTo("/billing/payments")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Payments</button>
-    <button class="col-snav-btn" @onclick='() => Nav.NavigateTo("/billing/payment-experience")'><i class="bi bi-graph-up" aria-hidden="true"></i> Payment Experience</button>
-</div>
-
-<div class="col-toolbar">
-    <SfTextBox Placeholder="Search notes, actions…" @bind-Value="_searchTerm" Width="280px"></SfTextBox>
-    <select class="um-input col-sel" @bind="_filterAction">
-        <option value="">All Actions</option>
-        @foreach (var action in _actions)
-        {
-            <option value="@action">@action</option>
-        }
-    </select>
-    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_toastVisible)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    <div class="col-toast col-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="col-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
 }
 
-<div class="col-grid-wrap">
-    @if (_loading)
-    {
-        <div class="um-loading-overlay"><div class="um-spinner" aria-hidden="true"></div><span>Loading collections…</span></div>
-    }
-    <SfGrid TValue="CollectionsNoteDto" DataSource="FilteredItems" AllowPaging="true" AllowSorting="true" Height="520px">
-        <GridEvents TValue="CollectionsNoteDto" RowSelected="OnRowSelected" />
-        <GridPageSettings PageSize="15"></GridPageSettings>
-        <GridColumns>
-            <GridColumn Field="@nameof(CollectionsNoteDto.NoteDate)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
-            <GridColumn HeaderText="Action" Width="140"><Template>@{ var n = (CollectionsNoteDto)context; }<span class="col-action-chip col-ac-@CssKey(n.ActionCode)">@n.ActionCode</span></Template></GridColumn>
-            <GridColumn Field="@nameof(CollectionsNoteDto.NoteText)" HeaderText="Note" Width="360"></GridColumn>
-            <GridColumn Field="@nameof(CollectionsNoteDto.NextFollowUpDate)" HeaderText="Follow-Up" Type="ColumnType.Date" Format="d" Width="120">
-                <Template>@{ var n = (CollectionsNoteDto)context; }@if (n.NextFollowUpDate.HasValue) { var overdue = n.NextFollowUpDate.Value.ToDateTime(TimeOnly.MinValue) <= DateTime.Today; <span class="@(overdue ? "col-followup-overdue" : "")">@n.NextFollowUpDate.Value.ToString("MMM d")</span> }</Template>
-            </GridColumn>
-            <GridColumn Field="@nameof(CollectionsNoteDto.CreatedDateUtc)" HeaderText="Created" Type="ColumnType.DateTime" Format="d" Width="110"></GridColumn>
-            <GridColumn HeaderText="Actions" Width="130">
-                <Template>
-                    @{ var n = (CollectionsNoteDto)context; }
-                    <div class="col-row-acts">
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(n)" title="Edit"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick='() => UpdateActionAsync(n, "Resolved")' title="Mark resolved"><i class="bi bi-check-circle" aria-hidden="true"></i></button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick='() => UpdateActionAsync(n, "Escalated")' title="Escalate"><i class="bi bi-arrow-up-circle" aria-hidden="true"></i></button>
+@if (_showDeleteConfirm && _deleteTarget is not null)
+{
+    <div class="col-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="col-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="col-delete-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash-fill"></i></div>
+                <div class="um-confirm-title" id="col-delete-title">Remove Collections Note</div>
+                <div class="um-confirm-body">Remove the <strong>@_deleteTarget.ActionCode</strong> collection note for <strong>@AccountName(_deleteTarget.AccountId)</strong>? This will soft-delete the note from active collection views.</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_busy">Remove Note</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="col-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="col-modal col-action-modal" role="dialog" aria-modal="true" aria-labelledby="col-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+                <span id="col-form-title">@(_editingId == Guid.Empty ? "Add Collections Note" : "Edit Collections Note")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="col-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Collections workflow</span>
+                        <p>Document tenant-scoped collection outreach, escalations, payment plans, and next follow-up dates using the existing Billing.CollectionsNote workflow.</p>
                     </div>
-                </Template>
-            </GridColumn>
-        </GridColumns>
-    </SfGrid>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Billing Account <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.AccountId">
+                                <option value="@Guid.Empty">Select account...</option>
+                                @foreach (var account in _accountOptions)
+                                {
+                                    <option value="@account.Id">@account.Display</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.AccountId" class="text-danger" />
+                            @if (_form.AccountId == Guid.Empty && _saveAttempted)
+                            {
+                                <div class="text-danger">Billing account is required.</div>
+                            }
+                        </div>
+                        <div class="um-field">
+                            <label>Invoice</label>
+                            <InputSelect class="form-select" @bind-Value="_form.InvoiceId">
+                                <option value="">None</option>
+                                @foreach (var invoice in InvoiceOptionsForForm)
+                                {
+                                    <option value="@invoice.Id">@invoice.Display</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.InvoiceId" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Action <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.ActionCode">
+                                @foreach (var action in _actions)
+                                {
+                                    <option value="@action">@action</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ActionCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Note Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_form.NoteDate" />
+                            <ValidationMessage For="() => _form.NoteDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Follow-Up Date</label>
+                            <InputDate class="form-control" @bind-Value="_form.NextFollowUpDate" />
+                            <ValidationMessage For="() => _form.NextFollowUpDate" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Note <span class="text-danger">*</span></label>
+                            <InputTextArea class="form-control" @bind-Value="_form.NoteText" rows="4" />
+                            <ValidationMessage For="() => _form.NoteText" class="text-danger" />
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        @(_editingId == Guid.Empty ? "Add Note" : "Save Changes")
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="col-enterprise-page">
+    <section class="col-header">
+        <div class="col-header-left">
+            <div class="col-lob-icon"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></div>
+            <div class="col-header-info">
+                <div class="col-title-row">
+                    <h1 class="col-page-title">Billing Collections</h1>
+                    <span class="col-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live collections data</span>
+                    <span class="col-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <div class="col-sub-row">
+                    <span>Resolve delinquent balances, track outreach, and manage payment-plan follow-ups.</span>
+                    <span class="col-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Invoice-seeded workflow</span>
+                    <span class="col-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span>
+                </div>
+            </div>
+        </div>
+        <div class="col-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+                <i class="bi bi-receipt" aria-hidden="true"></i> Invoices
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi @(_loading ? "bi-arrow-repeat col-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenAdd">
+                <i class="bi bi-plus-circle" aria-hidden="true"></i> Add Note
+            </button>
+        </div>
+    </section>
+
+    <section class="col-kpi-strip" aria-label="Collections metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="col-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "col-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="col-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="col-kpi-copy">
+                    <span class="col-kpi-label">@kpi.Label</span>
+                    <span class="col-kpi-value">@kpi.Value</span>
+                    <span class="col-kpi-caption">@kpi.Caption</span>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="col-workflow-strip" aria-label="Collections workflow shortcuts">
+        <button type="button" class="col-workflow-card col-wf-invoice" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+            <span class="col-workflow-icon"><i class="bi bi-receipt" aria-hidden="true"></i></span>
+            <span class="col-workflow-content"><strong>1</strong><span>Invoice</span><small>Review receivables and balances.</small></span>
+        </button>
+        <button type="button" class="col-workflow-card col-wf-pay" @onclick='() => Nav.NavigateTo("/billing/payments")'>
+            <span class="col-workflow-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+            <span class="col-workflow-content"><strong>2</strong><span>Collect</span><small>Apply payments to accounts.</small></span>
+        </button>
+        <button type="button" class="col-workflow-card col-wf-credit" @onclick='() => Nav.NavigateTo("/billing/credits")'>
+            <span class="col-workflow-icon"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></span>
+            <span class="col-workflow-content"><strong>3</strong><span>Adjust</span><small>Resolve credits and offsets.</small></span>
+        </button>
+        <button type="button" class="col-workflow-card col-wf-recon" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'>
+            <span class="col-workflow-icon"><i class="bi bi-ui-checks-grid" aria-hidden="true"></i></span>
+            <span class="col-workflow-content"><strong>4</strong><span>Reconcile</span><small>Match deposits and variances.</small></span>
+        </button>
+        <button type="button" class="col-workflow-card col-wf-collect" @onclick="OpenAdd">
+            <span class="col-workflow-icon"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>
+            <span class="col-workflow-content"><strong>5</strong><span>Recover</span><small>Document collection action.</small></span>
+        </button>
+    </section>
+
+    <section class="col-enterprise-search" aria-label="Collections filters">
+        <div class="col-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="col-search-body">
+            <label for="col-search">Search collections</label>
+            <input id="col-search" class="col-search-input" type="search" placeholder="Search account, invoice, note, action, status..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="col-search-hint">Filters apply instantly across collection notes and follow-up records.</span>
+        </div>
+        <select class="col-filter-select" @bind="ActionFilter" aria-label="Action filter">
+            <option value="">All actions</option>
+            @foreach (var action in _actions)
+            {
+                <option value="@action">@action</option>
+            }
+        </select>
+        <select class="col-filter-select" @bind="FollowUpFilter" aria-label="Follow-up filter">
+            <option value="">All follow-ups</option>
+            <option value="due">Due today/overdue</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="none">No follow-up</option>
+        </select>
+        <div class="col-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger col-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="col-content-layout">
+        <div class="col-grid-wrap">
+            <div class="col-grid-toolbar">
+                <div>
+                    <strong>Collections queue</strong>
+                    <span>@ActiveFilterText</span>
+                </div>
+                <div class="col-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/ar-aging")'><i class="bi bi-bar-chart" aria-hidden="true"></i> AR Aging</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenAdd"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button>
+                </div>
+            </div>
+
+            @if (_loading)
+            {
+                <div class="col-loading"><i class="bi bi-arrow-repeat col-spin" aria-hidden="true"></i><strong>Loading collections...</strong><span>Syncing collection notes, billing accounts, and open invoices.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="col-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No collection notes found</strong><span>Adjust filters or add a collection note for an overdue account.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenAdd">Add Note</button></div>
+            }
+            else
+            {
+                <div class="col-table-scroll">
+                    <table class="col-table">
+                        <thead>
+                            <tr>
+                                <th>Account / Note</th>
+                                <th>Action</th>
+                                <th>Invoice</th>
+                                <th>Note Date</th>
+                                <th>Follow-Up</th>
+                                <th class="col-number">Balance</th>
+                                <th class="col-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var note in PagedItems)
+                            {
+                                <tr class="col-table-row @(_selected?.CollectionsNoteId == note.CollectionsNoteId ? "col-table-row--selected" : null)" @onclick="() => SelectNote(note)">
+                                    <td>
+                                        <div class="col-note-cell">
+                                            <span class="col-note-icon @ActionIconTone(note.ActionCode)"><i class="bi @ActionIcon(note.ActionCode)" aria-hidden="true"></i></span>
+                                            <span>
+                                                <strong>@AccountName(note.AccountId)</strong>
+                                                <span>@Truncate(note.NoteText, 96)</span>
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td><span class="col-action-chip @ActionCss(note.ActionCode)">@note.ActionCode</span></td>
+                                    <td>@InvoiceNumber(note.InvoiceId)</td>
+                                    <td>@note.NoteDate.ToString("MMM d, yyyy")</td>
+                                    <td>
+                                        @if (note.NextFollowUpDate is null)
+                                        {
+                                            <span class="col-muted">Not scheduled</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="@(IsFollowUpDue(note) ? "col-followup-overdue" : "col-followup-ok")">@note.NextFollowUpDate.Value.ToString("MMM d, yyyy")</span>
+                                        }
+                                    </td>
+                                    <td class="col-number">@Fmt(AccountBalance(note.AccountId))</td>
+                                    <td>
+                                        <div class="col-row-acts">
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(note)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Mark resolved" @onclick:stopPropagation="true" @onclick='() => UpdateActionAsync(note, "Resolved")'><i class="bi bi-check-circle" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Escalate" @onclick:stopPropagation="true" @onclick='() => UpdateActionAsync(note, "Escalated")'><i class="bi bi-arrow-up-circle" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Remove" @onclick:stopPropagation="true" @onclick="() => ConfirmDelete(note)"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="col-pager">
+                    <span>Showing @PageStart-@PageEnd of @_filtered.Count</span>
+                    <div>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button>
+                        <span>Page @_page of @TotalPages</span>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <aside class="col-detail-panel" aria-label="Selected collection note detail">
+            @if (_selected is null)
+            {
+                <div class="col-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a note</strong><span>Choose a row to inspect collection history, invoice exposure, and next action.</span></div>
+            }
+            else
+            {
+                <div class="col-detail-head">
+                    <div>
+                        <span class="col-detail-eyebrow"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Collection case</span>
+                        <h2>@AccountName(_selected.AccountId)</h2>
+                        <div class="col-detail-meta">
+                            <span>@_selected.NoteDate.ToString("MMM d, yyyy")</span>
+                            <span>@InvoiceNumber(_selected.InvoiceId)</span>
+                            <span class="col-action-chip @ActionCss(_selected.ActionCode)">@_selected.ActionCode</span>
+                        </div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
+                </div>
+                <div class="col-detail-body">
+                    <div class="col-detail-summary">
+                        <div class="col-meta-row"><span class="col-meta-lbl">Balance</span><span class="col-meta-val">@Fmt(AccountBalance(_selected.AccountId))</span></div>
+                        <div class="col-meta-row"><span class="col-meta-lbl">Invoice</span><span class="col-meta-val">@InvoiceNumber(_selected.InvoiceId)</span></div>
+                        <div class="col-meta-row"><span class="col-meta-lbl">Follow-Up</span><span class="col-meta-val">@FollowUpText(_selected)</span></div>
+                        <div class="col-meta-row"><span class="col-meta-lbl">Created</span><span class="col-meta-val">@_selected.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</span></div>
+                    </div>
+                    <div class="col-note-card">
+                        <span><i class="bi bi-journal-text" aria-hidden="true"></i> Collection note</span>
+                        <p>@_selected.NoteText</p>
+                    </div>
+                    <div class="col-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => UpdateActionAsync(_selected, "Resolved")'><i class="bi bi-check-circle" aria-hidden="true"></i> Resolve</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => UpdateActionAsync(_selected, "Payment Plan")'><i class="bi bi-calendar-check" aria-hidden="true"></i> Payment Plan</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => UpdateActionAsync(_selected, "Escalated")'><i class="bi bi-arrow-up-circle" aria-hidden="true"></i> Escalate</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Remove</button>
+                    </div>
+                </div>
+            }
+        </aside>
+    </section>
 </div>
 
-<SfDialog Width="620px" IsModal="true" @bind-Visible="_showForm" ShowCloseIcon="false">
-    <DialogTemplates>
-        <Content>
-            <div class="um-modal-header"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span>@(_editingId == Guid.Empty ? "Add Collections Note" : "Edit Collections Note")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
-            <EditForm EditContext="_editContext">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body"><div class="um-form-grid">
-                    <div class="um-field"><label>Account <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountId" class="um-input"><option value="@Guid.Empty">Select account…</option>@foreach (var account in _accounts) { <option value="@account.AccountId">@account.AccountName</option> }</InputSelect><ValidationMessage For="() => _form.AccountId" class="text-danger" /></div>
-                    <div class="um-field"><label>Invoice</label><InputSelect @bind-Value="_form.InvoiceId" class="um-input"><option value="">None</option>@foreach (var invoice in _invoices) { <option value="@invoice.InvoiceId">@invoice.InvoiceNumber</option> }</InputSelect><ValidationMessage For="() => _form.InvoiceId" class="text-danger" /></div>
-                    <div class="um-field"><label>Action <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.ActionCode" class="um-input">@foreach (var action in _actions) { <option value="@action">@action</option> }</InputSelect><ValidationMessage For="() => _form.ActionCode" class="text-danger" /></div>
-                    <div class="um-field"><label>Note Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.NoteDate" class="um-input" /><ValidationMessage For="() => _form.NoteDate" class="text-danger" /></div>
-                    <div class="um-field"><label>Follow-Up Date</label><InputDate @bind-Value="_form.NextFollowUpDate" class="um-input" /><ValidationMessage For="() => _form.NextFollowUpDate" class="text-danger" /></div>
-                    <div class="um-field um-field--full"><label>Note <span class="text-danger">*</span></label><InputTextArea @bind-Value="_form.NoteText" class="um-input" rows="4" /><ValidationMessage For="() => _form.NoteText" class="text-danger" /></div>
-                    @if (!string.IsNullOrWhiteSpace(_formError))
-                    {
-                        <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
-                    }
-                </div></div>
-            </EditForm>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Saving…" : "Save Note")</button></div>
-        </Content>
-    </DialogTemplates>
-</SfDialog>
-
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
+    private const int PageSize = 12;
     private Guid _tenantId;
-    private SfToast _toast = default!;
+    private Guid _tenantAdminUserId;
     private List<CollectionsNoteDto> _items = [];
+    private List<CollectionsNoteDto> _filtered = [];
     private List<BillingAccountDto> _accounts = [];
     private List<InvoiceDto> _invoices = [];
-    private string? _searchTerm;
-    private string _filterAction = string.Empty;
-    private bool _showForm, _loading, _saving;
-    private string? _loadError, _formError;
-    private Guid _editingId = Guid.Empty;
+    private List<AccountOption> _accountOptions = [];
+    private List<InvoiceOption> _invoiceOptions = [];
+    private CollectionsNoteDto? _selected;
+    private CollectionsNoteDto? _deleteTarget;
     private CollectionForm _form = new();
-    private EditContext _editContext = default!;
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _filterAction = string.Empty;
+    private string _followUpFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showDeleteConfirm;
+    private bool _saveAttempted;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
     private readonly List<string> _actions = ["Called", "Email Sent", "Letter Sent", "Escalated", "Payment Plan", "Resolved", "Other"];
 
-    private IEnumerable<CollectionsNoteDto> FilteredItems => _items.Where(x => string.IsNullOrEmpty(_filterAction) || x.ActionCode == _filterAction);
+    private IEnumerable<CollectionsNoteDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private IEnumerable<InvoiceOption> InvoiceOptionsForForm => _form.AccountId == Guid.Empty ? _invoiceOptions : _invoiceOptions.Where(x => x.AccountId == _form.AccountId);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All collection notes" : $"Filtered by {_kpiFilter}";
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Cases", _items.Count.ToString("N0"), "All collection notes", "bi-exclamation-triangle", "col-ki-red"),
+        new("escalated", "Escalated", _items.Count(x => x.ActionCode == "Escalated").ToString("N0"), "Priority outreach", "bi-arrow-up-circle", "col-ki-red"),
+        new("due", "Due Today", _items.Count(IsFollowUpDue).ToString("N0"), "Follow-ups due", "bi-calendar-check", "col-ki-amber"),
+        new("plans", "Plans", _items.Count(x => x.ActionCode == "Payment Plan").ToString("N0"), "Payment plans", "bi-shield-check", "col-ki-green"),
+        new("resolved", "Resolved", _items.Count(x => x.ActionCode == "Resolved").ToString("N0"), "Closed actions", "bi-check-circle", "col-ki-green"),
+        new("balance", "Exposure", Fmt(_items.Sum(x => AccountBalance(x.AccountId))), "Tracked balance", "bi-currency-dollar", "col-ki-blue")
+    ];
+
+    private string SearchFilter
+    {
+        get => _searchTerm;
+        set { _searchTerm = value; ApplyFilters(resetPage: true); }
+    }
+
+    private string ActionFilter
+    {
+        get => _filterAction;
+        set { _filterAction = value; ApplyFilters(resetPage: true); }
+    }
+
+    private string FollowUpFilter
+    {
+        get => _followUpFilter;
+        set { _followUpFilter = value; ApplyFilters(resetPage: true); }
+    }
 
     protected override async Task OnInitializedAsync()
     {
         await ResolveCurrentUserContextAsync();
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Billing", "/billing/accounts"), new("Collections", ""));
-        _editContext = new(_form);
         await LoadAsync();
     }
 
@@ -143,49 +433,153 @@
         _loadError = null;
         try
         {
-            var notes = await Api.SearchCollectionsNotesAsync(_tenantId, _searchTerm);
+            var notes = await Api.SearchCollectionsNotesAsync(_tenantId, string.Empty);
             var accounts = await Api.SearchBillingAccountsAsync(_tenantId, pageSize: 500);
             var invoices = await Api.SearchInvoicesAsync(_tenantId);
-            _items = notes?.Items.ToList() ?? [];
+            _items = notes?.Items.OrderByDescending(x => x.NoteDate).ThenByDescending(x => x.CreatedDateUtc).ToList() ?? [];
             _accounts = accounts?.Items.ToList() ?? [];
             _invoices = invoices?.Items.ToList() ?? [];
+            _accountOptions = _accounts.OrderBy(x => x.AccountName).Select(x => new AccountOption(x.AccountId, $"{x.AccountName} · {x.AccountNumber}")).ToList();
+            _invoiceOptions = _invoices.OrderByDescending(x => x.CreatedDateUtc).Select(x => new InvoiceOption(x.InvoiceId, x.AccountId, $"{x.InvoiceNumber} · {Fmt(x.BalanceAmount)} balance")).ToList();
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
         }
         catch (Exception ex)
         {
             _loadError = $"Collections failed to load: {ex.Message}";
-            await ToastAsync(_loadError, true);
+            ShowToast(_loadError, "danger");
         }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    private void SetActionFilter(string action) => _filterAction = action;
-    private void OnRowSelected(RowSelectEventArgs<CollectionsNoteDto> args) => OpenEdit(args.Data);
-    private void OpenAdd() { _editingId = Guid.Empty; _form = new(); _editContext = new(_form); _formError = null; _showForm = true; }
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<CollectionsNoteDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(x.NoteText, term)
+                || Contains(x.ActionCode, term)
+                || Contains(AccountName(x.AccountId), term)
+                || Contains(InvoiceNumber(x.InvoiceId), term));
+        }
+        if (!string.IsNullOrWhiteSpace(_filterAction)) query = query.Where(x => x.ActionCode == _filterAction);
+        query = _followUpFilter switch
+        {
+            "due" => query.Where(IsFollowUpDue),
+            "scheduled" => query.Where(x => x.NextFollowUpDate is not null && !IsFollowUpDue(x)),
+            "none" => query.Where(x => x.NextFollowUpDate is null),
+            _ => query
+        };
+        query = _kpiFilter switch
+        {
+            "escalated" => query.Where(x => x.ActionCode == "Escalated"),
+            "due" => query.Where(IsFollowUpDue),
+            "plans" => query.Where(x => x.ActionCode == "Payment Plan"),
+            "resolved" => query.Where(x => x.ActionCode == "Resolved"),
+            _ => query
+        };
+        _filtered = query.OrderByDescending(IsFollowUpDue).ThenByDescending(x => x.NoteDate).ThenByDescending(x => x.CreatedDateUtc).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter)
+    {
+        _kpiFilter = filter;
+        ApplyFilters(resetPage: true);
+    }
+
+    private void ResetFilters()
+    {
+        _searchTerm = string.Empty;
+        _filterAction = string.Empty;
+        _followUpFilter = string.Empty;
+        _kpiFilter = "all";
+        ApplyFilters(resetPage: true);
+        ShowToast("Collections filters reset.", "info");
+    }
+
+    private void SelectNote(CollectionsNoteDto note) => _selected = note;
+
+    private void OpenAdd()
+    {
+        _editingId = Guid.Empty;
+        _saveAttempted = false;
+        _formError = null;
+        _form = new();
+        _showForm = true;
+    }
+
     private void OpenEdit(CollectionsNoteDto note)
     {
         _editingId = note.CollectionsNoteId;
-        _form = new CollectionForm { AccountId = note.AccountId, InvoiceId = note.InvoiceId, ActionCode = note.ActionCode, NoteDate = note.NoteDate.ToDateTime(TimeOnly.MinValue), NextFollowUpDate = note.NextFollowUpDate?.ToDateTime(TimeOnly.MinValue), NoteText = note.NoteText };
-        _editContext = new(_form);
+        _saveAttempted = false;
         _formError = null;
+        _form = new CollectionForm
+        {
+            AccountId = note.AccountId,
+            InvoiceId = note.InvoiceId,
+            ActionCode = note.ActionCode,
+            NoteDate = note.NoteDate.ToDateTime(TimeOnly.MinValue),
+            NextFollowUpDate = note.NextFollowUpDate?.ToDateTime(TimeOnly.MinValue),
+            NoteText = note.NoteText
+        };
         _showForm = true;
     }
-    private void CloseForm() => _showForm = false;
+
+    private void CloseForm()
+    {
+        if (_busy) return;
+        _showForm = false;
+    }
 
     private async Task SaveAsync()
     {
-        if (!_editContext.Validate()) return;
-        _saving = true;
+        _saveAttempted = true;
+        if (_form.AccountId == Guid.Empty)
+        {
+            _formError = "Billing account is required.";
+            ShowToast(_formError, "warning");
+            return;
+        }
+
+        _busy = true;
+        _formError = null;
         try
         {
             if (_editingId == Guid.Empty)
             {
-                await Api.CreateCollectionsNoteAsync(new CreateCollectionsNoteRequest { TenantId = _tenantId, AccountId = _form.AccountId, InvoiceId = _form.InvoiceId, ActionCode = _form.ActionCode, NoteDate = DateOnly.FromDateTime(_form.NoteDate), NoteText = _form.NoteText, NextFollowUpDate = _form.NextFollowUpDate.HasValue ? DateOnly.FromDateTime(_form.NextFollowUpDate.Value) : null });
-                await ToastAsync("Collections note saved.");
+                await Api.CreateCollectionsNoteAsync(new CreateCollectionsNoteRequest
+                {
+                    TenantId = _tenantId,
+                    AccountId = _form.AccountId,
+                    InvoiceId = _form.InvoiceId,
+                    ActionCode = _form.ActionCode,
+                    NoteDate = DateOnly.FromDateTime(_form.NoteDate),
+                    NoteText = _form.NoteText,
+                    NextFollowUpDate = _form.NextFollowUpDate.HasValue ? DateOnly.FromDateTime(_form.NextFollowUpDate.Value) : null,
+                    CreatedByUserId = _tenantAdminUserId
+                });
+                ShowToast("Collections note saved.", "success");
             }
             else
             {
-                await Api.UpdateCollectionsNoteAsync(_editingId, new UpdateCollectionsNoteRequest { CollectionsNoteId = _editingId, AccountId = _form.AccountId, InvoiceId = _form.InvoiceId, ActionCode = _form.ActionCode, NoteDate = DateOnly.FromDateTime(_form.NoteDate), NoteText = _form.NoteText, NextFollowUpDate = _form.NextFollowUpDate.HasValue ? DateOnly.FromDateTime(_form.NextFollowUpDate.Value) : null });
-                await ToastAsync("Collections note updated.");
+                await Api.UpdateCollectionsNoteAsync(_editingId, new UpdateCollectionsNoteRequest
+                {
+                    CollectionsNoteId = _editingId,
+                    AccountId = _form.AccountId,
+                    InvoiceId = _form.InvoiceId,
+                    ActionCode = _form.ActionCode,
+                    NoteDate = DateOnly.FromDateTime(_form.NoteDate),
+                    NoteText = _form.NoteText,
+                    NextFollowUpDate = _form.NextFollowUpDate.HasValue ? DateOnly.FromDateTime(_form.NextFollowUpDate.Value) : null,
+                    ModifiedByUserId = _tenantAdminUserId
+                });
+                ShowToast("Collections note updated.", "success");
             }
             _showForm = false;
             await LoadAsync();
@@ -193,52 +587,204 @@
         catch (Exception ex)
         {
             _formError = $"Save failed: {ex.Message}";
-            await ToastAsync(_formError, true);
+            ShowToast(_formError, "danger");
         }
-        finally { _saving = false; }
+        finally
+        {
+            _busy = false;
+        }
     }
 
     private async Task UpdateActionAsync(CollectionsNoteDto note, string action)
     {
+        _busy = true;
         try
         {
-            await Api.UpdateCollectionsNoteAsync(note.CollectionsNoteId, new UpdateCollectionsNoteRequest { CollectionsNoteId = note.CollectionsNoteId, AccountId = note.AccountId, InvoiceId = note.InvoiceId, ActionCode = action, NoteDate = note.NoteDate, NoteText = note.NoteText, NextFollowUpDate = note.NextFollowUpDate });
-            await ToastAsync($"Collection action set to {action}.");
+            await Api.UpdateCollectionsNoteAsync(note.CollectionsNoteId, new UpdateCollectionsNoteRequest
+            {
+                CollectionsNoteId = note.CollectionsNoteId,
+                AccountId = note.AccountId,
+                InvoiceId = note.InvoiceId,
+                ActionCode = action,
+                NoteDate = note.NoteDate,
+                NoteText = note.NoteText,
+                NextFollowUpDate = action == "Resolved" ? null : note.NextFollowUpDate,
+                ModifiedByUserId = _tenantAdminUserId
+            });
+            ShowToast($"Collection action set to {action}.", "success");
             await LoadAsync();
         }
-        catch (Exception ex) { await ToastAsync($"Update failed: {ex.Message}", true); }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
-    private async Task ToastAsync(string message, bool isError = false) => await _toast.ShowAsync(new ToastModel { Content = message, CssClass = isError ? "e-toast-danger" : "e-toast-success" });
-    private static string CssKey(string value) => value.ToLowerInvariant().Replace(" ", "-");
+    private void ConfirmDelete(CollectionsNoteDto note)
+    {
+        _deleteTarget = note;
+        _showDeleteConfirm = true;
+    }
+
+    private void CancelDelete()
+    {
+        if (_busy) return;
+        _showDeleteConfirm = false;
+        _deleteTarget = null;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _busy = true;
+        try
+        {
+            await Api.DeleteCollectionsNoteAsync(_deleteTarget.CollectionsNoteId, _tenantAdminUserId);
+            ShowToast("Collections note removed.", "success");
+            _showDeleteConfirm = false;
+            _deleteTarget = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Remove failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task NotifyValidationAsync(EditContext _)
+    {
+        _saveAttempted = true;
+        ShowToast("Please correct the validation errors before saving the collection note.", "warning");
+        return Task.CompletedTask;
+    }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any())
+        {
+            ShowToast("No collections are available to export.", "warning");
+            return;
+        }
+
+        var csv = new StringBuilder();
+        csv.AppendLine("Account,Invoice,Action,NoteDate,FollowUpDate,Balance,Note,CollectionsNoteId");
+        foreach (var note in _filtered)
+        {
+            csv.AppendLine(string.Join(',',
+                Csv(AccountName(note.AccountId)),
+                Csv(InvoiceNumber(note.InvoiceId)),
+                Csv(note.ActionCode),
+                Csv(note.NoteDate.ToString("yyyy-MM-dd")),
+                Csv(note.NextFollowUpDate?.ToString("yyyy-MM-dd") ?? string.Empty),
+                AccountBalance(note.AccountId).ToString("0.00"),
+                Csv(note.NoteText),
+                Csv(note.CollectionsNoteId.ToString())));
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"billing-collections-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} collection notes.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    private void EnsureSelectedStillVisible()
+    {
+        if (_selected is null)
+        {
+            _selected = _filtered.FirstOrDefault();
+            return;
+        }
+        _selected = _items.FirstOrDefault(x => x.CollectionsNoteId == _selected.CollectionsNoteId) ?? _filtered.FirstOrDefault();
+    }
+
+    private string AccountName(Guid accountId) => _accountOptions.FirstOrDefault(x => x.Id == accountId)?.Display ?? _accounts.FirstOrDefault(x => x.AccountId == accountId)?.AccountName ?? accountId.ToString()[..8];
+    private string InvoiceNumber(Guid? invoiceId) => invoiceId is Guid id ? _invoiceOptions.FirstOrDefault(x => x.Id == id)?.Display ?? _invoices.FirstOrDefault(x => x.InvoiceId == id)?.InvoiceNumber ?? id.ToString()[..8] : "No invoice";
+    private decimal AccountBalance(Guid accountId) => _accounts.FirstOrDefault(x => x.AccountId == accountId)?.BalanceAmount ?? _invoices.Where(x => x.AccountId == accountId).Sum(x => x.BalanceAmount);
+    private static string Fmt(decimal v) => v.ToString("C0");
+    private static bool IsFollowUpDue(CollectionsNoteDto note) => note.NextFollowUpDate is not null && note.NextFollowUpDate.Value.ToDateTime(TimeOnly.MinValue) <= DateTime.Today;
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static string FollowUpText(CollectionsNoteDto note) => note.NextFollowUpDate is null ? "Not scheduled" : note.NextFollowUpDate.Value.ToString("MMM d, yyyy");
+    private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max] + "…";
+    private static string ActionCss(string action) => $"col-ac-{CssKey(action)}";
+    private static string CssKey(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+    private static string ActionIcon(string action) => action switch
+    {
+        "Called" => "bi-telephone",
+        "Email Sent" => "bi-envelope",
+        "Letter Sent" => "bi-envelope-paper",
+        "Escalated" => "bi-arrow-up-circle",
+        "Payment Plan" => "bi-calendar-check",
+        "Resolved" => "bi-check-circle",
+        _ => "bi-journal-text"
+    };
+    private static string ActionIconTone(string action) => action switch
+    {
+        "Escalated" => "col-di-red",
+        "Payment Plan" or "Resolved" => "col-di-green",
+        "Letter Sent" => "col-di-amber",
+        _ => "col-di-blue"
+    };
+    private static string Csv(string value)
+    {
+        var quote = Convert.ToChar(34).ToString();
+        return string.Concat(quote, value.Replace(quote, quote + quote), quote);
+    }
+
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone)
+    {
+        public string Title => $"Filter collections by {Label}";
+    }
+
+    private sealed record AccountOption(Guid Id, string Display);
+    private sealed record InvoiceOption(Guid Id, Guid AccountId, string Display);
 
     private sealed class CollectionForm
     {
-        [RequiredGuid(ErrorMessage = "Account is required.")]
+        [RequiredGuid(ErrorMessage = "Billing account is required.")]
         public Guid AccountId { get; set; }
+
         public Guid? InvoiceId { get; set; }
-        [Required, StringLength(80)]
+
+        [Required]
+        [StringLength(80)]
         public string ActionCode { get; set; } = "Called";
+
         [Required]
         public DateTime NoteDate { get; set; } = DateTime.Today;
+
         public DateTime? NextFollowUpDate { get; set; }
-        [Required, StringLength(2000)]
+
+        [Required]
+        [StringLength(2000)]
         public string NoteText { get; set; } = string.Empty;
     }
 
     private sealed class RequiredGuidAttribute : ValidationAttribute
     {
         public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty;
-    }
-
-    async Task ResolveCurrentUserContextAsync()
-    {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
     }
 }

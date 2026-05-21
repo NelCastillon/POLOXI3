@@ -1,365 +1,852 @@
 @page "/billing/payment-experience"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Payments
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<PageTitle>Payment Experience — AMS</PageTitle>
+<PageTitle>Payment Experience — AMS Enterprise</PageTitle>
 
-<AppPageHeader Title="Payment Experience Monitor"
-               Subtitle="Track failed payments, ACH return codes, card decline trends, autopay enrollment, and days-to-pay by segment"
-               Icon="bi-graph-up">
-    <Actions>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/payments")'>
-            <i class="bi bi-cash-coin" aria-hidden="true"></i> All Payments
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/collections")'>
-            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Collections
-        </button>
-        <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
-            <i class="bi bi-building" aria-hidden="true"></i> Accounts
-        </button>
-    </Actions>
-</AppPageHeader>
-
-<!-- Period selector -->
-<div class="pe-period-bar">
-    <span class="pe-period-lbl">Period:</span>
-    @foreach (var p in new[]{"7d","30d","90d","YTD","12M"})
-    {
-        <button class="pe-period-btn @(_period==p?"pe-period-active":"")" @onclick="@(() => SetPeriod(p))">@p</button>
-    }
-    <span class="pe-period-sep">|</span>
-    <span class="pe-period-lbl">Segment:</span>
-    @foreach (var s in new[]{"All","Commercial","Personal","Agency Bill","Direct Bill"})
-    {
-        <button class="pe-period-btn @(_segment==s?"pe-period-active":"")" @onclick="@(() => _segment=s)">@s</button>
-    }
-</div>
-
-<!-- ── TOP KPI STRIP ──────────────────────────────────────────── -->
-<div class="pe-kpi-strip">
-    @KpiCard("bi-x-circle",          "Failed Payments",    _failed.ToString(),              "@(_failedRate.ToString(\"F1\"))% of total",          "pe-ki-red")
-    @KpiCard("bi-arrow-counterclockwise","ACH Returns",    _achReturns.ToString(),          "R01 · R08 · R29 most common",                        "pe-ki-orange")
-    @KpiCard("bi-credit-card",        "Card Declines",     _cardDeclines.ToString(),        "@(_declineRate.ToString(\"F1\"))% decline rate",      "pe-ki-amber")
-    @KpiCard("bi-arrow-repeat",       "Autopay Enrolled",  _autopayEnrolled.ToString(),     "@(_autopayPct.ToString(\"F0\"))% of accounts",        "pe-ki-green")
-    @KpiCard("bi-clock-history",      "Avg Days-to-Pay",   _avgDays.ToString("F1") + " d",  "vs. @_prevAvgDays.ToString(\"F1\")d prior period",   "pe-ki-blue")
-    @KpiCard("bi-shield-x",           "NSF / Bounced",     _nsf.ToString(),                 "@(_nsfAmt.ToString(\"C0\")) at risk",                 "pe-ki-red")
-    @KpiCard("bi-graph-up-arrow",     "Recovery Rate",     _recoveryRate.ToString("F0")+"%","Failed → cleared within 30 d",                       "pe-ki-green")
-    @KpiCard("bi-calendar-check",     "On-Time Rate",      _onTimeRate.ToString("F0")+"%",  "Paid on or before due date",                         "pe-ki-blue")
-</div>
-
-<div class="pe-main-grid">
-
-    <!-- LEFT COLUMN ──────────────────────────────────────────── -->
-    <div class="pe-col">
-
-        <!-- Failed Payments panel -->
-        <div class="pe-panel">
-            <div class="pe-panel-hdr">
-                <i class="bi bi-x-circle pe-hdr-icon red" aria-hidden="true"></i>
-                <span class="pe-hdr-title">Failed Payments</span>
-                <button class="um-btn um-btn-ghost um-btn-xs pe-hdr-link" @onclick='() => Nav.NavigateTo("/billing/payments")'>View all <i class="bi bi-arrow-right" aria-hidden="true"></i></button>
-            </div>
-            <SfGrid DataSource="_failedList" AllowSorting="true" Height="260px">
-                <GridColumns>
-                    <GridColumn Field="@nameof(FailedPayment.Date)" HeaderText="Date" Type="ColumnType.Date" Format="d" Width="100"></GridColumn>
-                    <GridColumn Field="@nameof(FailedPayment.AccountName)" HeaderText="Account" Width="170"></GridColumn>
-                    <GridColumn Field="@nameof(FailedPayment.Amount)" HeaderText="Amount" Format="C2" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-                    <GridColumn HeaderText="Method" Width="90">
-                        <Template>
-                            @{ var f = (FailedPayment)context; }
-                            <span class="pe-method-chip pe-m-@f.Method.ToLower()">@f.Method</span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(FailedPayment.FailReason)" HeaderText="Reason" Width="180"></GridColumn>
-                    <GridColumn HeaderText="" Width="80">
-                        <Template>
-                            @{ var f2 = (FailedPayment)context; }
-                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/billing/payments")' title="Retry">
-                                <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Retry
-                            </button>
-                        </Template>
-                    </GridColumn>
-                </GridColumns>
-            </SfGrid>
-        </div>
-
-        <!-- ACH Return Codes panel -->
-        <div class="pe-panel">
-            <div class="pe-panel-hdr">
-                <i class="bi bi-arrow-counterclockwise pe-hdr-icon orange" aria-hidden="true"></i>
-                <span class="pe-hdr-title">ACH Return Codes</span>
-                <span class="pe-hdr-badge">Last @_period</span>
-            </div>
-            <div class="pe-ach-grid">
-                @foreach (var achCode in _achCodes)
-                {
-                    <div class="pe-ach-row">
-                        <div class="pe-ach-code">@achCode.Code</div>
-                        <div class="pe-ach-desc">@achCode.Description</div>
-                        <div class="pe-ach-bar-wrap">
-                            <div class="pe-ach-bar" style="width:@(achCode.Count * 100 / (_achCodes.Max(x=>x.Count)+1))%"></div>
-                        </div>
-                        <div class="pe-ach-cnt">@achCode.Count</div>
-                        <span class="pe-ach-sev pe-sev-@achCode.Severity.ToLower()">@achCode.Severity</span>
-                    </div>
-                }
-            </div>
-        </div>
-
-        <!-- Days-to-Pay by Segment -->
-        <div class="pe-panel">
-            <div class="pe-panel-hdr">
-                <i class="bi bi-clock-history pe-hdr-icon blue" aria-hidden="true"></i>
-                <span class="pe-hdr-title">Days-to-Pay by Segment</span>
-            </div>
-            <div class="pe-dtp-grid">
-                @foreach (var seg in _daysToPay)
-                {
-                    <div class="pe-dtp-row">
-                        <div class="pe-dtp-seg">@seg.Segment</div>
-                        <div class="pe-dtp-bar-wrap">
-                            <div class="pe-dtp-bar @(seg.Days>14?"pe-dtp-warn":"pe-dtp-ok")" style="width:@(Math.Min(100,(int)(seg.Days/30.0*100)))%"></div>
-                        </div>
-                        <div class="pe-dtp-val @(seg.Days>14?"pe-dtp-warn-text":"")">@seg.Days.ToString("F1") d</div>
-                        <div class="pe-dtp-trend @(seg.Delta>0?"pe-dtp-up":"pe-dtp-dn")">
-                            <i class="bi @(seg.Delta>0?"bi-arrow-up":"bi-arrow-down")" aria-hidden="true"></i> @Math.Abs(seg.Delta).ToString("F1")
-                        </div>
-                    </div>
-                }
-            </div>
-        </div>
-
+@if (_toastVisible)
+{
+    <div class="pe-toast pe-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pe-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
     </div>
+}
 
-    <!-- RIGHT COLUMN ─────────────────────────────────────────── -->
-    <div class="pe-col">
-
-        <!-- Card Decline Trends panel -->
-        <div class="pe-panel">
-            <div class="pe-panel-hdr">
-                <i class="bi bi-credit-card pe-hdr-icon amber" aria-hidden="true"></i>
-                <span class="pe-hdr-title">Card Decline Trends</span>
-                <span class="pe-hdr-badge">Last @_period</span>
+@if (_showRetry && _selected is not null)
+{
+    <div class="pe-modal-backdrop" role="presentation" @onclick="CloseRetry">
+        <div class="pe-modal pe-action-modal" role="dialog" aria-modal="true" aria-labelledby="pe-retry-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                <span id="pe-retry-title">Record Recovery Payment</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseRetry" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
             </div>
-            <div class="pe-decline-grid">
-                @foreach (var dc in _declineCodes)
-                {
-                    <div class="pe-dec-row">
-                        <div class="pe-dec-code">@dc.Code</div>
-                        <div class="pe-dec-desc">@dc.Description</div>
-                        <div class="pe-dec-bar-wrap">
-                            <div class="pe-dec-bar" style="width:@(dc.Count * 100 / (_declineCodes.Max(x=>x.Count)+1))%"></div>
-                        </div>
-                        <div class="pe-dec-cnt">@dc.Count</div>
+            <EditForm Model="_retryForm" OnValidSubmit="RecordRecoveryAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="pe-modal-intro">
+                        <span><i class="bi bi-shield-check" aria-hidden="true"></i> Recovery workflow</span>
+                        <p>Record a payment retry for @_selected.AccountName using the existing Billing.Payment create workflow.</p>
                     </div>
-                }
-            </div>
-            <!-- Trend chart (inline spark) -->
-            <div class="pe-spark-section">
-                <div class="pe-spark-title">Monthly Decline Rate</div>
-                <div class="pe-spark-bars">
-                    @foreach (var (month, rate) in _monthlyDeclines)
-                    {
-                        <div class="pe-spark-col">
-                            <div class="pe-spark-bar @(rate>5?"pe-spark-high":rate>3?"pe-spark-mid":"pe-spark-low")" style="height:@(rate*5)px" title="@month: @rate%"></div>
-                            <div class="pe-spark-lbl">@month</div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Billing Account <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_retryForm.AccountId">
+                                <option value="@Guid.Empty">Select account...</option>
+                                @foreach (var account in _accountOptions)
+                                {
+                                    <option value="@account.Id">@account.Display</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _retryForm.AccountId" class="text-danger" />
+                            @if (_retryForm.AccountId == Guid.Empty && _saveAttempted)
+                            {
+                                <div class="text-danger">Billing account is required.</div>
+                            }
                         </div>
-                    }
+                        <div class="um-field">
+                            <label>Invoice</label>
+                            <InputSelect class="form-select" @bind-Value="_retryForm.InvoiceId">
+                                <option value="">None</option>
+                                @foreach (var invoice in InvoiceOptionsForRetry)
+                                {
+                                    <option value="@invoice.Id">@invoice.Display</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _retryForm.InvoiceId" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Amount <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_retryForm.Amount" />
+                            <ValidationMessage For="() => _retryForm.Amount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Payment Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_retryForm.PaymentDate" />
+                            <ValidationMessage For="() => _retryForm.PaymentDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Method <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_retryForm.PaymentMethodCode">
+                                @foreach (var method in _methods)
+                                {
+                                    <option value="@method">@method</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _retryForm.PaymentMethodCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_retryForm.StatusCode">
+                                @foreach (var status in _statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _retryForm.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Reference #</label>
+                            <InputText class="form-control" @bind-Value="_retryForm.ReferenceNumber" />
+                            <ValidationMessage For="() => _retryForm.ReferenceNumber" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea class="form-control" @bind-Value="_retryForm.Notes" rows="3" />
+                            <ValidationMessage For="() => _retryForm.Notes" class="text-danger" />
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseRetry" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
+                        Record Retry
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="pe-enterprise-page">
+    <section class="pe-header">
+        <div class="pe-header-left">
+            <div class="pe-lob-icon"><i class="bi bi-graph-up" aria-hidden="true"></i></div>
+            <div class="pe-header-info">
+                <div class="pe-title-row">
+                    <h1 class="pe-page-title">Payment Experience</h1>
+                    <span class="pe-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live billing signals</span>
+                    <span class="pe-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span>
+                </div>
+                <div class="pe-sub-row">
+                    <span>Monitor failed payments, recovery actions, autopay adoption, and days-to-pay performance.</span>
+                    <span class="pe-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Derived from payments</span>
+                    <span class="pe-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span>
                 </div>
             </div>
         </div>
+        <div class="pe-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="SyncAgingAsync" disabled="@_loading">
+                <i class="bi bi-bar-chart" aria-hidden="true"></i> Sync AR Aging
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading">
+                <i class="bi @(_loading ? "bi-arrow-repeat pe-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh
+            </button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())">
+                <i class="bi bi-download" aria-hidden="true"></i> Export
+            </button>
+            <button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/billing/payments")'>
+                <i class="bi bi-cash-coin" aria-hidden="true"></i> All Payments
+            </button>
+        </div>
+    </section>
 
-        <!-- Autopay Enrollment panel -->
-        <div class="pe-panel">
-            <div class="pe-panel-hdr">
-                <i class="bi bi-arrow-repeat pe-hdr-icon green" aria-hidden="true"></i>
-                <span class="pe-hdr-title">Autopay Enrollment</span>
+    <section class="pe-kpi-strip" aria-label="Payment experience metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="pe-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "pe-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="pe-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span>
+                <span class="pe-kpi-copy">
+                    <span class="pe-kpi-label">@kpi.Label</span>
+                    <span class="pe-kpi-value">@kpi.Value</span>
+                    <span class="pe-kpi-caption">@kpi.Caption</span>
+                </span>
+            </button>
+        }
+    </section>
+
+    <section class="pe-workflow-strip" aria-label="Payment experience workflow shortcuts">
+        <button type="button" class="pe-workflow-card pe-wf-invoice" @onclick='() => Nav.NavigateTo("/billing/invoices")'>
+            <span class="pe-workflow-icon"><i class="bi bi-receipt" aria-hidden="true"></i></span>
+            <span class="pe-workflow-content"><strong>1</strong><span>Invoice</span><small>Review receivables.</small></span>
+        </button>
+        <button type="button" class="pe-workflow-card pe-wf-pay" @onclick='() => Nav.NavigateTo("/billing/payments")'>
+            <span class="pe-workflow-icon"><i class="bi bi-cash-coin" aria-hidden="true"></i></span>
+            <span class="pe-workflow-content"><strong>2</strong><span>Collect</span><small>Record and retry payments.</small></span>
+        </button>
+        <button type="button" class="pe-workflow-card pe-wf-account" @onclick='() => Nav.NavigateTo("/billing/accounts")'>
+            <span class="pe-workflow-icon"><i class="bi bi-building" aria-hidden="true"></i></span>
+            <span class="pe-workflow-content"><strong>3</strong><span>Autopay</span><small>Review enrollment setup.</small></span>
+        </button>
+        <button type="button" class="pe-workflow-card pe-wf-recon" @onclick='() => Nav.NavigateTo("/billing/reconciliation")'>
+            <span class="pe-workflow-icon"><i class="bi bi-ui-checks-grid" aria-hidden="true"></i></span>
+            <span class="pe-workflow-content"><strong>4</strong><span>Reconcile</span><small>Match deposits.</small></span>
+        </button>
+        <button type="button" class="pe-workflow-card pe-wf-collect" @onclick='() => Nav.NavigateTo("/billing/collections")'>
+            <span class="pe-workflow-icon"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></span>
+            <span class="pe-workflow-content"><strong>5</strong><span>Recover</span><small>Escalate exceptions.</small></span>
+        </button>
+    </section>
+
+    <section class="pe-enterprise-search" aria-label="Payment experience filters">
+        <div class="pe-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="pe-search-body">
+            <label for="pe-search">Search payment experience</label>
+            <input id="pe-search" class="pe-search-input" type="search" placeholder="Search account, method, status, reason, invoice..." @bind="SearchFilter" @bind:event="oninput" />
+            <span class="pe-search-hint">Filters apply instantly across derived payment experience signals.</span>
+        </div>
+        <select class="pe-filter-select" @bind="PeriodFilter" aria-label="Period filter">
+            @foreach (var period in _periods)
+            {
+                <option value="@period">@period</option>
+            }
+        </select>
+        <select class="pe-filter-select" @bind="SegmentFilter" aria-label="Segment filter">
+            @foreach (var segment in _segments)
+            {
+                <option value="@segment">@segment</option>
+            }
+        </select>
+        <select class="pe-filter-select" @bind="StatusFilter" aria-label="Status filter">
+            <option value="">All statuses</option>
+            @foreach (var status in _experienceStatuses)
+            {
+                <option value="@status">@status</option>
+            }
+        </select>
+        <div class="pe-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pe-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="pe-content-layout">
+        <div class="pe-grid-wrap">
+            <div class="pe-grid-toolbar">
+                <div>
+                    <strong>Payment experience register</strong>
+                    <span>@ActiveFilterText</span>
+                </div>
+                <div class="pe-toolbar-actions">
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/collections")'><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Collections</button>
+                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/payments")'><i class="bi bi-cash-coin" aria-hidden="true"></i> Payment</button>
+                </div>
             </div>
-            <div class="pe-autopay-body">
-                <!-- Donut-style summary -->
-                <div class="pe-ap-summary">
-                    <div class="pe-ap-ring">
-                        <div class="pe-ap-ring-inner">
-                            <div class="pe-ap-pct">@_autopayPct.ToString("F0")%</div>
-                            <div class="pe-ap-sub">enrolled</div>
-                        </div>
-                    </div>
-                    <div class="pe-ap-legend">
-                        <div class="pe-ap-leg-row"><span class="pe-ap-dot pe-ap-enrolled" aria-hidden="true"></span> Enrolled: @_autopayEnrolled</div>
-                        <div class="pe-ap-leg-row"><span class="pe-ap-dot pe-ap-not"      aria-hidden="true"></span> Not Enrolled: @(_totalAccounts - _autopayEnrolled)</div>
-                        <div class="pe-ap-leg-row pe-ap-leg-info">
-                            <i class="bi bi-arrow-up-circle" aria-hidden="true"></i> +@_newAutopayThisPeriod new enrollments this period
-                        </div>
+
+            @if (_loading)
+            {
+                <div class="pe-loading"><i class="bi bi-arrow-repeat pe-spin" aria-hidden="true"></i><strong>Loading payment experience...</strong><span>Syncing accounts, invoices, payments, AR aging, delinquency, and collections signals.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="pe-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No payment signals found</strong><span>Adjust filters or record a new payment to start the experience workflow.</span><button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/billing/payments")'>Go to Payments</button></div>
+            }
+            else
+            {
+                <div class="pe-table-scroll">
+                    <table class="pe-table">
+                        <thead>
+                            <tr>
+                                <th>Account / Signal</th>
+                                <th>Method</th>
+                                <th>Status</th>
+                                <th>Date</th>
+                                <th>Reason</th>
+                                <th class="pe-number">Amount</th>
+                                <th class="pe-actions-col">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in PagedItems)
+                            {
+                                <tr class="pe-table-row @(_selected?.Id == row.Id ? "pe-table-row--selected" : null)" @onclick="() => SelectSignal(row)">
+                                    <td>
+                                        <div class="pe-signal-cell">
+                                            <span class="pe-signal-icon @StatusIconTone(row.Status)"><i class="bi @SignalIcon(row)" aria-hidden="true"></i></span>
+                                            <span>
+                                                <strong>@row.AccountName</strong>
+                                                <span>@row.Signal</span>
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td><span class="pe-method-chip @MethodCss(row.Method)">@row.Method</span></td>
+                                    <td><span class="pe-status-chip @StatusCss(row.Status)">@row.Status</span></td>
+                                    <td>@row.SignalDate.ToString("MMM d, yyyy")</td>
+                                    <td>@row.Reason</td>
+                                    <td class="pe-number">@Fmt(row.Amount)</td>
+                                    <td>
+                                        <div class="pe-row-acts">
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Inspect" @onclick:stopPropagation="true" @onclick="() => SelectSignal(row)"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Retry" @onclick:stopPropagation="true" @onclick="() => OpenRetry(row)"><i class="bi bi-arrow-repeat" aria-hidden="true"></i></button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Collections" @onclick:stopPropagation="true" @onclick='() => Nav.NavigateTo("/billing/collections")'><i class="bi bi-exclamation-triangle" aria-hidden="true"></i></button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="pe-pager">
+                    <span>Showing @PageStart-@PageEnd of @_filtered.Count</span>
+                    <div>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button>
+                        <span>Page @_page of @TotalPages</span>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button>
                     </div>
                 </div>
-                <!-- Segment breakdown -->
-                <div class="pe-ap-segments">
-                    @foreach (var seg in _autopaySegments)
-                    {
-                        <div class="pe-ap-seg-row">
-                            <div class="pe-ap-seg-lbl">@seg.Segment</div>
-                            <div class="pe-ap-seg-bar-wrap">
-                                <div class="pe-ap-seg-bar" style="width:@seg.Pct%"></div>
+            }
+        </div>
+
+        <aside class="pe-detail-panel" aria-label="Selected payment experience detail">
+            @if (_selected is null)
+            {
+                <div class="pe-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a signal</strong><span>Choose a row to inspect recovery status, account profile, and next best action.</span></div>
+            }
+            else
+            {
+                <div class="pe-detail-head">
+                    <div>
+                        <span class="pe-detail-eyebrow"><i class="bi bi-graph-up" aria-hidden="true"></i> Experience signal</span>
+                        <h2>@_selected.AccountName</h2>
+                        <div class="pe-detail-meta">
+                            <span>@_selected.SignalDate.ToString("MMM d, yyyy")</span>
+                            <span>@_selected.Method</span>
+                            <span class="pe-status-chip @StatusCss(_selected.Status)">@_selected.Status</span>
+                        </div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenRetry(_selected)"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Retry</button>
+                </div>
+                <div class="pe-detail-body">
+                    <div class="pe-detail-summary">
+                        <div class="pe-meta-row"><span class="pe-meta-lbl">Amount</span><span class="pe-meta-val">@Fmt(_selected.Amount)</span></div>
+                        <div class="pe-meta-row"><span class="pe-meta-lbl">Invoice</span><span class="pe-meta-val">@_selected.InvoiceNumber</span></div>
+                        <div class="pe-meta-row"><span class="pe-meta-lbl">Reason</span><span class="pe-meta-val">@_selected.Reason</span></div>
+                        <div class="pe-meta-row"><span class="pe-meta-lbl">Risk</span><span class="pe-meta-val">@_selected.Risk</span></div>
+                    </div>
+                    <div class="pe-insight-card">
+                        <span><i class="bi bi-lightbulb" aria-hidden="true"></i> Recommended action</span>
+                        <p>@Recommendation(_selected)</p>
+                    </div>
+                    <div class="pe-segment-grid">
+                        @foreach (var segment in SegmentRows)
+                        {
+                            <div class="pe-segment-row">
+                                <span>@segment.Label</span>
+                                <div class="pe-segment-bar-wrap"><div class="pe-segment-bar @segment.Tone" style="width:@segment.Width%"></div></div>
+                                <strong>@segment.Value</strong>
                             </div>
-                            <div class="pe-ap-seg-pct">@seg.Pct%</div>
-                        </div>
-                    }
-                </div>
-                <!-- Insights -->
-                <div class="pe-ap-insights">
-                    <div class="pe-insight-row pe-insight-tip">
-                        <i class="bi bi-lightbulb" aria-hidden="true"></i>
-                        <span>Accounts with autopay have <strong>62% fewer</strong> failed payments</span>
+                        }
                     </div>
-                    <div class="pe-insight-row pe-insight-info">
-                        <i class="bi bi-info-circle" aria-hidden="true"></i>
-                        <span><strong>@_eligibleNotEnrolled</strong> eligible accounts not yet enrolled</span>
-                    </div>
-                    <div class="pe-insight-row pe-insight-action">
-                        <i class="bi bi-megaphone" aria-hidden="true"></i>
-                        <span>
-                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick='() => Nav.NavigateTo("/communications/outreach")'>
-                                Launch enrollment campaign →
-                            </button>
-                        </span>
+                    <div class="pe-detail-actions">
+                        <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenRetry(_selected)"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Record Retry</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/accounts")'><i class="bi bi-building" aria-hidden="true"></i> Account</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/billing/collections")'><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Collections</button>
                     </div>
                 </div>
-            </div>
-        </div>
-
-        <!-- Recovery & Retry panel -->
-        <div class="pe-panel">
-            <div class="pe-panel-hdr">
-                <i class="bi bi-arrow-repeat pe-hdr-icon blue" aria-hidden="true"></i>
-                <span class="pe-hdr-title">Payment Recovery Tracker</span>
-            </div>
-            <SfGrid DataSource="_recoveries" AllowSorting="true" Height="210px">
-                <GridColumns>
-                    <GridColumn Field="@nameof(RecoveryRow.Account)" HeaderText="Account" Width="170"></GridColumn>
-                    <GridColumn Field="@nameof(RecoveryRow.Amount)" HeaderText="Amount" Format="C2" Width="110" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"></GridColumn>
-                    <GridColumn Field="@nameof(RecoveryRow.Attempts)" HeaderText="Attempts" Width="85" TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center"></GridColumn>
-                    <GridColumn HeaderText="Status" Width="110">
-                        <Template>
-                            @{ var r = (RecoveryRow)context; }
-                            <span class="pe-rec-chip pe-rc-@r.Status.ToLower()">@r.Status</span>
-                        </Template>
-                    </GridColumn>
-                    <GridColumn Field="@nameof(RecoveryRow.NextRetry)" HeaderText="Next Retry" Type="ColumnType.Date" Format="d" Width="110"></GridColumn>
-                </GridColumns>
-            </SfGrid>
-        </div>
-
-    </div>
+            }
+        </aside>
+    </section>
 </div>
 
 @code {
-    private string _period = "30d", _segment = "All";
+    private const int PageSize = 12;
+    private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private List<PaymentDto> _payments = [];
+    private List<BillingAccountDto> _accounts = [];
+    private List<InvoiceDto> _invoices = [];
+    private List<ArAgingSnapshotDto> _aging = [];
+    private List<DelinquencyFlagDto> _delinquencies = [];
+    private List<CollectionsNoteDto> _collections = [];
+    private List<ExperienceRow> _signals = [];
+    private List<ExperienceRow> _filtered = [];
+    private List<AccountOption> _accountOptions = [];
+    private List<InvoiceOption> _invoiceOptions = [];
+    private ExperienceRow? _selected;
+    private RetryForm _retryForm = new();
+    private string _period = "30d";
+    private string _segment = "All";
+    private string _statusFilter = string.Empty;
+    private string _search = string.Empty;
+    private string _kpiFilter = "all";
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showRetry;
+    private bool _saveAttempted;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _periods = ["7d", "30d", "90d", "YTD", "12M"];
+    private readonly List<string> _segments = ["All", "Commercial", "Personal", "Agency Bill", "Direct Bill", "Autopay"];
+    private readonly List<string> _methods = ["ACH", "Credit Card", "Check", "Wire Transfer"];
+    private readonly List<string> _statuses = ["Pending", "Applied", "Cleared"];
+    private readonly List<string> _experienceStatuses = ["Failed", "Returned", "Recovered", "Pending", "Outstanding"];
 
-    // ── Headline metrics ────────────────────────────────────────
-    private int    _failed           = 23;
-    private double _failedRate       = 4.7;
-    private int    _achReturns       = 11;
-    private int    _cardDeclines     = 37;
-    private double _declineRate      = 6.2;
-    private int    _autopayEnrolled  = 218;
-    private double _autopayPct       = 72.4;
-    private double _avgDays          = 8.3;
-    private double _prevAvgDays      = 9.1;
-    private int    _nsf              = 5;
-    private decimal _nsfAmt          = 18200m;
-    private double _recoveryRate     = 68;
-    private double _onTimeRate       = 84;
-    private int    _totalAccounts    = 301;
-    private int    _newAutopayThisPeriod = 14;
-    private int    _eligibleNotEnrolled  = 83;
-
-    // ── Failed payments list ────────────────────────────────────
-    private readonly List<FailedPayment> _failedList =
+    private IEnumerable<ExperienceRow> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private IEnumerable<InvoiceOption> InvoiceOptionsForRetry => _retryForm.AccountId == Guid.Empty ? _invoiceOptions : _invoiceOptions.Where(x => x.AccountId == _retryForm.AccountId);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All payment experience signals" : $"Filtered by {_kpiFilter}";
+    private DateTime PeriodStart => _period switch { "7d" => DateTime.Today.AddDays(-7), "90d" => DateTime.Today.AddDays(-90), "YTD" => new DateTime(DateTime.Today.Year, 1, 1), "12M" => DateTime.Today.AddMonths(-12), _ => DateTime.Today.AddDays(-30) };
+    private int TotalAccounts => Math.Max(_accounts.Count, 1);
+    private int AutopayEnrolled => _accounts.Count(x => x.AutopayEnrolled);
+    private double AutopayPct => TotalAccounts == 0 ? 0 : AutopayEnrolled * 100d / TotalAccounts;
+    private int FailedCount => _signals.Count(x => x.Status is "Failed" or "Returned");
+    private decimal FailedAmount => _signals.Where(x => x.Status is "Failed" or "Returned").Sum(x => x.Amount);
+    private double FailedRate => _payments.Count == 0 ? 0 : FailedCount * 100d / Math.Max(_payments.Count, 1);
+    private int RecoveredCount => _signals.Count(x => x.Status == "Recovered");
+    private double RecoveryRate => FailedCount == 0 ? 100 : RecoveredCount * 100d / FailedCount;
+    private double OnTimeRate => _invoices.Count == 0 ? 100 : _invoices.Count(x => x.BalanceAmount <= 0) * 100d / _invoices.Count;
+    private decimal Exposure => _signals.Sum(x => x.Amount);
+    private IReadOnlyList<KpiModel> Kpis =>
     [
-        new(DateTime.Today.AddDays(-1), "Westside Properties",  7540m,  "ACH",  "R01 – Insufficient Funds"),
-        new(DateTime.Today.AddDays(-2), "Coastal Restaurants",  9300m,  "ACH",  "R08 – Payment Stopped"),
-        new(DateTime.Today.AddDays(-3), "Riverdale Medical",    2100m,  "Card", "Do Not Honor"),
-        new(DateTime.Today.AddDays(-4), "Green Valley LLC",     4200m,  "Card", "Insufficient Funds"),
-        new(DateTime.Today.AddDays(-5), "Summit Tech Solutions", 890m,  "ACH",  "R29 – Corporate Revocation"),
-        new(DateTime.Today.AddDays(-6), "Bluewater Marine",     3750m,  "Card", "Expired Card"),
-        new(DateTime.Today.AddDays(-7), "Harbor Logistics",     1500m,  "ACH",  "R01 – Insufficient Funds"),
+        new("all", "Signals", _signals.Count.ToString("N0"), "Derived signals", "bi-activity", "pe-ki-blue"),
+        new("failed", "Failed", FailedCount.ToString("N0"), $"{FailedRate:F1}% of payments", "bi-x-circle", "pe-ki-red"),
+        new("returned", "ACH Returns", _signals.Count(x => x.Method == "ACH" && x.Status == "Returned").ToString("N0"), "Return-code risk", "bi-arrow-counterclockwise", "pe-ki-amber"),
+        new("autopay", "Autopay", AutopayEnrolled.ToString("N0"), $"{AutopayPct:F0}% enrolled", "bi-arrow-repeat", "pe-ki-green"),
+        new("recovered", "Recovered", $"{RecoveryRate:F0}%", "Recovery rate", "bi-graph-up-arrow", "pe-ki-green"),
+        new("exposure", "Exposure", Fmt(Exposure), "Signal amount", "bi-currency-dollar", "pe-ki-purple")
+    ];
+    private IReadOnlyList<SegmentRow> SegmentRows =>
+    [
+        new("Autopay adoption", $"{AutopayPct:F0}%", Math.Clamp(AutopayPct, 5, 100), "pe-seg-green"),
+        new("Failure rate", $"{FailedRate:F1}%", Math.Clamp(FailedRate * 8, 5, 100), FailedRate > 8 ? "pe-seg-red" : "pe-seg-amber"),
+        new("On-time rate", $"{OnTimeRate:F0}%", Math.Clamp(OnTimeRate, 5, 100), "pe-seg-blue"),
+        new("Recovery", $"{RecoveryRate:F0}%", Math.Clamp(RecoveryRate, 5, 100), "pe-seg-green")
     ];
 
-    // ── ACH return codes ────────────────────────────────────────
-    private readonly List<AchCode> _achCodes =
-    [
-        new("R01", "Insufficient Funds",        5, "High"),
-        new("R08", "Payment Stopped",           3, "Medium"),
-        new("R29", "Corporate Revocation",      1, "High"),
-        new("R03", "No Account / Unable to Locate",1,"Medium"),
-        new("R07", "Authorization Revoked",     1, "Low"),
-    ];
+    private string SearchFilter { get => _search; set { _search = value; ApplyFilters(resetPage: true); } }
+    private string PeriodFilter { get => _period; set { _period = value; BuildSignals(); ApplyFilters(resetPage: true); } }
+    private string SegmentFilter { get => _segment; set { _segment = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
 
-    // ── Card decline codes ──────────────────────────────────────
-    private readonly List<DeclineCode> _declineCodes =
-    [
-        new("05", "Do Not Honor",          14),
-        new("51", "Insufficient Funds",     9),
-        new("54", "Expired Card",           7),
-        new("61", "Exceeds Withdrawal Amt", 4),
-        new("78", "No Account",             3),
-    ];
-
-    private readonly List<(string Month, double Rate)> _monthlyDeclines =
-    [
-        ("Oct", 3.8), ("Nov", 4.2), ("Dec", 6.9), ("Jan", 5.1), ("Feb", 6.2), ("Mar", 6.2),
-    ];
-
-    // ── Days-to-pay by segment ──────────────────────────────────
-    private readonly List<DtpSegment> _daysToPay =
-    [
-        new("Commercial Lines",  7.2, -0.4),
-        new("Personal Lines",    9.8,  0.3),
-        new("Agency Bill",      12.1,  1.2),
-        new("Direct Bill",       6.5, -0.8),
-        new("EFT / Autopay",     1.3, -0.1),
-        new("90+ Day Delinquent",47.0, 5.6),
-    ];
-
-    // ── Autopay segments ────────────────────────────────────────
-    private readonly List<AutopaySegment> _autopaySegments =
-    [
-        new("EFT / ACH",        95),
-        new("Commercial Lines", 78),
-        new("Personal Lines",   61),
-        new("Agency Bill",      45),
-        new("Direct Bill",      82),
-    ];
-
-    // ── Recovery tracker ────────────────────────────────────────
-    private readonly List<RecoveryRow> _recoveries =
-    [
-        new("Westside Properties",  7540m, 1, "Retry Pending", DateTime.Today.AddDays(3)),
-        new("Coastal Restaurants",  9300m, 2, "In Recovery",   DateTime.Today.AddDays(1)),
-        new("Riverdale Medical",    2100m, 1, "Retry Pending", DateTime.Today.AddDays(2)),
-        new("Green Valley LLC",     4200m, 3, "Escalated",     null),
-        new("Bluewater Marine",     3750m, 2, "Recovered",     null),
-    ];
-
-    void SetPeriod(string p) { _period = p; }
-
-    RenderFragment KpiCard(string icon, string title, string value, string sub, string color) => __builder =>
+    protected override async Task OnInitializedAsync()
     {
-        <div class="pe-kpi-card @color">
-            <div class="pe-kpi-top">
-                <i class="bi @icon pe-kpi-icon" aria-hidden="true"></i>
-                <span class="pe-kpi-title">@title</span>
-            </div>
-            <div class="pe-kpi-val">@value</div>
-            <div class="pe-kpi-sub">@sub</div>
-        </div>
-    };
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Billing", "/billing/accounts"), new("Payment Experience", ""));
+        await LoadAsync();
+    }
 
-    record FailedPayment(DateTime Date, string AccountName, decimal Amount, string Method, string FailReason);
-    record AchCode(string Code, string Description, int Count, string Severity);
-    record DeclineCode(string Code, string Description, int Count);
-    record DtpSegment(string Segment, double Days, double Delta);
-    record AutopaySegment(string Segment, int Pct);
-    record RecoveryRow(string Account, decimal Amount, int Attempts, string Status, DateTime? NextRetry);
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            await Api.EnsureBillingAccountsSeedAsync(_tenantId);
+            var accounts = await Api.SearchBillingAccountsAsync(_tenantId, pageSize: 500);
+            var payments = await Api.SearchPaymentsAsync(_tenantId);
+            var invoices = await Api.SearchInvoicesAsync(_tenantId);
+            var aging = await Api.SearchArAgingSnapshotsAsync(_tenantId);
+            var delinquencies = await Api.SearchDelinquencyFlagsAsync(_tenantId);
+            var collections = await Api.SearchCollectionsNotesAsync(_tenantId);
+            _accounts = accounts?.Items.ToList() ?? [];
+            _payments = payments?.Items.ToList() ?? [];
+            _invoices = invoices?.Items.ToList() ?? [];
+            _aging = aging?.Items.ToList() ?? [];
+            _delinquencies = delinquencies?.Items.ToList() ?? [];
+            _collections = collections?.Items.ToList() ?? [];
+            _accountOptions = _accounts.OrderBy(x => x.AccountName).Select(x => new AccountOption(x.AccountId, $"{x.AccountName} · {x.AccountNumber}")).ToList();
+            _invoiceOptions = _invoices.OrderByDescending(x => x.CreatedDateUtc).Select(x => new InvoiceOption(x.InvoiceId, x.AccountId, $"{x.InvoiceNumber} · {Fmt(x.BalanceAmount)} balance")).ToList();
+            BuildSignals();
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Payment experience failed to load: {ex.Message}";
+            ShowToast(_loadError, "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void BuildSignals()
+    {
+        var start = PeriodStart;
+        var rows = new List<ExperienceRow>();
+        foreach (var payment in _payments.Where(x => x.PaymentDate >= start))
+        {
+            var failed = IsFailed(payment.StatusCode);
+            var pending = IsPending(payment.StatusCode);
+            var signalStatus = failed ? (payment.PaymentMethodCode.Contains("ACH", StringComparison.OrdinalIgnoreCase) ? "Returned" : "Failed") : pending ? "Pending" : "Recovered";
+            rows.Add(new ExperienceRow(
+                payment.PaymentId,
+                payment.AccountId,
+                payment.InvoiceId,
+                AccountName(payment.AccountId),
+                InvoiceNumber(payment.InvoiceId),
+                $"{payment.PaymentMethodCode} payment {StatusLabel(payment.StatusCode)}",
+                payment.PaymentMethodCode,
+                signalStatus,
+                payment.PaymentDate,
+                payment.Amount,
+                FailureReason(payment),
+                RiskFor(payment.AccountId, payment.Amount, signalStatus),
+                SegmentFor(payment.AccountId),
+                payment.ReferenceNumber ?? payment.PaymentNumber ?? payment.PaymentId.ToString()[..8]));
+        }
+
+        foreach (var invoice in _invoices.Where(x => x.BalanceAmount > 0 && x.CreatedDateUtc >= start))
+        {
+            if (rows.Any(x => x.InvoiceId == invoice.InvoiceId)) continue;
+            rows.Add(new ExperienceRow(
+                invoice.InvoiceId,
+                invoice.AccountId,
+                invoice.InvoiceId,
+                AccountName(invoice.AccountId),
+                invoice.InvoiceNumber,
+                "Open invoice balance",
+                PreferredMethod(invoice.AccountId),
+                "Outstanding",
+                invoice.CreatedDateUtc,
+                invoice.BalanceAmount,
+                "Balance still outstanding",
+                RiskFor(invoice.AccountId, invoice.BalanceAmount, "Outstanding"),
+                SegmentFor(invoice.AccountId),
+                invoice.InvoiceNumber));
+        }
+
+        foreach (var flag in _delinquencies.Where(x => x.CreatedDateUtc >= start && x.StatusCode != "Resolved"))
+        {
+            if (rows.Any(x => x.InvoiceId == flag.InvoiceId && x.Status == "Outstanding")) continue;
+            rows.Add(new ExperienceRow(
+                flag.DelinquencyFlagId,
+                flag.AccountId,
+                flag.InvoiceId,
+                AccountName(flag.AccountId),
+                InvoiceNumber(flag.InvoiceId),
+                $"{flag.SeverityCode} delinquency flag",
+                PreferredMethod(flag.AccountId),
+                "Outstanding",
+                flag.FlagDate.ToDateTime(TimeOnly.MinValue),
+                flag.OverdueAmount,
+                flag.Notes ?? $"{flag.DaysOverdue:N0} days overdue",
+                flag.SeverityCode,
+                SegmentFor(flag.AccountId),
+                flag.DelinquencyFlagId.ToString()[..8]));
+        }
+
+        _signals = rows.OrderByDescending(x => x.Status is "Failed" or "Returned").ThenByDescending(x => x.SignalDate).ToList();
+    }
+
+    private void ApplyFilters(bool resetPage)
+    {
+        IEnumerable<ExperienceRow> query = _signals;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var term = _search.Trim();
+            query = query.Where(x => Contains(x.AccountName, term) || Contains(x.InvoiceNumber, term) || Contains(x.Signal, term) || Contains(x.Method, term) || Contains(x.Status, term) || Contains(x.Reason, term));
+        }
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.Status == _statusFilter);
+        if (_segment != "All") query = query.Where(x => Contains(x.Segment, _segment));
+        query = _kpiFilter switch
+        {
+            "failed" => query.Where(x => x.Status == "Failed"),
+            "returned" => query.Where(x => x.Status == "Returned"),
+            "autopay" => query.Where(x => x.Segment == "Autopay"),
+            "recovered" => query.Where(x => x.Status == "Recovered"),
+            "exposure" => query.Where(x => x.Amount > 0),
+            _ => query
+        };
+        _filtered = query.OrderByDescending(x => x.Status is "Failed" or "Returned").ThenByDescending(x => x.SignalDate).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter)
+    {
+        _kpiFilter = filter;
+        ApplyFilters(resetPage: true);
+    }
+
+    private void ResetFilters()
+    {
+        _search = string.Empty;
+        _segment = "All";
+        _statusFilter = string.Empty;
+        _kpiFilter = "all";
+        ApplyFilters(resetPage: true);
+        ShowToast("Payment experience filters reset.", "info");
+    }
+
+    private void SelectSignal(ExperienceRow row) => _selected = row;
+
+    private void OpenRetry(ExperienceRow row)
+    {
+        _selected = row;
+        _saveAttempted = false;
+        _formError = null;
+        _retryForm = new RetryForm
+        {
+            AccountId = row.AccountId,
+            InvoiceId = row.InvoiceId,
+            Amount = Math.Max(row.Amount, 0.01m),
+            PaymentDate = DateTime.Today,
+            PaymentMethodCode = row.Method is "Card" ? "Credit Card" : row.Method,
+            StatusCode = "Pending",
+            ReferenceNumber = $"RETRY-{DateTime.UtcNow:MMddHHmm}",
+            Notes = $"Recovery retry for {row.Signal}. Original reason: {row.Reason}"
+        };
+        _showRetry = true;
+    }
+
+    private void CloseRetry()
+    {
+        if (_busy) return;
+        _showRetry = false;
+    }
+
+    private async Task RecordRecoveryAsync()
+    {
+        _saveAttempted = true;
+        if (_retryForm.AccountId == Guid.Empty)
+        {
+            _formError = "Billing account is required.";
+            ShowToast(_formError, "warning");
+            return;
+        }
+        _busy = true;
+        _formError = null;
+        try
+        {
+            await Api.CreatePaymentAsync(new CreatePaymentRequest
+            {
+                TenantId = _tenantId,
+                AccountId = _retryForm.AccountId,
+                InvoiceId = _retryForm.InvoiceId,
+                PaymentDate = _retryForm.PaymentDate,
+                Amount = _retryForm.Amount,
+                PaymentMethodCode = _retryForm.PaymentMethodCode,
+                StatusCode = _retryForm.StatusCode,
+                ReferenceNumber = _retryForm.ReferenceNumber,
+                Notes = _retryForm.Notes,
+                CreatedByUserId = _tenantAdminUserId
+            });
+            _showRetry = false;
+            ShowToast("Recovery payment retry recorded.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Retry failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SyncAgingAsync()
+    {
+        _loading = true;
+        try
+        {
+            var count = await Api.SyncArAgingFromInvoicesAsync(_tenantId, DateOnly.FromDateTime(DateTime.Today), _tenantAdminUserId);
+            ShowToast($"AR aging synced from invoices ({count:N0} rows affected).", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"AR aging sync failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private Task NotifyValidationAsync(EditContext _)
+    {
+        _saveAttempted = true;
+        ShowToast("Please correct validation errors before recording the retry.", "warning");
+        return Task.CompletedTask;
+    }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any())
+        {
+            ShowToast("No payment experience signals are available to export.", "warning");
+            return;
+        }
+
+        var csv = new StringBuilder();
+        csv.AppendLine("Account,Invoice,Signal,Method,Status,Date,Amount,Reason,Risk,Segment,Reference,SignalId");
+        foreach (var row in _filtered)
+        {
+            csv.AppendLine(string.Join(',',
+                Csv(row.AccountName),
+                Csv(row.InvoiceNumber),
+                Csv(row.Signal),
+                Csv(row.Method),
+                Csv(row.Status),
+                Csv(row.SignalDate.ToString("yyyy-MM-dd")),
+                row.Amount.ToString("0.00"),
+                Csv(row.Reason),
+                Csv(row.Risk),
+                Csv(row.Segment),
+                Csv(row.Reference),
+                Csv(row.Id.ToString())));
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"billing-payment-experience-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} payment experience signals.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+        _toastVisible = true;
+    }
+
+    private void EnsureSelectedStillVisible()
+    {
+        if (_selected is null)
+        {
+            _selected = _filtered.FirstOrDefault();
+            return;
+        }
+        _selected = _signals.FirstOrDefault(x => x.Id == _selected.Id) ?? _filtered.FirstOrDefault();
+    }
+
+    private string AccountName(Guid accountId) => _accountOptions.FirstOrDefault(x => x.Id == accountId)?.Display ?? _accounts.FirstOrDefault(x => x.AccountId == accountId)?.AccountName ?? accountId.ToString()[..8];
+    private string InvoiceNumber(Guid? invoiceId) => invoiceId is Guid id ? _invoiceOptions.FirstOrDefault(x => x.Id == id)?.Display ?? _invoices.FirstOrDefault(x => x.InvoiceId == id)?.InvoiceNumber ?? id.ToString()[..8] : "No invoice";
+    private string PreferredMethod(Guid accountId) => _accounts.FirstOrDefault(x => x.AccountId == accountId)?.DefaultPaymentMethodCode ?? "ACH";
+    private string SegmentFor(Guid accountId)
+    {
+        var account = _accounts.FirstOrDefault(x => x.AccountId == accountId);
+        if (account is null) return "All";
+        if (account.AutopayEnrolled) return "Autopay";
+        if (account.BillingModeCode.Contains("Agency", StringComparison.OrdinalIgnoreCase)) return "Agency Bill";
+        if (account.BillingModeCode.Contains("Direct", StringComparison.OrdinalIgnoreCase)) return "Direct Bill";
+        return account.PolicyCount > 2 || account.CreditLimit > 10000 ? "Commercial" : "Personal";
+    }
+
+    private string RiskFor(Guid accountId, decimal amount, string status)
+    {
+        if (status is "Failed" or "Returned") return amount > 5000 ? "High" : "Medium";
+        if (_delinquencies.Any(x => x.AccountId == accountId && x.StatusCode != "Resolved")) return "High";
+        if (amount > 10000) return "Medium";
+        return "Low";
+    }
+
+    private static bool IsFailed(string status) => status is "Failed" or "Returned" or "Void" or "Voided";
+    private static bool IsPending(string status) => status is "Pending" or "Processing";
+    private static string StatusLabel(string status) => string.IsNullOrWhiteSpace(status) ? "pending" : status.ToLowerInvariant();
+    private static string FailureReason(PaymentDto payment)
+    {
+        if (payment.StatusCode is "Failed" or "Returned")
+        {
+            if (payment.PaymentMethodCode.Contains("ACH", StringComparison.OrdinalIgnoreCase)) return "ACH return or NSF risk";
+            if (payment.PaymentMethodCode.Contains("Card", StringComparison.OrdinalIgnoreCase)) return "Card decline or authorization failure";
+            return "Payment failed or voided";
+        }
+        if (payment.StatusCode is "Pending") return "Awaiting settlement";
+        return "Recovered or cleared payment";
+    }
+    private static string Recommendation(ExperienceRow row) => row.Status switch
+    {
+        "Failed" or "Returned" => "Record a retry payment and escalate to collections if the retry remains pending after the next follow-up window.",
+        "Outstanding" => "Review the open invoice balance and trigger a collections note if the account is past the payment terms window.",
+        "Pending" => "Monitor settlement and avoid duplicate retries until the payment clears or returns.",
+        _ => "Keep the account in good standing and encourage autopay enrollment for future billing cycles."
+    };
+    private static string Fmt(decimal v) => v.ToString("C0");
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static string MethodCss(string method) => $"pe-m-{CssKey(method)}";
+    private static string StatusCss(string status) => $"pe-st-{CssKey(status)}";
+    private static string CssKey(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+    private static string SignalIcon(ExperienceRow row) => row.Status switch
+    {
+        "Failed" => "bi-x-circle",
+        "Returned" => "bi-arrow-counterclockwise",
+        "Recovered" => "bi-check-circle",
+        "Pending" => "bi-hourglass",
+        _ => "bi-receipt"
+    };
+    private static string StatusIconTone(string status) => status switch
+    {
+        "Failed" or "Returned" => "pe-di-red",
+        "Recovered" => "pe-di-green",
+        "Pending" => "pe-di-amber",
+        _ => "pe-di-blue"
+    };
+    private static string Csv(string value)
+    {
+        var quote = Convert.ToChar(34).ToString();
+        return string.Concat(quote, value.Replace(quote, quote + quote), quote);
+    }
+
+    private async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _tenantAdminUserId = context.UserId;
+    }
+
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone)
+    {
+        public string Title => $"Filter payment experience by {Label}";
+    }
+    private sealed record SegmentRow(string Label, string Value, double Width, string Tone);
+    private sealed record AccountOption(Guid Id, string Display);
+    private sealed record InvoiceOption(Guid Id, Guid AccountId, string Display);
+    private sealed record ExperienceRow(Guid Id, Guid AccountId, Guid? InvoiceId, string AccountName, string InvoiceNumber, string Signal, string Method, string Status, DateTime SignalDate, decimal Amount, string Reason, string Risk, string Segment, string Reference);
+
+    private sealed class RetryForm
+    {
+        [RequiredGuid(ErrorMessage = "Billing account is required.")]
+        public Guid AccountId { get; set; }
+
+        public Guid? InvoiceId { get; set; }
+
+        [Required]
+        [Range(0.01, 999999999999)]
+        public decimal Amount { get; set; }
+
+        [Required]
+        public DateTime PaymentDate { get; set; } = DateTime.Today;
+
+        [Required]
+        [StringLength(50)]
+        public string PaymentMethodCode { get; set; } = "ACH";
+
+        [Required]
+        [StringLength(50)]
+        public string StatusCode { get; set; } = "Pending";
+
+        [StringLength(100)]
+        public string? ReferenceNumber { get; set; }
+
+        [StringLength(500)]
+        public string? Notes { get; set; }
+    }
+
+    private sealed class RequiredGuidAttribute : ValidationAttribute
+    {
+        public override bool IsValid(object? value) => value is Guid guid && guid != Guid.Empty;
+    }
 }

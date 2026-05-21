@@ -1,57 +1,440 @@
 @page "/finance/deferred-revenue-recognition"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Finance
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using System.ComponentModel.DataAnnotations
+@using System.Text
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
-@using Ams.Application.Common.Dtos
-@using Ams.Web.Services
-@using Syncfusion.Blazor.Grids
-@using Syncfusion.Blazor.Inputs
-@using Syncfusion.Blazor.Buttons
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@inject IJSRuntime Js
 
-<h3>Deferred Revenue Recognition</h3>
+<PageTitle>Deferred Revenue Recognition — AMS Enterprise</PageTitle>
 
-<div class="mb-3 d-flex gap-2">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="300px" />
-    <SfButton OnClick="LoadAsync">Search</SfButton>
+@if (_toastVisible)
+{
+    <div class="drr-toast drr-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @ToastIconClass" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="drr-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showStatusConfirm && _statusTarget is not null && !string.IsNullOrWhiteSpace(_pendingStatus))
+{
+    <div class="drr-modal-backdrop" role="presentation" @onclick="CancelStatusUpdate">
+        <div class="drr-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="drr-status-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog">
+                <div class="um-confirm-icon @(_pendingStatus == "Voided" ? "um-confirm-icon--danger" : null)"><i class="bi @PendingStatusIcon" aria-hidden="true"></i></div>
+                <div class="um-confirm-title" id="drr-status-title">@PendingStatusTitle</div>
+                <div class="um-confirm-body">Mark recognition <strong>@ShortId(_statusTarget.RecognitionId)</strong> as <strong>@_pendingStatus</strong>?</div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CancelStatusUpdate" disabled="@_busy">Cancel</button>
+                    <button type="button" class="um-btn @(_pendingStatus == "Voided" ? "um-btn-danger" : "um-btn-primary")" @onclick="ExecuteStatusUpdateAsync" disabled="@_busy">@PendingStatusAction</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="drr-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="drr-modal drr-action-modal" role="dialog" aria-modal="true" aria-labelledby="drr-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-journal-check" aria-hidden="true"></i>
+                <span id="drr-form-title">@(_editingId == Guid.Empty ? "New Recognition Entry" : "Edit Recognition Entry")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="NotifyValidationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="drr-modal-intro"><span><i class="bi bi-shield-check" aria-hidden="true"></i> Revenue recognition control</span><p>Record recognition events against deferred revenue schedules and route each entry through approval and posting.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Deferred Revenue Schedule <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.DeferredRevenueScheduleId">
+                                <option value="@Guid.Empty">Select schedule...</option>
+                                @foreach (var schedule in _schedules)
+                                {
+                                    <option value="@schedule.DeferredRevenueScheduleId">@ScheduleLabel(schedule)</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.DeferredRevenueScheduleId" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Recognition Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_form.RecognitionDate" />
+                            <ValidationMessage For="() => _form.RecognitionDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Amount <span class="text-danger">*</span></label>
+                            <InputNumber class="form-control" @bind-Value="_form.Amount" />
+                            <ValidationMessage For="() => _form.Amount" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Status <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.StatusCode">
+                                @foreach (var status in _statuses)
+                                {
+                                    <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Journal Entry</label>
+                            <InputSelect class="form-select" @bind-Value="_form.JournalEntryId">
+                                <option value="">Not posted</option>
+                                @if (_form.JournalEntryId is Guid journalId && journalId != Guid.Empty)
+                                {
+                                    <option value="@journalId">@ShortId(journalId)</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="um-field um-field--full drr-balance-preview"><span>Schedule context</span><strong>@SelectedScheduleRemaining</strong><small>@SelectedScheduleProgress recognized on selected schedule</small></div>
+                        @if (!string.IsNullOrWhiteSpace(_formError))
+                        {
+                            <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_formError</div>
+                        }
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">@if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> } @(_editingId == Guid.Empty ? "Create Entry" : "Save Changes")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+<div class="drr-enterprise-page">
+    <section class="drr-header">
+        <div class="drr-header-left">
+            <div class="drr-lob-icon"><i class="bi bi-journal-check" aria-hidden="true"></i></div>
+            <div class="drr-header-info">
+                <div class="drr-title-row"><h1 class="drr-page-title">Deferred Revenue Recognition</h1><span class="drr-status-pill"><i class="bi bi-database-check" aria-hidden="true"></i> Live recognition entries</span><span class="drr-status-pill"><i class="bi bi-shield-lock" aria-hidden="true"></i> Tenant scoped</span></div>
+                <div class="drr-sub-row"><span>Review, approve, and post deferred revenue recognition entries tied to active schedules.</span><span class="drr-sub-chip"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Seed sync enabled</span><span class="drr-sub-chip"><i class="bi bi-check2-circle" aria-hidden="true"></i> @_filtered.Count active matches</span></div>
+            </div>
+        </div>
+        <div class="drr-header-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/deferred-revenue")'><i class="bi bi-hourglass-split" aria-hidden="true"></i> Schedules</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i> Journals</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi @(_loading ? "bi-arrow-repeat drr-spin" : "bi-arrow-clockwise")" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="ExportAsync" disabled="@(!_filtered.Any())"><i class="bi bi-download" aria-hidden="true"></i> Export</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Entry</button>
+        </div>
+    </section>
+
+    <section class="drr-kpi-strip" aria-label="Recognition metrics">
+        @foreach (var kpi in Kpis)
+        {
+            <button type="button" class="drr-kpi-card @kpi.Tone @(_kpiFilter == kpi.Filter ? "drr-kpi-active" : null)" title="@kpi.Title" @onclick="() => SetKpiFilter(kpi.Filter)">
+                <span class="drr-kpi-icon"><i class="bi @kpi.Icon" aria-hidden="true"></i></span><span class="drr-kpi-copy"><span class="drr-kpi-label">@kpi.Label</span><span class="drr-kpi-value">@kpi.Value</span><span class="drr-kpi-caption">@kpi.Caption</span></span>
+            </button>
+        }
+    </section>
+
+    <section class="drr-workflow-strip" aria-label="Recognition workflow shortcuts">
+        <button type="button" class="drr-workflow-card drr-wf-capture" @onclick="OpenCreate"><span class="drr-workflow-icon"><i class="bi bi-calendar-plus" aria-hidden="true"></i></span><span class="drr-workflow-content"><strong>1</strong><span>Capture</span><small>Create recognition event.</small></span></button>
+        <button type="button" class="drr-workflow-card drr-wf-approve" @onclick="ApproveSelected" disabled="@(!CanApproveSelected)"><span class="drr-workflow-icon"><i class="bi bi-check2-circle" aria-hidden="true"></i></span><span class="drr-workflow-content"><strong>2</strong><span>Approve</span><small>Review pending entries.</small></span></button>
+        <button type="button" class="drr-workflow-card drr-wf-post" @onclick="PostSelected" disabled="@(!CanPostSelected)"><span class="drr-workflow-icon"><i class="bi bi-journal-arrow-up" aria-hidden="true"></i></span><span class="drr-workflow-content"><strong>3</strong><span>Post</span><small>Finalize to ledger.</small></span></button>
+        <button type="button" class="drr-workflow-card drr-wf-ledger" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><span class="drr-workflow-icon"><i class="bi bi-journal-text" aria-hidden="true"></i></span><span class="drr-workflow-content"><strong>4</strong><span>Ledger</span><small>Audit journal entries.</small></span></button>
+        <button type="button" class="drr-workflow-card drr-wf-close" @onclick='() => Nav.NavigateTo("/finance/period-close")'><span class="drr-workflow-icon"><i class="bi bi-lock" aria-hidden="true"></i></span><span class="drr-workflow-content"><strong>5</strong><span>Close</span><small>Validate month-end.</small></span></button>
+    </section>
+
+    <section class="drr-enterprise-search" aria-label="Recognition filters">
+        <div class="drr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
+        <div class="drr-search-body"><label for="drr-search">Search recognition entries</label><input id="drr-search" class="drr-search-input" type="search" placeholder="Search status, schedule, amount, journal, or date..." @bind="SearchFilter" @bind:event="oninput" /><span class="drr-search-hint">Filters apply instantly across synchronized recognition data.</span></div>
+        <select class="drr-filter-select" @bind="StatusFilter" aria-label="Status filter"><option value="">All statuses</option>@foreach (var status in _statuses) { <option value="@status">@status</option> }</select>
+        <select class="drr-filter-select" @bind="ScheduleFilter" aria-label="Schedule filter"><option value="">All schedules</option>@foreach (var schedule in _schedules) { <option value="@schedule.DeferredRevenueScheduleId.ToString()">@ShortId(schedule.DeferredRevenueScheduleId)</option> }</select>
+        <div class="drr-search-result"><strong>@_filtered.Count</strong><span>matches</span></div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger drr-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <section class="drr-content-layout">
+        <div class="drr-grid-wrap">
+            <div class="drr-grid-toolbar"><div><strong>Recognition register</strong><span>@ActiveFilterText</span></div><div class="drr-toolbar-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ResetFilters"><i class="bi bi-eraser" aria-hidden="true"></i> Reset</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ApproveSelected" disabled="@(!CanApproveSelected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Approve</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PostSelected" disabled="@(!CanPostSelected)"><i class="bi bi-journal-arrow-up" aria-hidden="true"></i> Post</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreate"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add</button></div></div>
+            @if (_loading)
+            {
+                <div class="drr-loading"><i class="bi bi-arrow-repeat drr-spin" aria-hidden="true"></i><strong>Loading recognition entries...</strong><span>Syncing schema, seed entries, schedules, and journal status.</span></div>
+            }
+            else if (!_filtered.Any())
+            {
+                <div class="drr-empty-state"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No recognition entries found</strong><span>Adjust filters or create a recognition entry for a deferred revenue schedule.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">New Entry</button></div>
+            }
+            else
+            {
+                <div class="drr-table-scroll">
+                    <table class="drr-table">
+                        <thead>
+                            <tr><th>Recognition</th><th>Schedule</th><th>Date</th><th class="drr-number">Amount</th><th>Journal</th><th>Status</th><th>Created</th><th class="drr-actions-col">Actions</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in PagedItems)
+                            {
+                                <tr class="drr-table-row @(_selected?.RecognitionId == item.RecognitionId ? "drr-table-row--selected" : null)" @onclick="() => SelectRecognition(item)">
+                                    <td><div class="drr-entry-cell"><span class="drr-entry-icon @StatusIconTone(item.StatusCode)"><i class="bi bi-journal-check" aria-hidden="true"></i></span><span><strong>@ShortId(item.RecognitionId)</strong><span>@ScheduleContext(item.DeferredRevenueScheduleId)</span></span></div></td>
+                                    <td>@ShortId(item.DeferredRevenueScheduleId)</td>
+                                    <td>@item.RecognitionDate.ToString("MMM d, yyyy")</td>
+                                    <td class="drr-number drr-recognized">@FormatMoney(item.Amount)</td>
+                                    <td>@(item.JournalEntryId is Guid journalId ? ShortId(journalId) : "Not posted")</td>
+                                    <td><span class="drr-status-chip @StatusCss(item.StatusCode)">@item.StatusCode</span></td>
+                                    <td>@item.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                    <td><div class="drr-row-acts"><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Edit" @onclick:stopPropagation="true" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Approve" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Approved")' disabled="@(!CanApprove(item))"><i class="bi bi-check2-circle" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Post" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Posted")' disabled="@(!CanPost(item))"><i class="bi bi-journal-arrow-up" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Void" @onclick:stopPropagation="true" @onclick='() => ConfirmStatusUpdate(item, "Voided")' disabled="@(IsVoided(item))"><i class="bi bi-x-octagon" aria-hidden="true"></i></button></div></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="drr-pager"><span>Showing @PageStart-@PageEnd of @_filtered.Count</span><div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevPage" disabled="@(_page == 1)">Previous</button><span>Page @_page of @TotalPages</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next</button></div></div>
+            }
+        </div>
+        <aside class="drr-detail-panel" aria-label="Selected recognition entry detail">
+            @if (_selected is null)
+            {
+                <div class="drr-detail-empty"><i class="bi bi-cursor" aria-hidden="true"></i><strong>Select a recognition entry</strong><span>Choose a row to inspect amount, schedule context, journal status, and workflow actions.</span></div>
+            }
+            else
+            {
+                <div class="drr-detail-head"><div><span class="drr-detail-eyebrow"><i class="bi bi-journal-check" aria-hidden="true"></i> Recognition entry</span><h2>@FormatMoney(_selected.Amount)</h2><div class="drr-detail-meta"><span>@_selected.RecognitionDate.ToString("MMM d, yyyy")</span><span class="drr-status-chip @StatusCss(_selected.StatusCode)">@_selected.StatusCode</span></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button></div>
+                <div class="drr-detail-body"><div class="drr-progress-card"><div><span>Schedule progress</span><strong>@ScheduleProgress(_selected.DeferredRevenueScheduleId)</strong></div><div class="drr-progress-track"><span style="width:@ScheduleProgressPercent(_selected.DeferredRevenueScheduleId)%"></span></div></div><div class="drr-detail-summary"><div class="drr-meta-row"><span class="drr-meta-lbl">Schedule</span><span class="drr-meta-val">@ShortId(_selected.DeferredRevenueScheduleId)</span></div><div class="drr-meta-row"><span class="drr-meta-lbl">Amount</span><span class="drr-meta-val">@FormatMoney(_selected.Amount)</span></div><div class="drr-meta-row"><span class="drr-meta-lbl">Journal</span><span class="drr-meta-val">@(_selected.JournalEntryId is Guid journalId ? ShortId(journalId) : "Not posted")</span></div><div class="drr-meta-row"><span class="drr-meta-lbl">Created</span><span class="drr-meta-val">@_selected.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span></div></div><div class="drr-note-card"><span><i class="bi bi-diagram-3" aria-hidden="true"></i> Schedule context</span><p>@ScheduleDescription(_selected.DeferredRevenueScheduleId)</p></div><div class="drr-detail-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="ApproveSelected" disabled="@(!CanApproveSelected)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Approve</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PostSelected" disabled="@(!CanPostSelected)"><i class="bi bi-journal-arrow-up" aria-hidden="true"></i> Post</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => ConfirmStatusUpdate(_selected, "Voided")' disabled="@(IsVoided(_selected))"><i class="bi bi-x-octagon" aria-hidden="true"></i> Void</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/finance/deferred-revenue")'><i class="bi bi-hourglass-split" aria-hidden="true"></i> Schedules</button></div></div>
+            }
+        </aside>
+    </section>
 </div>
 
-<SfGrid DataSource="_items" AllowPaging="true">
-    <GridPageSettings PageSize="10" />
-    <GridColumns>
-        <GridColumn Field="@nameof(DeferredRevenueRecognitionDto.RecognitionId)" HeaderText="ID" Width="220" />
-        <GridColumn Field="@nameof(DeferredRevenueRecognitionDto.DeferredRevenueScheduleId)" HeaderText="Schedule ID" Width="220" />
-        <GridColumn Field="@nameof(DeferredRevenueRecognitionDto.RecognitionDate)" HeaderText="Recognition Date" Width="140" />
-        <GridColumn Field="@nameof(DeferredRevenueRecognitionDto.Amount)" HeaderText="Amount" Format="C2" Width="120" />
-        <GridColumn Field="@nameof(DeferredRevenueRecognitionDto.StatusCode)" HeaderText="Status" Width="120" />
-        <GridColumn Field="@nameof(DeferredRevenueRecognitionDto.CreatedDateUtc)" HeaderText="Created" Width="160" />
-    </GridColumns>
-</SfGrid>
-
 @code {
-    Guid TenantId { get; set; }
-    Guid TenantAdminUserId { get; set; }
-    Guid DevTenantId { get; set; }
-    Guid DevUserId { get; set; }
-    private Guid _tenantAdminUserId;
-    private List<DeferredRevenueRecognitionDto>? _items;
-    private string? _searchTerm;
+    private const int PageSize = 12;
     private Guid _tenantId;
+    private Guid _tenantAdminUserId;
+    private List<DeferredRevenueRecognitionDto> _items = [];
+    private List<DeferredRevenueRecognitionDto> _filtered = [];
+    private List<DeferredRevenueScheduleDto> _schedules = [];
+    private DeferredRevenueRecognitionDto? _selected;
+    private DeferredRevenueRecognitionDto? _statusTarget;
+    private RecognitionForm _form = new();
+    private Guid _editingId = Guid.Empty;
+    private string _searchTerm = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _scheduleFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string? _pendingStatus;
+    private int _page = 1;
+    private bool _loading;
+    private bool _busy;
+    private bool _showForm;
+    private bool _showStatusConfirm;
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private string _toastKind = "success";
+    private string? _loadError;
+    private string? _formError;
+    private readonly List<string> _statuses = ["Pending", "Approved", "Posted", "Voided"];
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private IEnumerable<DeferredRevenueRecognitionDto> PagedItems => _filtered.Skip((_page - 1) * PageSize).Take(PageSize);
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
+    private int PageStart => _filtered.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_filtered.Count, _page * PageSize);
+    private decimal TotalRecognized => _items.Where(x => x.StatusCode == "Posted").Sum(x => x.Amount);
+    private bool CanApproveSelected => _selected is not null && CanApprove(_selected);
+    private bool CanPostSelected => _selected is not null && CanPost(_selected);
+    private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", "info" => "bi-info-circle-fill", _ => "bi-check-circle-fill" };
+    private string ActiveFilterText => _kpiFilter == "all" ? "All recognition entries" : $"Filtered by {_kpiFilter}";
+    private string PendingStatusIcon => _pendingStatus switch { "Approved" => "bi-check2-circle", "Posted" => "bi-journal-arrow-up", "Voided" => "bi-x-octagon-fill", _ => "bi-arrow-repeat" };
+    private string PendingStatusTitle => _pendingStatus switch { "Approved" => "Approve Recognition", "Posted" => "Post Recognition", "Voided" => "Void Recognition", _ => "Update Recognition" };
+    private string PendingStatusAction => _pendingStatus switch { "Approved" => "Approve", "Posted" => "Post", "Voided" => "Void", _ => "Update" };
+    private string SelectedScheduleRemaining => _form.DeferredRevenueScheduleId == Guid.Empty ? "Select a schedule" : FormatMoney(_schedules.FirstOrDefault(x => x.DeferredRevenueScheduleId == _form.DeferredRevenueScheduleId)?.RemainingAmount ?? 0);
+    private string SelectedScheduleProgress => _form.DeferredRevenueScheduleId == Guid.Empty ? "0%" : ScheduleProgress(_form.DeferredRevenueScheduleId);
+    private IReadOnlyList<KpiModel> Kpis =>
+    [
+        new("all", "Entries", _items.Count.ToString("N0"), "All recognition", "bi-journal-check", "drr-ki-blue"),
+        new("pending", "Pending", _items.Count(x => x.StatusCode == "Pending").ToString("N0"), "Needs review", "bi-clock", "drr-ki-amber"),
+        new("approved", "Approved", _items.Count(x => x.StatusCode == "Approved").ToString("N0"), "Ready to post", "bi-check2-circle", "drr-ki-green"),
+        new("posted", "Posted", _items.Count(x => x.StatusCode == "Posted").ToString("N0"), "Ledger complete", "bi-journal-arrow-up", "drr-ki-cyan"),
+        new("amount", "Recognized", FormatMoney(TotalRecognized), "Posted amount", "bi-cash-stack", "drr-ki-purple"),
+        new("voided", "Voided", _items.Count(x => x.StatusCode == "Voided").ToString("N0"), "Excluded entries", "bi-x-octagon", "drr-ki-red")
+    ];
+
+    private string SearchFilter { get => _searchTerm; set { _searchTerm = value; ApplyFilters(resetPage: true); } }
+    private string StatusFilter { get => _statusFilter; set { _statusFilter = value; ApplyFilters(resetPage: true); } }
+    private string ScheduleFilter { get => _scheduleFilter; set { _scheduleFilter = value; ApplyFilters(resetPage: true); } }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ResolveCurrentUserContextAsync();
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Finance", "/finance"), new("Deferred Revenue Recognition", "/finance/deferred-revenue-recognition"));
+        await LoadAsync();
+    }
 
     private async Task LoadAsync()
     {
-        var result = await Api.SearchDeferredRevenueRecognitionsAsync(_tenantId, _searchTerm);
-        _items = result?.Items.ToList() ?? [];
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var schedules = await Api.SearchDeferredRevenueSchedulesAsync(_tenantId, string.Empty);
+            _schedules = schedules?.Items.OrderByDescending(x => x.StartDate).ToList() ?? [];
+            var result = await Api.SearchDeferredRevenueRecognitionsAsync(_tenantId, string.Empty);
+            _items = result?.Items.OrderByDescending(x => x.RecognitionDate).ToList() ?? [];
+            ApplyFilters(resetPage: true);
+            EnsureSelectedStillVisible();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Deferred revenue recognition failed to load: {ex.Message}";
+            ShowToast(_loadError, "danger");
+            _items = [];
+            _filtered = [];
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
-    async Task ResolveCurrentUserContextAsync()
+    private void ApplyFilters(bool resetPage)
     {
-        var context = await CurrentUser.RequireAsync();
-        TenantId = context.TenantId;
-        TenantAdminUserId = context.UserId;
-        _tenantId = context.TenantId;
-        _tenantAdminUserId = context.UserId;
-        DevTenantId = context.TenantId;
-        DevUserId = context.UserId;
+        IEnumerable<DeferredRevenueRecognitionDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            var term = _searchTerm.Trim();
+            query = query.Where(x => Contains(x.StatusCode, term) || Contains(ScheduleContext(x.DeferredRevenueScheduleId), term) || Contains(x.JournalEntryId?.ToString(), term) || Contains(x.RecognitionDate.ToString("yyyy-MM-dd"), term) || x.Amount.ToString("N2").Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_statusFilter)) query = query.Where(x => x.StatusCode == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_scheduleFilter) && Guid.TryParse(_scheduleFilter, out var scheduleId)) query = query.Where(x => x.DeferredRevenueScheduleId == scheduleId);
+        query = _kpiFilter switch
+        {
+            "pending" => query.Where(x => x.StatusCode == "Pending"),
+            "approved" => query.Where(x => x.StatusCode == "Approved"),
+            "posted" => query.Where(x => x.StatusCode == "Posted"),
+            "amount" => query.Where(x => x.Amount > 0),
+            "voided" => query.Where(x => x.StatusCode == "Voided"),
+            _ => query
+        };
+
+        _filtered = query.OrderBy(x => StatusSort(x.StatusCode)).ThenByDescending(x => x.RecognitionDate).ToList();
+        if (resetPage) _page = 1;
+        if (_page > TotalPages) _page = TotalPages;
+    }
+
+    private void SetKpiFilter(string filter) { _kpiFilter = filter; ApplyFilters(resetPage: true); }
+    private void ResetFilters() { _searchTerm = string.Empty; _statusFilter = string.Empty; _scheduleFilter = string.Empty; _kpiFilter = "all"; ApplyFilters(resetPage: true); ShowToast("Recognition filters reset.", "info"); }
+    private void SelectRecognition(DeferredRevenueRecognitionDto item) => _selected = item;
+    private void OpenCreate() { _editingId = Guid.Empty; _formError = null; var schedule = _schedules.FirstOrDefault(x => x.RemainingAmount > 0) ?? _schedules.FirstOrDefault(); _form = new RecognitionForm { DeferredRevenueScheduleId = schedule?.DeferredRevenueScheduleId ?? Guid.Empty, RecognitionDate = DateTime.Today, Amount = schedule is null ? 1000 : Math.Max(0.01m, Math.Min(schedule.RemainingAmount <= 0 ? schedule.TotalAmount / 12 : schedule.RemainingAmount, schedule.TotalAmount / 12 <= 0 ? schedule.RemainingAmount : schedule.TotalAmount / 12)) }; _showForm = true; }
+    private void OpenEdit(DeferredRevenueRecognitionDto item) { _editingId = item.RecognitionId; _formError = null; _form = new RecognitionForm { DeferredRevenueScheduleId = item.DeferredRevenueScheduleId, RecognitionDate = item.RecognitionDate.ToDateTime(TimeOnly.MinValue), Amount = item.Amount, JournalEntryId = item.JournalEntryId, StatusCode = item.StatusCode }; _showForm = true; }
+    private void CloseForm() { if (_busy) return; _showForm = false; }
+
+    private async Task SaveAsync()
+    {
+        if (_form.DeferredRevenueScheduleId == Guid.Empty) { _formError = "Deferred Revenue Schedule is required."; ShowToast(_formError, "warning"); return; }
+        _busy = true;
+        _formError = null;
+        try
+        {
+            if (_editingId == Guid.Empty)
+            {
+                await Api.CreateDeferredRevenueRecognitionAsync(new CreateDeferredRevenueRecognitionRequest { TenantId = _tenantId, DeferredRevenueScheduleId = _form.DeferredRevenueScheduleId, RecognitionDate = DateOnly.FromDateTime(_form.RecognitionDate), Amount = _form.Amount, JournalEntryId = _form.JournalEntryId, StatusCode = _form.StatusCode, CreatedByUserId = _tenantAdminUserId });
+                ShowToast("Recognition entry created.", "success");
+            }
+            else
+            {
+                await Api.UpdateDeferredRevenueRecognitionAsync(_editingId, new UpdateDeferredRevenueRecognitionRequest { TenantId = _tenantId, RecognitionId = _editingId, DeferredRevenueScheduleId = _form.DeferredRevenueScheduleId, RecognitionDate = DateOnly.FromDateTime(_form.RecognitionDate), Amount = _form.Amount, JournalEntryId = _form.JournalEntryId, StatusCode = _form.StatusCode, ModifiedByUserId = _tenantAdminUserId });
+                ShowToast("Recognition entry updated.", "success");
+            }
+
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = $"Save failed: {ex.Message}";
+            ShowToast(_formError, "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ApproveSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Approved"); }
+    private void PostSelected() { if (_selected is not null) ConfirmStatusUpdate(_selected, "Posted"); }
+    private void ConfirmStatusUpdate(DeferredRevenueRecognitionDto item, string status) { _statusTarget = item; _pendingStatus = status; _showStatusConfirm = true; }
+    private void CancelStatusUpdate() { if (_busy) return; _showStatusConfirm = false; _statusTarget = null; _pendingStatus = null; }
+
+    private async Task ExecuteStatusUpdateAsync()
+    {
+        if (_statusTarget is null || string.IsNullOrWhiteSpace(_pendingStatus)) return;
+        _busy = true;
+        try
+        {
+            await Api.UpdateDeferredRevenueRecognitionAsync(_statusTarget.RecognitionId, new UpdateDeferredRevenueRecognitionRequest { TenantId = _tenantId, RecognitionId = _statusTarget.RecognitionId, DeferredRevenueScheduleId = _statusTarget.DeferredRevenueScheduleId, RecognitionDate = _statusTarget.RecognitionDate, Amount = _statusTarget.Amount, JournalEntryId = _pendingStatus == "Posted" ? (_statusTarget.JournalEntryId ?? Guid.NewGuid()) : _statusTarget.JournalEntryId, StatusCode = _pendingStatus, ModifiedByUserId = _tenantAdminUserId });
+            ShowToast($"Recognition entry marked {_pendingStatus.ToLowerInvariant()}.", "success");
+            _showStatusConfirm = false;
+            _statusTarget = null;
+            _pendingStatus = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task NotifyValidationAsync(EditContext _) { ShowToast("Please correct validation errors before saving the recognition entry.", "warning"); return Task.CompletedTask; }
+
+    private async Task ExportAsync()
+    {
+        if (!_filtered.Any()) { ShowToast("No recognition entries are available to export.", "warning"); return; }
+        var csv = new StringBuilder();
+        csv.AppendLine("RecognitionId,ScheduleId,RecognitionDate,Amount,JournalEntryId,Status,CreatedDateUtc,ScheduleContext");
+        foreach (var item in _filtered) csv.AppendLine(string.Join(',', Csv(item.RecognitionId.ToString()), Csv(item.DeferredRevenueScheduleId.ToString()), Csv(item.RecognitionDate.ToString("yyyy-MM-dd")), item.Amount, Csv(item.JournalEntryId?.ToString() ?? string.Empty), Csv(item.StatusCode), Csv(item.CreatedDateUtc.ToString("O")), Csv(ScheduleContext(item.DeferredRevenueScheduleId))));
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsShell.downloadBase64", $"deferred-revenue-recognition-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        ShowToast($"Exported {_filtered.Count:N0} recognition entries.", "success");
+    }
+
+    private void PrevPage() { if (_page > 1) _page--; }
+    private void NextPage() { if (_page < TotalPages) _page++; }
+    private void HideToast() => _toastVisible = false;
+    private void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    private void EnsureSelectedStillVisible() => _selected = _selected is null ? _filtered.FirstOrDefault() : _items.FirstOrDefault(x => x.RecognitionId == _selected.RecognitionId) ?? _filtered.FirstOrDefault();
+    private string ScheduleLabel(DeferredRevenueScheduleDto item) => $"{ShortId(item.DeferredRevenueScheduleId)} · {FormatMoney(item.RemainingAmount)} remaining · {item.StatusCode}";
+    private string ScheduleContext(Guid scheduleId) { var schedule = _schedules.FirstOrDefault(x => x.DeferredRevenueScheduleId == scheduleId); return schedule is null ? ShortId(scheduleId) : $"{ShortId(scheduleId)} · {schedule.FrequencyCode} · {schedule.StatusCode}"; }
+    private string ScheduleDescription(Guid scheduleId) { var schedule = _schedules.FirstOrDefault(x => x.DeferredRevenueScheduleId == scheduleId); return schedule is null ? "Schedule detail is not loaded." : $"Total {FormatMoney(schedule.TotalAmount)}, recognized {FormatMoney(schedule.RecognizedAmount)}, remaining {FormatMoney(schedule.RemainingAmount)}. Frequency: {schedule.FrequencyCode}."; }
+    private string ScheduleProgress(Guid scheduleId) => $"{ScheduleProgressPercent(scheduleId)}%";
+    private int ScheduleProgressPercent(Guid scheduleId) { var schedule = _schedules.FirstOrDefault(x => x.DeferredRevenueScheduleId == scheduleId); return schedule is null || schedule.TotalAmount <= 0 ? 0 : Math.Clamp((int)Math.Round(schedule.RecognizedAmount * 100m / schedule.TotalAmount), 0, 100); }
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static int StatusSort(string status) => status switch { "Pending" => 0, "Approved" => 1, "Posted" => 2, "Voided" => 3, _ => 4 };
+    private static bool CanApprove(DeferredRevenueRecognitionDto item) => item.StatusCode == "Pending";
+    private static bool CanPost(DeferredRevenueRecognitionDto item) => item.StatusCode is "Approved" or "Pending";
+    private static bool IsVoided(DeferredRevenueRecognitionDto item) => item.StatusCode == "Voided";
+    private static string StatusCss(string status) => $"drr-st-{status.ToLowerInvariant()}";
+    private static string StatusIconTone(string status) => status switch { "Posted" => "drr-di-green", "Voided" => "drr-di-red", "Approved" => "drr-di-cyan", _ => "drr-di-blue" };
+    private static string FormatMoney(decimal value) => value.ToString("C0");
+    private static string ShortId(Guid value) => value.ToString("N")[..8];
+    private static string Csv(string value) { var quote = Convert.ToChar(34).ToString(); return string.Concat(quote, value.Replace(quote, quote + quote), quote); }
+    private async Task ResolveCurrentUserContextAsync() { var context = await CurrentUser.RequireAsync(); _tenantId = context.TenantId; _tenantAdminUserId = context.UserId; }
+    private sealed record KpiModel(string Filter, string Label, string Value, string Caption, string Icon, string Tone) { public string Title => $"Filter recognition by {Label}"; }
+
+    private sealed class RecognitionForm
+    {
+        [RequiredGuid(ErrorMessage = "Deferred Revenue Schedule is required.")] public Guid DeferredRevenueScheduleId { get; set; }
+        [Required] public DateTime RecognitionDate { get; set; } = DateTime.Today;
+        [Range(0.01, 100000000)] public decimal Amount { get; set; } = 1000;
+        public Guid? JournalEntryId { get; set; }
+        [Required, StringLength(50)] public string StatusCode { get; set; } = "Pending";
     }
 }
